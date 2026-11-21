@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/bus"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/store"
@@ -24,6 +25,7 @@ type service struct {
 	bus     *bus.Bus
 	states  *stateRepo
 	backend *daemon
+	auth    *auth.Manager
 }
 
 // buildService 装配 registry/supervisor/bus/httpapi 后端。
@@ -69,6 +71,8 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc := &service{
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
 		backend: newDaemon(catalog, manager, frameBus, states),
+		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
+			cfg.snapshot.Auth.CookieSecure == "true"),
 	}
 	svc.restoreEnabled()
 	return svc, exitOK

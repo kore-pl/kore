@@ -9,8 +9,41 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
+
+// withAuth 对 /api/v1/* 强制会话校验；/-/healthz 与登录端点放行。
+// 无有效 cookie → 401 E_UNAUTHORIZED（不泄露是"无 cookie"还是"已过期"）。
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPublicPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if len(r.URL.Path) >= 7 && r.URL.Path[:7] == "/api/v1" {
+			if _, err := s.sessionFrom(r); err != nil {
+				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isPublicPath 返回无需鉴权的路径（健康检查与登录）。
+func isPublicPath(path string) bool {
+	return path == "/-/healthz" || path == "/api/v1/auth/login"
+}
+
+// sessionFrom 从 cookie 取 token 并校验，返回会话视图。
+func (s *Server) sessionFrom(r *http.Request) (auth.Session, error) {
+	cookie, err := r.Cookie(auth.CookieName)
+	if err != nil {
+		return auth.Session{}, auth.ErrNoSession
+	}
+	return s.auth.Validate(cookie.Value)
+}
 
 // reqIDKey 是请求 id 在 context 中的私有键。
 type reqIDKey struct{}

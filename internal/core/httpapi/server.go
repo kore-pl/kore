@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/platform"
 )
@@ -31,6 +32,8 @@ type Options struct {
 	Addr string
 	// Backend 是插件管理后端；nil 表示未装配（仅健康检查与系统信息可用）。
 	Backend Backend
+	// Auth 是鉴权管理器；nil 表示不启用鉴权（测试与 M0 探活骨架用）。
+	Auth *auth.Manager
 }
 
 // Server 持有监听器与 http.Server，生命周期由 cmd/kored 控制。
@@ -39,16 +42,21 @@ type Server struct {
 	transport  platform.Transport
 	mux        *http.ServeMux
 	httpServer *http.Server
+	auth       *auth.Manager
 	mu         sync.Mutex
 	listeners  []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
 func New(opts Options, transport platform.Transport) *Server {
-	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux()}
+	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux(), auth: opts.Auth}
 	server.routes()
+	handler := http.Handler(server.mux)
+	if server.auth != nil {
+		handler = server.withAuth(handler)
+	}
 	server.httpServer = &http.Server{
-		Handler:           server.withRequestID(server.mux),
+		Handler:           server.withRequestID(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
