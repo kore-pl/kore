@@ -151,7 +151,7 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 
 ## 9. 已知遗留（M0 / M1 记录级，不阻断提交）
 
-- **M1 · P0（阻断收口）**：SDK tag `pkg/pluginapi/v0.1.0` 不可被消费——内容声明的 module 路径仍是 `github.com/kore-project/kore/pkg/pluginapi`，干净目录 `GOWORK=off go mod download` 失败；proxy.golang.org 已缓存该 `.mod`，**不可改写 tag**，只能切 `v0.1.1` + `retract v0.1.0` + echo 升 `require` + 删本地 `go.work` 后复验。详见 [JOURNAL.md](JOURNAL.md) M1 段 §4.5 与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5 第 0 项。
+- ~~**M1 · P0（阻断收口）**~~ **已闭环（2026-11-22 收口补正）**：SDK tag `pkg/pluginapi/v0.1.0` 不可被消费——内容声明的 module 路径仍是 `github.com/kore-project/kore/pkg/pluginapi`，干净目录 `GOWORK=off go mod download` 失败；proxy.golang.org 已缓存该 `.mod`，**不可改写 tag**，按 `retract v0.1.0` + 发 `pkg/pluginapi/v0.1.1` + echo 升 `require` 至 v0.1.1（tag `v0.1.1`）处置，干净 clone 复验通过。详见 [JOURNAL.md](JOURNAL.md) M1 段 §4.5 与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5 第 0 项。
 - **M1 遗留（8 项）**：见 [JOURNAL.md](JOURNAL.md) 2026-11-22 M1 段「结论与 M2 前置」与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5——auth / market 未做、web 壳未交付、退避重启与心跳按 M1-12/13 延期、capability 方法级校验（M1-08）、audit 写入（M1-09）、bus 多路复用、`registry/validate.go` 241 行超 200 行上限、bbolt mmap 计入 RssFile（M4 瘦身）。
 - `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
 - `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。

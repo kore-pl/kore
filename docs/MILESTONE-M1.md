@@ -2,7 +2,7 @@
 
 # M1 里程碑 · 行走骨架（能装 / 能跑 / 能停）
 
-一句话：M1 把 M0 的纸面契约变成**一个可安装、可启动、可调用、可停止**的 Linux 二进制，以及一个只依赖公开 SDK 的验证插件。运行时结论 **PASS**、发布链 **P0 未闭环**（见 §5 第 0 项），证据见 [.agents/verify/m1-final-acceptance.md](../.agents/verify/m1-final-acceptance.md)（独立 verifier，全部命令本轮自跑）与 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 的 2026-11-22 M1 复盘段。
+一句话：M1 把 M0 的纸面契约变成**一个可安装、可启动、可调用、可停止**的 Linux 二进制，以及一个只依赖公开 SDK 的验证插件。运行时结论 **PASS**、发布链 **P0 已闭环**（`retract v0.1.0` + `pkg/pluginapi/v0.1.1`，见 §5 第 0 项），证据见 [.agents/verify/m1-final-acceptance.md](../.agents/verify/m1-final-acceptance.md)（独立 verifier，全部命令本轮自跑）与 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 的 2026-11-22 M1 复盘段。
 
 ## 1. 交付物清单（文件级）
 
@@ -98,9 +98,9 @@
 | 跨仓库 | 单仓 | `kore` + `kore-plugin-echo`，SDK 独立 module 与 tag |
 | 外部可见性 | 本地仓库 | GitHub public + MIT + CI + 六件套 |
 
-## 5. 明确延期项
+## 5. 明确延期项与已闭环项（P0 记录保留）
 
-0. **P0 · SDK tag 不可用（阻断收口）**：`pkg/pluginapi/v0.1.0`（tag `3a59b98`）的 `go.mod` 仍声明 `github.com/kore-project/kore/pkg/pluginapi`，干净 clone 报 `module declares its path as ... but was required as ...`；proxy.golang.org 已缓存该 `.mod`，**改写 tag 会让所有消费者校验和永久失败**。处置：在 `2616374`/`fc66a99` 切 `pkg/pluginapi/v0.1.1` + 在 `go.mod` 里 `retract v0.1.0`，echo 升 `require`，删本地 `go.work` 后 `GOWORK=off` 干净 clone 复验；复验通过前 M1 不置 completed（BOARD 已同步降级）。
+0. ~~**P0 · SDK tag 不可用（阻断收口）**~~ **已闭环（2026-11-22 收口补正）**：`pkg/pluginapi/v0.1.0`（tag `3a59b98`）的 `go.mod` 仍声明 `github.com/kore-project/kore/pkg/pluginapi`，干净 clone 报 `module declares its path as ... but was required as ...`；proxy.golang.org 已缓存该 `.mod`，**改写 tag 会让所有消费者校验和永久失败**。处置：在 `pkg/pluginapi/go.mod` 里 `retract v0.1.0` 并发布 `pkg/pluginapi/v0.1.1`（tag `90e9fdd`）；echo 升 `require` 到 v0.1.1 并重发 `v0.1.1`（tag `10cc6eb`）。复验：`GOWORK=off go get ...@v0.1.1` 退出码 0（`GOPROXY=direct` 与 `proxy.golang.org` 双路径）、`go list -m -versions` 仅列 v0.1.1；echo 干净 clone `GOWORK=off make build` / `make dist` 退出码 0；BOARD 里程碑与 `CS-M1-01` 已置 completed / confirmed。
 1. `internal/core/auth`（PBKDF2 / session / 双 `Path=/` cookie / CSRF）与 `market`（`POST /api/v1/store/install`、`GET /store/jobs/{id}`）——M1 回 501，属 M1-05/M1-13 未完成。
 2. web 壳（`web/dist/index.html` + `id="app"`，≤30 KiB）：仓库当前无 `web/`，随 M2 前端一起做。
 3. 退避重启 / 心跳探测 / `run.json` 孤儿核对：supervisor 目前只累计 `restarts`，不做退避（`manager.go:8` 明示归 M1-12/13）。
