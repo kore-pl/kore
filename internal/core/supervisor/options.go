@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/kore-project/kore/internal/core/registry"
-	"github.com/kore-project/kore/internal/platform"
+	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/platform"
 )
 
 // Manifests 是 supervisor 对 registry 的最小依赖：只读清单与 enabled 状态。

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kore-project/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/registry"
 )
 
 // instance 是单个插件的运行态；所有字段读写都在 mu 下，避免与 reaper 竞争。

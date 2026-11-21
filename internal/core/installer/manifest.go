@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kore-project/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/registry"
 )
 
 // loadManifest 复用 registry 的解析/校验（12 个必填字段、capabilities 两段模型等），

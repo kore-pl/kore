@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/kore-project/kore/internal/platform"
+	"github.com/pengtang1024/kore/internal/platform"
 )
 
 // Collect 通过 platform 五接口采集探测事实。

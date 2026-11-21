@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // Call 转发一次方法调用并等待响应。

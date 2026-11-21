@@ -7,10 +7,10 @@ import (
 	"io"
 	"log/slog"
 
-	coreconfig "github.com/kore-project/kore/internal/core/config"
-	"github.com/kore-project/kore/internal/core/installer"
-	"github.com/kore-project/kore/internal/core/store"
-	"github.com/kore-project/kore/pkg/pluginapi"
+	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/store"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // installOptions 是 install 子命令解析后的参数。

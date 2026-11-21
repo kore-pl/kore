@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/installer"
 )
 
 // TestInstallSuccess 覆盖验收用例 1：正常安装后目录结构、plugins 与 plugin_state 均正确。

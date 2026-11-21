@@ -29,9 +29,16 @@
 | 2026-11-22 约 00:2x | M1-10 registry：12 字段 + `lifecycle` 解析 | —（派发记录缺失） | `internal/core/registry/` | M1-10 提案 | `manifest.go` 已落盘，**未提交** | — | in_progress |
 | 2026-11-22 约 00:2x | 建立判断台账 + 回填 M0/M1 | kore-scribe-log | `.agents/LOG/`、`.agents/README.md`、`.agents/BOARD.md`、`.agents/WORKFLOW.md` | M0/M1 既有产物 | 5 份台账文件 + 3 处索引 / 工作流补丁 | — | in_progress |
 
+| 2026-11-22 | M1-07 daemon 装配 + HTTP 端点（walking skeleton） | kore-impl-integration | `cmd/kored/serve*.go`、`internal/core/httpapi/` | config / store / registry / supervisor / bus / installer 六模块 | serve 拆 9 文件 + httpapi 6 文件 + 6 项测试 + 手工 E2E（install→enable→invoke→kill -9→disable） | —（待提交） | in_progress |
+| 2026-11-22 | 大小写审计与 `case-check` | kore-case-audit | `scripts/case-check.sh`、docs 大小写修正 | 模块改名 | 5 项校验 4 pass / 1 warn（旧仓库名规则命中 ADR / 台账必要引用）；已接入 `make check` 第 9 段 | —（待提交） | completed |
+| 2026-11-22 | 模块路径改名 `kore-project` → `pengtang1024` | kore-rename-module | `go.mod`、`go.sum`、`pkg/pluginapi/go.mod`、`scripts/dep-check.sh`、`docs/**`、`cmd/`、`internal/`、`../kore-plugin-echo` | ADR-0017 | 文档 77 文件 / 163 处 + 代码 import 全量改；残留 3 处为历史/假设名（`scripts/case-check.sh` 1、`docs/OPEN-SOURCE.md` 2） | —（待提交，HEAD 仍为旧路径） | completed |
+| 2026-11-22 | 开源六件套 + G-26 | kore-oss-assets | `LICENSE`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`、`docs/OPEN-SOURCE.md` | ADR-0017 | 六件齐 + MIT；`make oss-check` 8 pass / 0 fail | —（待提交） | completed |
+| 2026-11-22 | 只读探测：GitHub 归属与提交身份 | kore-gh-probe / kore-git-identity | 只读，无写域 | — | `gh auth status`（pengtang1024）→ ADR-0017 选项对比；`git log --format='%ae'` 11 条同邮箱 | —（只读，无产出） | completed |
+
 ## 未回收与待补
 
 1. **`internal/core/config` / `registry` 的派发记录缺失**：文件已落盘（2026-11-22 00:2x），但会话内没有对应的 `team_task_*` 或派发消息可引；owner 列留 `—`，等 lead 补登记后再回填。
 2. **`90c5936` 的 owner 为推断**：commit 署名不区分角色；按改动文件（协议正文 + ADR + 提案）推断为 `kore-architect-m1`。
 3. **`6fdaedd` / `02d0154` 的 owner 为推断**：两笔均只改 `cmd/kored/`，与 `kore-impl-runtime` 写域一致，但无派发记录。
 4. **M1 各 implementer 任务的 `blocked_by`**：以 `proposals/0001` §3 任务表的依赖列为准（如 M1-02 ← M1-01、M1-12 ← M1-09/10/21），本表不重复展开。
+5. **`case-check` 规则 3 与 ADR / 台账的必要引用冲突**：`Kore-Project` 作为"被否决的组织名"必须被点名，规则却按旧仓库名告警（当前 1 warn）；待 owner 决定"加豁免标注"还是"允许 WARN 长期存在"，**不靠改写历史消警**。

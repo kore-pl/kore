@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // version 由构建参数注入（make build 的 -X main.version=...）。

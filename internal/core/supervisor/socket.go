@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // socketPath 返回插件 UDS 路径（<RunDir>/<id>.sock）。

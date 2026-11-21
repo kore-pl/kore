@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // shutdownMethod 是优雅停止的协议方法名。

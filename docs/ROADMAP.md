@@ -19,12 +19,12 @@ kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属
 
 ### 2.1 仓库清单
 
-module 路径为裁决占位值，最终以 `docs/DECISIONS/0008-multi-repo-topology.md` 与 `docs/REPOS.md` 为准。
+module 路径以 `docs/DECISIONS/0008-multi-repo-topology.md` 与 `docs/REPOS.md` 为准（仓库归属 `pengtang1024`）。
 
-| 仓库 | module（占位） | 定位 | 创建时点 |
+| 仓库 | module 路径 | 定位 | 创建时点 |
 | --- | --- | --- | --- |
-| `kore` | `github.com/kore-project/kore` | 内核 + `pkg/pluginapi` 公开 SDK（独立嵌套 module）+ 主壳前端 + `docs/` + `.agents/` | 已存在（M0） |
-| `kore-plugins` | `github.com/kore-project/kore-plugins` | 纯静态索引（`index/plugins.json` + `presets/*.json` + 校验脚本），不做审核、不代管包、无账号 | **M1** |
+| `kore` | `github.com/pengtang1024/kore` | 内核 + `pkg/pluginapi` 公开 SDK（独立嵌套 module）+ 主壳前端 + `docs/` + `.agents/` | 已存在（M0） |
+| `kore-plugins` | `github.com/pengtang1024/kore-plugins` | 纯静态索引（`index/plugins.json` + `presets/*.json` + 校验脚本），不做审核、不代管包、无账号 | **M1** |
 | `kore-plugin-echo` | `.../kore-plugin-echo` | M1 跨仓库依赖验证件（最小插件） | **M1** |
 | `kore-plugin-site` / `-ssl` / `-backup` | `.../kore-plugin-<id>` | 核心插件（站点 / 证书 / 备份） | **M2** |
 | 其余 17 个产品插件仓库 | `.../kore-plugin-<id>` | 见 §5 插件族映射（web / data / ops / sec / app） | **M3–M4** |

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // TestFrameSizeBoundary 覆盖 8 MiB 整帧口径：8388608 收、8388609 断，无「扣掉帧头 -2」偏移。

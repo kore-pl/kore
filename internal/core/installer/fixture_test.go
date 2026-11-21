@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/installer"
-	"github.com/kore-project/kore/internal/core/store"
+	"github.com/pengtang1024/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // fixture 是隔离的测试环境：临时状态目录 + 已打开状态库 + 安装器。

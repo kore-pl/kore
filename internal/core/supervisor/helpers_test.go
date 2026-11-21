@@ -10,10 +10,10 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/registry"
-	"github.com/kore-project/kore/internal/core/supervisor"
-	"github.com/kore-project/kore/internal/platform"
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/supervisor"
+	"github.com/pengtang1024/kore/internal/platform"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // fakePluginPath 是 TestMain 构建出的假插件二进制（临时目录，测试结束即删）。

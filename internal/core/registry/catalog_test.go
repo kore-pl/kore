@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/registry"
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // newCatalogWith 建一个已登记并 enable 指定清单的登记表。

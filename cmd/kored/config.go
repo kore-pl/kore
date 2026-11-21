@@ -6,8 +6,8 @@ import (
 	"io"
 	"log/slog"
 
-	coreconfig "github.com/kore-project/kore/internal/core/config"
-	"github.com/kore-project/kore/internal/core/store"
+	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // config 是 serve 的运行期配置（由只读配置快照映射而来）。

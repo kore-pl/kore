@@ -31,7 +31,7 @@
 | 惰性插件 | lazy plugin | `lifecycle: lazy`（**默认**）：调用即拉起、空闲 300 s 退出，冷启动 p95 ≤300 ms | A·C·R | 不是 oneshot：lazy 复用 300 s 窗口；也不是 resident：不占常驻配额 |
 | 常驻配额 | resident quota | 同时运行的 resident 插件上限：3 个 / 合计 ≤24 MiB / 单个 ≤12 MiB | A·C | 不是"装了几个"，是"同时启用了几个"；超限拒绝启用而非自动踢人 |
 | 插件 | plugin | 以独立进程存在、通过协议向主壳提供能力的可安装单元 | V·A·C | 不是 Go plugin 动态库；红线①禁止同进程加载 |
-| 插件仓库 | plugin repo (`kore-plugin-<id>`) | 每个插件一个独立 git 仓库，module 为 `github.com/kore-project/kore-plugin-<id>`，只依赖 kore 的 `pkg/pluginapi` | V·A·R | 不是 kore 的 `plugins/` 子目录（该旧拓扑已作废）；也不是 mono-repo 的一个 package |
+| 插件仓库 | plugin repo (`kore-plugin-<id>`) | 每个插件一个独立 git 仓库，module 为 `github.com/pengtang1024/kore-plugin-<id>`，只依赖 kore 的 `pkg/pluginapi` | V·A·R | 不是 kore 的 `plugins/` 子目录（该旧拓扑已作废）；也不是 mono-repo 的一个 package |
 | 索引仓库 | index repo (`kore-plugins`) | 纯静态聚合仓库：`index/plugins.json` + 校验脚本，只读插件发布物，不代管包、无审核、无账号 | A·R | 不是市场后端；没有上传接口、没有用户体系、运行期不被 kore 访问 |
 | 协议 SDK | protocol SDK (`pkg/pluginapi`) | kore 对外公开的协议包（帧编解码/消息类型/错误码），插件仓库唯一可依赖的 kore 包 | V·A·C·R | 不是 `internal/` 下的私有包；放 `internal/` 会让外部 module 编译期无法导入 |
 | 项目名 | kore | 项目 / 仓库 / Go module 名，全小写；不用于进程名与服务名 | V·A·C·G | 不是二进制名；进程与二进制是 `kored` |
@@ -116,7 +116,7 @@
 | 对象 | 规则 | 正例 | 反例 |
 | --- | --- | --- | --- |
 | 目录 | 全小写；多词用 `-`（文档/配置）或直接小写单词（Go 包） | `cmd/kored`、`internal/core/httpapi`、`docs/DECISIONS` | `internal/Core`、`docs/decision` |
-| Go module 路径 | `github.com/kore-project/<repo>`；插件为 `github.com/kore-project/kore-plugin-<id>` | `github.com/kore-project/kore`、`github.com/kore-project/kore-plugin-echo` | `kore`、`kore/site`、裸 `kore-plugin-echo`（缺组织路径） |
+| Go module 路径 | `github.com/pengtang1024/<repo>`；插件为 `github.com/pengtang1024/kore-plugin-<id>` | `github.com/pengtang1024/kore`、`github.com/pengtang1024/kore-plugin-echo` | `kore`、`kore/site`、裸 `kore-plugin-echo`（缺组织路径） |
 | Go 包名 | 小写单词，不用下划线/复数 | `supervisor`、`pluginapi` | `supervisor_pkg`、`utils` |
 | Go 标识符 | 导出 PascalCase，非导出 camelCase | `PluginState`、`callTimeout` | `plugin_state`、`Call_Timeout` |
 | 文档文件 | 顶层全大写 `.md`；ADR 用 `<4 位序号>-<kebab>.md` | `VISION.md`、`0002-uds-length-prefix-json.md` | `vision.md`、`adr1.md` |

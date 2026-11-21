@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kore-project/kore/internal/core/store"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // Persister 是落库所需的最小能力；*store.Store 直接满足。

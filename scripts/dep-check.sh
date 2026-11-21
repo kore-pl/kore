@@ -2,7 +2,7 @@
 # dep-check — 主壳依赖白名单（只约束第三方；同仓嵌套 module 不计入配额）
 # 判定：
 #   1) 第三方直接依赖 ∈ { yaml.v3, bbolt, protobuf }，且数量 ≤ 3
-#   2) 以 github.com/kore-project/kore/ 开头的同仓 module：允许，不计配额，
+#   2) 以 github.com/pengtang1024/kore/ 开头的同仓 module：允许，不计配额，
 #      但必须在 go.mod 用 replace => ./ 指向仓库内路径（../ 与绝对路径一律禁止）
 #   3) replace 解析同时支持单行与 replace ( ... ) 块两种 Go 合法写法
 # 用法: bash scripts/dep-check.sh [含 go.mod 的目录]   （默认当前目录）
@@ -12,7 +12,7 @@ set -euo pipefail
 DIR="${1:-.}"
 MOD="${DIR%/}/go.mod"
 
-SELF_PREFIX='github.com/kore-project/kore/'
+SELF_PREFIX='github.com/pengtang1024/kore/'
 THIRD_WHITELIST='gopkg.in/yaml.v3 go.etcd.io/bbolt google.golang.org/protobuf'
 MAX_THIRD=3
 

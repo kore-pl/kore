@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // Lifecycle 是插件生命周期取值（resident | lazy | oneshot）。
@@ -37,7 +37,7 @@ type Resources struct {
 	PidsMax int `json:"pids_max"`
 }
 
-// Manifest 是 info.json 的内存表示：12 个必填字段 + 可选扩展字段。
+// Manifest 是 info.json 的内存表示：9 个必填字段 + 3 个可选字段（见 requiredKeys）。
 type Manifest struct {
 	// ID 插件 id（同时决定 socket、目录与二进制名）。
 	ID string `json:"id"`
@@ -78,11 +78,10 @@ type Manifest struct {
 
 // requiredKeys 是必须出现在 info.json 顶层的键（缺失即 E_INVALID）。
 //
-// 协议口径的 12 个必填字段：id、name、version、protocol、lifecycle、entry、
-// capabilities、resources{memory_mb,cpu_quota,pids_max}、requires_kore、
-// triggers（字符串数组，元素 "<type>:<name>"）。
-// 其中 resources 三项在 validateResources 里按值校验（键存在但值越界同样 E_INVALID），
-// lifecycle 缺省为 lazy（G-14）因此允许省略；其余 9 个键都做存在性检查。
+// 口径：9 个必填 = id、name、version、protocol、entry、capabilities、
+// resources、requires_kore、triggers；3 个可选 = lifecycle（缺省 lazy，G-14）、
+// scenario_tags（缺省 []）、size_bytes（缺省 0，make dist 回填）。
+// resources 三项在 validateResources 里按值校验；其余按存在性检查。
 var requiredKeys = []string{
 	"id", "name", "version", "protocol", "entry",
 	"capabilities", "resources", "requires_kore", "triggers",

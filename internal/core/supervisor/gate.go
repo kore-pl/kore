@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // gate 是单插件的冷启动闸门：同一时刻只允许一次启动，其余请求并入队列等同一结果。

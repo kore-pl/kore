@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/envprobe"
+	"github.com/pengtang1024/kore/internal/core/envprobe"
 )
 
 // newTestServer 构造只测路由的 Server（不绑定监听器，transport 置 nil）。

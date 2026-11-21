@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/registry"
 )
 
 // TestDetectCycleNoCycle 验证无环图返回 nil（含缺失依赖节点）。

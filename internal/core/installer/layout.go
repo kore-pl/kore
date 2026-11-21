@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kore-project/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/registry"
 )
 
 // newStaging 在插件根目录的 .staging 下建唯一临时目录并收紧权限。

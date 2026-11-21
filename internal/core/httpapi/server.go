@@ -1,7 +1,8 @@
-// Package httpapi 提供 kore 的最小 HTTP 入口：UDS 监听、健康检查与系统信息。
+// Package httpapi 提供 kore 的最小 HTTP 入口：UDS 监听、健康检查、系统信息与插件启停/调用。
 //
-// M1 只有两个端点（GET /-/healthz、GET /api/v1/system/info）；路由用标准库
-// net/http + ServeMux，不引入任何 Web 框架；关闭走 context + Server.Shutdown。
+// M1 端点：GET /-/healthz、GET /api/v1/system/info、GET /api/v1/plugins、
+// POST 插件管理端点（enable/disable）与 POST /api/v1/invoke/{plugin}/{method}；
+// 路由用标准库 net/http + ServeMux，不引入任何 Web 框架；关闭走 context + Server.Shutdown。
 package httpapi
 
 import (
@@ -14,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kore-project/kore/internal/core/envprobe"
-	"github.com/kore-project/kore/internal/platform"
+	"github.com/pengtang1024/kore/internal/core/envprobe"
+	"github.com/pengtang1024/kore/internal/platform"
 )
 
 // Options 是 httpapi 的启动参数，由 cmd/kored 装配。
@@ -28,6 +29,8 @@ type Options struct {
 	SocketPath string
 	// Addr 是可选的 TCP 监听地址（默认空 = 不监听 TCP）。
 	Addr string
+	// Backend 是插件管理后端；nil 表示未装配（仅健康检查与系统信息可用）。
+	Backend Backend
 }
 
 // Server 持有监听器与 http.Server，生命周期由 cmd/kored 控制。
@@ -45,15 +48,15 @@ func New(opts Options, transport platform.Transport) *Server {
 	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux()}
 	server.routes()
 	server.httpServer = &http.Server{
-		Handler:           server.mux,
+		Handler:           server.withRequestID(server.mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	return server
 }
 
-// Handler 返回路由处理器，供测试与后续内嵌复用。
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler 返回带 request id 中间件的路由处理器，供测试与后续内嵌复用。
+func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
 // Start 先绑定 UDS（按需追加 TCP），再开始服务；绑定失败原样返回（cmd 映射 exit 5）。
 func (s *Server) Start() error {

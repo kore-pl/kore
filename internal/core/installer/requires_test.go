@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/installer"
 )
 
 // TestCheckRequiresKore 覆盖区间语义：下界含、上界不含、只写下界、非法写法。

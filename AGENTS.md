@@ -4,9 +4,9 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 **v1 定位**：覆盖 **22 项能力域：12 项生产级 / 8 项基础级（边界用例延 v1.1）/ 6 项明确不做**。**v1.0 = Linux GA，macOS / Windows 为 preview**；能力由 **18–22 个插件仓库**提供，内核只做调度与商店 / 预设机制。
 当前里程碑 **M0 · 文档与骨架**（只交付 `kore` 仓库：纯文档 + 空骨架，零业务代码）｜MVP 版本 0.1.0｜`kore-plugins` 与 `kore-plugin-echo` 归 M1，`site` / `backup` 归 M2。
 
-- `kore`（module `github.com/kore-project/kore`）：内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（**唯一协作中枢**）。
-- `kore-plugins`（module `github.com/kore-project/kore-plugins`）：纯静态索引 `index/plugins.json` + 校验脚本；不做审核、不代管包、无账号。
-- `kore-plugin-<id>`（module `github.com/kore-project/kore-plugin-<id>`）：每插件一仓库，含 `main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md`，只依赖 `kore/pkg/pluginapi`。
+- `kore`（module `github.com/pengtang1024/kore`）：内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（**唯一协作中枢**）。
+- `kore-plugins`（module `github.com/pengtang1024/kore-plugins`）：纯静态索引 `index/plugins.json` + 校验脚本；不做审核、不代管包、无账号。
+- `kore-plugin-<id>`（module `github.com/pengtang1024/kore-plugin-<id>`）：每插件一仓库，含 `main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md`，只依赖 `kore/pkg/pluginapi`。
 
 **读前必知**
 
@@ -17,20 +17,22 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 5. **设计优化优先于代码优化**：资源 / 性能 / 复杂度问题先问"能否改设计"（少一个进程、少一个依赖、改生命周期、改触发方式），再问"能否调参"。调参只能作为临时手段，且必须记 ADR 并标注"待设计层解决"。反例：为压 500 KiB 而调 `GOGC`——那不是达标的主要功臣，薄壳 + 依赖白名单 + embed 单二进制才是。
 6. **数据形状必须显式**：对外 schema（协议、配置、`info.json`、索引、preset）**禁止 `object` / `any` / `map[string]any` 作为类型**——要么显式列出字段与类型，要么用带类型前缀的标量（如 `"event:cert.renew_due"`）。内部解析可以临时用 `any`，但必须在一处收口并转成具体类型。**不要用 `object` 逃避把结构想清楚。**
 
-## 1. 阅读顺序（五步，不跳步）
+## 1. 阅读顺序（七步，不跳步）
 
 1. [docs/VISION.md](docs/VISION.md) — 做什么、不做什么、五锚点原文与成功判据。
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 组件图、进程模型、插件状态机、故障域。
 3. 本领域文档：内核 [docs/CORE.md](docs/CORE.md)｜协议 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md)｜资源 [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md)｜数据 [docs/DATA-MODEL.md](docs/DATA-MODEL.md)｜前端 [docs/FRONTEND.md](docs/FRONTEND.md)｜安全 [docs/SECURITY.md](docs/SECURITY.md)｜决策 [docs/DECISIONS/](docs/DECISIONS/)。
 4. [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段门禁、讨论协议、任务板状态机、上下文交接。
-5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G17 门禁命令、执行者、分层与证据格式。
+5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 门禁命令、执行者、分层与证据格式。
+6. **贡献与治理**：[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — 开源化政策（MIT）、PR / Issue 流程与评审要求。
+7. **安全披露**：[SECURITY.md](SECURITY.md)（根，披露政策）vs [docs/SECURITY.md](docs/SECURITY.md)（设计）——**两者不要混**。
 
 ## 2. 硬门禁（违反任意一条，产物即不成立）
 
 | 编号 | 规则 | 违反后果 | 检查方式 |
 | --- | --- | --- | --- |
 | G-01 | 薄壳红线：`internal/core` 只做规则不写业务，且禁止 import `plugins/**` | 提交拒绝，改动整段重写 | `grep -rn "plugins/" internal/core` 必须零命中（G7）；**capability 字符串不属于业务逻辑**——内核只认识 6 个特权能力（`system:` / `net:` / `proc:` 各 read/write 类）与通用语法 `<plugin-id>:<action>`，**不得维护业务域名词表**（详见 PLUGIN-PROTOCOL） |
-| G-02 | 依赖白名单：主壳**第三方**直接依赖上限 3 = `gopkg.in/yaml.v3` / `go.etcd.io/bbolt` / `google.golang.org/protobuf`（M3 引入）；**同仓嵌套 module**（`github.com/kore-project/kore/*`，当前只有 `pkg/pluginapi`）**不计入该配额**，但必须在根 `go.mod` 用 `replace => ./` 指向仓库内路径（禁止 `../` 或绝对路径）。禁 Web 框架、gRPC、NATS、SQLite、Redis 客户端、容器 SDK | 提交拒绝 | `go list -m all` 与白名单逐项比对（G5）；`make check` 2/5 区分两类：第三方计数 ≤3 + 同仓 module 仅允许 `kore-project/kore/` 前缀且 `replace => ./` |
+| G-02 | 依赖白名单：主壳**第三方**直接依赖上限 3 = `gopkg.in/yaml.v3` / `go.etcd.io/bbolt` / `google.golang.org/protobuf`（M3 引入）；**同仓嵌套 module**（`github.com/pengtang1024/kore/*`，当前只有 `pkg/pluginapi`）**不计入该配额**，但必须在根 `go.mod` 用 `replace => ./` 指向仓库内路径（禁止 `../` 或绝对路径）。禁 Web 框架、gRPC、NATS、SQLite、Redis 客户端、容器 SDK | 提交拒绝 | `go list -m all` 与白名单逐项比对（G5）；`make check` 2/5 区分两类：第三方计数 ≤3 + 同仓 module 仅允许 `pengtang1024/kore/` 前缀且 `replace => ./` |
 | G-03 | 资源预算：**硬红线** 主壳空载 VmRSS ≤ 16 MiB、单常驻插件 ≤ 24 MiB、常驻合计 ≤ 48 MiB、同时常驻 ≤ 3（推荐 ≤2）、单二进制 ≤ 25 MiB、前端首屏 ≤ 300 KiB gzip、空闲 CPU ≤ 0.1%（60s ≤ 60ms）、goroutine ≤ 20、fd ≤ 64、出站 0；**目标（争取，不判未完成）** 主壳 8 MiB / 单插件 12 MiB / 合计 24 MiB。依据 **ADR-0016**（`docs/DECISIONS/0016-resource-budget-final.md`）；除安全事故或用户明确要求外不再调整 | 超硬红线判未完成；红线与目标之间记 WARN + 趋势，不返工，M4 集中瘦身 | `make budget-check`（判红线）+ `make mem MEM_POINTS=60`（里程碑收口）；证据须含生效值与来源标注；GC 判别看 `/gc/gogc:percent` |
 | G-04 | 进程隔离：插件必须是独立进程 + 独立 socket，禁止同进程动态库插件 | 架构级拒绝 | 评审 `docs/PLUGIN-PROTOCOL.md` 与 supervisor 启动路径 |
 | G-05 | 无中间件：不引入 Redis / NATS / MQ / 容器运行时等常驻组件，隔离直接走 systemd + cgroup v2 + 文件系统 | 架构级拒绝 | 依赖白名单 + 进程清单核对 |
@@ -53,6 +55,9 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-22 | 优化顺序：资源 / 性能类改动必须说明所处层级（设计层 / 架构层 / 代码层）；**只有设计层与架构层已穷尽，才允许纯代码层调参**，且调参必须记 ADR + 标注临时性 | 改动不予合入（先补设计层评估） | 判定型门禁，无需 grep：评审时逐条回答"为什么不能少一个进程 / 一个依赖 / 改生命周期 / 改触发方式"，答不出即退回 |
 | G-23 | 判断留痕：任何"多选一"的决定（架构 / 协议 / 预算 / 范围 / 门禁）必须写入 `.agents/LOG/DECISIONS.md`（含**被否决的选项与依据**）；任何派发必须写入 `.agents/LOG/DISPATCH.md`（task / owner / 写域 / 依赖 / 交付 / commit）。里程碑收口时台账缺条目视为该里程碑未收口 | 里程碑不得收口 | 里程碑收口时人工核对；`make check` 不强制（避免为记账阻断日常提交），但 REVISE 时 verifier 会查 |
 | G-24 | 无 any / object 逃逸：对外 schema 与对外结构体不得出现 `object` / `any` / `map[string]any`；`json.RawMessage` 仅允许用于"插件方法的参数与结果载荷"（受控例外，M2 起按插件声明的 schema 校验） | 评审退回，不得合入 | `grep -rn "map[string]any" --include='*.go' internal/ cmd/`（排除 `_test.go` 与 `testdata/`）逐个核对是否解析期临时；`grep -rn "类型：object" docs/` 零命中（受控例外行必须写明原因）；判定型部分由评审回答"这个字段为什么不能定形" |
+| G-25 | worktree 卫生：不得遗留临时 worktree 与临时分支；里程碑收口时 `git worktree list` 仅主工作树、`git branch --list 'wt-*' 'tmp-*'` 为空 | 该里程碑不得收口（残留会干扰后续检出与 CI） | `make wt-check`（F 落地）或手工 `git worktree list` + `git branch --list` |
+| G-26 | 开源资产完整：根必须有 `LICENSE`（MIT）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`；`LICENSE` 必须含 `MIT License` 与 `Permission is hereby granted`；不得混入非 MIT 协议头 | 不得发布（GitHub 上缺 `LICENSE` = 默认保留所有权利，与项目声明矛盾） | `make oss-check`（第 8 段，阻断级） |
+| G-27 | 大小写一致性：module 路径全小写且无 `!` 转义；同一目录内不得存在仅大小写不同的文件 / 目录（Windows / macOS 会静默覆盖）；插件 `info.json` 的 `id` 匹配 `^[a-z][a-z0-9-]*$`；文档中 GitHub URL 的 owner 段全小写 | 阻塞级 FAIL（冲突文件在 Windows / macOS clone 时丢失）；**历史组织名指称（见 ADR-0017）**与 URL owner 大小写为 **WARN 级** | `make case-check`（第 9 段） |
 
 ## 3. 提交规范
 
@@ -60,6 +65,14 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 精确 add：`git add internal/core/bus.go`，禁止 `git add .` / `git add -A`。
 - 检查点即提交：一处自洽且过了对应层级门禁（G1/G2/G4）就提交，不攒到任务收尾。
 - 不提交未验证改动；门禁没跑或跑挂时，明确报告阻塞原因，不"先提交再说"。
+
+**隔离环境与 worktree**：**隔离验证优先用 `git archive`，需要真实编辑才用 worktree。**
+
+- 只读验证（证明某提交自洽）：`git archive HEAD | tar -x -C /tmp/xxx`，测完删目录；**不留任何 git 状态**。
+- 需要编辑 / 提交的隔离：`git worktree add /tmp/wt-<name> -b <branch> [<start-point>]`。
+- **清理三件事，缺一不可**：① 改动先合并回主分支（或明确放弃并说明）② `git worktree remove /tmp/wt-<name>` ③ `git branch -d <branch>` + `git worktree prune`。
+- **禁止**"验证完直接删 worktree 而不合并"——那等于把改动丢了还看不出来。
+- 里程碑收口时 `git worktree list` 必须只有主工作树（1 行）。
 
 ## 4. 派发纪律
 
@@ -97,9 +110,12 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [.agents/ROLES.md](.agents/ROLES.md) — 6 张角色卡（输入/输出/可做/禁止/交接物/完成判据）、冲突仲裁、不可兼任。
 - [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段逐条门禁、讨论协议、状态机、防漂移审计。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
-- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G17 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 门禁命令、三层组合、证据格式、M0 跳过规则。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md) — 复盘模板、里程碑记录、反模式沉淀。
 - [.agents/LOG/](.agents/LOG/) — 判断留痕：裁决台账（选项 / 依据 / 影响）、派发台账、会话摘要；与 BOARD（状态）、JOURNAL（教训）互补。
+- [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献流程与行为准则（PR / Issue / 评审要求）。
+- [SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
+- [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 开源化政策（MIT）与 CI / 模板。
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件。
 - [docs/CORE.md](docs/CORE.md) — **九个内核模块**（config / store / auth / httpapi / registry / supervisor / bus / installer / market）+ 4 个支撑小节（logger / static / sse / envprobe），合计 §2 共 13 小节；HTTP API **20 个端点**：13 业务 + 7 store，前缀 `/api/v1`；另有 `/-/healthz` 与 3 条静态前缀。
 - [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准。

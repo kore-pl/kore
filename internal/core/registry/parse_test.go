@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/registry"
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// baseManifest 返回一份 12 个必填字段齐全的 resident 清单。
+// baseManifest 返回一份 9 个必填字段齐全的 resident 清单。
 func baseManifest() map[string]any {
 	return map[string]any{
 		"id":           "site",
@@ -58,7 +58,7 @@ func codeOf(t *testing.T, err error) string {
 	return protocolErr.Code
 }
 
-// TestParseValidManifest 验证 12 个必填字段齐全时解析成功且字段落位。
+// TestParseValidManifest 验证 9 个必填字段齐全时解析成功且字段落位。
 func TestParseValidManifest(t *testing.T) {
 	manifest := parse(t, baseManifest())
 	if manifest.ID != "site" || manifest.Version != "0.1.0" {

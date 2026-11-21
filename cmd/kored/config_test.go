@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/store"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // TestLoadConfigMapsBadYAMLToExit2 验证坏 YAML 映射退出码 2。

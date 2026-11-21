@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // encodeFrameHeader 返回只含 4 字节大端长度前缀的假帧头，用于构造异常输入。

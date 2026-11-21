@@ -13,9 +13,9 @@
 
 | 仓库 | 模块路径 | 职责 |
 | --- | --- | --- |
-| kore | `github.com/kore-project/kore` | 内核 + `pkg/pluginapi` 公开协议 SDK |
-| kore-plugins | `github.com/kore-project/kore-plugins` | 纯静态索引 + 可选市场页；不做人工审核、不代管包、无账号 |
-| `kore-plugin-<id>` | `github.com/kore-project/kore-plugin-<id>` | 每个插件一仓库；产物 `<id>-<version>.tar.gz` + sha256 |
+| kore | `github.com/pengtang1024/kore` | 内核 + `pkg/pluginapi` 公开协议 SDK |
+| kore-plugins | `github.com/pengtang1024/kore-plugins` | 纯静态索引 + 可选市场页；不做人工审核、不代管包、无账号 |
+| `kore-plugin-<id>` | `github.com/pengtang1024/kore-plugin-<id>` | 每个插件一仓库；产物 `<id>-<version>.tar.gz` + sha256 |
 
 八条规则：R1 依赖单向（插件 → `pkg/pluginapi`，kore 不 import 任何插件）｜R2 协议包必须公开，破坏性改动 = 主版本 + ADR｜R3 `info.json` 必填 `requires_kore`｜R4 各仓库独立 tag｜R5 `.agents/` 只在 kore｜R6 变更集登记｜R7 各仓库自带 Makefile｜R8 docs-check 只在 kore。
 
@@ -34,7 +34,7 @@
 
 ## 后果
 
-**正面**：每个插件独立发版，内核 tag 不再暗示插件变化；CI 按仓库隔离，插件失败不阻塞内核；第三方只需 `go get github.com/kore-project/kore/pkg/pluginapi`；索引仓库只是发现渠道，删掉它不影响已安装插件；插件前端在各自仓库构建，不进内核二进制。
+**正面**：每个插件独立发版，内核 tag 不再暗示插件变化；CI 按仓库隔离，插件失败不阻塞内核；第三方只需 `go get github.com/pengtang1024/kore/pkg/pluginapi`；索引仓库只是发现渠道，删掉它不影响已安装插件；插件前端在各自仓库构建，不进内核二进制。
 
 **负面**：出现 N×M 兼容矩阵（内核版本 × 插件版本），需要 `requires_kore` 声明与测试覆盖；跨仓库联调要 `go.work` 或 replace，否则只能等 tag；`pkg/pluginapi` 从内部类型升级为公共契约，任何字段改动都要按语义化版本对待，且要考虑已发布插件的兼容窗口。
 

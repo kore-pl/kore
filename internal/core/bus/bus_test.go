@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kore-project/kore/internal/core/bus"
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/internal/core/bus"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // fakeProvider 返回固定连接；err 非空时模拟 supervisor 的拒绝（未 enable 等）。

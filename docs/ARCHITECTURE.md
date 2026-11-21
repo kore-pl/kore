@@ -10,7 +10,7 @@
 | 作用 | 定义组件边界、依赖方向、进程模型、数据流、状态机、故障域与设计权衡 |
 | 不作用 | 不写单个模块的字段级规格（见 [CORE.md](./CORE.md)）、不写协议帧细节（由 `PLUGIN-PROTOCOL.md` 承载，本文件只给结论）、不写愿景（见 [VISION.md](./VISION.md)） |
 | 上位约束 | 五条红线：不做同进程动态库插件；不引入常驻中间件；主壳不含业务逻辑；不做容器化底座；无账号/联网校验/上报/封锁 |
-| 版本基线 | MVP 0.1.0；Go module `github.com/kore-project/kore`（组织名占位，发布前替换）；单二进制 `kored`；协议 `kore.plugin.v1` |
+| 版本基线 | MVP 0.1.0；Go module `github.com/pengtang1024/kore`（仓库归属 `pengtang1024`）；单二进制 `kored`；协议 `kore.plugin.v1` |
 
 本文件所有数字（RSS、超时、退避、帧上限、路径）为**门禁值**，改动必须同步 [CORE.md](./CORE.md) 并落 ADR。术语以 [GLOSSARY.md](./GLOSSARY.md) 为准。
 
@@ -65,10 +65,10 @@
 | L0 协议层 | `pkg/pluginapi/`（公开协议 SDK） | 仅 Go 标准库（`encoding/json`、`encoding/binary`、`errors`） | import `internal/core/*`；import 任何业务包；引入第三方库 |
 | L1 内核层 | `internal/core/{httpapi,auth,registry,supervisor,bus,store,config}` | 标准库 + `pkg/pluginapi` + 白名单 3 依赖（`yaml.v3`、`bbolt`、M3 的 `protobuf`） | import `plugins/**`；Web 框架；SQL/ORM；gRPC/NATS/Redis/容器 SDK |
 | L2 壳层 | `cmd/kored/` | `internal/core/*`、`pkg/pluginapi`、标准库 | 业务逻辑；直接读写 `state.db` 表结构（必须经 store） |
-| L3 插件层 | 独立仓库 `kore-plugin-<id>/`（各自独立 `go.mod`） | `github.com/kore-project/kore/pkg/pluginapi`（tag 依赖，协议类型与帧编解码）+ 标准库 + 插件自选依赖 | import `internal/*`（Go 不可见）；import 其他插件；共享进程内存 |
+| L3 插件层 | 独立仓库 `kore-plugin-<id>/`（各自独立 `go.mod`） | `github.com/pengtang1024/kore/pkg/pluginapi`（tag 依赖，协议类型与帧编解码）+ 标准库 + 插件自选依赖 | import `internal/*`（Go 不可见）；import 其他插件；共享进程内存 |
 | L4 前端 | `web/`（Vue 3 + Vite + TS） | 仅 HTTP API `/api/v1/*` 与静态资源 | import Go 包；直接访问文件系统；绕过 auth 拿数据 |
 
-插件如何复用协议类型（M1 必须按此落地）：插件仓库的 `go.mod` 声明 `module github.com/kore-project/kore-plugin-<id>`，`require github.com/kore-project/kore vX.Y.Z`（**tag 依赖**），只导入 `github.com/kore-project/kore/pkg/pluginapi`。协议包放在 `pkg/` 而不是 `internal/`，是因为 Go 的 `internal` 规则让外部 module **编译期就无法导入**——协议包留在 `internal/` 等于插件永远接不进来。
+插件如何复用协议类型（M1 必须按此落地）：插件仓库的 `go.mod` 声明 `module github.com/pengtang1024/kore-plugin-<id>`，`require github.com/pengtang1024/kore vX.Y.Z`（**tag 依赖**），只导入 `github.com/pengtang1024/kore/pkg/pluginapi`。协议包放在 `pkg/` 而不是 `internal/`，是因为 Go 的 `internal` 规则让外部 module **编译期就无法导入**——协议包留在 `internal/` 等于插件永远接不进来。
 
 公开性约束：`pkg/pluginapi` 只允许标准库依赖，不得 import `internal/*`；任何破坏性改动按 R2 走 kore 主版本递增 + ADR + 索引标记不兼容。
 
@@ -77,7 +77,7 @@
 R1（依赖单向）在物理层的体现，三条边界不可跨越：
 
 ```
-kore-plugin-<id> ──require github.com/kore-project/kore vX.Y.Z──► kore/pkg/pluginapi
+kore-plugin-<id> ──require github.com/pengtang1024/kore vX.Y.Z──► kore/pkg/pluginapi
 kore-plugin-<id> ──release tar.gz + sha256──► kore-plugins（索引只读，不代管包）
 kore             ──✗ 不 import 任何 kore-plugin-* ─────────────► 插件仓库
 ```

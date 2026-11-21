@@ -51,7 +51,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross compat-info vet test frontend mem idle budget-check docs-check repo-check canonical-check log-check check clean fmt
+.PHONY: help build cross compat-info vet test frontend mem idle budget-check docs-check repo-check canonical-check log-check wt-check oss-check case-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -161,7 +161,7 @@ idle: ## 空载行为门禁（60s 窗口；空闲 CPU ≤60ms · 线程 ≤20 ·
 	clk=$$(getconf CLK_TCK 2>/dev/null || echo 100); \
 	pass=0; fail=0; na=0; \
 	echo "[INFO] kored PID=$$pid · CLK_TCK=$$clk · 提示：由当前 shell 直接启动可能继承父进程 fd，用 systemd/干净环境启动测量才准"; \
-	sleep 5; a=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat 2>/dev/null || true); \
+	sleep 5; a=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat 2>/dev/null || true); th0=$$(awk '/^Threads:/{print $$2; exit}' /proc/$$pid/status 2>/dev/null || true); \
 	if [ -z "$$a" ]; then echo "[FAIL] 无法读取 /proc/$$pid/stat（进程在采样开始前退出）"; exit 1; fi; \
 	sleep 60; b=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat 2>/dev/null || true); \
 	if [ -z "$$b" ]; then echo "[FAIL] kored 在 60s 采样窗口内退出，本次测量作废"; exit 1; fi; \
@@ -170,11 +170,12 @@ idle: ## 空载行为门禁（60s 窗口；空闲 CPU ≤60ms · 线程 ≤20 ·
 	th=$$(awk '/^Threads:/{print $$2; exit}' /proc/$$pid/status 2>/dev/null || true); \
 	if [ -n "$$th" ]; then g="$$th"; src="Threads(/proc/status)"; elif [ -S /run/kore/kore.sock ] && command -v curl >/dev/null 2>&1; then g=$$(curl -s --unix-socket /run/kore/kore.sock /api/v1/system/info | sed -n 's/.*"goroutines":[ ]*\([0-9][0-9]*\).*/\1/p'); src="goroutines(/api/v1/system/info)"; else g=""; src="不可用"; fi; \
 	if [ -z "$$g" ]; then echo "[N/A] 线程/goroutine 数不可得（无 Threads 且 socket API 不可用）"; na=$$((na + 1)); elif [ "$$g" -le "$(GOROUTINES_MAX)" ]; then echo "[OK] 线程数($$src): $$g（≤$(GOROUTINES_MAX)）"; pass=$$((pass + 1)); else echo "[FAIL] 线程数($$src): $$g > $(GOROUTINES_MAX)"; fail=$$((fail + 1)); fi; \
+	if [ -n "$$th0" ] && [ -n "$$g" ]; then ds=$$((g - th0)); if [ "$$ds" -gt 2 ] || [ "$$ds" -lt -2 ]; then echo "[WARN] 线程数在 60s 内由 $$th0 变为 $$g（差 $$ds > 2，疑似轮询/泄漏，记趋势不阻断）"; else echo "[INFO] 线程数稳定：$$th0 → $$g（差 $$ds，≤2）"; fi; fi; \
 	fds=$$(ls /proc/$$pid/fd 2>/dev/null | wc -l); \
 	if [ "$$fds" -le "$(FD_MAX)" ]; then echo "[OK] 打开 fd: $$fds（≤$(FD_MAX)）"; pass=$$((pass + 1)); else echo "[FAIL] 打开 fd: $$fds > $(FD_MAX)"; fail=$$((fail + 1)); fi; \
 	out=$$(ss -tnp 2>/dev/null | grep -c kored || true); out=$${out:-0}; \
 	if [ "$$out" -eq 0 ]; then echo "[OK] 出站连接: 0（禁止主动外连）"; pass=$$((pass + 1)); else echo "[FAIL] 出站连接: $$out（阈值 0）"; fail=$$((fail + 1)); fi; \
-	if [ -d internal ]; then tn=$$( { grep -rnE 'time\.NewTicker|time\.NewTimer|time\.AfterFunc' internal/ --include='*.go' 2>/dev/null | grep -v cert_renew || true; } | wc -l); if [ "$$tn" -eq 0 ]; then echo "[OK] 定时器白名单: 0 处非白名单定时器"; pass=$$((pass + 1)); else echo "[FAIL] 定时器白名单: $$tn 处未登记（cert_renew 除外）"; grep -rnE 'time\.NewTicker|time\.NewTimer|time\.AfterFunc' internal/ --include='*.go' 2>/dev/null | grep -v cert_renew | head -5 || true; fail=$$((fail + 1)); fi; else echo "[N/A] 源码未就绪（internal/ 缺失），定时器白名单检查跳过"; na=$$((na + 1)); fi; \
+	if [ -d internal ]; then tn=$$( { grep -rnE 'time\.NewTicker|time\.AfterFunc' internal/ cmd/ --include='*.go' 2>/dev/null | grep -v cert_renew || true; } | wc -l); if [ "$$tn" -eq 0 ]; then echo "[OK] 周期性定时器零命中（Ticker/AfterFunc）；NewTimer 属请求级超时，不在此列（须 Stop()，由评审确认）"; pass=$$((pass + 1)); else echo "[FAIL] 周期性定时器 $$tn 处（Ticker/AfterFunc，cert_renew 除外）"; grep -rnE 'time\.NewTicker|time\.AfterFunc' internal/ cmd/ --include='*.go' 2>/dev/null | grep -v cert_renew | head -5 || true; fail=$$((fail + 1)); fi; else echo "[N/A] 源码未就绪（internal/ 缺失），周期性定时器检查跳过"; na=$$((na + 1)); fi; \
 	echo "idle: $$pass pass, $$fail fail, $$na n/a"; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi
 
@@ -267,12 +268,24 @@ log-check: ## 判断留痕台账检查（.agents/LOG 三件套 + 条目数 + ses
 	@echo "[RUN ] log-check"
 	@bash scripts/log-check.sh
 
-check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性
+wt-check: ## worktree 卫生检查（工作树数 / wt-*分支 / .git/worktrees 元数据 / /tmp/wt- 路径；WARN 级不阻断）
+	@echo "[RUN ] wt-check"
+	@bash scripts/wt-check.sh
+
+oss-check: ## 开源资产门禁（LICENSE / 根文档 / CI / 占位符 / Go 协议头；G-26）
+	@echo "[RUN ] oss-check"
+	@bash scripts/oss-check.sh
+
+case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大小写冲突 / 插件 id / 文档 URL owner）
+	@echo "[RUN ] case-check"
+	@bash scripts/case-check.sh
+
+check: ## 聚合门禁（9 段）：docs-check + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性
 	@fail=0; \
-	echo "[RUN ] 1/6 docs-check"; \
+	echo "[RUN ] 1/9 docs-check"; \
 	if ! bash scripts/docs-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 2/6 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
+	echo "[RUN ] 2/9 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
 	s=0; \
 	if ! grep -qE '^GOAMD64[[:space:]]*\?=[[:space:]]*v1$$' Makefile; then echo "[FAIL] GOAMD64 基线漂移（应 GOAMD64 ?= v1）"; s=1; fi; \
 	if ! grep -qE '^GOARM64[[:space:]]*\?=[[:space:]]*v8\.0$$' Makefile; then echo "[FAIL] GOARM64 基线漂移（应 GOARM64 ?= v8.0）"; s=1; fi; \
@@ -285,7 +298,7 @@ check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边
 	echo "[INFO] 依赖白名单（第三方 ≤3 个；同仓 module 不计配额，须 replace => ./）"; \
 	if ! bash scripts/dep-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 3/6 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
+	echo "[RUN ] 3/9 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
 	if [ ! -d ./cmd ] && [ ! -d ./internal ]; then \
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
@@ -295,16 +308,27 @@ check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 4/6 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
+	echo "[RUN ] 4/9 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
 	if ! $(MAKE) --no-print-directory repo-check; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 5/6 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
+	echo "[RUN ] 5/9 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
 	if ! bash scripts/canonical-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 6/6 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 6/9 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
 	log_out=$$(bash scripts/log-check.sh 2>&1 || true); printf '%s\n' "$$log_out"; \
 	log_warn=$$(printf '%s\n' "$$log_out" | grep -c '^\[WARN\]' || true); log_warn=$${log_warn:-0}; \
 	if [ "$$log_warn" -gt 0 ]; then echo "[WARN] 台账有 $$log_warn 处缺口（WARN 级，不阻断；里程碑收口时人工判）"; fi; \
+	echo ""; \
+	echo "[RUN ] 7/9 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
+	wt_out=$$(bash scripts/wt-check.sh 2>&1 || true); printf '%s\n' "$$wt_out"; \
+	wt_warn=$$(printf '%s\n' "$$wt_out" | grep -c '^\[WARN\]' || true); wt_warn=$${wt_warn:-0}; \
+	if [ "$$wt_warn" -gt 0 ]; then echo "[WARN] worktree 卫生有 $$wt_warn 处残留（WARN 级，不阻断；里程碑收口前必须清空）"; fi; \
+	echo ""; \
+	echo "[RUN ] 8/9 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
+	if ! bash scripts/oss-check.sh; then fail=1; fi; \
+	echo ""; \
+	echo "[RUN ] 9/9 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
+	if ! bash scripts/case-check.sh; then fail=1; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"

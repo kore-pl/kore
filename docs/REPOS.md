@@ -10,7 +10,7 @@
 | 作用 | 定义仓库清单、单向依赖、跨仓库规则 R1–R8、本地联调、版本兼容与发布流程 |
 | 不作用 | 不写内核模块规格（见 [CORE.md](./CORE.md)）、不写组件与数据流（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写协议字段（见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)） |
 | 硬约束 | 项目是**多 git 仓库**：`kore` 只含内核与主壳，插件各有独立仓库；"插件放在 kore 的 `plugins/` 子目录"这一旧假设**已作废** |
-| 组织名占位 | 全部 module 用 `github.com/kore-project/...`；发布前统一替换组织名，不留第二套写法 |
+| 仓库归属 | 全部 module 用 `github.com/pengtang1024/...`；发布仓库固定 `pengtang1024` 名下（迁入组织须走 ADR），不留第二套写法 |
 
 一句话：**内核一个仓库，插件一个仓库，索引一个仓库；三者的唯一连接是 tag 依赖与静态发布物，不是子目录。**
 
@@ -18,12 +18,12 @@
 
 | 仓库 | 定位 | module 路径 | 内容 | 发布物 | CI 触发 |
 | --- | --- | --- | --- | --- | --- |
-| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/kore-project/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | push/PR：docs-check + build + test；tag：release |
-| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/kore-project/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | PR 改 `index/plugins.json`：validate.sh |
-| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/kore-project/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | tag `v*`：交叉编译 + 打包 + release |
-| `kore-plugin-echo` | M1 验证件（Walking Skeleton） | `github.com/kore-project/kore-plugin-echo` | 同上，仅实现 hello/ping/echo 与 `kore.event` | 同上 | 同上 |
-| `kore-plugin-site` | 常驻插件（M2） | `github.com/kore-project/kore-plugin-site` | 同上 + 站点管理能力 + `web/` | 同上 | 同上 |
-| `kore-plugin-backup` | 一次性插件（M2） | `github.com/kore-project/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同上 |
+| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/pengtang1024/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | push/PR：docs-check + build + test；tag：release |
+| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/pengtang1024/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | PR 改 `index/plugins.json`：validate.sh |
+| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/pengtang1024/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | tag `v*`：交叉编译 + 打包 + release |
+| `kore-plugin-echo` | M1 验证件（Walking Skeleton） | `github.com/pengtang1024/kore-plugin-echo` | 同上，仅实现 hello/ping/echo 与 `kore.event` | 同上 | 同上 |
+| `kore-plugin-site` | 常驻插件（M2） | `github.com/pengtang1024/kore-plugin-site` | 同上 + 站点管理能力 + `web/` | 同上 | 同上 |
+| `kore-plugin-backup` | 一次性插件（M2） | `github.com/pengtang1024/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同上 |
 | `kore-plugin-sdk-rust` / `-starlark` | 非 Go SDK（M4 可选） | 同名 | 帧编解码 + hello 示例 | crate/包 | tag |
 
 索引仓库的边界（防止它长成平台）：**纯静态聚合，不做人工审核、不代管包、无账号、无上传接口**。它只读插件仓库的 release 产物，把 `{id,version,requires_kore,protocol,sha256,url,size}` 聚合成一个 JSON。
@@ -32,7 +32,7 @@
 
 ```
               ┌──────────────────────────────────────────┐
-              │ github.com/kore-project/kore             │
+              │ github.com/pengtang1024/kore             │
               │ cmd/kored · internal/core                │
               │ pkg/pluginapi（公开协议 SDK，必须公开）   │
               │ web/ · docs/ · .agents/                   │
@@ -98,17 +98,17 @@ use (
 
 | 场景 | 方式 | 可否提交 |
 | --- | --- | --- |
-| 插件正常开发/发版 | `require github.com/kore-project/kore v0.1.0`（**tag 依赖**） | 是 |
-| **同仓库嵌套 module**（kore 根 `go.mod` → `pkg/pluginapi`） | `require` + `replace github.com/kore-project/kore/pkg/pluginapi => ./pkg/pluginapi` | **是，必须提交**（Go 标准做法；干净克隆与 CI 都依赖它） |
+| 插件正常开发/发版 | `require github.com/pengtang1024/kore v0.1.0`（**tag 依赖**） | 是 |
+| **同仓库嵌套 module**（kore 根 `go.mod` → `pkg/pluginapi`） | `require` + `replace github.com/pengtang1024/kore/pkg/pluginapi => ./pkg/pluginapi` | **是，必须提交**（Go 标准做法；干净克隆与 CI 都依赖它） |
 | 联调未发版的内核改动 | 在 `~/Work/GolandProjects/go.work` 里 `use ./kore` | 否（工作区文件不入库） |
-| 跨仓库联调（插件仓库 → 本地 kore） | `replace github.com/kore-project/kore => ../kore`（或 `../kore/pkg/pluginapi`） | **否，禁止提交**（只放本地 `go.work`） |
+| 跨仓库联调（插件仓库 → 本地 kore） | `replace github.com/pengtang1024/kore => ../kore`（或 `../kore/pkg/pluginapi`） | **否，禁止提交**（只放本地 `go.work`） |
 
 两类 `replace` 必须分开看，否则会把正常做法误判成违规：
 
 | 类型 | 写法 | 是否提交 | 原因 |
 | --- | --- | --- | --- |
-| 同仓库嵌套 module | `replace github.com/kore-project/kore/pkg/pluginapi => ./pkg/pluginapi` | **必须提交** | 同一仓库内多 module 时，`./` 相对路径在干净克隆与 CI 上都成立；不提交反而构建不了 |
-| 跨仓库联调 | `replace github.com/kore-project/kore => ../kore` 或绝对路径 | **禁止提交** | `../kore` 只存在于你的机器；CI 与用户 `go install` 上都解析失败 |
+| 同仓库嵌套 module | `replace github.com/pengtang1024/kore/pkg/pluginapi => ./pkg/pluginapi` | **必须提交** | 同一仓库内多 module 时，`./` 相对路径在干净克隆与 CI 上都成立；不提交反而构建不了 |
+| 跨仓库联调 | `replace github.com/pengtang1024/kore => ../kore` 或绝对路径 | **禁止提交** | `../kore` 只存在于你的机器；CI 与用户 `go install` 上都解析失败 |
 
 G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go.mod'` 为空；`=> ./` 不拦。
 

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kore-project/kore/internal/core/registry"
-	"github.com/kore-project/kore/internal/core/store"
+	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // 落库常量；bucket 名与 DATA-MODEL §5 一致，source 固定 manual（M1 只有本地包安装）。

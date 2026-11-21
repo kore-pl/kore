@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // TestColdStartQueueLimit 是冷启动互斥 + 队列上限的反向用例：

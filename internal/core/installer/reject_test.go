@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kore-project/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/installer"
 )
 
 // TestInstallRejectsTraversal 覆盖验收用例 3：tar 穿越（相对/绝对）拒绝且无残留。

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // tarEntry 描述动态夹具中的一个 tar 条目。

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // State 是插件登记状态（M1 只有 installed / enabled 两态）。

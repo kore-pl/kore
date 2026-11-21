@@ -10,5 +10,5 @@
 // 两者用途不同，不得互相替代。
 //
 // 本包只依赖 Go 标准库，不 import 内核 internal 包，供每个插件仓库独立依赖
-// （module github.com/kore-project/kore/pkg/pluginapi，按子目录 tag pkg/pluginapi/vX.Y.Z 发版）。
+// （module github.com/pengtang1024/kore/pkg/pluginapi，按子目录 tag pkg/pluginapi/vX.Y.Z 发版）。
 package pluginapi

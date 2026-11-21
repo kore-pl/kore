@@ -28,7 +28,7 @@
 
 包内结构固定：`info.json` + `bin/<id>`（0755 静态二进制）+ 可选 `web/`（标准 ES module，入口 `web/index.js`）与 `signature`，不含源码。
 
-`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库固定含 `main.go`（仅 import `github.com/kore-project/kore/pkg/pluginapi`）、`info.json`、可选 `web/`、`Makefile`（`build`/`dist`/`clean`）、`CHANGELOG.md`。
+`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库固定含 `main.go`（仅 import `github.com/pengtang1024/kore/pkg/pluginapi`）、`info.json`、可选 `web/`、`Makefile`（`build`/`dist`/`clean`）、`CHANGELOG.md`。
 
 ### 2.2 解包与命名规则
 
@@ -54,7 +54,7 @@
 | version | string | 是 | — | 语义化版本，与包名一致 |
 | protocol | string | 是 | — | MVP 只接受 `kore.plugin.v1` |
 | requires_kore | string | 是 | — | 语义化区间，如 `">=0.1.0 <0.2.0"`（R3）；kore 加载时对照自身版本，不满足 → 拒绝加载并回 `E_UNSUPPORTED` |
-| lifecycle | string | 是 | — | `resident` \| `lazy`（默认）\| `oneshot`（原 `type` 字段名废弃） |
+| lifecycle | string | 否 | `lazy` | `resident` \| `lazy`（默认，G-14）\| `oneshot`（原 `type` 字段名废弃）；缺省即 lazy，显式 resident 才常驻 |
 | idle_timeout_s | int | 否 | `300` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
 | entry | string | 是 | — | 相对包根的可执行路径，固定 `bin/<id>` |
 | capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；**非空：至少 1 项、上限 16 项** |
@@ -64,8 +64,8 @@
 | triggers | string[] | 是 | — | 元素 `<type>:<name>`，`type` ∈ `event` \| `schedule` \| `invoke`；`event` 的 `name` 匹配 `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`；`invoke` 允许单段动词或任意段点分名 `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`（如 `invoke:restart`、`invoke:site.restart`）；`schedule` M1 只校验非空（M2 解析表达式）；缺 `:`、类型不在枚举、name 非法 → `E_INVALID`；空数组合法 |
 | depends_on | string[] | 否 | `[]` | 依赖的插件 id；安装时拓扑排序，缺失依赖拒绝安装；循环依赖直接拒绝并回 `E_INVALID`（`detail.cycle` 给环路径） |
 | conflicts | string[] | 否 | `[]` | 冲突插件 id；与已装插件冲突时拒绝安装，回 `E_CONFLICT` |
-| scenario_tags | string[] | 是 | — | ⊆ `web`/`data`/`ops`/`sec`/`app`，至少 1 个；供商店分类与预设筛选 |
-| size_bytes | int | 是 | — | ≥ 0，安装后占用字节数（商店展示与磁盘预检） |
+| scenario_tags | string[] | 否 | `[]` | 枚举固定 5 值 `web`/`data`/`ops`/`sec`/`app`（**能力族标签，不等于 preset 名**）；空数组合法（不进商店分类），非空时每值必须在枚举内；写成 `dev`/`minimal`/`full` 等 preset 名 → `E_INVALID` |
+| size_bytes | int | 否 | `0` | 由 `make dist` 打包时回填；仓库内可为 `0`；安装后为实际占用字节数（商店展示与磁盘预检），须 ≥ 0 |
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
 | protocol_minor | int | 否 | 0 | 见 §13 |
 | web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
@@ -73,7 +73,9 @@
 - `requires_kore` 区间语义（R3）：MVP 只支持 `">=X.Y.Z <A.B.C"` 与 `">=X.Y.Z"` 两种写法；不支持 `^`/`~`/`||`；解析器用标准库自实现，不引第三方库（G-02）。
 - 匹配规则：按 semver 比较 kore 版本；kore 版本含预发布号（如 `0.2.0-rc.1`）时拒绝匹配（MVP 不认 pre-release）。
 - 失败行为：不匹配 → 拒绝安装/加载并回 `E_UNSUPPORTED`，`message` 同时带 kore 版本、`requires_kore`、`<id>@<version>`。
+- `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。
 - 与 `protocol` 的关系：`protocol` 是协议主版本、`requires_kore` 是内核版本区间，两者都要过；`protocol` 不变而 `requires_kore` 收窄是合法发布。REPOS 版本矩阵（0.2.x → `">=0.1.0 <0.3.0"`、1.0.x → `">=0.1.0 <2.0.0"`）符合上述规则。
+- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys`。
 
 ### 3.1.1 依赖解析（安装时）
 
@@ -302,7 +304,7 @@
 
 ## 15. 插件 SDK 最小接口
 
-Go 侧（`pkg/pluginapi`，import `github.com/kore-project/kore/pkg/pluginapi`；插件仓库只允许依赖该公开包，禁止 import `kore/internal/*`——Go 的 internal 规则在编译期直接拒绝）：
+Go 侧（`pkg/pluginapi`，import `github.com/pengtang1024/kore/pkg/pluginapi`；插件仓库只允许依赖该公开包，禁止 import `kore/internal/*`——Go 的 internal 规则在编译期直接拒绝）：
 
 ```go
 type Handler interface {

@@ -10,7 +10,7 @@
 | 作用 | 回答"为什么做 kore""做到什么程度算成功""什么明确不做" |
 | 不作用 | 不写模块规格（见 [CORE.md](./CORE.md)）、不写组件与数据流（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不定义术语（见 [GLOSSARY.md](./GLOSSARY.md)） |
 | 状态 | draft。M0 定稿前允许修订；M1 开工后修改须走 ADR |
-| 版本基线 | MVP 0.1.0；Go module 路径 `github.com/kore-project/kore`（组织名占位）；多仓库项目（插件各有独立仓库）；本次交付 = M0（仅 `kore` 仓库：纯文档 + 骨架，无业务代码） |
+| 版本基线 | MVP 0.1.0；Go module 路径 `github.com/pengtang1024/kore`（仓库归属 `pengtang1024`）；多仓库项目（插件各有独立仓库）；本次交付 = M0（仅 `kore` 仓库：纯文档 + 骨架，无业务代码） |
 
 一句话定位：**kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座。**
 它不是"大而全面板"，是**薄壳调度内核**——内核只定规则（插件生命周期 / 权限校验 / 消息路由 / 资源隔离），不内置任何运维功能。
@@ -153,7 +153,7 @@ M0 之后每个里程碑按同一张表验收，数字不达标不算完成。**
 | 12 | 空载进程数 | 1 个主壳 + 0~3 个常驻插件（lazy/oneshot 未激活时为 0） | `pgrep -fc '^(kored|kore-)'`，空闲 5 分钟后复测 | M2 |
 | 13 | 空闲 CPU | 60 s 内 CPU 时间 ≤ 60 ms（≈0.1%） | 读两次 `/proc/<pid>/stat` 的 utime+stime 差分（间隔 60 s） | M2 |
 | 14 | 总 RSS 占宿主内存 | kore 相关进程合计 < 0.5%（2 GiB 机器 = <10 MiB） | `ps -eo comm,rss | grep -E '^(kored|kore-)'` 求和 ÷ `MemTotal` | M3 |
-| 11 | 第三方插件独立仓库接入 | kore 源码 diff = 0 行；插件只依赖 `github.com/kore-project/kore/pkg/pluginapi` 的 tag 版本 | 在独立仓库 `go get github.com/kore-project/kore@v0.1.0` → `make package` → 安装后 `kore.hello` 成功；`git -C kore diff --stat` 为空 | M2 |
+| 11 | 第三方插件独立仓库接入 | kore 源码 diff = 0 行；插件只依赖 `github.com/pengtang1024/kore/pkg/pluginapi` 的 tag 版本 | 在独立仓库 `go get github.com/pengtang1024/kore@v0.1.0` → `make package` → 安装后 `kore.hello` 成功；`git -C kore diff --stat` 为空 | M2 |
 
 ## 7. 设计原则
 

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // 编译期断言：*Error 实现 error 接口，handler 可直接把协议错误体当 error 返回。

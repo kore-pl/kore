@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // defaultCallTimeout 是未显式指定时的单次调用上限（协议默认 15s）。

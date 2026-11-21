@@ -5,7 +5,7 @@
 
 ## 背景
 
-红队 F-10 指出了一个真实死锁：插件仓库需要 `require` 内核模块才能编译，但内核的第一个 tag 要到 M1 收尾才打。在干净目录、无 `replace`、无 `go.work` 的情况下，插件**根本无法构建**——`go get github.com/kore-project/kore` 取不到任何版本。
+红队 F-10 指出了一个真实死锁：插件仓库需要 `require` 内核模块才能编译，但内核的第一个 tag 要到 M1 收尾才打。在干净目录、无 `replace`、无 `go.work` 的情况下，插件**根本无法构建**——`go get github.com/pengtang1024/kore` 取不到任何版本。
 
 于是"跨仓库依赖已验证"只有两种结局：靠本地 `replace` 假装成立（换一台干净的 CI 就崩），或永远推迟到内核 tag 之后（M1 的验收标准形同虚设）。两种都是自欺。根因不是"tag 打晚了"，而是**把整个内核当成了插件的依赖**。
 
@@ -13,11 +13,11 @@
 
 **`pkg/pluginapi` 在 kore 仓库内作为独立 Go module**：
 
-- module 路径 `github.com/kore-project/kore/pkg/pluginapi`，独立 `go.mod`、独立版本线；
+- module 路径 `github.com/pengtang1024/kore/pkg/pluginapi`，独立 `go.mod`、独立版本线；
 - tag 形如 `pkg/pluginapi/v0.1.0`（子目录 tag），因此 SDK 可以**先于内核发版**；
 - 插件仓库只依赖该 module，不依赖整个 kore 仓库。**两类 `replace` 语义不同，必须分开处理**：
-  - **同仓库嵌套 module（必须提交）**：kore 根 `go.mod` 写 `require github.com/kore-project/kore/pkg/pluginapi v0.1.0` + `replace github.com/kore-project/kore/pkg/pluginapi => ./pkg/pluginapi`。这是 Go 对同仓嵌套 module 的标准做法，不是作弊——CI 与干净克隆都依赖它，**这条 replace 随仓库提交**。
-  - **跨仓库联调（禁止提交）**：插件仓库临时写 `replace github.com/kore-project/kore/pkg/pluginapi => ../kore/pkg/pluginapi`，**只能出现在 `go.work` 里，不得提交**；验收必须在无 `go.work`、无跨仓库 `replace` 的干净目录跑（G-17 的 grep 只拦这一类）。
+  - **同仓库嵌套 module（必须提交）**：kore 根 `go.mod` 写 `require github.com/pengtang1024/kore/pkg/pluginapi v0.1.0` + `replace github.com/pengtang1024/kore/pkg/pluginapi => ./pkg/pluginapi`。这是 Go 对同仓嵌套 module 的标准做法，不是作弊——CI 与干净克隆都依赖它，**这条 replace 随仓库提交**。
+  - **跨仓库联调（禁止提交）**：插件仓库临时写 `replace github.com/pengtang1024/kore/pkg/pluginapi => ../kore/pkg/pluginapi`，**只能出现在 `go.work` 里，不得提交**；验收必须在无 `go.work`、无跨仓库 `replace` 的干净目录跑（G-17 的 grep 只拦这一类）。
 - `go.work` 仅用于本地联调，**不提交**；CI 必须能在无 `go.work` 的干净环境完成构建；
 - 破坏性改动同时升 SDK 主版本与 kore 主版本，并留 ADR（G-14）。
 
@@ -42,10 +42,10 @@
 
 ```bash
 # 干净环境：无 go.work、无 replace、无同级 kore 检出
-cd $(mktemp -d) && git clone git@github.com:kore-project/kore-plugin-echo.git echo
+cd $(mktemp -d) && git clone git@github.com:pengtang1024/kore-plugin-echo.git echo
 cd echo && go mod download && make dist && ls dist/*.tar.gz
-go list -m all | grep 'kore'          # 只应出现 github.com/kore-project/kore/pkg/pluginapi
-go list -m all | grep -c 'kore-project/kore$'   # 期望 0（未依赖整个内核）
+go list -m all | grep 'kore'          # 只应出现 github.com/pengtang1024/kore/pkg/pluginapi
+go list -m all | grep -c 'pengtang1024/kore$'   # 期望 0（未依赖整个内核）
 # 版本线可见
 cd /path/to/kore && git tag -l 'pkg/pluginapi/*'
 # SDK 自身可独立构建与测试

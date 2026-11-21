@@ -84,7 +84,7 @@ M0 的唯一目标是把 kore 的地基口径固化成可执行文档与仓库�
 - `docs/ROADMAP.md` 十四节齐全：版本策略、仓库拓扑与规则、里程碑总览表（M0–M5）、依赖图、插件族与里程碑映射、工程量现实（红队重算）、里程碑明细、质量升级表、资源预算演进表、发布与回滚、变更规则、风险登记、三平台兼容矩阵与验证节奏、对标诚实性。
 - `docs/PLAN.md` 九节齐全：执行原则、M0 WBS（覆盖 A–G 七轨，每项含产出文件/owner/验收/依赖，并声明 M0 不含插件仓库）、Sprint 1–12 + M5 概述、DoD 七维（代码/文档/资源/安全/跨仓库/兼容性/跨平台）+ 插件级 DoD、验收命令清单（含 `go work`）、并行写域、Kore Loop 节奏、度量指标、风险登记（≥8 条）。
 - `docs/MILESTONE-M0.md` 五节齐全：本清单、三层验收、可执行清单、完成定义与交接、已知缺口与 M1 入口。
-- 契约数字逐字一致：主壳空载 RSS `8 MiB`、常驻插件单 `12 MiB`、合计 `24 MiB`、同时常驻 ≤3、空闲 CPU ≤0.1%、插件包 `15 MiB`、单二进制 `25 MiB`、前端首屏 `300 KiB gzip`、帧上限 `8 MiB`、MVP `0.1.0`、协议 `kore.plugin.v1`；`kore` module 为 `github.com/kore-project/kore`（占位，见 `REPOS.md` / ADR-0008）。
+- 契约数字逐字一致：主壳空载 RSS `8 MiB`、常驻插件单 `12 MiB`、合计 `24 MiB`、同时常驻 ≤3、空闲 CPU ≤0.1%、插件包 `15 MiB`、单二进制 `25 MiB`、前端首屏 `300 KiB gzip`、帧上限 `8 MiB`、MVP `0.1.0`、协议 `kore.plugin.v1`；`kore` module 为 `github.com/pengtang1024/kore`（见 `REPOS.md` / ADR-0008）。
 - M0 边界：交付范围仅 `kore` 仓库；`kore-plugins` 与 `kore-plugin-echo` 属 M1，M0 不创建、不打包、不在 kore 内放插件代码。
 - 运行时路径逐字一致：`/etc/kore/config.yaml`、`/var/lib/kore`、`/run/kore/kore.sock`、`/run/kore/plugins/<id>.sock`、`/var/log/kore/`、cgroup `/sys/fs/cgroup/kore/<id>.slice`。
 - 角色固定 6 个：lead / architect / implementer / verifier / red-team / scribe；Kore Loop 七阶段：提案 → 双评审 → 拆解 → 实现 → 验证 → 蓝军 → 归档复盘（第 7 阶段同时产出 JOURNAL 记录与 ADR 归档）。按 lead 2026-11-21 裁决采用七阶段，与 AGENTS.md / .agents/WORKFLOW.md 一致；8 项仅为动作清单口径，不作为阶段数对外使用。
@@ -108,7 +108,7 @@ M0 的唯一目标是把 kore 的地基口径固化成可执行文档与仓库�
 | 角色与 Loop | AGENTS、.agents/ROLES、.agents/WORKFLOW、PLAN | 6 角色、七阶段、写域表一致 |
 | 二进制名 | `Makefile`、AGENTS 命令速查、systemd ExecStart | 统一为 `kored`（项目名 / 仓库名仍为 `kore`，module 路径见 `REPOS.md`，unit 名仍为 `kore.service`），三者一致 |
 | 门禁编号 | AGENTS、.agents/QUALITY-GATES、PLAN | G-01…G-15（含 G-13 仓库边界 / G-14 协议兼容 / G-15 变更集）与 make 目标对得上 |
-| 拓扑一致性 | `docs/REPOS.md`、ROADMAP §2、PLAN §1/§2、AGENTS、README | 仓库清单（`kore` / `kore-plugins` / `kore-plugin-<id>`）、module 占位路径、创建时点（M0/M1/M2/M4）逐项一致 |
+| 拓扑一致性 | `docs/REPOS.md`、ROADMAP §2、PLAN §1/§2、AGENTS、README | 仓库清单（`kore` / `kore-plugins` / `kore-plugin-<id>`）、module 路径、创建时点（M0/M1/M2/M4）逐项一致 |
 | 兼容性基线 | `docs/COMPATIBILITY.md`、`ADR-0009`、`ADR-0010`、`Makefile`、ROADMAP §13 | 构建参数逐字一致；三平台矩阵 3 行 + Linux 明细 10 行；降级规则无模糊表述 |
 
 ## 3. 可执行验收清单
@@ -187,6 +187,6 @@ make help && make docs-check && make check
 - `Makefile` 的全部目标真实存在，`make build` 由 `[SKIP]` 转为产出 `bin/kored`。
 - 依赖白名单确认：主壳直接依赖仅 yaml.v3 / bbolt（protobuf 到 M3），无 Web 框架、gRPC、NATS、SQLite、Redis 客户端、容器 SDK。
 - 预算口径被 CORE、RESOURCE-MODEL、ROADMAP、PLAN 同时引用且数字一致（8 MiB / 12 MiB / 24 MiB / 15 MiB / 25 MiB / 300 KiB，+ 空闲 CPU ≤0.1%、同时常驻 ≤3）。
-- 首批要创建的仓库清单与 module 路径已定：`kore-plugins`（`github.com/kore-project/kore-plugins`，空 `index/plugins.json` + 校验脚本）与 `kore-plugin-echo`（`github.com/kore-project/kore-plugin-echo`，只依赖 `kore/pkg/pluginapi`），见 `REPOS.md` §1 / §6 与 ADR-0008。
+- 首批要创建的仓库清单与 module 路径已定：`kore-plugins`（`github.com/pengtang1024/kore-plugins`，空 `index/plugins.json` + 校验脚本）与 `kore-plugin-echo`（`github.com/pengtang1024/kore-plugin-echo`，只依赖 `kore/pkg/pluginapi`），见 `REPOS.md` §1 / §6 与 ADR-0008。
 - 跨仓库联调方式已确认：`go.work` 只在本地联调、不进任何仓库；插件 `go.mod` 只允许 tag 依赖。
 - verifier 的 M0 报告 PASS，red-team 无未闭环 P0 问题。

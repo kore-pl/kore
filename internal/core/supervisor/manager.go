@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kore-project/kore/pkg/pluginapi"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // State 是插件运行状态（M1 覆盖 resident 的四态 + 失败态）。
