@@ -1,6 +1,6 @@
 # .agents · 任务板
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M1
 
 任务板是唯一事实源：谁在做什么、卡在哪、凭什么叫完成，都以本文件为准。对话里的口头约定不算。
 
@@ -38,7 +38,18 @@
 - 同一层并行任务的 `scope` 不得相交；相交即视为冲突，必须串行化（用 `blocked_by` 表达顺序）。
 - 一个任务只允许一个 owner；需要两人协作时拆成上下游两个任务。
 
-## 4. 当前快照（M0 · 7 条轨道）
+## 4. 里程碑记录与轨道快照
+
+### 4.1 里程碑记录
+
+里程碑只有在「轨道全部 completed + 独立验收报告 PASS + JOURNAL 复盘段落盘 + 台账齐备」四条同时满足时才可置 `completed`（G-07 / G-23）。
+
+| 里程碑 | 名称 | 状态 | 收口日期 | 证据 |
+| --- | --- | --- | --- | --- |
+| M0 | 文档与骨架 | completed | 2026-11-21 | [verify/m0-consistency-r5.md](verify/m0-consistency-r5.md)（PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-21 两条 M0 复盘 |
+| M1 | 行走骨架 | completed | 2026-11-22 | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（VERDICT PASS，阻断 0）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」段；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) |
+
+### 4.2 M0 轨道（7 条，已收口）
 
 快照时间 2026-11-21 21:50（多仓库拓扑修订后）。evidence 中的行数是该时点实测值；文档再改动时由 scribe 在下一次归档刷新。`status` 表示验收事实：A–F 已交付并过 G4；M0-G 依赖已全部解除、正在产出验收报告。`revision` 为本次状态登记的版本（每次状态或字段变更 +1）。**M0 的交付边界只有 `kore` 这一个仓库**：`kore-plugins` 与 `kore-plugin-echo` 属 M1，`kore-plugin-site` / `kore-plugin-backup` 属 M2，均不在本板。
 
@@ -62,7 +73,23 @@
 - M0-F：定仓骨架与门禁脚本，让后续每条命令都有落点。
 - M0-G：独立复跑 `make docs-check` + 交叉一致性核对 + 精确提交，**依赖 A–F 全部完成**。
 
-### 插件轨道（M1 起启用）
+### 4.3 M1 轨道（7 条，已收口）
+
+快照时间 2026-11-22 02:05（M1 收口）。evidence 为收口实测值；M1 的交付边界是 `kore` + `kore-plugin-echo` 两个仓库，索引仓 `kore-plugins` 未在 M1 落地（`index/plugins.json` 仍归 M2）。
+
+| id | subject | owner | status | scope | blocked_by | 变更集 | evidence | revision |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M1-A | 协议与公开 SDK：frame / envelope / timeout + 嵌套 module | implementer | completed | `pkg/pluginapi/` | — | CS-M1-01 | 705 行 / 10 文件；`go test -count=1 ./pkg/pluginapi` ok；tag `pkg/pluginapi/v0.1.0`；根 `go.mod` `replace => ./pkg/pluginapi` | 1 |
+| M1-B | 内核 7/9 模块 + envprobe / platform 支撑包 | implementer | completed | `internal/core/`, `internal/platform/` | — | — | `internal/core` 7,414 行 + `platform` 880 行；`go test -count=1 ./...` 10 包全 ok；auth / market 未做，`routes()` 回 501 | 1 |
+| M1-C | `cmd/kored` 装配：`install` / `serve` 子命令 | implementer | completed | `cmd/kored/` | M1-B | — | 20 文件 1,910 行；11 步 E2E（验收报告 §C）全通过 | 1 |
+| M1-D | 9 段门禁接线（含 canonical / oss / case） | implementer | completed | `Makefile`, `scripts/` | M1-B | — | `make check` **9/9**：docs 6 / dep 2 / thin-shell 4 / repo 5 / canonical 9 / log 8 / wt 4 / oss 8 / case 5 | 1 |
+| M1-E | 开源六件套 + CI 模板 | scribe | completed | `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CHANGELOG.md`, `.github/workflows/` | — | — | `make oss-check` 8 pass / 0 warn / 0 fail | 1 |
+| M1-F | 跨仓库：echo 验证插件 + 首次公开 | implementer | completed | `../kore-plugin-echo` | M1-A | CS-M1-01 | `make dist` → `echo-0.1.0.tar.gz` 1,258,020 B + `.sha256`；`git ls-remote` 双仓 main 可达 | 1 |
+| M1-G | 独立验收（verifier ≠ implementer） | verifier | completed | `.agents/verify/` | M1-A…F | — | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md) VERDICT PASS、阻断 0；`make mem MEM_POINTS=60` 中位 9,664 KiB | 1 |
+
+轨道说明：M1-A 冻结协议面（SDK 先于内核发版）；M1-B 是主链，auth / market 的缺席见 [JOURNAL](JOURNAL.md) M1 段第 5 节；M1-C 只做装配不写业务；M1-D 让每条命令都有落点；M1-E 满足 G-26 发布红线；M1-F 证明"插件只依赖公开 SDK"成立；M1-G 由非实现者复跑全部命令。
+
+### 4.4 插件轨道（M1 起启用）
 
 M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，与内核轨道分开统计；下面的表头即模板，逐行填：
 
@@ -79,13 +106,13 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | 变更集 | 目标 | 涉及仓库（tag / commit） | kore 协议影响 | 合并顺序 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
-| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 干净 clone 后 `make check` 9/9；`go build ./...` + `go test -count=1 ./...`；`git ls-remote` 核对远端 refs | completed |
+| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 干净 clone 后 `make check` 9/9；`go build ./...` + `go test -count=1 ./...`；`git ls-remote` 核对远端 refs | confirmed |
 
-规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 completed；缺任一列视为未完成（G-15）。
+规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 
-## 6. 本里程碑裁决记录
+## 6. 里程碑裁决记录
 
-M0 期间产生过分歧、且必须以裁决收口的口径。后续任何任务先读这里，不要再以"某份正文当前这么写"为依据推翻。
+M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何任务先读这里，不要再以"某份正文当前这么写"为依据推翻。**M1 的裁决（第 21–30 条）不复制到本表**，以 [LOG/DECISIONS.md](LOG/DECISIONS.md) 为唯一真源；下表 1–11 是 M0 期间直接以 BOARD 收口的口径。
 
 **判断留痕见 [`.agents/LOG/`](LOG/)**：本板只存裁决结论与任务状态；选项、被否决方案与依据在台账，两者冲突时以 ADR + 台账为准（G-23）。
 
@@ -122,8 +149,9 @@ M0 期间产生过分歧、且必须以裁决收口的口径。后续任何任�
 - 任务标题出现"顺便""相关""完善一下"= 粒度不清，退回重写。
 - 文档类任务按"一份文档一个任务"或"一组同源文档一个任务"拆；同一份文档不得由两个任务并行改。
 
-## 9. 已知遗留（M0 记录级，不阻断提交）
+## 9. 已知遗留（M0 / M1 记录级，不阻断提交）
 
+- **M1 遗留（8 项）**：见 [JOURNAL.md](JOURNAL.md) 2026-11-22 M1 段「结论与 M2 前置」与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5——auth / market 未做、web 壳未交付、退避重启与心跳按 M1-12/13 延期、capability 方法级校验（M1-08）、audit 写入（M1-09）、bus 多路复用、`registry/validate.go` 241 行超 200 行上限、bbolt mmap 计入 RssFile（M4 瘦身）。
 - `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
 - `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。
 - C5 口径「22 项能力域：12 项生产级 / 8 项基础级」与 `FEATURE-PARITY:12`「14 项由生产级插件承载」是"插件数 vs 能力域数"两种说法；建议后续在 ROADMAP 该句加"（由 12 个生产级插件承载 14 个域）"限定语。

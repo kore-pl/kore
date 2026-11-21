@@ -57,6 +57,92 @@
 - **教训**：**"读取当前配置"和"修改当前配置"是两种操作**，Go 有若干 API 用负数/返回值兼任两者；凡是日志代码，一律假设它不能改状态。
 - **门禁**：新增 G-21（AGENTS）/ G16（QUALITY-GATES）——`grep` 双零命中，合并前必跑。
 
+### 2026-11-22 · M1 · 里程碑复盘（行走骨架 → 首次公开）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目标 | Linux 上打通「能装 → 能跑 → 能停」的最小闭环：`proposals/0001` §1 的三个不确定性（体积 / RSS、UDS 帧 + supervisor 生命周期、干净目录只靠 SDK tag 构建）+ §8 反向验收九条 |
+| 结果 | 内核 9 模块落地 7（config / store / httpapi / registry / supervisor / bus / installer）+ envprobe / platform；`pkg/pluginapi` 705 行、`cmd/kored` 1,910 行（`install` / `serve`）；`make check` 9/9；开源六件套齐；`kore` 与 `kore-plugin-echo` 首次公开 |
+| 差距 | auth 未做（§2.1 in-scope 内，回 501）；market 未做（属 M2 商店，proposal 未列）；web 壳未交付（无 `web/`）；退避重启 / 心跳 / 孤儿核对按 M1-12/13 延期；空载 VmRSS 9,664 KiB 超目标 8,192、未越红线 16,384 |
+| 根因 | 23 条任务按「保 §1 三个不确定性 + §8 反向验收」收敛；auth / market / web 不在 install→serve→enable→invoke→disable→SIGTERM 主链上，被让位给门禁与开源发布；缺口写进本文第 5 节，没有用 N/A 冒充通过 |
+| 沉淀 | ① 里程碑验收 = 可演示的最小闭环，不是 in-scope 全勾；② 规则与判据是同一契约的两个副本，必须同轮改 + 反向验证；③ schema 先 lock 再派发；④ 外部依赖每个前提都要一次真实探测；⑤ 判据对准风险，不对准形式 |
+| 下次动作 | M2 第一件事：补 auth（PBKDF2 + 双 cookie + CSRF）与 market 安装端点，再开前端；开工前把 `registry/validate.go` 241 行与 VmRSS 9,664 KiB 两条债写进任务卡 |
+
+#### 1. 里程碑目标
+
+`proposals/0001-m1-walking-skeleton.md` §1 把 M1 压成三个可用命令证伪的不确定性：
+
+1. **体积与内存**：`stat -c%s bin/kored` ≤ 26,214,400；空载 VmRSS 60 点中位数 ≤ 8,192 KiB（ADR-0016 后来把 8,192 降为目标、16,384 才是红线）；`VmRSS` 为唯一主值，`RssAnon` / `RssFile` 只做诊断拆分。
+2. **协议与生命周期**：`pkg/pluginapi` 四个必选方法全通；`kill -9` 插件后 ≤5s 出现新 pid 且 ping 返回 200；帧边界 `8388608` / `8388609` / `0` / `1` 全绿。
+3. **跨仓库依赖**：无同级 `kore`、无 `go.work`、无 `replace` 的干净目录里 `go mod download && make dist` 成功，`go list -m all` 只出现 `.../pkg/pluginapi`。
+
+边界（§2.2 out-of-scope）：cgroup 强制、Windows / macOS 运行时、包签名、前端插件加载、商店安装 UI、热升级、全发行版矩阵都不在 M1。§2.1 的 in-scope 列了 `auth`，但没列 `market`（商店属 M2）——所以 **auth 是真实欠账，market 是口径上限之外的缺席**，两者在第 5 节分别记。
+
+#### 2. 实际交付
+
+- **内核**：config（1,573 行 / 12 文件）、store（552 / 5）、httpapi（597 / 7）、registry（1,038 / 7）、supervisor（1,399 / 12）、bus（379 / 3）、installer（1,423 / 16）；支撑 envprobe（302 / 4）、platform（880 / 8）。内核 7 模块 + 支撑包合计 **8,294 行**（`internal/core` 7,414 + `platform` 880，均含测试与夹具）。
+- **公开 SDK**：`pkg/pluginapi` 独立 module（705 行 / 10 文件，含 frame / envelope / timeout / errors 与 4 个测试文件）；根 `go.mod` 用 `replace => ./pkg/pluginapi`，同仓嵌套 module 不计入第三方配额。
+- **主程序**：`cmd/kored` 20 文件 1,910 行，两个子命令——`install --package <tgz>` 与 `serve --config --state-dir`；启动顺序 = 资源锚点 → 配置 → 环境探测 → 状态库 → supervisor → HTTP。
+- **门禁**：`make check` **9 段**（docs / 依赖白名单 + 兼容基线 / 薄壳边界 / repo / canonical / log / wt / oss / case），另有 build / cross / compat-info / vet / test / mem / idle / budget-check。
+- **开源六件套**：`LICENSE`（MIT）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`；`make oss-check` 8 pass。
+- **首次公开**：`kore` @ `2616374` + `pkg/pluginapi/v0.1.0` tag（SDK 先发版）、`kore-plugin-echo` @ `v0.1.0`（`3422c10`），变更集 `CS-M1-01`。
+- **安装布局**：插件落盘固定 `<state_dir>/plugins/<id>/<version>/`（多版本并存、不建 `current` 软链）；先解压到 `.staging/` 再 `rename` 原子切换，路径穿越与超限包在 installer 层拒绝（`extract.go` / `limits.go` / `reject_test.go`）。
+- **未交付**：`internal/core/auth`（登录 / session / 双 `Path=/` cookie / CSRF / PBKDF2）与 `internal/core/market`；`/api/v1/auth/*`、`/api/v1/store/*`、`/api/v1/events` 在 `httpapi/routes()` 显式 501 `E_UNSUPPORTED`，不用 404 假装路由不存在。web 壳（`id="app"`、≤30 KiB）也未落地，仓库无 `web/`。
+
+#### 3. 证据
+
+| 项 | 命令 | 关键数字（2026-11-22 本轮实测，HEAD `1deb086`） |
+| --- | --- | --- |
+| 门禁 | `make check` | **9/9 段全绿**：docs 6 pass / 0 warn / 0 fail（55 文档 + 13 证据 + 260 链接）；dep 2 pass；thin-shell 4 pass（68 个可执行 .go）；repo 5 pass；canonical 9 pass；log 8 pass；wt 4 pass；oss 8 pass；case 5 pass；末行 `[OK] 门禁全部通过` |
+| 测试 | `go test -count=1 -timeout 200s ./...` | 10 个包全 `ok`（cmd/kored 2.515s、supervisor 2.991s、store 1.060s 为长尾），退出码 0；`go vet ./...` 与 `gofmt -l .` 无输出 |
+| SDK 测试（嵌套 module） | `cd pkg/pluginapi && go test -count=1 ./...` | `ok github.com/pengtang1024/kore/pkg/pluginapi 0.014s`（根模块 `./...` 不含嵌套 module，必须单独跑） |
+| 端到端 11 步 | 见 `verify/m1-final-acceptance.md` §C | `make dist` → `echo-0.1.0.tar.gz` 1,258,020 B；`install` exit 0；`serve` 日志 `kore ready`；`/-/healthz` → `{"status":"ok"}`；enable → `state=ready pid=1602171 restarts=0`；invoke → `{"pong":true}` + `X-Request-Id`；`kill -9` → `state=failed restarts=1 pid=0`；disable → `stopped`；ghost → 404 `E_NOTFOUND`；未启用 invoke → 409 `E_CONFLICT`；SIGTERM → `kored_exit_code=0` 且 socket 清理 |
+| 空闲 | `make idle` | **5 pass / 0 fail / 0 n/a**：CPU **10 ms/60s**（≤60）· Threads **13**（≤20，前后差 0）· fd **7**（≤64）· 出站 **0** · Ticker/AfterFunc **零命中** |
+| 内存 | `make mem MEM_POINTS=60` | 中位 **9,664 KiB** · min 9,664 · max 9,744 · p95 9,744；RssAnon **3,040** / RssFile **6,624** KiB（源 `/proc/<pid>/status`，`smaps_rollup` 无这两个字段）；判定 `[WARN] 超出目标 8,192、未越红线 16,384`，退出码 0 |
+| 生效值 | 启动日志「资源锚点」 | `gogc_percent=50 gomemlimit_bytes=6291456 gomaxprocs=8`；environ 未设 GOGC/GOMEMLIMIT（默认档生效）；`/gc/gogc:percent` 由 `TestRuntimeLimitsKeepGCEnabled` 断言 = 50（G-21 防副作用回归） |
+| 二进制 | `stat -c%s` / `sha256sum` | 7,573,666 B（≤ 26,214,400）；sha256 `cfb635f58621a8e88dc168ec0ac699f5b2c9a5f7f63f23b544fe2e2d12731572` |
+| goroutine | `SIGQUIT` 栈计数 | 20（无 pprof 端点，非门禁口径；G-19 用 Threads 13 判定，20 是参考值、已在指标表标注为边界趋势） |
+| 交叉编译 | `GOOS=windows GOARCH=amd64 go build ./...` / `GOOS=darwin GOARCH=arm64 go build ./...` | 均退出码 0（Tier B 冒烟；不做运行时验证） |
+| 预算聚合 | `make budget-check` | 4 项全过：mem（WARN 级）+ idle + 进程数 1 + 二进制 7.57 MB ≤ 25 MiB，退出码 0 |
+| 协议边界用例 | `go test -run 'Frame' ./pkg/pluginapi` | `8388608` 收、`8388609` 拒且零分配、`0`/`1` 拒、半包与粘包各 200 轮零错帧 |
+
+数据来源标注：内存主值 `ps -o rss=`（等价 `/proc/<pid>/status` 的 VmRSS），拆分 RssAnon/RssFile 取 `/proc/<pid>/status`（本机内核 `smaps_rollup` 已无这两项）；idle 五项取 `/proc/<pid>/stat`、`/proc/<pid>/status`、`/proc/<pid>/fd`、`ss -tnp` 与源码 grep；采样前 `pgrep -x kored | wc -l` = 0，采样后 `kill -TERM` 收尾并复核为 0。
+
+#### 4. 三次以上重复出现的问题（这是本条复盘的核心价值）
+
+1. **规则改了口径、判据没跟上**：预算从「单一红线 8 MiB」升为「红线 16 / 目标 8」后，`canonical-check` 仍按旧口径判 48 MiB 违规；G-19 白名单已允许请求级 `time.NewTimer`，`make idle` 仍全禁 Ticker/AfterFunc。**教训：规则与判据是同一契约的两个副本，必须同轮改 + 反向验证**（改判据后先造一个应 FAIL 的样本、再造一个应 PASS 的样本，两边都验过才算改完）。
+2. **schema 未定稿就并行派发**：`triggers` 在 `{type,name}` 对象数组 / 裸字符串 / 带前缀字符串之间反复三轮，registry、installer 夹具、文档三处各改一遍。**教训：先 lock schema，再通知 consumers；consumer 用探针等 producer**，不要让三份代码各自猜形状。
+3. **假设未验证**：一个"看起来合适"的 GitHub 组织名（大小写写法与被否决理由见 ADR-0017）从未确认归属，却被 134～163 处文档与 module 路径引用，直到推送前 `gh api` 探测才发现无权限（ADR-0017 之后全量改名）。**教训：外部依赖的每个前提都要有一次真实探测**——`gh api`、`git ls-remote`、`go mod download` 都只要几秒，猜错的代价是百处返工。
+4. **门禁判据扫到了非风险对象**：thin-shell 业务词扫描把注释里的示例也算违规，`site:read` → `cron` → `site.restart` 三次误伤、三次返工。**教训：判据对准风险，不对准形式**——注释不执行，扫描对象应是可执行语义（最终裁决剥离注释/字符串，只扫代码）。
+
+被撤回 / 否定的方案（编号指向 [LOG/DECISIONS.md](LOG/DECISIONS.md) 的行序）：
+
+| 被撤回方案 | 否决依据 | LOG 条目 |
+| --- | --- | --- |
+| 全部常驻（22 进程 ≈264 MiB） | 结构性超 48 MiB 红线，必须驱逐 resident | 第 4 条（生命周期三态） |
+| 自建调度器（`cron` 常驻 + 主壳内建 ticker） | 违反 G-19 零轮询，且第 3 个 resident 挤掉 site/monitor | 第 5 条（常驻收敛与 cron 触发） |
+| 用 `debug.SetGCPercent(-1)` 读配置 / `GOGC=off` 纯 GOMEMLIMIT | 负数是「关闭 GC」不是「读取」，三档消融全部失效；GC 抖动不可控 | 第 10 条（运行时锚点）+ 第 18 条（G-21 落地） |
+| capability 八项业务域白名单 | 内核维护业务域名词表＝G-01 事故；改为 6 个宿主特权能力 + `<id>:<action>` 通用语法 | 第 30 条（本轮回填） |
+| `triggers` 用 `object[]` | 对外 schema 禁 `object`/`any`（G-24），一个字段塞两段语义 | 第 26 条（triggers 形状） |
+| 含注释的业务词扫描（豁免前的旧门禁） | 注释不执行，判据对准风险不对准形式 | 第 27 条（门禁扫描豁免注释） |
+
+#### 5. 结论与 M2 前置
+
+**M1 = PASS**：三个不确定性全部有本轮实测证据（体积 7.57 MB / VmRSS 9,664 KiB 红线内 / 11 步 E2E / 干净 clone 只依赖 SDK tag），`make check` 9/9，独立 verifier 报告无阻断项。
+
+**下个里程碑开工前必须先做**（缺一项不开工）：
+
+1. **补 auth 与 market**：auth 是 §2.1 内欠账，不补则前端无法登录、CSRF 无法验证；market 不补则 `CS-M1-01` 之后没有安装链路可测。
+2. **把 M1-08/09/12/13 遗留写进 M2 任务卡**：capability 方法级校验、audit 写入、bus 多路复用、退避重启 / 心跳 / 孤儿核对——每项都要有验收命令，不接受「顺手做了」。
+3. **两条技术债立项**：`registry/validate.go` 241 行（超 200 行上限，M0 遗留 D-1 同类）与 VmRSS 9,664 KiB（RssFile 6,624 KiB 主体查 bbolt mmap + embed 页，归 M4 设计层，不调阈值）。
+4. **台账口径对齐**：BOARD §5 的 `CS-M1-01` 与 proposal 的 `CS-20261121-01` 是同一变更集的两种写法，M2 前统一为 `CS-<YYYYMMDD>-<序号>` 一种格式。
+
+**M1 没有证明的事**（防止后续引用时被夸大）：
+
+- macOS / Windows 运行时：只有 `go build` 冒烟，无服务注册、无凭据隔离，Tier B 语义仍是纸面。
+- cgroup v2 强制限额：本机 `delegation=false`，启动日志明确 `限额不生效`，只验证了探测与降级路径。
+- systemd 托管下的 fd / 权限基线：本轮用临时目录 + `close_fds` 启动测得 fd 7，生产 unit 下需复测一次。
+
 ## 3. 反模式记录
 
 | 踩坑 | 教训 | 已加入哪条门禁 |
