@@ -79,6 +79,7 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | 变更集 | 目标 | 涉及仓库（tag / commit） | kore 协议影响 | 合并顺序 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
+| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 干净 clone 后 `make check` 9/9；`go build ./...` + `go test -count=1 ./...`；`git ls-remote` 核对远端 refs | completed |
 
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 completed；缺任一列视为未完成（G-15）。
 
