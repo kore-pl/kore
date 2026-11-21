@@ -50,7 +50,7 @@
 | M0-D | 路线图 / 执行计划 / M0 清单 | lead | completed | `docs/ROADMAP.md`, `docs/PLAN.md`, `docs/MILESTONE-M0.md` | — | — | `wc -l docs/{ROADMAP,PLAN,MILESTONE-M0}.md` → 退出码 0；191 / 227 / 169 行 | 2 |
 | M0-E | AGENTS.md + agent 管理架构 | scribe | completed | `AGENTS.md`, `README.md`, `.agents/` | — | — | `wc -l AGENTS.md README.md` → 退出码 0；86 / 150 行；`.agents/` 体系文档 6 份 + 模板 4 份；`make docs-check` 退出码 0（6 pass / 0 fail，35 份文档 / 8 篇 ADR） | 4 |
 | M0-F | 仓库骨架 / 门禁脚本 | implementer | completed | `.gitignore`, `.editorconfig`, `Makefile`, `scripts/` | — | — | `grep -E '^APP' Makefile; grep -E '^BIN' Makefile` → 退出码 0；`APP ?= kored` / `BIN ?= ./bin/kored`；`bash scripts/docs-check.sh` → 退出码 0（6 pass / 0 fail）；`git rev-list --count HEAD` → 退出码 128（0 commit，HEAD 未出生，符合 M0） | 3 |
-| M0-G | 独立验收 + 首提交 | verifier | in_progress | `.agents/verify/` | M0-A, M0-B, M0-C, M0-D, M0-E, M0-F | — | 进行中：已产出 `m0-consistency.md` / `m0-commit-plan.md`，r2 复核在 `m0-consistency-r2.md`；前置 A–F 全部 completed，依赖已解除 | 2 |
+| M0-G | 独立验收 + 首提交 | verifier | completed | `.agents/verify/` | M0-A, M0-B, M0-C, M0-D, M0-E, M0-F | — | `make check` 5/5（docs-check 55 份 6 pass / 0 warn / 0 fail；repo-check 5 pass；canonical-check 7 pass）；`git commit 7404ad1`（59 文件 / 8,193 insertions，排除 proposals/reviews 3 件）；`git status --short` 仅剩 M1 未跟踪件；报告 `m0-consistency-r5.md`（99 行） | 3 |
 
 轨道说明：
 
@@ -118,3 +118,9 @@ M0 期间产生过分歧、且必须以裁决收口的口径。后续任何任�
 - 拆分依据是"能否独立验收"，不是"文件多少"：一个任务对应一条可执行的验收命令。
 - 任务标题出现"顺便""相关""完善一下"= 粒度不清，退回重写。
 - 文档类任务按"一份文档一个任务"或"一组同源文档一个任务"拆；同一份文档不得由两个任务并行改。
+
+## 9. 已知遗留（M0 记录级，不阻断提交）
+
+- `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
+- `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。
+- C5 口径「22 项能力域：12 项生产级 / 8 项基础级」与 `FEATURE-PARITY:12`「14 项由生产级插件承载」是"插件数 vs 能力域数"两种说法；建议后续在 ROADMAP 该句加"（由 12 个生产级插件承载 14 个域）"限定语。
