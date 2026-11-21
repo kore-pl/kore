@@ -63,10 +63,10 @@
 | --- | --- |
 | 目标 | Linux 上打通「能装 → 能跑 → 能停」的最小闭环：`proposals/0001` §1 的三个不确定性（体积 / RSS、UDS 帧 + supervisor 生命周期、干净目录只靠 SDK tag 构建）+ §8 反向验收九条 |
 | 结果 | 内核 9 模块落地 7（config / store / httpapi / registry / supervisor / bus / installer）+ envprobe / platform；`pkg/pluginapi` 705 行、`cmd/kored` 1,910 行（`install` / `serve`）；`make check` 9/9；开源六件套齐；`kore` 与 `kore-plugin-echo` 首次公开 |
-| 差距 | auth 未做（§2.1 in-scope 内，回 501）；market 未做（属 M2 商店，proposal 未列）；web 壳未交付（无 `web/`）；退避重启 / 心跳 / 孤儿核对按 M1-12/13 延期；空载 VmRSS 9,664 KiB 超目标 8,192、未越红线 16,384 |
+| 差距 | **发布链 P0**：`pkg/pluginapi/v0.1.0`（tag `3a59b98`）的 `go.mod` 仍声明旧路径 `github.com/kore-project/...`，干净目录解析直接失败（本地 `kore-plugin-echo/go.work` 把缺陷完全掩盖）；另有 auth 未做（§2.1 in-scope 内，回 501）、market 未做（属 M2 商店）、web 壳未交付（无 `web/`）、退避重启 / 心跳 / 孤儿核对按 M1-12/13 延期；空载 VmRSS 9,664 KiB 超目标 8,192、未越红线 16,384 |
 | 根因 | 23 条任务按「保 §1 三个不确定性 + §8 反向验收」收敛；auth / market / web 不在 install→serve→enable→invoke→disable→SIGTERM 主链上，被让位给门禁与开源发布；缺口写进本文第 5 节，没有用 N/A 冒充通过 |
 | 沉淀 | ① 里程碑验收 = 可演示的最小闭环，不是 in-scope 全勾；② 规则与判据是同一契约的两个副本，必须同轮改 + 反向验证；③ schema 先 lock 再派发；④ 外部依赖每个前提都要一次真实探测；⑤ 判据对准风险，不对准形式 |
-| 下次动作 | M2 第一件事：补 auth（PBKDF2 + 双 cookie + CSRF）与 market 安装端点，再开前端；开工前把 `registry/validate.go` 241 行与 VmRSS 9,664 KiB 两条债写进任务卡 |
+| 下次动作 | **第 0 件（P0）**：在 `2616374`/`fc66a99`（module 路径已正确）切 `pkg/pluginapi/v0.1.1`，echo `require` 升到 v0.1.1，删本地 `go.work` 后 `GOWORK=off` 干净 clone 复验；之后再补 auth（PBKDF2 + 双 cookie + CSRF）与 market 安装端点，最后开前端 |
 
 #### 1. 里程碑目标
 
@@ -103,7 +103,8 @@
 | 二进制 | `stat -c%s` / `sha256sum` | 7,573,666 B（≤ 26,214,400）；sha256 `cfb635f58621a8e88dc168ec0ac699f5b2c9a5f7f63f23b544fe2e2d12731572` |
 | goroutine | `SIGQUIT` 栈计数 | 20（无 pprof 端点，非门禁口径；G-19 用 Threads 13 判定，20 是参考值、已在指标表标注为边界趋势） |
 | 交叉编译 | `GOOS=windows GOARCH=amd64 go build ./...` / `GOOS=darwin GOARCH=arm64 go build ./...` | 均退出码 0（Tier B 冒烟；不做运行时验证） |
-| 预算聚合 | `make budget-check` | 4 项全过：mem（WARN 级）+ idle + 进程数 1 + 二进制 7.57 MB ≤ 25 MiB，退出码 0 |
+| 预算聚合 | `make budget-check` | `4 pass, 1 warn, 0 skip, 0 fail`，退出码 0（warn = 主壳 VmRSS 超目标；idle / 进程数 1 / 二进制 7,573,666 B 三项 pass） |
+| 干净目录 SDK（P0） | `git clone ../kore-plugin-echo /tmp/x && cd /tmp/x && GOWORK=off go mod download` | **FAIL**：`github.com/pengtang1024/kore/pkg/pluginapi@v0.1.0: module declares its path as: github.com/kore-project/kore/pkg/pluginapi but was required as: github.com/pengtang1024/kore/pkg/pluginapi`；`GOWORK=off make dist` → `missing go.sum entry`，退出码非 0。本地 `go env GOWORK` = `../kore-plugin-echo/go.work`（`use ../kore/pkg/pluginapi`）即被掩盖 |
 | 协议边界用例 | `go test -run 'Frame' ./pkg/pluginapi` | `8388608` 收、`8388609` 拒且零分配、`0`/`1` 拒、半包与粘包各 200 轮零错帧 |
 
 数据来源标注：内存主值 `ps -o rss=`（等价 `/proc/<pid>/status` 的 VmRSS），拆分 RssAnon/RssFile 取 `/proc/<pid>/status`（本机内核 `smaps_rollup` 已无这两项）；idle 五项取 `/proc/<pid>/stat`、`/proc/<pid>/status`、`/proc/<pid>/fd`、`ss -tnp` 与源码 grep；采样前 `pgrep -x kored | wc -l` = 0，采样后 `kill -TERM` 收尾并复核为 0。
@@ -114,6 +115,8 @@
 2. **schema 未定稿就并行派发**：`triggers` 在 `{type,name}` 对象数组 / 裸字符串 / 带前缀字符串之间反复三轮，registry、installer 夹具、文档三处各改一遍。**教训：先 lock schema，再通知 consumers；consumer 用探针等 producer**，不要让三份代码各自猜形状。
 3. **假设未验证**：一个"看起来合适"的 GitHub 组织名（大小写写法与被否决理由见 ADR-0017）从未确认归属，却被 134～163 处文档与 module 路径引用，直到推送前 `gh api` 探测才发现无权限（ADR-0017 之后全量改名）。**教训：外部依赖的每个前提都要有一次真实探测**——`gh api`、`git ls-remote`、`go mod download` 都只要几秒，猜错的代价是百处返工。
 4. **门禁判据扫到了非风险对象**：thin-shell 业务词扫描把注释里的示例也算违规，`site:read` → `cron` → `site.restart` 三次误伤、三次返工。**教训：判据对准风险，不对准形式**——注释不执行，扫描对象应是可执行语义（最终裁决剥离注释/字符串，只扫代码）。
+
+5. **发布物 ≠ 工作树（本轮收口时新发现，与前四条同类）**：SDK tag `pkg/pluginapi/v0.1.0` 切在 `3a59b98`，而 module 改名的 `2616374` 在其后——tag 内容里的 `go.mod` 仍是 `github.com/kore-project/...`。本地 `kore-plugin-echo/go.work` 用 `use ../kore/pkg/pluginapi` 把依赖指回工作树，于是验收报告 §C 第 1 步 `make dist` 成功、`v0.1.0` 从未被真正消费过；`GOWORK=off` + 干净 clone 立刻报 `module declares its path as ... but was required as ...`。**教训：发布物必须从远端 ref 回验**——`git clone` 新目录 + `GOWORK=off` + `GOFLAGS=-mod=readonly` 跑一次消费方构建；本地 `go.work` 在验收期等于关掉了「跨仓库只靠 tag」这条判据。
 
 被撤回 / 否定的方案（编号指向 [LOG/DECISIONS.md](LOG/DECISIONS.md) 的行序）：
 
@@ -128,10 +131,13 @@
 
 #### 5. 结论与 M2 前置
 
-**M1 = PASS**：三个不确定性全部有本轮实测证据（体积 7.57 MB / VmRSS 9,664 KiB 红线内 / 11 步 E2E / 干净 clone 只依赖 SDK tag），`make check` 9/9，独立 verifier 报告无阻断项。
+**M1 = 条件 PASS（收口挂起）**：不确定性①与②有本轮实测证据（二进制 7.57 MB / VmRSS 9,664 KiB 红线内 / 11 步 E2E / idle 5 pass / `make check` 9/9），独立 verifier 报告的运行时结论无阻断项；**不确定性③ FAIL**——干净目录只靠 `pkg/pluginapi/v0.1.0` 构建不成立（tag 内容声明旧 module 路径），本地之所以通过是因为 `go.work` 指回工作树。
+
+按 proposal §1 的判据表，「依赖 replace / go.work / 不存在的 tag」属**判为失败**，所以本轮只能给条件 PASS：**代码完成、收口挂在发布链 P0 上**，待 `v0.1.1` 切出并 `GOWORK=off` 干净 clone 复验通过后再置 completed（BOARD 里程碑状态与 `CS-M1-01` 已同步降级）。
 
 **下个里程碑开工前必须先做**（缺一项不开工）：
 
+0. **重切 SDK tag（P0，唯一阻断项）**：在 module 路径已正确的提交（`2616374` 或 `fc66a99`）切 `pkg/pluginapi/v0.1.1`；`v0.1.0` **不要改写**——proxy.golang.org 已缓存其 `.mod`（`module declares its path as: github.com/kore-project/...`），改写会让所有消费者的校验和永久失败；在 `pkg/pluginapi/go.mod` 里 `retract v0.1.0`，echo 升 `require` 到 v0.1.1，删本地 `go.work` 后复验 `GOWORK=off go mod download && make dist`。
 1. **补 auth 与 market**：auth 是 §2.1 内欠账，不补则前端无法登录、CSRF 无法验证；market 不补则 `CS-M1-01` 之后没有安装链路可测。
 2. **把 M1-08/09/12/13 遗留写进 M2 任务卡**：capability 方法级校验、audit 写入、bus 多路复用、退避重启 / 心跳 / 孤儿核对——每项都要有验收命令，不接受「顺手做了」。
 3. **两条技术债立项**：`registry/validate.go` 241 行（超 200 行上限，M0 遗留 D-1 同类）与 VmRSS 9,664 KiB（RssFile 6,624 KiB 主体查 bbolt mmap + embed 页，归 M4 设计层，不调阈值）。
@@ -150,4 +156,5 @@
 | 多轨道并行写文档时，同一组数字（RSS 预算、socket 路径、错误码）在 5 份文件里各写一遍，任何一处改动都会留下不一致 | 数字与路径只保留一个权威出处（`docs/RESOURCE-MODEL.md` / `docs/CORE.md`），其他文档只引用不复制；修改时同一检查点内全量对齐 | G4 docs-check（链接与元信息）+ M0-G 交叉一致性核对；G6 文档同步 |
 | 实现者为了让门禁"变绿"，顺手把验收命令改宽（去掉 `-timeout`、跳过失败用例、删断言），事后无人发现 | 验收命令属于任务卡，不属于实现者；命令原文固化在任务卡与 QUALITY-GATES 表里，verifier 逐字复跑，改动必须走提案 | G3 命令原文固化 + verifier 独立复跑 + G-07 证据验收 |
 | 把"下游文档当前文本"当准绳：2 字节帧头、`.sock.new`、`argon2id` 三处口径各自传播一轮，越传越像"已经定了" | ADR 是唯一准绳：改协议 / 数据 / 资源口径前先查 `docs/DECISIONS/`；ADR 与正文冲突时以 ADR 为准并同步正文，不许反向覆盖；发现冲突报告 lead 等裁决 | [WORKFLOW.md](WORKFLOW.md) §8 第 6 条硬规则 + 每 sprint 末「ADR ↔ 正文」对账 |
+| SDK tag 切在 module 改名之前，tag 内容仍是旧 module 路径；本地 `go.work` 把依赖指回工作树，验收全程没碰过远端 tag，直到干净 clone 才暴露 | **发布物要从远端 ref 回验**：`git clone` 新目录 + `GOWORK=off` + 只读 mod 模式跑消费方构建；本地 `go.work` 参与验收 ＝ 把「跨仓库只依赖 tag」判据关掉；tag 切点必须在口径改名之后 | G-15 变更集（远端 ref 复验）+ G-17（replace / go.work 纪律）+ 本条 M1 复盘 |
 | 同一概念在不同轨道各写一种名字：二进制/进程名曾一边写 `kore`（`Makefile` 的 `BIN ?= ./bin/kore`、`PLAN`/`ROADMAP` 的 `bin/kore`），另一边写 `kored`（`ARCHITECTURE`/`CORE`/`GLOSSARY`/`VISION` 与 `cmd/kored/`）；Loop 阶段数曾一边七阶段（地基契约），一边 8 步（`MILESTONE-M0`/`PLAN`） | **裁决（2026-11-21 lead）：二进制/进程/systemd `ExecStart` 统一为 `kored`（daemon 惯例，与 `cmd/kored/` 同源）；项目名与 Go module 保持 `kore`；systemd unit 名 `kore.service`；Kore Loop 统一七阶段（第 7 阶段=归档复盘）。** 教训不变：跨轨并行前先对齐词表（术语以 `docs/GLOSSARY.md` 为准），出现第二种写法先改回词表再写内容，不由各轨道各自发明 | G4（元信息/链接）+ G6 文档同步 + M0-G 交叉一致性核对 |

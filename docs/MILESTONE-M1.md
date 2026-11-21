@@ -2,7 +2,7 @@
 
 # M1 里程碑 · 行走骨架（能装 / 能跑 / 能停）
 
-一句话：M1 把 M0 的纸面契约变成**一个可安装、可启动、可调用、可停止**的 Linux 二进制，以及一个只依赖公开 SDK 的验证插件。结论 **PASS**，证据见 [.agents/verify/m1-final-acceptance.md](../.agents/verify/m1-final-acceptance.md)（独立 verifier，全部命令本轮自跑）与 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 的 2026-11-22 M1 复盘段。
+一句话：M1 把 M0 的纸面契约变成**一个可安装、可启动、可调用、可停止**的 Linux 二进制，以及一个只依赖公开 SDK 的验证插件。运行时结论 **PASS**、发布链 **P0 未闭环**（见 §5 第 0 项），证据见 [.agents/verify/m1-final-acceptance.md](../.agents/verify/m1-final-acceptance.md)（独立 verifier，全部命令本轮自跑）与 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 的 2026-11-22 M1 复盘段。
 
 ## 1. 交付物清单（文件级）
 
@@ -35,17 +35,13 @@
 
 ### 1.4 门禁（`make check` 9 段）
 
-| # | 段 | 脚本 |
-| --- | --- | --- |
-| 1 | docs-check | `scripts/docs-check.sh` |
-| 2 | 依赖白名单 + 兼容基线 | `scripts/dep-check.sh` + Makefile 内联断言 |
-| 3 | 薄壳边界 | `scripts/thin-shell-check.sh` |
-| 4 | 跨仓库边界 | Makefile `repo-check` |
-| 5 | 口径唯一性 | `scripts/canonical-check.sh` |
-| 6 | 判断留痕台账 | `scripts/log-check.sh` |
-| 7 | worktree 卫生 | `scripts/wt-check.sh` |
-| 8 | 开源资产 | `scripts/oss-check.sh` |
-| 9 | 大小写一致性 | `scripts/case-check.sh` |
+| 段 | 脚本 |
+| --- | --- |
+| 1 docs-check · 2 依赖白名单 + 兼容基线 | `docs-check.sh` · `dep-check.sh` + Makefile 内联断言 |
+| 3 薄壳边界 · 4 跨仓库边界 | `thin-shell-check.sh` · Makefile `repo-check` |
+| 5 口径唯一性 · 6 判断留痕台账 | `canonical-check.sh` · `log-check.sh` |
+| 7 worktree 卫生 · 8 开源资产 | `wt-check.sh` · `oss-check.sh` |
+| 9 大小写一致性 | `case-check.sh` |
 
 `Makefile` 另有 build / cross / compat-info / vet / test / mem / idle / budget-check / frontend / clean / fmt 目标。
 
@@ -72,6 +68,7 @@
 | 8 | `make mem MEM_POINTS=60` | 主壳 VmRSS 中位数 ≤ 16,384 KiB（红线）；> 8,192 只记 WARN |
 | 9 | `GOOS=windows GOARCH=amd64 go build ./...` / `GOOS=darwin GOARCH=arm64 go build ./...` | 均退出码 0（Tier B 交叉编译冒烟） |
 | 10 | `make budget-check` | mem + idle + 进程数 + 二进制体积四项聚合，退出码 0 |
+| 11 | `git clone ../kore-plugin-echo /tmp/x && cd /tmp/x && GOWORK=off go mod download && make dist` | 退出码 0（当前 **FAIL**：v0.1.0 tag 内容声明旧 module 路径，见 §5 第 0 项） |
 
 端到端 11 步（`kore-plugin-echo` 装 → 起 → healthz → enable → invoke → `kill -9` → failed → disable → 404/409 → SIGTERM 退出 0）原文与关键输出见 [验收报告 §C](../.agents/verify/m1-final-acceptance.md)。
 
@@ -103,6 +100,7 @@
 
 ## 5. 明确延期项
 
+0. **P0 · SDK tag 不可用（阻断收口）**：`pkg/pluginapi/v0.1.0`（tag `3a59b98`）的 `go.mod` 仍声明 `github.com/kore-project/kore/pkg/pluginapi`，干净 clone 报 `module declares its path as ... but was required as ...`；proxy.golang.org 已缓存该 `.mod`，**改写 tag 会让所有消费者校验和永久失败**。处置：在 `2616374`/`fc66a99` 切 `pkg/pluginapi/v0.1.1` + 在 `go.mod` 里 `retract v0.1.0`，echo 升 `require`，删本地 `go.work` 后 `GOWORK=off` 干净 clone 复验；复验通过前 M1 不置 completed（BOARD 已同步降级）。
 1. `internal/core/auth`（PBKDF2 / session / 双 `Path=/` cookie / CSRF）与 `market`（`POST /api/v1/store/install`、`GET /store/jobs/{id}`）——M1 回 501，属 M1-05/M1-13 未完成。
 2. web 壳（`web/dist/index.html` + `id="app"`，≤30 KiB）：仓库当前无 `web/`，随 M2 前端一起做。
 3. 退避重启 / 心跳探测 / `run.json` 孤儿核对：supervisor 目前只累计 `restarts`，不做退避（`manager.go:8` 明示归 M1-12/13）。

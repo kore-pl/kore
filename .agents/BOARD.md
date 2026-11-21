@@ -42,12 +42,12 @@
 
 ### 4.1 里程碑记录
 
-里程碑只有在「轨道全部 completed + 独立验收报告 PASS + JOURNAL 复盘段落盘 + 台账齐备」四条同时满足时才可置 `completed`（G-07 / G-23）。
+里程碑只有在「轨道全部 completed + 独立验收报告 PASS + JOURNAL 复盘段落盘 + 台账齐备 + 变更集无未闭环 P0」五条同时满足时才可置 `completed`（G-07 / G-23 / G-15）。第五条是 2026-11-22 收口时新加的：M1 的验收报告运行时 PASS，但登记后发现发布链 P0（`pkg/pluginapi/v0.1.0` 内容为旧 module 路径），按「发布物不可用即变更集未完成」处理。
 
 | 里程碑 | 名称 | 状态 | 收口日期 | 证据 |
 | --- | --- | --- | --- | --- |
 | M0 | 文档与骨架 | completed | 2026-11-21 | [verify/m0-consistency-r5.md](verify/m0-consistency-r5.md)（PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-21 两条 M0 复盘 |
-| M1 | 行走骨架 | completed | 2026-11-22 | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（VERDICT PASS，阻断 0）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」段；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) |
+| M1 | 行走骨架 | blocked | —（代码 2026-11-22 完成；发布链 P0 未闭环） | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（运行时 VERDICT PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」§4.5 / §5；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md)。**阻断项**：`GOWORK=off` 干净 clone `go mod download` 报 `module declares its path as: github.com/kore-project/... but was required as: github.com/pengtang1024/...`；`CS-M1-01` 降为 blocked |
 
 ### 4.2 M0 轨道（7 条，已收口）
 
@@ -106,7 +106,7 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | 变更集 | 目标 | 涉及仓库（tag / commit） | kore 协议影响 | 合并顺序 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
-| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 干净 clone 后 `make check` 9/9；`go build ./...` + `go test -count=1 ./...`；`git ls-remote` 核对远端 refs | confirmed |
+| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 本地 `make check` 9/9、`go build`/`go test` 通过；`git ls-remote` 双仓可达。**但** `GOWORK=off` 干净 clone `go mod download` FAIL（`pkg/pluginapi/v0.1.0` 声明旧 module 路径 `kore-project`，proxy 已缓存该 `.mod`） | blocked |
 
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 
@@ -151,6 +151,7 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 
 ## 9. 已知遗留（M0 / M1 记录级，不阻断提交）
 
+- **M1 · P0（阻断收口）**：SDK tag `pkg/pluginapi/v0.1.0` 不可被消费——内容声明的 module 路径仍是 `github.com/kore-project/kore/pkg/pluginapi`，干净目录 `GOWORK=off go mod download` 失败；proxy.golang.org 已缓存该 `.mod`，**不可改写 tag**，只能切 `v0.1.1` + `retract v0.1.0` + echo 升 `require` + 删本地 `go.work` 后复验。详见 [JOURNAL.md](JOURNAL.md) M1 段 §4.5 与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5 第 0 项。
 - **M1 遗留（8 项）**：见 [JOURNAL.md](JOURNAL.md) 2026-11-22 M1 段「结论与 M2 前置」与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5——auth / market 未做、web 壳未交付、退避重启与心跳按 M1-12/13 延期、capability 方法级校验（M1-08）、audit 写入（M1-09）、bus 多路复用、`registry/validate.go` 241 行超 200 行上限、bbolt mmap 计入 RssFile（M4 瘦身）。
 - `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
 - `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。
