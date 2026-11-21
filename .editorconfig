@@ -1,0 +1,29 @@
+# kore — 统一编辑器行为（跨 IDE / 跨平台）
+root = true
+
+# 默认：UTF-8 + LF + 结尾空行 + 去行尾空白
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Go：gofmt 用 tab，宽度按 4 显示
+[*.go]
+indent_style = tab
+indent_size = 4
+
+# 前端 / 配置 / 文档：2 空格
+[*.{ts,tsx,js,json,yml,yaml,css,md}]
+indent_style = space
+indent_size = 2
+
+# Markdown：保留行尾空白（换行语义，如表格硬换行）
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefile：recipe 必须 tab
+[Makefile]
+indent_style = tab
