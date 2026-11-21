@@ -29,7 +29,7 @@ M0 只交付 `kore` 仓库的文档与骨架，**不含任何插件仓库与索�
 | B2 | 资源模型 | `docs/RESOURCE-MODEL.md` | architect | 150–250 行；6 条硬预算逐条给测量方法与超限处置；cgroup 路径 | A3 |
 | B3 | 数据模型 | `docs/DATA-MODEL.md` | architect | 150–250 行；`state.db` 表/字段/索引命名；迁移只追加；任务模型 | A3 |
 | C1 | 前端规格 | `docs/FRONTEND.md` | architect | 150–250 行；技术栈逐项；composables 不引 Pinia；插件前端 ES module + 原生 `import()`；默认暗色 | A2 |
-| C2 | 安全模型 | `docs/SECURITY.md` | architect | 150–250 行；鉴权、8 项能力白名单、UDS 权限、隔离、无联网校验、无隐藏上报 | A3, B2 |
+| C2 | 安全模型 | `docs/SECURITY.md` | architect | 150–250 行；鉴权、能力模型（6 特权 + 插件自有 `<plugin-id>:<action>`，非空 ≤16）、UDS 权限、隔离、无联网校验、无隐藏上报 | A3, B2 |
 | C3 | 十四篇 ADR + 仓库清单 | `docs/DECISIONS/0001-0014`、`docs/REPOS.md` | architect | 14 篇各 40–120 行（6 节结构）；`0008` 多仓库拓扑含 R1–R8；`0009` 兼容基线；`0010` 平台五接口；`0011` SDK 嵌套 module；`0012` 商店与预设；`0013` 极致资源；`0014` v1 范围与深度分级（12 生产 / 8 基础 / 6 不做）；`REPOS.md` 与 ROADMAP §2 一致 | A1–C2 起稿后 |
 | D1 | 路线图 | `docs/ROADMAP.md` | lead | 150–350 行；9 节齐全；M0–M4 固定编号；按仓库列交付物 | A1, B2 |
 | D2 | 执行计划 | `docs/PLAN.md` | lead | 150–350 行；9 节齐全；WBS 覆盖 A–G 七轨；含 M1 前置任务 | D1 |
@@ -88,7 +88,7 @@ Sprint 1–3 覆盖 M1（Linux 内核 + SDK 独立 module + echo 跨仓库验证
 ### Sprint 5（M2-2）ssl / backup 插件 + preset 引擎 + 8 场景预设
 
 - **目标**：3 个核心插件齐备，首次安装可按 8 个预设一键装批。
-- **任务清单**：`kore-plugin-ssl`、`kore-plugin-backup` 两仓库；preset 引擎（读 `kore-plugins/presets/*.json`、按 `scenario_tags` 选插件、版本区间解析、依赖顺序安装）；8 个预设置；能力校验（8 项白名单）；`make presets-check`。
+- **任务清单**：`kore-plugin-ssl`、`kore-plugin-backup` 两仓库；preset 引擎（读 `kore-plugins/presets/*.json`、按 `scenario_tags` 选插件、版本区间解析、依赖顺序安装）；8 个预设置；能力校验（6 特权 + `<plugin-id>:<action>`，非空 ≤16）；`make presets-check`。
 - **退出条件**：8 预设一键安装可复现（同预设两次结果一致）；backup oneshot 空闲 RSS=0；越权能力调用被拒；预设引用 id/区间全部可解析（G-18）。
 - **风险**：预设与版本区间耦合 → 预设与索引同 tag 发布 + 校验脚本。
 
@@ -274,7 +274,7 @@ Sprint 1–3 覆盖 M1（Linux 内核 + SDK 独立 module + echo 跨仓库验证
 | 协议包破坏性变更打断所有插件仓库 | 中 | 极高 | `pkg/pluginapi` 独立版本 + R2 兼容窗口 + 破坏性改动需 ADR 与主版本递增 | 任一插件仓库 `make build` 失败或 hello 协商失败 |
 | 多仓库联调成本（go.work/本地路径） | 高 | 中 | `go.work` 仅本地、发布前移除；变更集登记；CI 用 tag 而非本地 replace | 本地能跑、按 tag 构建失败 |
 | 索引篡改或索引与发布物脱钩 | 中 | 高 | sha256 由 dist 产物写入；校验脚本进发布门禁；索引独立 tag | 三处 sha256 不一致或校验脚本放过坏条目 |
-| 插件越权（能力白名单漏检） | 中 | 高 | 能力校验单测 + red-team 越权用例 | 越权调用返回 200 |
+| 插件越权（6 特权 + 插件自有能力校验漏检） | 中 | 高 | 能力校验单测 + red-team 越权用例 | 越权调用返回 200 |
 | oneshot 被误常驻 | 中 | 中 | 执行超时强杀 + `pgrep` 断言 | 空闲时仍能查到进程 |
 | 前端首屏膨胀 | 中 | 中 | 按需引入 + 构建期 gzip 预算 | 首屏 >300 KiB gzip |
 | 文档口径漂移（多仓库表述） | 高 | 中 | 关键字符串进 docs-check、verifier 拓扑核对 | REPOS 与 ROADMAP/PLAN/AGENTS 表述不一致 |

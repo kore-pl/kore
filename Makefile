@@ -290,12 +290,7 @@ check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
 	  s=0; \
-	  if grep -rqE '^[[:space:]]*"plugin"[[:space:]]*(//.*)?$|plugin[.]Open' --include='*.go' ./cmd ./internal 2>/dev/null; then echo "[FAIL] 发现同进程动态库 plugin 使用（红线 1）"; grep -rnE '^[[:space:]]*"plugin"[[:space:]]*(//.*)?$|plugin[.]Open' --include='*.go' ./cmd ./internal | head -5 || true; s=1; fi; \
-	  if grep -rqE '"kore/plugins/' --include='*.go' ./cmd ./internal/core 2>/dev/null; then echo "[FAIL] 主壳 internal/core import 业务插件包（红线 3：主壳不含业务逻辑）"; grep -rnE '"kore/plugins/' --include='*.go' ./cmd ./internal/core | head -5 || true; s=1; fi; \
-	  bw_noun_hits=$$(grep -rniE --include='*.go' --exclude='*_test.go' --exclude-dir=testdata '(^|[^[:alnum:]_])(backup|site|monitor|cron|ssl|database|mysql|nginx|docker)' ./cmd ./internal 2>/dev/null || true); \
-	  if [ -n "$$bw_noun_hits" ]; then echo "[FAIL] 主壳出现业务域词（词首整词匹配，排除 _test.go 与 testdata/）"; printf '%s\n' "$$bw_noun_hits" | head -10; s=1; else echo "[OK] 业务域词扫描（词首匹配）：0 命中（backup/site/monitor/cron/ssl/database/mysql/nginx/docker）"; fi; \
-	  bw_verb_hits=$$(grep -rniwE --include='*.go' --exclude='*_test.go' --exclude-dir=testdata 'create|restart|deploy' ./cmd ./internal 2>/dev/null || true); \
-	  if [ -n "$$bw_verb_hits" ]; then echo "[FAIL] 主壳出现业务动作词（整词匹配）"; printf '%s\n' "$$bw_verb_hits" | head -10; s=1; else echo "[OK] 业务动作词扫描（整词匹配）：0 命中（create/restart/deploy）"; fi; \
+	  if ! bash scripts/thin-shell-check.sh; then s=1; fi; \
 	  if [ -f go.mod ] && grep -qE 'gin-gonic|labstack/echo|gofiber|grpc-go|nats-io|go-sqlite3|go-redis|docker/docker|containerd' go.mod; then echo "[FAIL] go.mod 含禁止的 Web 框架/中间件/容器依赖（红线 2/4）"; s=1; fi; \
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \

@@ -9,7 +9,7 @@
 ### 1.1 目标
 
 1. **进程隔离下的最小契约**：插件是独立进程，只依赖 UDS + 4 字节长度前缀 + JSON，不引入 RPC 框架；内核与插件可各自升级、各自被替换。
-2. **可手工调试**：任意一帧都能用 20 行脚本构造并打印；字段自描述，抓包即可读，不需要 `.proto` 描述文件与代码生成（M3 引入 protobuf 时保留 JSON 回退）。
+2. **可手工调试**：任何一帧都能用 20 行脚本构造并打印；字段自描述，抓包即可读，不需要 `.proto` 描述文件与代码生成（M3 引入 protobuf 时保留 JSON 回退）。
 3. **可演进**：加字段只允许可选、加事件只增不改、删改字段必须升主版本；主版本不匹配时拒绝加载，不做猜测兼容。
 4. **资源与故障可控**：单帧上限 8 MiB、单次调用默认 15s、心跳 10s 三级判死，内核可单方面终止任何不响应的插件进程。
 
@@ -57,18 +57,18 @@
 | lifecycle | string | 是 | — | `resident` \| `lazy`（默认）\| `oneshot`（原 `type` 字段名废弃） |
 | idle_timeout_s | int | 否 | `300` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
 | entry | string | 是 | — | 相对包根的可执行路径，固定 `bin/<id>` |
-| capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；空数组合法 |
+| capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；**非空：至少 1 项、上限 16 项** |
 | resources.memory_mb | int | 是 | — | 4–12（常驻与活跃 lazy 上限 12，见 RESOURCE-MODEL） |
 | resources.cpu_quota | string | 是 | — | `"10%"`–`"100%"`，映射 `cpu.max` |
 | resources.pids_max | int | 是 | — | 16–512 |
-| triggers | object[] | 是 | — | 元素 `{type: http\|cli\|cron, name}`；`cron` 仅元数据，MVP 不内建调度；空数组合法 |
+| triggers | string[] | 是 | — | 元素 `<type>:<name>`，`type` ∈ `event` \| `schedule` \| `invoke`；`event` 的 `name` 匹配 `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`；`invoke` 允许单段动词或任意段点分名 `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`（如 `invoke:restart`、`invoke:site.restart`）；`schedule` M1 只校验非空（M2 解析表达式）；缺 `:`、类型不在枚举、name 非法 → `E_INVALID`；空数组合法 |
 | depends_on | string[] | 否 | `[]` | 依赖的插件 id；安装时拓扑排序，缺失依赖拒绝安装；循环依赖直接拒绝并回 `E_INVALID`（`detail.cycle` 给环路径） |
 | conflicts | string[] | 否 | `[]` | 冲突插件 id；与已装插件冲突时拒绝安装，回 `E_CONFLICT` |
 | scenario_tags | string[] | 是 | — | ⊆ `web`/`data`/`ops`/`sec`/`app`，至少 1 个；供商店分类与预设筛选 |
 | size_bytes | int | 是 | — | ≥ 0，安装后占用字节数（商店展示与磁盘预检） |
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
 | protocol_minor | int | 否 | 0 | 见 §13 |
-| web | object | 否 | 无 | `{entry: "web/index.js"}`；无前端时省略 |
+| web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
 
 - `requires_kore` 区间语义（R3）：MVP 只支持 `">=X.Y.Z <A.B.C"` 与 `">=X.Y.Z"` 两种写法；不支持 `^`/`~`/`||`；解析器用标准库自实现，不引第三方库（G-02）。
 - 匹配规则：按 semver 比较 kore 版本；kore 版本含预发布号（如 `0.2.0-rc.1`）时拒绝匹配（MVP 不认 pre-release）。
@@ -84,9 +84,9 @@
 
 ### 3.1.2 capabilities 模型（两层）
 
-**特权能力**（内核唯一白名单，6 个、固定不可扩展）：`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，对宿主有实际影响，由内核集中校验授权；**插件自有能力** `<plugin-id>:<action>`，域必须等于声明它的插件 id（`site` 可声明 `site:read`，`mysql` 不得声明 `site:write`）。
+**特权能力**（内核唯一白名单，6 个、固定不可扩展）：`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，对宿主有实际影响，由内核集中校验授权；**插件自有能力** `<plugin-id>:<action>`，域必须等于声明它的插件 id（`site` 可声明 `site:read`，`db-mysql` 不得声明 `site:write`）。
 
-**校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；空数组合法，重复项或 >16 项 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
+**校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
 
 **设计理由**：内核不得维护业务域名词表——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治；新增插件永远不需要改内核。
 
@@ -99,7 +99,7 @@
   "entry": "bin/site",
   "capabilities": ["site:read", "site:write", "net:read"],
   "resources": { "memory_mb": 10, "cpu_quota": "50%", "pids_max": 128 },
-  "triggers": [{ "type": "http", "name": "site.list" }],
+  "triggers": ["invoke:site.list"],
   "depends_on": [], "conflicts": [], "scenario_tags": ["web"], "size_bytes": 31457280, "store_visibility": "public",
   "description": "静态站点与反向代理配置管理",
   "web": { "entry": "web/index.js" }
@@ -115,7 +115,7 @@
   "entry": "bin/backup",
   "capabilities": ["system:read", "backup:run"],
   "resources": { "memory_mb": 8, "cpu_quota": "100%", "pids_max": 256 },
-  "triggers": [{ "type": "http", "name": "backup.run" }, { "type": "cli", "name": "backup.run" }],
+  "triggers": ["invoke:backup.run", "schedule:daily@03:00"],
   "depends_on": [], "conflicts": [], "scenario_tags": ["data", "ops"], "size_bytes": 20971520,
   "description": "按计划执行一次性备份任务，执行完退出"
 }
@@ -236,11 +236,11 @@
 {"type":"event","event":"plugin.log","seq":42,"ts":"2026-11-21T20:40:15.123+08:00","data":{...}}
 ```
 
-- 信封固定字段：`seq`（uint64，每连接单调递增、从 1 开始，用于去重与断点续传，重连归零）、`ts`（RFC3339 字符串，事件产生时间）、`data`（object）。
+- 信封固定字段：`seq`（uint64，每连接单调递增、从 1 开始，用于去重与断点续传，重连归零）、`ts`（RFC3339 字符串，事件产生时间）、`data`（字段由 §8 事件表逐项定义，未登记事件拒绝）。
 
 | 事件 | 方向 | data 字段 | 用途 |
 | --- | --- | --- | --- |
-| plugin.log | 插件→内核 | `level`(debug/info/warn/error)、`msg`、`fields`(object) | 写入 `/var/log/kore/plugins/<id>.log`，前缀 `[plugin:<id>]` |
+| plugin.log | 插件→内核 | `level`(debug/info/warn/error)、`msg`、`fields`(map<string,string>，≤16 键，值 ≤1 KiB) | 写入 `/var/log/kore/plugins/<id>.log`，前缀 `[plugin:<id>]` |
 | plugin.health | 插件→内核 | `state`、`rss_kb`、`goroutines`、`last_error` | 供 `/system/info` 与前端展示，不写 bbolt |
 | plugin.state | 内核→插件 | `from`、`to`、`reason` | 通知插件自身状态变化（如 disable 前的 stopping） |
 | system.event | 内核→插件 | `kind`、`subject`、`detail` | 内核级广播（如证书续期完成、配置重载），订阅由插件在 hello 的 `methods` 外声明 `events: []` |

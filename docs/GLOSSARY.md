@@ -42,8 +42,8 @@
 | 一次性插件 | oneshot plugin | `lifecycle: oneshot`，触发才拉起、执行完退出，空闲 RSS = 0（如 backup） | V·A·C | 空闲为 0 指**进程不存在**，不是"内存占用很小" |
 | 插件包 | plugin package | 分发单元 `<id>-<version>.tar.gz`，含 `info.json` + `bin/<id>` + `web/` + 可选 `signature` | V·A·C | 与"插件清单"混用；包是 tar.gz，清单是包内的 info.json |
 | 插件清单 | manifest (`info.json`) | 包内声明文件：id/name/version/protocol/lifecycle/entry/capabilities/resources/triggers | A·C | 不是"已安装插件列表"；列表在 registry 的 plugins bucket |
-| 能力 | capability | 插件被允许使用的资源类别，能力白名单 8 项（`site:read`/`site:write`/`db:read`/`db:write`/`net:read`/`net:write`/`system:read`/`system:admin`） | V·A·C | 不是 RBAC 权限点；只做"插件能否碰这类资源"，不细分到具体对象 |
-| 能力白名单 | capability allowlist | 内核唯一承认的 8 项能力集合，清单里出现集合外能力即安装失败 | A·C | 白名单是集合包含校验，不是前缀匹配（`site:admin` 不存在） |
+| 能力 | capability | 插件声明的能力标识，两类：**6 个特权能力**（`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，内核唯一认识、固定不可扩展）与插件自有 `<plugin-id>:<action>`（**域必须等于插件 id**） | V·A·C | 不是 RBAC 权限点；内核只做语法、域匹配与数量校验，不维护业务域名词表 |
+| 能力清单 | capability list | `info.json.capabilities[]`：**非空（≥1 项）、≤16 项**；重复 / 超限 / 语法非法 / 自有能力域 ≠ 插件 id → `E_INVALID` | A·C | 不是"固定项数的白名单"；旧的固定清单模型已是历史，内核不得维护业务域名词表 |
 | 触发 | trigger | 拉起一次性插件的条件：cron / HTTP invoke / bus 事件 | A·C | 不是"事件订阅"；触发决定**何时起进程**，事件是运行期通知 |
 | 热升级 | hot upgrade | 新进程拉起并 hello 成功后，再优雅停旧进程的升级方式 | V·A·C | 不是"零中断"；升级窗口内该插件的新调用会短暂 503 |
 | 帧 | frame | 协议传输单元：4 字节大端长度前缀 + JSON 负载 | A·C | 不是 TCP 包；一次 send 可能跨多个帧，必须按长度前缀切分 |

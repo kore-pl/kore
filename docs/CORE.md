@@ -37,8 +37,8 @@
 
 ### 2.1 `internal/core/config`
 
-- **职责**：内置默认值 → `/etc/kore/config.yaml` 覆盖 → 环境变量覆盖 → 字段校验 → 不可变 `Config` 快照；SIGHUP 时重新解析并按 §6 白名单热替换。优先级：内置默认 < 配置文件 < 环境变量（仅 `KORE_CONFIG` 改配置路径、`KORE_STATE_DIR` 覆盖 `paths.state_dir`）；键名与默认值以 `DATA-MODEL.md` §3 为唯一真源。
-- **输入输出**：输入为配置文件路径（`KORE_CONFIG`）与 `KORE_STATE_DIR`，输出 `*Config`（各模块只读引用）+ `[]ValidationError`；字段组为 `server.*` / `auth.*` / `paths.*` / `log.*` / `resources.*` / `plugins.*` / `security.*`，逐键定义见 `DATA-MODEL.md` §3，本文件不复制。
+- **职责**：内置默认值 → `/etc/kore/config.yaml` 覆盖 → 环境变量覆盖 → 字段校验 → 不可变 `Config` 快照；SIGHUP 时重新解析并按 §6 白名单热替换。优先级：内置默认 < 配置文件 < 环境变量。**内核侧配置覆盖变量共 3 个**：`KORE_CONFIG`（改配置路径）、`KORE_STATE_DIR`（覆盖 `paths.state_dir`）、`KORE_PLUGIN_DIR`（覆盖 `paths.plugin_dir`）。**派生规则**：`paths.state_dir` 解析优先级 = `KORE_STATE_DIR` > `--state-dir` > 配置 `paths.state_dir` > `/var/lib/kore`；`paths.plugin_dir` 解析优先级 = `KORE_PLUGIN_DIR` > 配置 `paths.plugin_dir` > **`<state_dir>/plugins`（未显式设置时派生）**。即只设 `KORE_STATE_DIR=/tmp/x` 时，状态库为 `/tmp/x/state.db`、插件目录自动为 `/tmp/x/plugins`（M1 修复：此前 `plugin_dir` 写死，与 `state_dir` 脱节）。键名与默认值以 `DATA-MODEL.md` §3 为唯一真源。
+- **输入输出**：输入为配置文件路径（`KORE_CONFIG`）、`KORE_STATE_DIR`、`KORE_PLUGIN_DIR` 与 `--state-dir`，输出 `*Config`（各模块只读引用）+ `[]ValidationError`；字段组为 `server.*` / `auth.*` / `paths.*` / `log.*` / `resources.*` / `plugins.*` / `security.*`，逐键定义见 `DATA-MODEL.md` §3，本文件不复制。
 - **失败模式与处理**：文件不存在 → 用内置默认值 + WARN，继续启动；只有真正必填项缺失才拒绝启动（退出码 2）——`auth.admin_password_hash` **不是**必填项，空值走 §2.3 的首启 bootstrap。YAML 语法错 → stderr 报行号，退出码 2。**未知字段 → WARN + 继续启动**，附最接近的合法键名拼写建议（不因拼写把服务打死）。**类型错误 / 必填缺失 / 取值越界 → 退出码 2**（如 `auth.session_ttl` 超出 1m–720h、`server.addr` 非回环地址）。`auth.initialized=true` 但哈希为空 → 退出码 2（配置损坏，**不重新生成**，避免覆盖已被运维重置的意图）。SIGHUP 重载失败 → 保留旧快照 + ERROR，不回滚进程。
 - **明确不做什么**：不定义或复写配置键（真源在 `DATA-MODEL.md` §3）；不做配置中心/远端拉取/版本管理；不做 schema 迁移（属 store）；不读插件配置（插件自管 `/var/lib/kore/plugins/<id>/` 下文件）；不监听文件变更（零轮询定时器，只认 SIGHUP）。
 
@@ -65,7 +65,7 @@
 
 ### 2.5 `internal/core/registry`
 
-- **职责**：插件包 `<id>-<version>.tar.gz` 校验与原子安装（解压到 `/var/lib/kore/plugins/.staging/<id>-<version>/` 后 `rename` 到 `<id>/<version>/`）；`info.json` 12 个必填字段校验：`id,name,version,protocol,lifecycle,entry,capabilities[],resources{memory_mb,cpu_quota,pids_max},triggers[]`；**`lifecycle` 取值 `resident|lazy|oneshot`（缺省 `lazy`；旧字段名已废弃、不保留别名）**；capabilities 按**两段模型**校验：6 个特权能力（`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`）+ 插件自有 `<id>:<action>`（域必须等于自身 id），语法/重复/>16 项拒绝（详见 PLUGIN-PROTOCOL §3.1.2）；维护 installed/enabled 状态并持久化到 `plugins` bucket。
+- **职责**：插件包 `<id>-<version>.tar.gz` 校验与原子安装（解压到 `/var/lib/kore/plugins/.staging/<id>-<version>/` 后 `rename` 到 `<id>/<version>/`）；`info.json` 12 个必填字段校验：`id,name,version,protocol,lifecycle,entry,capabilities[],resources{memory_mb,cpu_quota,pids_max},triggers[]`；**`lifecycle` 取值 `resident|lazy|oneshot`（缺省 `lazy`；旧字段名已废弃、不保留别名）**；capabilities 按**两段模型**校验：6 个特权能力（`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`）+ 插件自有 `<id>:<action>`（域必须等于自身 id），**必须非空（至少 1 项、上限 16 项）**，空数组/重复/超限拒绝（详见 PLUGIN-PROTOCOL §3.1.2）；维护 installed/enabled 状态并持久化到 `plugins` bucket。
 - **输入输出**：输入 multipart 包（`POST /api/v1/plugins`，body ≤ 32 MiB）或 `{id}` 路径参数；输出插件视图 `{id,name,version,lifecycle,state,capabilities,resources,installedAt}`。安装为原子操作：任何一步失败都清理 `.staging`，不留半装状态。
 - **失败模式与处理**：tar 路径穿越（`..`/绝对路径/符号链接逃逸）→ 400 `E_INVALID` 且拒绝整包；缺字段/类型错/版本非 semver → 400 `E_INVALID` 带字段名；同 id 同版本已存在 → 409 `E_CONFLICT`；降级安装（新版本 < 已装）→ 400 `E_INVALID`；解压后总大小 > 128 MiB、单文件 > 64 MiB 或文件数 > 2000 → 400 `E_INVALID`（防 zip bomb）；磁盘满 → 507 语义（映射 `E_INTERNAL` + 明确 message）。
 - **明确不做什么**：不做签名密钥管理（M4 才强校验，MVP 只存 `signature` 文件不验）；不做依赖解析（插件是静态二进制）；不启动/停止进程（交 supervisor）；不做插件市场、审核、评分、遥测。
@@ -152,7 +152,7 @@
 | 可执行文件 | `/var/lib/kore/plugins/<id>/<version>/bin/<id>`（`info.json.entry` 相对包根） |
 | 运行身份 | 系统用户/组 `kore-<id>`（uid/gid 由 `useradd --system --no-create-home` 提供，主壳启动时确保存在） |
 | cgroup | `/sys/fs/cgroup/kore/<id>.slice`：`memory.max = resources.memory_mb × 1 MiB`；`cpu.max = "<cpu_quota> 100000"`；`pids.max = resources.pids_max` |
-| 环境变量 | 仅 5 个：`KORE_PLUGIN_ID`、`KORE_PLUGIN_SOCK`、`KORE_PLUGIN_TOKEN`（hello HMAC 用，Windows 必需）、`KORE_STATE_DIR=/var/lib/kore/plugins/<id>`、`KORE_LOG_DIR=/var/log/kore/plugins`；任务目录为 `<KORE_STATE_DIR>/tasks`（派生，不另设 env）；协议版本与 capabilities 来自 `info.json` 与 `kore.hello`，**不设环境变量**（无 `KORE_SOCKET` 等别名） |
+| 环境变量 | 注入插件的仅 5 个：`KORE_PLUGIN_ID`、`KORE_PLUGIN_SOCK`、`KORE_PLUGIN_TOKEN`（hello HMAC 用，Windows 必需）、`KORE_STATE_DIR=/var/lib/kore/plugins/<id>`、`KORE_LOG_DIR=/var/log/kore/plugins`（**内核侧另有 `KORE_CONFIG` / `KORE_STATE_DIR` / `KORE_PLUGIN_DIR` 三个配置覆盖变量，不注入插件**，见 §2.1）；任务目录为 `<KORE_STATE_DIR>/tasks`（派生，不另设 env）；协议版本与 capabilities 来自 `info.json` 与 `kore.hello`，**不设环境变量**（无 `KORE_SOCKET` 等别名） |
 | socket | 主壳**作为 server** 先 bind `/run/kore/plugins/<id>.sock`（`chmod 0600`、`chown kore-<id>`；其它插件用户既读不到也连不上），插件以 client 身份 `connect` |
 | 工作目录 | `/var/lib/kore/plugins/<id>`（`0700 kore-<id>`），插件不得写工作目录之外 |
 | stdout/stderr | 重定向到 `/var/log/kore/plugins/<id>.log`（`0640 root:kore`），内核不解析内容 |
@@ -178,7 +178,7 @@
 
 ### 4.5 优雅停止
 
-总宽限 **5 s**（契约值）：t=0 同时发 `kore.shutdown`（协议级）与 `SIGTERM`（允许不实现协议的插件立即收尾）；进程在 5 s 内退出 → `stopped`；超时 → `SIGKILL` → `stopped`（记 `killed=true`）。之后删 socket、删 cgroup 目录、清理 `run.json`。关闭流程总预算 ≤ 12 s，systemd `TimeoutStopSec=15` 兜底。
+**停止序列**：主壳向插件 socket 发送 `kore.shutdown` 帧 → 等待 **≤5 s** → 超时 `SIGKILL` → `stopped`（记 `killed=true`）。**不发 `SIGTERM`**——插件是独立进程，`kore.shutdown` 即其优雅停止信号；主壳不直接调用 `syscall.SIGTERM`（G-16：平台专有 API 收口在 `internal/platform`）。进程在 5 s 内退出 → `stopped`。之后删 socket、删 cgroup 目录、清理 `run.json`。关闭流程总预算 ≤ 12 s，systemd `TimeoutStopSec=15` 兜底。
 
 ### 4.6 热升级
 
@@ -186,7 +186,7 @@
 2. 解压到 `/var/lib/kore/plugins/<id>/<newVersion>/`，不覆盖旧版本目录。
 3. 为新进程 bind 临时 socket `/run/kore/plugins/<id>.next.sock`，拉起新进程。
 4. 新进程 hello ≤ 2 s 且校验通过 → registry 把路由与 socket 指向新进程；失败 → SIGKILL 新进程，保留旧进程，升级失败返回 409 `E_CONFLICT`。
-5. 对旧进程发 `kore.shutdown` + SIGTERM，5 s → SIGKILL。
+5. 对旧进程发 `kore.shutdown`，5 s → `SIGKILL`（**不发 `SIGTERM`**，理由同 §4.5：G-16 信号收口）。
 6. 删除旧 socket，把 `<id>.next.sock` 重命名为 `/run/kore/plugins/<id>.sock`；后续调用按 registry 记录的 socket 路径寻址（不硬编码）。
 7. 旧版本目录保留 1 份用于回滚（`POST /plugins/{id}/upgrade` 带 `rollback=true` 可回退），再升级时删除更旧的版本。
 

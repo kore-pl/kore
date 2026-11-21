@@ -107,7 +107,7 @@
 
 | 阶段 | 触发 | 校验内容 | 失败码 |
 | --- | --- | --- | --- |
-| 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | 按 §5.2 顺序校验：语法合法、域为 6 特权之一或等于自身 id、无重复、≤16 项 | `E_INVALID` |
+| 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | 按 §5.2 顺序校验：非空（≥1 项）、语法合法、域为 6 特权之一或等于自身 id、无重复、≤16 项 | `E_INVALID` |
 | 启用授予 | `POST /api/v1/plugins/{id}/enable` | 展示声明清单并由用户确认，写入 `plugins` bucket 的 `granted_capabilities` 字段 | `E_CONFLICT`（升级新增能力未重新确认时） |
 | 调用校验 | 每个 `POST /api/v1/invoke/{plugin}/{method}` 帧 | 方法→能力映射表命中，且目标能力已在 `plugins.granted_capabilities` 中 | `E_UNAUTHORIZED` + 审计 `capability.denied` |
 
@@ -116,9 +116,9 @@
 | 段 | 内容 | 归属与语义 |
 | --- | --- | --- |
 | 特权能力（6 个，固定不可扩展） | `system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write` | 对宿主有实际影响，由内核集中校验与授权；`system:admin` 最高危，启用时强制二次确认 |
-| 插件自有能力 | `<plugin-id>:<action>`，**域必须等于声明它的插件 id**（`site` 可声明 `site:read`；`mysql` 不得声明 `site:write`） | 插件自治，内核只校验语法与域归属 |
+| 插件自有能力 | `<plugin-id>:<action>`，**域必须等于声明它的插件 id**（`site` 可声明 `site:read`；`db-mysql` 不得声明 `site:write`） | 插件自治，内核只校验语法与域归属 |
 
-校验规则（按序，安装时执行）：① 语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；② 域 ∈ 特权集 → 允许；③ 否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；④ 空数组合法，重复项或 >16 项 → `E_INVALID`。
+校验规则（按序，安装时执行）：① 语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；② 域 ∈ 特权集 → 允许；③ 否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；④ **必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。
 
 设计理由：**内核不得维护业务域名词表**——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治，新增插件永远不需要改内核（G-01）。
 

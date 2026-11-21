@@ -209,7 +209,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | 1 | httpapi 停止接受新连接；向全部 SSE 连接发 `event: shutdown` | ≤ 100 ms |
 | 2 | 等在途 HTTP 请求结束（`http.Server.Shutdown`） | ≤ 5 s |
 | 3 | 停止 cron 触发与新的 oneshot 拉起；bus 拒绝新调用 | 立即 |
-| 4 | 对 resident 插件并发发 `kore.shutdown`，等其自退；超时 `SIGTERM`→5 s→`SIGKILL` | ≤ 5 s |
+| 4 | 对 resident 插件并发发 `kore.shutdown`，等其自退；超时 5 s → `SIGKILL`（**不发 `SIGTERM`**，主壳不直接调 `syscall.SIGTERM`，G-16） | ≤ 5 s |
 | 5 | 关闭 bus（在途 `E_UPSTREAM`）→ 关闭 bbolt（等 fsync）→ unlink 两个 socket → 释放 flock（不删锁文件），退出码 0 | ≤ 5 s |
 
 总自限 ≤ 12 s；systemd `TimeoutStopSec=15` 兜底（见 [CORE.md](./CORE.md) §7）。
@@ -232,10 +232,10 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
                     ┌─────▼─────┐  ping 连续 3 次超时(2s/次)    │       │
                     │   ready   │──────────────────────► ┌──────┴────┐ │
                     └─────┬─────┘                        │ degraded  │ │
-        kore.shutdown /   │                              └──────┬────┘ │
-        SIGTERM           │                     ping 恢复 / 重启成功│      │
+        kore.shutdown     │                              └──────┬────┘ │
+        (无 SIGTERM)      │                     ping 恢复 / 重启成功│      │
                     ┌─────▼─────┐ ◄────────────────────────────┘      │
-                    │ stopping  │────SIGTERM→5s→SIGKILL──────────────►┘
+                    │ stopping  │────5s→SIGKILL（无 SIGTERM）──────────►┘
                     └───────────┘
 ```
 
@@ -278,7 +278,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | --- | --- | --- |
 | 1 | 包结构符合 `<id>-<version>.tar.gz`，内含 `info.json` + `bin/<id>` + `web/`（可选）+ `signature`（可选） | 安装时 registry 校验 |
 | 2 | `info.json` 12 个必填字段齐全且取值合法（见 CORE §registry） | 安装时 schema 校验，失败返回 400 E_INVALID |
-| 3 | capabilities 全部在能力白名单（capability allowlist）**8 项**内：`site:read` `site:write` `db:read` `db:write` `net:read` `net:write` `system:read` `system:admin` | registry 集合包含校验 |
+| 3 | capabilities 合法：**6 个特权能力**（`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，内核唯一认识、固定不可扩展）+ 插件自有 `<plugin-id>:<action>`（**域必须等于插件 id**）；**非空（≥1 项、≤16 项）**；重复 / 超限 / 语法非法 → 400 `E_INVALID`。内核**不维护业务域名词表** | registry 语法 + 域匹配 + 数量校验 |
 | 4 | 只用 **4 个必选方法（`kore.hello`/`kore.ping`/`kore.shutdown`/`kore.reload`）+ 1 条必选事件通道（`kore.event`，单向）**，加自己的 `<plugin>.<verb>`；不占用 `kore.*` 保留名 | verifier 抓帧 + 契约测试 |
 | 5 | 资源声明与实测一致（`memory_mb`/`cpu_quota`/`pids_max`） | `make mem` + cgroup 读数 |
 

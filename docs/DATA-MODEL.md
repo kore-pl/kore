@@ -23,7 +23,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 | 商店缓存 | `/var/lib/kore/store/index.json` | JSON 索引缓存，0600 | 短期，过期即删 | 不备份（可重建） |
 | 临时 | `/run/kore/`（socket、pid、`plugins/<id>.json` 运行态） | socket/pid/运行态 JSON | 进程生命周期，重启重建 | 不备份 |
 
-路径优先级：环境变量 > 配置文件 > 上述默认值。`KORE_STATE_DIR` 覆盖 `paths.state_dir`，`KORE_CONFIG` 覆盖配置路径本身；env 覆盖时启动日志记 WARN 说明生效来源。
+路径解析优先级：环境变量 > CLI > 配置文件 > 上述默认值。`KORE_CONFIG` 覆盖配置路径本身；`KORE_STATE_DIR` 覆盖 `paths.state_dir`；`KORE_PLUGIN_DIR` 覆盖 `paths.plugin_dir`。**派生规则**：`paths.state_dir` = `KORE_STATE_DIR` > `--state-dir` > 配置 `paths.state_dir` > `/var/lib/kore`；`paths.plugin_dir` = `KORE_PLUGIN_DIR` > 配置 `paths.plugin_dir` > **`<state_dir>/plugins`（未显式设置时派生）**——只设 `KORE_STATE_DIR=/tmp/x` 时，状态库为 `/tmp/x/state.db`、插件目录自动为 `/tmp/x/plugins`（M1 修复：此前写死，与 `state_dir` 脱节）。env 覆盖时启动日志记 WARN 说明生效来源。
 
 多版本并存：每个 `<id>/<version>/` 是独立目录，升级保留当前 + 上一版本；回滚 = 把 registry 指向上一版本目录并以该目录 `bin/<id>` 重启进程，删除目录即释放磁盘。插件包由 `kore-plugin-<id>` 仓库 `make dist` 产出，本仓库只解包与登记，不构建插件。商店缓存不是真源：真源在 `kore-plugins` 的 `index/plugins.json`，`/var/lib/kore/store/index.json` 只是离线可看的副本，丢失或过期即可直接删除，下次显式刷新重建。
 
@@ -47,7 +47,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `state.db`、`plugins/`、`tasks/` |
 | `paths.log_dir` | string | `/var/log/kore` | 必须可写；含插件日志子目录 |
 | `paths.run_dir` | string | `/run/kore` | 0700；socket 落此处 |
-| `paths.plugin_dir` | string | `/var/lib/kore/plugins` | 解包目标 |
+| `paths.plugin_dir` | string | `<state_dir>/plugins`（**未显式设置时派生**，默认即 `/var/lib/kore/plugins`） | 解包目标；`KORE_PLUGIN_DIR` 可覆盖 |
 | `log.level` | string | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `log.rotate.max_size_mb` | int | `10` | 1–100；单文件轮转阈值 |
 | `log.rotate.max_backups` | int | `5` | 1–20；保留份数 |
@@ -85,7 +85,7 @@ paths:
   state_dir: "/var/lib/kore"          # state.db / plugins / tasks
   log_dir: "/var/log/kore"            # kore.log / plugins/<id>.log
   run_dir: "/run/kore"                # kore.sock / plugins/<id>.sock
-  plugin_dir: "/var/lib/kore/plugins"
+  plugin_dir: "/var/lib/kore/plugins"  # 省略时派生为 <state_dir>/plugins
 
 log:
   level: "info"                 # debug|info|warn|error
@@ -141,11 +141,27 @@ cert_renew:                     # 唯一允许的常驻定时器，默认关
 | bucket | key 编码 | value JSON schema | 清理策略 |
 | --- | --- | --- | --- |
 | `meta` | 固定字符串：`schema_version` `installed_at` `kore_version` `last_backup_at` `preset_snapshot_version` `store_last_refresh_at` | `{"schema_version":1}` / `{"ts":"..."}` / `{"version":"0.1.0"}` / `{"preset_snapshot_version":"2026-11-21.1"}` / `{"ts":"..."}`（上次显式刷新时间，不是出站心跳） | 永不清理 |
-| `plugins` | 插件 id（如 `site`） | `{id,name,version,lifecycle:"resident"\|"lazy"\|"oneshot",idle_timeout_s,protocol,requires_kore,capabilities[],resources{},installed_at,package_sha256,signed,source:"store"\|"local"\|"embedded"\|"manual",scenario_id,depends_on[],size_bytes,store_visibility,prev_version}` | 卸载即删；保留 `prev_version` 供回滚；索引仓库用同一 `requires_kore` 做兼容过滤；`scenario_id` 记录首次安装来源预设，手动安装为空 |
+| `plugins` | 插件 id（如 `site`） | `{id,name,version,lifecycle:"resident"\|"lazy"\|"oneshot",idle_timeout_s,protocol,requires_kore,capabilities[],triggers[],resources{memory_mb,cpu_quota,pids_max},installed_at,package_sha256,signed,source:"store"\|"local"\|"embedded"\|"manual",scenario_id,depends_on[],size_bytes,store_visibility,prev_version}` | 卸载即删；保留 `prev_version` 供回滚；索引仓库用同一 `requires_kore` 做兼容过滤；`scenario_id` 记录首次安装来源预设，手动安装为空 |
 | `plugin_state` | 插件 id | `{desired:"enabled"\|"disabled",actual:"ready"\|"degraded"\|"failed"\|"stopped"\|"idle",restarts,restart_window_start,last_error,last_active_at,last_upgrade_at,updated_at}` | 卸载即删 |
-| `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"http"\|"cli"\|"cron",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 保留 30 天（启动时 + 惰性触发） |
+| `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 保留 30 天（启动时 + 惰性触发） |
 | `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次） | `{subject:"admin",created_at,last_seen_at,expires_at}`；`expires_at` = 最近一次鉴权 + `session_ttl`（12h 滑动） | 过期即删（读时判断 + 惰性清理） |
 | `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{who,action,plugin_id,method,result:"ok"\|"denied"\|"error",req_id,at,detail{}}` | 保留 90 天 |
+
+**`triggers`（`info.json` 与 `plugins` bucket 同名字段）**：**`[]string`**，每项格式 **`<type>:<name>`**（**前缀即类型**；不是对象数组，也不是无前缀裸名）：
+
+```json
+"triggers": ["event:cert.renew_due", "schedule:daily@03:00", "invoke:echo.reload", "invoke:reload"]
+```
+
+| `type` 前缀 | 语义 | `name` 约束 |
+| --- | --- | --- |
+| `event:` | 订阅 kore 事件（`kore.event.type`） | `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`（如 `cert.renew_due`） |
+| `invoke:` | 外部调用触发（HTTP / CLI），指向方法名 | `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`（**单段或多段均可**：`invoke:reload` 与 `invoke:echo.reload` 都合法） |
+| `schedule:` | 宿主调度器（**M2 生效**） | M1 仅校验非空且不含 `:` 之外的控制字符，不解析调度表达式 |
+
+**两处正则差异的原因**：`event:` 必须两段——事件名天然是 `<域>.<事件>`（如 `cert.renew_due`），单段无法区分域；`invoke:` 指向插件方法名，单段（`invoke:reload`）与多段（`invoke:echo.reload`）都自然，故放宽为「单段或多段」。
+
+**空数组合法**（= 不订阅任何触发）。任一项非法——缺 `:` 前缀、前缀不在 `event`/`schedule`/`invoke` 内、`name` 不匹配上表规则、项非字符串——→ 安装失败 `E_INVALID`（registry 校验，见 [CORE.md](./CORE.md) §2.5）。`triggers` 只决定插件被哪些外部源唤醒，**不改变 `lifecycle`**（生命周期是安装形态，触发是唤醒来源）。
 
 lazy 插件的 `actual:"idle"` 与 `last_active_at` 必须落盘：主壳重启后按 `last_active_at` 恢复「最久未用先降级」的配额判定，不允许重启后把全部 lazy 一次性拉起。
 
@@ -222,7 +238,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |
 | `req_id` | string | 与日志串联 |
 | `at` | string | RFC 3339 毫秒 |
-| `detail` | object | 附加信息（如 `{"from":"0.1.0","to":"0.2.0"}`），≤ 1 KiB |
+| `detail` | `map[string]string`（**受控例外**：仅允许标量字符串值，禁止嵌套） | 附加信息（如 `{"from":"0.1.0","to":"0.2.0"}`），≤ 1 KiB；**校验方：内核 audit 写入路径**（写入前校验键 ≤32 字符、值 ≤256 字符、键数 ≤16；非法即拒绝写入并记 WARN，不落库） |
 
 查询：`GET /api/v1/invoke/...` 不暴露审计；MVP 用 `kored audit --since 24h` 读 bbolt 输出，前端 M2 再加列表。保留 90 天，超期由清理流程删除。
 

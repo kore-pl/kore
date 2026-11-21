@@ -13,7 +13,7 @@ func TestDetectCycleNoCycle(t *testing.T) {
 		"site":     {"db-mysql"},
 		"monitor":  {"site", "db-mysql"},
 		"db-mysql": nil,
-		"cron":     {"未安装的依赖"},
+		"ext":      {"未安装的依赖"},
 	}
 	if cycle := registry.DetectCycle(graph); cycle != nil {
 		t.Fatalf("无环图不应返回环，实际 %v", cycle)

@@ -15,6 +15,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 3. 交付只认证据：命令原文 + 退出码 + 关键输出。没有输出的"已完成"不成立。
 4. 一个静态二进制跑遍 RHEL8 → Alpine 3.19 是 **Tier A**；Windows 10 1809+ / macOS 12+ 为 **Tier B**（能用，隔离与限额降级）。兼容性靠**降级矩阵**，不是要求用户升级系统。
 5. **设计优化优先于代码优化**：资源 / 性能 / 复杂度问题先问"能否改设计"（少一个进程、少一个依赖、改生命周期、改触发方式），再问"能否调参"。调参只能作为临时手段，且必须记 ADR 并标注"待设计层解决"。反例：为压 500 KiB 而调 `GOGC`——那不是达标的主要功臣，薄壳 + 依赖白名单 + embed 单二进制才是。
+6. **数据形状必须显式**：对外 schema（协议、配置、`info.json`、索引、preset）**禁止 `object` / `any` / `map[string]any` 作为类型**——要么显式列出字段与类型，要么用带类型前缀的标量（如 `"event:cert.renew_due"`）。内部解析可以临时用 `any`，但必须在一处收口并转成具体类型。**不要用 `object` 逃避把结构想清楚。**
 
 ## 1. 阅读顺序（五步，不跳步）
 
@@ -22,7 +23,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 组件图、进程模型、插件状态机、故障域。
 3. 本领域文档：内核 [docs/CORE.md](docs/CORE.md)｜协议 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md)｜资源 [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md)｜数据 [docs/DATA-MODEL.md](docs/DATA-MODEL.md)｜前端 [docs/FRONTEND.md](docs/FRONTEND.md)｜安全 [docs/SECURITY.md](docs/SECURITY.md)｜决策 [docs/DECISIONS/](docs/DECISIONS/)。
 4. [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段门禁、讨论协议、任务板状态机、上下文交接。
-5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G16 门禁命令、执行者、分层与证据格式。
+5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G17 门禁命令、执行者、分层与证据格式。
 
 ## 2. 硬门禁（违反任意一条，产物即不成立）
 
@@ -51,6 +52,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-21 | 无副作用的诊断代码：日志 / 诊断**不得改变运行时状态**——`debug.SetGCPercent(-1)` / `debug.SetMemoryLimit(-1)` 这类"设置即读取"的 API 一律禁止；读取运行配置只允许 `runtime/metrics` 或"记录自己设置的值" | 视为 **P0**，产物回滚 | G16：`grep -rn "SetGCPercent(-1)" --include='*.go' .` 与 `grep -rn "SetMemoryLimit(-1)" --include='*.go' .` 双零命中；**验证 GC 是否启用请看 `/gc/gogc:percent`**，**不能**用"分配内存看 `NumGC` 增长"——`GOMEMLIMIT` 生效时 GOGC=off 也会触发 GC；M1 起必跑 |
 | G-22 | 优化顺序：资源 / 性能类改动必须说明所处层级（设计层 / 架构层 / 代码层）；**只有设计层与架构层已穷尽，才允许纯代码层调参**，且调参必须记 ADR + 标注临时性 | 改动不予合入（先补设计层评估） | 判定型门禁，无需 grep：评审时逐条回答"为什么不能少一个进程 / 一个依赖 / 改生命周期 / 改触发方式"，答不出即退回 |
 | G-23 | 判断留痕：任何"多选一"的决定（架构 / 协议 / 预算 / 范围 / 门禁）必须写入 `.agents/LOG/DECISIONS.md`（含**被否决的选项与依据**）；任何派发必须写入 `.agents/LOG/DISPATCH.md`（task / owner / 写域 / 依赖 / 交付 / commit）。里程碑收口时台账缺条目视为该里程碑未收口 | 里程碑不得收口 | 里程碑收口时人工核对；`make check` 不强制（避免为记账阻断日常提交），但 REVISE 时 verifier 会查 |
+| G-24 | 无 any / object 逃逸：对外 schema 与对外结构体不得出现 `object` / `any` / `map[string]any`；`json.RawMessage` 仅允许用于"插件方法的参数与结果载荷"（受控例外，M2 起按插件声明的 schema 校验） | 评审退回，不得合入 | `grep -rn "map[string]any" --include='*.go' internal/ cmd/`（排除 `_test.go` 与 `testdata/`）逐个核对是否解析期临时；`grep -rn "类型：object" docs/` 零命中（受控例外行必须写明原因）；判定型部分由评审回答"这个字段为什么不能定形" |
 
 ## 3. 提交规范
 
@@ -95,7 +97,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [.agents/ROLES.md](.agents/ROLES.md) — 6 张角色卡（输入/输出/可做/禁止/交接物/完成判据）、冲突仲裁、不可兼任。
 - [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段逐条门禁、讨论协议、状态机、防漂移审计。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
-- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G16 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G17 门禁命令、三层组合、证据格式、M0 跳过规则。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md) — 复盘模板、里程碑记录、反模式沉淀。
 - [.agents/LOG/](.agents/LOG/) — 判断留痕：裁决台账（选项 / 依据 / 影响）、派发台账、会话摘要；与 BOARD（状态）、JOURNAL（教训）互补。
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件。

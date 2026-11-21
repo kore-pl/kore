@@ -19,7 +19,7 @@
 | id | 名称 | 等级 | lifecycle | 预估 RSS | capabilities | 依赖 | 冲突 | pids | 对标 | 里程碑 | 仓库 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `site` | 站点与反向代理 | 生产级 | resident | 10 MiB | `site:read` `site:write` `net:read` | — | 同端口只属一个站点 | 64 | 网站/域名/伪静态/反代 | M2 | `kore-plugin-site` |
-| `ssl` | 证书与自动续期 | 生产级 | oneshot | 峰值 12 MiB | `net:write` `site:read` | `site`(可选) | — | 32 | SSL 签发/续期 | M2 | `kore-plugin-ssl` |
+| `ssl` | 证书与自动续期 | 生产级 | oneshot | 峰值 12 MiB | `net:write` `ssl:read` `ssl:write` | `site`(可选) | — | 32 | SSL 签发/续期 | M2 | `kore-plugin-ssl` |
 | `runtime-php` | PHP-FPM 管理 | 生产级 | lazy | 8 MiB | `system:read` `system:admin` `net:read` | — | 同端口 FPM 池冲突 | 64 | PHP 运行时 | M2 | `kore-plugin-runtime-php` |
 | `runtime-node` | Node 进程守护 | 基础级 | lazy | 8 MiB | `system:read` `net:read` | — | 同端口进程冲突 | 48 | Node 运行时 | M3 | `kore-plugin-runtime-node` |
 | `runtime-python` | Python 运行时 | 基础级 | lazy | 8 MiB | `system:read` `net:read` | — | 同端口进程冲突 | 48 | Python 运行时 | M3 | `kore-plugin-runtime-python` |
@@ -28,34 +28,34 @@
 
 | id | 名称 | 等级 | lifecycle | 预估 RSS | capabilities | 依赖 | 冲突 | pids | 对标 | 里程碑 | 仓库 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `db-mysql` | MySQL/MariaDB 管理 | 生产级 | lazy | 8 MiB | `db:read` `db:write` `system:read` | — | 同实例端口冲突 | 32 | MySQL 管理/慢查询 | M3 | `kore-plugin-db-mysql` |
-| `db-postgres` | PostgreSQL 管理 | 基础级 | lazy | 8 MiB | `db:read` `db:write` `system:read` | — | 同实例端口冲突 | 32 | PostgreSQL 管理 | M3 | `kore-plugin-db-postgres` |
-| `redis` | Redis 管理 | 生产级 | lazy | 6 MiB | `db:read` `db:write` | — | 同实例端口冲突 | 32 | Redis 管理/键扫描 | M3 | `kore-plugin-redis` |
+| `db-mysql` | MySQL/MariaDB 管理 | 生产级 | lazy | 8 MiB | `db-mysql:read` `db-mysql:write` `system:read` | — | 同实例端口冲突 | 32 | MySQL 管理/慢查询 | M3 | `kore-plugin-db-mysql` |
+| `db-postgres` | PostgreSQL 管理 | 基础级 | lazy | 8 MiB | `db-postgres:read` `db-postgres:write` `system:read` | — | 同实例端口冲突 | 32 | PostgreSQL 管理 | M3 | `kore-plugin-db-postgres` |
+| `redis` | Redis 管理 | 生产级 | lazy | 6 MiB | `redis:read` `redis:write` | — | 同实例端口冲突 | 32 | Redis 管理/键扫描 | M3 | `kore-plugin-redis` |
 
 ## 3. ops 族
 
 | id | 名称 | 等级 | lifecycle | 预估 RSS | capabilities | 依赖 | 冲突 | pids | 对标 | 里程碑 | 仓库 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `file` | 文件管理 | 生产级 | oneshot | 峰值 12 MiB | `site:read` `site:write` `system:read` | — | — | 32 | 在线编辑/上传/解压/权限 | M2 | `kore-plugin-file` |
+| `file` | 文件管理 | 生产级 | oneshot | 峰值 12 MiB | `file:read` `file:write` `system:read` | — | — | 32 | 在线编辑/上传/解压/权限 | M2 | `kore-plugin-file` |
 | `cron` | 计划任务（写宿主调度条目） | 生产级 | lazy | 4 MiB（峰值） | `system:admin` `system:read` | — | 只管理 `kore:` 前缀条目；不接管宿主其它任务 | 32 | cron + 执行日志 | M2 | `kore-plugin-cron` |
 | `logs` | 日志查看 | 生产级 | lazy | 6 MiB | `system:read` | — | — | 64 | 日志分类/过滤/下载 | M2 | `kore-plugin-logs` |
 | `monitor` | 监控与告警 | 生产级 | resident | 6 MiB | `system:read` `net:write`(webhook) | — | — | 64 | CPU/内存/磁盘/告警 | M3 | `kore-plugin-monitor` |
-| `backup` | 备份 | 生产级 | oneshot | 峰值 16 MiB | `site:read` `db:read` `system:read` `net:write`(S3) | `db-*`(可选) | 同目标目录并发冲突 | 32 | 本地 + S3 备份 | M2 | `kore-plugin-backup` |
+| `backup` | 备份 | 生产级 | oneshot | 峰值 16 MiB | `backup:read` `backup:write` `system:read` `net:write`(S3) | `db-*`(可选) | 同目标目录并发冲突 | 32 | 本地 + S3 备份 | M2 | `kore-plugin-backup` |
 
 ## 4. sec 族
 
 | id | 名称 | 等级 | lifecycle | 预估 RSS | capabilities | 依赖 | 冲突 | pids | 对标 | 里程碑 | 仓库 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `firewall` | 防火墙与端口 | 生产级 | lazy | 6 MiB | `system:admin` | — | 只改 `kore:` 注释段 | 32 | 防火墙/端口放行 | M3 | `kore-plugin-firewall` |
-| `waf` | WAF | 基础级 | lazy | 8 MiB | `net:read` `net:write` `site:read` | `site`(可选前置) | 与 `site` 内建反代二选一 | 64 | WAF/拦截日志 | M4 | `kore-plugin-waf` |
+| `waf` | WAF | 基础级 | lazy | 8 MiB | `net:read` `net:write` `waf:read` | `site`(可选前置) | 与 `site` 内建反代二选一 | 64 | WAF/拦截日志 | M4 | `kore-plugin-waf` |
 | `ssh-guard` | SSH 加固 | 基础级 | oneshot | 峰值 10 MiB | `system:admin` `system:read` | `firewall`(可选) | — | 32 | 失败封禁/配置审计 | M3 | `kore-plugin-ssh-guard` |
-| `integrity` | 文件完整性 | 基础级 | oneshot | 峰值 12 MiB | `site:read` `system:read` | — | — | 32 | 关键文件哈希基线 | M3 | `kore-plugin-integrity` |
+| `integrity` | 文件完整性 | 基础级 | oneshot | 峰值 12 MiB | `integrity:read` `system:read` | — | — | 32 | 关键文件哈希基线 | M3 | `kore-plugin-integrity` |
 
 ## 5. app 族
 
 | id | 名称 | 等级 | lifecycle | 预估 RSS | capabilities | 依赖 | 冲突 | pids | 对标 | 里程碑 | 仓库 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `app-deploy` | 一键部署应用 | 生产级 | oneshot | 峰值 16 MiB | `site:write` `db:write` `system:admin` | `site`；`runtime-*`/`db-*` 可选 | 模板声明端口冲突 | 64 | WordPress/Laravel/Next.js | M4 | `kore-plugin-app-deploy` |
+| `app-deploy` | 一键部署应用 | 生产级 | oneshot | 峰值 16 MiB | `app-deploy:read` `app-deploy:write` `system:admin` | `site`；`runtime-*`/`db-*` 可选 | 模板声明端口冲突 | 64 | WordPress/Laravel/Next.js | M4 | `kore-plugin-app-deploy` |
 | `dns` | DNS 管理 | 基础级 | lazy | 6 MiB | `net:write` `system:read` | — | 与宿主 `dnsmasq`/`bind` 端口冲突 | 32 | 区域与记录管理 | M4 | `kore-plugin-dns` |
 | `container` | 容器管理（可选） | 基础级 | lazy | 10 MiB | `system:admin` `net:read` | — | 默认不装；与 firewall 规则段共存 | 64 | Docker/Podman 面板 | M4 | `kore-plugin-container` |
 
@@ -105,7 +105,7 @@
 | 包结构 | `<id>-<version>.tar.gz` 含 `info.json` + `bin/<id>` + 可选 `web/`，≤15 MiB |
 | 声明完整 | `requires_kore`/`capabilities`/`resources`/`lifecycle`/`depends_on`/`conflicts`/`scenario_tags`/`size_bytes` 齐全 |
 | hello | 拉起后 2 s 内 `kore.hello` 成功，`protocol=kore.plugin.v1` |
-| 能力最小化 | capabilities 为 8 项白名单子集，且与 `info.json` 一致 |
+| 能力最小化 | capabilities 合法：6 特权能力或自有 `<id>:<action>`（域=插件 id），非空 ≤16、无重复，且与 `info.json` 一致 |
 | 预算达标 | 实测 RSS ≤ 预估值的 110%，常驻插件 ≤12 MiB |
 | lazy 冷启动 | 5 次冷启动取 p95 ≤300 ms（oneshot 同样适用） |
 | 空闲回收 | lazy 空闲 300 s 后进程消失（`pgrep`=0） |
@@ -130,18 +130,20 @@
 
 ## 10. 能力使用统计
 
-| capability | 使用插件数 | 插件 |
-| --- | --- | --- |
-| `site:read` | 4 | site ssl file backup integrity |
-| `site:write` | 3 | site file app-deploy |
-| `db:read` | 3 | db-mysql db-postgres redis |
-| `db:write` | 3 | db-mysql db-postgres redis（+ app-deploy 经 site 间接触发） |
-| `net:read` | 4 | site runtime-php runtime-node runtime-python（+waf 只读流量） |
-| `net:write` | 5 | ssl backup monitor waf dns |
-| `system:read` | 10 | 多数只读插件 |
-| `system:admin` | 5 | cron runtime-php firewall ssh-guard app-deploy（+container） |
+六特权能力的使用面（内核固定认识，不可扩展）：
 
-原则：能用 `system:read` 就不申请 `system:admin`；能读就不写。
+| 特权能力 | 使用插件数 | 插件 |
+| --- | --- | --- |
+| `system:read` | 10 | cron logs monitor firewall ssh-guard integrity ssl db-mysql db-postgres runtime-php |
+| `system:admin` | 6 | cron runtime-php firewall ssh-guard app-deploy container |
+| `net:read` | 5 | site runtime-php runtime-node runtime-python waf container |
+| `net:write` | 5 | ssl backup monitor waf dns |
+| `proc:read` | 0 | 预留给需要读宿主进程表的插件（M2 起按需授予） |
+| `proc:write` | 0 | 预留给需要向宿主进程发信号的插件（M2 起按需授予） |
+
+**插件自有能力**：每个插件声明自己的 `<id>:<action>`（如 `db-mysql:read`、`backup:write`），**域必须等于插件 id**，非空 ≤16；内核只校验语法、域匹配与数量，**不维护业务域名词表**。
+
+原则：能用 `system:read` 就不申请 `system:admin`；能读就不写；能用自己的域就不借用别人的域。
 
 ## 11. 插件间协作
 
