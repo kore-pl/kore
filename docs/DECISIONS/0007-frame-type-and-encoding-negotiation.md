@@ -14,6 +14,7 @@
 - 线格式恒为 `[4B BE length][payload]`，`length` = payload 字节数。**帧上限 8 MiB 指整帧载荷**，不存在"扣头后 8,388,606"的口径。
 - 帧类型放 JSON 信封：`{"type":"request","id":"...","method":"..."}`；取值 `request`/`response`/`event`/`ping`/`pong`。未知 `type` 回 `E_UNSUPPORTED` 并断开，不做猜测。
 - 编码协商：`kore.hello` 请求带 `encoding`（`json` | `protobuf`，缺省 `json`），响应回确认值；协商结果**会话级**生效，成功后该连接所有帧载荷换编码，**帧头结构不变**。未协商或协商失败一律按 JSON 处理。
+- **最小载荷随会话编码而异**：`encoding=json` 会话下，合法 JSON 对象至少 `{}` = 2 字节，因此帧载荷 `<2` 直接拒绝（`0` 空载荷、`1` 字节都非法）；`encoding=protobuf` 会话（M3）下最小载荷由 protobuf 语义决定，可能为 1 字节或更小，届时按**连接级编码**放宽该限制，而不是在帧层写死。**帧层不理解语义，只做长度与编码校验**——这也是 `id` 不在编解码层解析的原因。
 - `protocol_minor` / `require_minor` 仍是 JSON 信封字段（不是帧头），语义与位置保留在 [PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md) §13，本 ADR 不再单列决定项。
 - 热升级：新进程监听 `/run/kore/plugins/<id>.next.sock`，hello 成功后 rename 接管；失败删临时 socket 且旧进程不动。
 
@@ -32,7 +33,7 @@
 
 **负面**：每帧多 `type` 字段约 10 字节；必须先解析信封才能分流，无法在解析前按固定头丢弃；载荷非 JSON 时类型不再自描述，只能依赖连接级协商结果。
 
-**技术债**：编码变成连接级状态，断线重连必须重新协商，supervisor 与 bus 都要维护"连接 → encoding"映射并在关闭时清理；JSON 信封的 `type`（传输层）与 `kore.event` 的 `topic`（业务层）语义相邻，文档必须防混用；帧格式与 `.next.sock` 的正文冲突已于 2026-11-21 同步完成（[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md) §4 现为 `4B 长度 + JSON 信封`、§12 为 `.next.sock`）；M3 引入 protobuf 时需补双编码等价测试。
+**技术债**：编码变成连接级状态，断线重连必须重新协商，supervisor 与 bus 都要维护"连接 → encoding"映射并在关闭时清理；JSON 信封的 `type`（传输层）与 `kore.event` 的 `topic`（业务层）语义相邻，文档必须防混用；帧格式与 `.next.sock` 的正文冲突已于 2026-11-21 同步完成（[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md) §4 现为 `4B 长度 + JSON 信封`、§12 为 `.next.sock`）；M3 引入 protobuf 时需补双编码等价测试，且必须覆盖"双编码下最小载荷与空载荷"，防止 JSON 会话的 2 字节假设泄漏到 protobuf 路径。
 
 ## 验证方式
 
@@ -49,4 +50,4 @@ printf '\x00\x00\x00\x10{"type":"bogus"}' | nc -U /run/kore/plugins/site.sock
 
 ## 复审条件
 
-出现以下任一信号即重开：M3 需要同连接多编码并存（而非二选一）；帧类型多到 `type` 字段占比不可忽略（> 5% 帧长）；出现"不解析即可按类型分流"的硬需求（如背压时丢 event 保 request）；协议正文与 ADR-0002 的帧格式再次分叉。
+出现以下任一信号即重开：M3 需要同连接多编码并存（而非二选一）；帧类型多到 `type` 字段占比不可忽略（> 5% 帧长）；出现"不解析即可按类型分流"的硬需求（如背压时丢 event 保 request）；协议正文与 ADR-0002 的帧格式再次分叉；protobuf 路径出现 JSON 会话 2 字节假设的残留（例如把"空载荷非法"硬编码进编解码层）。

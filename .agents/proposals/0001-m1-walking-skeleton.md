@@ -64,7 +64,7 @@
 | ID | 任务 | 仓库 | owner | 产出 | 验收方式 | 依赖 |
 | --- | --- | --- | --- | --- | --- | --- |
 | M1-00 | **口径冻结**：F-13 七处冲突取严，只改唯一真源 | kore | architect + scribe | 小 diff + `CS-20261121-01` 登记 | `grep -rl '保留 30 天\|保留 90 天' docs \| wc -l` = 1；`autostart` 默认 `[]` | — |
-| M1-01 | 帧编解码：4B BE + JSON、8 MiB 上限、先判长度不分配 | kore | implementer | `pkg/pluginapi/frame.go` + 测试 | 往返/分片/粘包/`8388608`/`8388609`/0/1 全绿；`grep -rnE 'make\(\[\]byte, *(n\|length\|size)\)' pkg/pluginapi` = 0 | — |
+| M1-01 | 帧编解码：4B BE + JSON、8 MiB 上限、先校验长度再分配 | kore | implementer | `pkg/pluginapi/frame.go` + 测试 | 往返/分片/粘包/`8388608`/`8388609`/0/1 全绿；**语义判据（不看 grep）**：`ReadFrame` 里 `make([]byte, n)` 必须出现在 `n < 2` 与 `n > MaxFrameSize` 两条校验之后，读代码路径确认两条分支都在分配前返回；超限时零分配、连接关闭。**允许存在 `make([]byte, n)` 字面量，不得据此判 FAIL** | — |
 | M1-02 | 嵌套 module 骨架 + 公开 SDK 面 | kore | implementer | `pkg/pluginapi/go.mod`、`{client,server,types}.go` | `go vet` 通过；假 handler 握手；根 `replace => ./pkg/pluginapi` 生效 | M1-01 |
 | M1-03 | config：默认 + YAML + 未知键 WARN + 校验错误一次报 + SIGHUP | kore | implementer | `internal/core/config/*.go` | 缺必填→exit 2；未知键→WARN 且继续；坏 YAML→行号 | — |
 | M1-04 | store：bbolt 打开 / 6 bucket / schema v1 / 错误分类 | kore | implementer | `internal/core/store/*.go` | 重开库 6 bucket 齐；`schema>1` → `ErrSchemaTooNew` | — |
@@ -127,7 +127,7 @@ type Handler interface {
 
 ### 4.2 帧编解码（F-04/F-05 的正面回答）
 
-`io.ReadFull(r, hdr[:4])` → `n := binary.BigEndian.Uint32(hdr[:4])` → **立即**判 `n < 2 || n > MaxFrameSize`：不读 payload、不分配、`close(conn)`、WARN `frame_oversize`；判定前只有 4 字节栈缓冲。写：header+payload 拼同一 `[]byte` 单次 `Write` + 每连接互斥锁，否则两 goroutine 的 header 会交错。读循环每帧 `SetReadDeadline(now+15s)`；每插件在途 ≤64，超出 429 `E_RATELIMIT`。`readFrame` 是**唯一**入口，任何地方禁止 `json.NewDecoder(conn)`。
+`io.ReadFull(r, hdr[:4])` → `n := binary.BigEndian.Uint32(hdr[:4])` → **立即**判 `n < 2 || n > MaxFrameSize`：不读 payload、不分配、`close(conn)`、WARN `frame_oversize`；判定前只有 4 字节栈缓冲（**允许 `make([]byte, n)`，但它必须在校验之后**——判据是代码路径不是 grep）。**信封边界**：`id` 由编解码层原样搬运、不解析 32 位 hex 语义（生成与校验归 `bus`）；`timeout_ms ≤ 0` 视为 `15000`，有效 1000–120000、越界夹取，SDK 不写日志。写：header+payload 拼同一 `[]byte` 单次 `Write` + 每连接互斥锁，否则两 goroutine 的 header 会交错。读循环每帧 `SetReadDeadline(now+15s)`；每插件在途 ≤64，超出 429 `E_RATELIMIT`。`readFrame` 是**唯一**入口，任何地方禁止 `json.NewDecoder(conn)`。
 
 ### 4.3 supervisor（F-06/F-07/G-19 的正面回答）
 

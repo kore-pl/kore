@@ -147,7 +147,7 @@ kore-plugin-<id>/
 
 ### 4.3 上限与超限处理
 
-- 上限：`length ≤ 8,388,608` 字节（8 MiB，指整个 JSON 载荷），不存在「扣掉帧头」的口径；接收侧读满 4 字节后先判断，超限**不读 payload** 并立即 `close(conn)`、WARN `frame_oversize`，该次调用回 `E_INVALID`（400）；单帧须 15s 内读完，否则按失联处理（§11）。发送侧编码前检查，超限不写字节直接返回 `E_INVALID`。
+- 上限：`length ≤ 8,388,608` 字节（8 MiB，指整个 JSON 载荷），不存在「扣掉帧头」的口径；`encoding=json` 会话下帧载荷最小 **2 字节**（`{}` 才合法），`0`/`1` 字节直接拒绝，M3 protobuf 会话按连接编码放宽；接收侧读满 4 字节后先判断，超限**不读 payload** 并立即 `close(conn)`、WARN `frame_oversize`，该次调用回 `E_INVALID`（400）；单帧须 15s 内读完，否则按失联处理（§11）。发送侧编码前检查，超限不写字节直接返回 `E_INVALID`。
 
 ## 5. kore.hello 握手
 
@@ -181,8 +181,7 @@ kore-plugin-<id>/
   "methods":[{"name":"site.list","idempotent":true,"timeout_ms":15000}]}}
 ```
 
-- `methods` 为可选能力表：只有在此声明 `idempotent: true` 的业务方法才允许内核自动重试（§10）；`encoding` 声明本连接编码（MVP 恒为 `json`，M3 可为 `protobuf`）。
-- 协商顺序固定：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 平台身份校验（peercred 或 HMAC，§17）→ `capabilities` ⊆ 清单 → 登记路由；任一步失败回 `E_UNSUPPORTED` / `E_UNAUTHORIZED` 并 SIGKILL 不进入 ready（防 kore 降级）。握手超时 2s，超时或出错杀进程置 `failed`，`session_id` 每次启动唯一、重启后旧 session 作废。
+- `methods` 为可选能力表：只有在此声明 `idempotent: true` 的业务方法才允许内核自动重试（§10）；`encoding` 声明本连接编码（MVP 恒为 `json`，M3 可为 `protobuf`）。协商顺序固定：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 平台身份校验（peercred 或 HMAC，§17）→ `capabilities` ⊆ 清单 → 登记路由；任一步失败回 `E_UNSUPPORTED` / `E_UNAUTHORIZED` 并 SIGKILL 不进入 ready（防 kore 降级）。握手超时 2s，超时或出错杀进程置 `failed`，`session_id` 每次启动唯一、重启后旧 session 作废。
 
 ## 6. 生命周期状态机
 
@@ -225,10 +224,10 @@ kore-plugin-<id>/
  "params":{"domain":"example.com"},"timeout_ms":15000}
 ```
 
-- `id`：连接内请求标识，32 位小写 hex（16 字节随机），内核生成、插件原样回填，同一连接并发按 id 匹配且不得复用；`method`：`<plugin>.<verb>`，`<plugin>` 必须等于自身 id，跨插件名 `E_NOTFOUND`，`kore.*` 业务入口一律 400 `E_INVALID`。
+- `id`：连接内请求标识，32 位小写 hex（16 字节随机），内核生成、插件原样回填，同一连接并发按 id 匹配且不得复用；**编解码层不解析 `id` 语义（只搬运），生成与校验归 `bus`**——M3 protobuf 复用同一入口时不做语义解析。`method`：`<plugin>.<verb>`，`<plugin>` 必须等于自身 id，跨插件名 `E_NOTFOUND`，`kore.*` 业务入口一律 400 `E_INVALID`。
 - `req_id`：**跨进程追踪标识**（HTTP 侧生成并透传，如 `r-01JC8Q3A`）：请求帧必带，响应帧必须原样回显；`id` 只用于连接内匹配，两者不得混用或互相替代。
-- `params`：JSON 对象，缺省为 `{}`；业务字段由插件定义，必须可向后兼容（加可选字段）。`timeout_ms`：默认 15000，允许 1000–120000，超上限按 120000 处理并 WARN。
-- 统一入口：HTTP `POST /api/v1/invoke/{plugin}/{method}`，body 即 `params`；内核组装 envelope 后转发，响应解包为 `{result}` 或 `{error}`。
+- Response 固定字段：`type`、`id`、`req_id`（**必填回显，必须与请求一致**）、`result` 或 `error` 二选一；缺 `req_id` 视为协议违规，调用方按 `E_INVALID` 处理。
+- `params`：JSON 对象，缺省为 `{}`；业务字段由插件定义，必须可向后兼容（加可选字段）。`timeout_ms`：缺省或 `<= 0` 一律视为**未设置**、取默认 15000；有效范围 1000–120000，越界按边界夹取（下限 1000、上限 120000），由调用方在截断处打 WARN（SDK 本身不写日志）。统一入口：HTTP `POST /api/v1/invoke/{plugin}/{method}`，body 即 `params`；内核组装 envelope 后转发，响应解包为 `{result}` 或 `{error}`。
 
 ## 8. 事件类型
 
@@ -237,6 +236,8 @@ kore-plugin-<id>/
 ```json
 {"type":"event","event":"plugin.log","seq":42,"ts":"2026-11-21T20:40:15.123+08:00","data":{...}}
 ```
+
+- 信封固定字段：`seq`（uint64，每连接单调递增、从 1 开始，用于去重与断点续传，重连归零）、`ts`（RFC3339 字符串，事件产生时间）、`data`（object）。
 
 | 事件 | 方向 | data 字段 | 用途 |
 | --- | --- | --- | --- |
@@ -329,7 +330,6 @@ func (e *echo) Handle(ctx context.Context, method string, p json.RawMessage) (js
     return p, nil // 原样回显 params
 }
 func (e *echo) Ping(context.Context) (pluginapi.PingResponse, error) { return pluginapi.PingResponse{Status: "ready"}, nil }
-// Hello/Shutdown/Reload 实现略：Hello 返回版本，Shutdown 触发 Serve 退出，Reload 重读 env。
 ```
 
 ## 16. 演进规则
