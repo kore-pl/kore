@@ -12,6 +12,14 @@ import (
 // shutdownMethod 是优雅停止的协议方法名。
 const shutdownMethod = "kore.shutdown"
 
+// shutdownParams 是 kore.shutdown 的请求参数（PLUGIN-PROTOCOL §7.1）。
+type shutdownParams struct {
+	// Reason 停止原因（disable / upgrade / shutdown）。
+	Reason string `json:"reason"`
+	// GraceMS 宽限期（毫秒），默认 5000。
+	GraceMS int `json:"grace_ms"`
+}
+
 // Stop 优雅停止插件：kore.shutdown → 等宽限期 → SIGKILL；退出后清理 socket。
 //
 // 幂等：stopped / draining 直接返回。在途调用的连接会被关闭，bus 侧按 E_UPSTREAM
@@ -58,7 +66,7 @@ func (m *Manager) sendShutdown(id string, conn net.Conn) {
 		return
 	}
 	graceMS := int(m.opts.ShutdownGrace / time.Millisecond)
-	params, err := json.Marshal(map[string]any{"reason": "disable", "grace_ms": graceMS})
+	params, err := json.Marshal(shutdownParams{Reason: "disable", GraceMS: graceMS})
 	if err != nil {
 		m.logger.Warn("序列化 shutdown 参数失败", "plugin_id", id, "err", err)
 		return

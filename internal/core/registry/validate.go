@@ -44,8 +44,11 @@ var (
 	}
 	// capabilityPattern 是能力项语法：<域>:<动作>，两段均为小写短横线标识符。
 	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`)
-	// triggerNamePattern 是 event / invoke 触发的匹配名语法：<域>.<事件>，如 cert.renew_due。
-	triggerNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`)
+	// eventNamePattern 是 event 触发的匹配名语法：<域>.<事件>，如 cert.renew_due。
+	eventNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`)
+	// invokeNamePattern 是 invoke 触发的匹配名语法：允许单段动词（如 run）
+	// 或多段名（如 status.check）。
+	invokeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`)
 	// scenarioTagWhitelist 是 scenario_tags 的合法取值（商店分类用）。
 	scenarioTagWhitelist = map[string]struct{}{
 		"web": {}, "data": {}, "ops": {}, "sec": {}, "app": {},
@@ -160,37 +163,42 @@ func (m *Manifest) validateResources() error {
 	return nil
 }
 
-// validateTriggers 校验 object[] 触发声明：空数组合法，每个元素按 type 分别校验 name。
+// validateTriggers 校验字符串数组触发声明：空数组合法，元素为 "<type>:<name>"。
 //
-// 三类触发：event 与 invoke 的 name 必须是 <域>.<事件>（如 cert.renew_due）；
-// schedule 交给宿主调度器（M2 生效），M1 只做非空校验，不解析调度表达式。
+// 三类触发：event 的 name 必须是 <域>.<事件>（如 cert.renew_due）；invoke 允许单段
+// 动作词（如 run）；schedule 交给宿主调度器（M2 生效），M1 只做非空校验。
 func (m *Manifest) validateTriggers() error {
 	for index, trigger := range m.Triggers {
-		if err := trigger.validate(); err != nil {
-			return errf(pluginapi.E_INVALID, "triggers[%d]：%s", index, err.Error())
+		if err := validateTrigger(trigger); err != nil {
+			return errf(pluginapi.E_INVALID, "triggers[%d]=%q：%s", index, trigger, err.Error())
 		}
 	}
 	return nil
 }
 
-// validate 校验单个触发声明的类型枚举与匹配名。
-func (t Trigger) validate() error {
-	switch t.Type {
-	case "":
-		return fmt.Errorf("缺少 type（应为 event|schedule|invoke）")
-	case "event", "invoke":
-		if !triggerNamePattern.MatchString(t.Name) {
-			return fmt.Errorf("name=%q 不合法，应为 <域>.<事件>（如 cert.renew_due）", t.Name)
-		}
-		return nil
-	case "schedule":
-		if strings.TrimSpace(t.Name) == "" {
-			return fmt.Errorf("schedule 触发缺少 name")
-		}
-		return nil
-	default:
-		return fmt.Errorf("type=%q 不在 event|schedule|invoke 内", t.Type)
+// validateTrigger 校验单条 "<type>:<name>"：先切第一个 ":"，再按 type 校验 name。
+func validateTrigger(trigger string) error {
+	kind, name, ok := strings.Cut(trigger, ":")
+	if !ok {
+		return fmt.Errorf("缺少 \"<type>:\" 前缀（应为 event|schedule|invoke）")
 	}
+	switch kind {
+	case "event":
+		if !eventNamePattern.MatchString(name) {
+			return fmt.Errorf("event 的 name=%q 应为 <域>.<事件>（如 cert.renew_due）", name)
+		}
+	case "invoke":
+		if !invokeNamePattern.MatchString(name) {
+			return fmt.Errorf("invoke 的 name=%q 应为小写动词或 <域>.<事件>", name)
+		}
+	case "schedule":
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("schedule 缺少 name")
+		}
+	default:
+		return fmt.Errorf("type=%q 不在 event|schedule|invoke 内", kind)
+	}
+	return nil
 }
 
 // validateExtras 校验可选字段：依赖/冲突 id、场景标签、深度等级、体积。

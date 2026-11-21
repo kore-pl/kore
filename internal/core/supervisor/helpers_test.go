@@ -151,7 +151,7 @@ func writeManifest(t *testing.T, pluginDir, id string) {
 		"capabilities":  []string{"system:read"},
 		"resources":     map[string]any{"memory_mb": 8, "cpu_quota": "50%", "pids_max": 64},
 		"requires_kore": ">=0.1.0 <0.2.0",
-		"triggers":      []any{},
+		"triggers":      []string{},
 		"depends_on":    []string{},
 		"scenario_tags": []string{"web"},
 		"size_bytes":    1024,

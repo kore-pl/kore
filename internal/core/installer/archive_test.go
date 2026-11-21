@@ -85,7 +85,7 @@ func baseManifest() map[string]any {
 		"lifecycle":    "resident",
 		"entry":        "bin/site",
 		"capabilities": []string{"site:read"},
-		"triggers":     []map[string]string{{"type": "event", "name": "cert.renew_due"}},
+		"triggers":     []string{"event:cert.renew_due"},
 		"resources": map[string]any{
 			"memory_mb": 8, "cpu_quota": "50%", "pids_max": 128,
 		},

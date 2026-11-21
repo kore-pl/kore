@@ -61,51 +61,46 @@ func (b *Bus) Call(ctx context.Context, plugin, method string, params json.RawMe
 }
 
 // readReply 读帧直到匹配到本次请求的响应；事件与 ping 不算响应。
+//
+// 解析期 any 的唯一收口点：DecodeFrame 返回 any，这里立即断言成
+// *pluginapi.Response / *Event / *Ping 三个具体类型，出口（Reply）不携带 any。
 func (b *Bus) readReply(conn net.Conn, plugin, requestID, reqID string) (*Reply, error) {
 	for {
 		payload, err := pluginapi.ReadFrame(conn, pluginapi.MaxFrameSize)
 		if err != nil {
 			return nil, b.frameError(conn, plugin, reqID, err)
 		}
-		env, err := pluginapi.DecodeFrame(payload)
+		envelope, err := pluginapi.DecodeFrame(payload)
 		if err != nil {
 			return nil, errf(pluginapi.E_INVALID, "插件 %s 响应不是合法信封：%v", plugin, err)
 		}
-		reply, done, err := b.handleFrame(conn, plugin, env, requestID, reqID)
-		if err != nil {
-			return nil, err
-		}
-		if done {
-			return reply, nil
+		switch value := envelope.(type) {
+		case *pluginapi.Response:
+			return replyOf(value, requestID, reqID)
+		case *pluginapi.Event:
+			b.logger.Debug("插件事件暂未接入 SSE，丢弃", "plugin_id", plugin, "event", value.Event)
+		case *pluginapi.Ping:
+			_ = pluginapi.WriteJSON(conn, &pluginapi.Pong{Type: pluginapi.TypePong, TS: value.TS})
+		default:
+			return nil, errf(pluginapi.E_INVALID, "协议违规：等待响应却收到 %T", envelope)
 		}
 	}
 }
 
-// handleFrame 处理一帧：命中响应即返回 done，事件丢弃、ping 回 pong 后继续等。
-func (b *Bus) handleFrame(conn net.Conn, plugin string, env any, requestID, reqID string) (*Reply, bool, error) {
-	switch value := env.(type) {
-	case *pluginapi.Response:
-		if value.ID != requestID {
-			return nil, false, errf(pluginapi.E_INVALID,
-				"响应 id=%s 与请求 id=%s 不匹配，连接不再可信", value.ID, requestID)
-		}
-		if value.ReqID != reqID {
-			return nil, false, errf(pluginapi.E_INVALID,
-				"响应未回显 req_id（期望 %s，实际 %q）", reqID, value.ReqID)
-		}
-		if value.Error != nil {
-			return nil, false, value.Error
-		}
-		return &Reply{ReqID: value.ReqID, Result: value.Result}, true, nil
-	case *pluginapi.Event:
-		b.logger.Debug("插件事件暂未接入 SSE，丢弃", "plugin_id", plugin, "event", value.Event)
-		return nil, false, nil
-	case *pluginapi.Ping:
-		_ = pluginapi.WriteJSON(conn, &pluginapi.Pong{Type: pluginapi.TypePong, TS: value.TS})
-		return nil, false, nil
-	default:
-		return nil, false, errf(pluginapi.E_INVALID, "协议违规：等待响应却收到 %T", env)
+// replyOf 校验响应的 id 与 req_id 并转成 Reply；错误体原样透传。
+func replyOf(response *pluginapi.Response, requestID, reqID string) (*Reply, error) {
+	if response.ID != requestID {
+		return nil, errf(pluginapi.E_INVALID,
+			"响应 id=%s 与请求 id=%s 不匹配，连接不再可信", response.ID, requestID)
 	}
+	if response.ReqID != reqID {
+		return nil, errf(pluginapi.E_INVALID,
+			"响应未回显 req_id（期望 %s，实际 %q）", reqID, response.ReqID)
+	}
+	if response.Error != nil {
+		return nil, response.Error
+	}
+	return &Reply{ReqID: response.ReqID, Result: response.Result}, nil
 }
 
 // frameError 把读帧失败映射成协议错误；超限帧断开连接并记审计日志。

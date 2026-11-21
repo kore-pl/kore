@@ -24,7 +24,7 @@ func baseManifest() map[string]any {
 			"memory_mb": 10, "cpu_quota": "50%", "pids_max": 128,
 		},
 		"requires_kore": ">=0.1.0 <0.2.0",
-		"triggers":      []any{},
+		"triggers":      []string{},
 	}
 }
 
@@ -114,11 +114,12 @@ var rejectCases = []struct {
 	{"pids_max 越界", func(m map[string]any) { m["resources"].(map[string]any)["pids_max"] = 8 }, pluginapi.E_INVALID, "pids_max"},
 	{"缺 requires_kore", func(m map[string]any) { delete(m, "requires_kore") }, pluginapi.E_INVALID, "requires_kore"},
 	{"缺 triggers", func(m map[string]any) { delete(m, "triggers") }, pluginapi.E_INVALID, "triggers"},
-	{"trigger 类型非法", func(m map[string]any) { m["triggers"] = []map[string]any{{"type": "http", "name": "cert.renew"}} }, pluginapi.E_INVALID, "triggers"},
-	{"trigger 缺 type", func(m map[string]any) { m["triggers"] = []map[string]any{{"name": "cert.renew"}} }, pluginapi.E_INVALID, "triggers"},
-	{"trigger 缺 name", func(m map[string]any) { m["triggers"] = []map[string]any{{"type": "event"}} }, pluginapi.E_INVALID, "triggers"},
-	{"trigger name 非法", func(m map[string]any) { m["triggers"] = []map[string]any{{"type": "event", "name": "Cert.renew"}} }, pluginapi.E_INVALID, "triggers"},
-	{"trigger 空 name", func(m map[string]any) { m["triggers"] = []map[string]any{{"type": "event", "name": ""}} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger 缺类型前缀", func(m map[string]any) { m["triggers"] = []string{"cert.renew_due"} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger 类型非法", func(m map[string]any) { m["triggers"] = []string{"http:x.y"} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger event name 非法", func(m map[string]any) { m["triggers"] = []string{"event:Cert.renew"} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger event 缺事件段", func(m map[string]any) { m["triggers"] = []string{"event:cert"} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger 空 name", func(m map[string]any) { m["triggers"] = []string{"event:"} }, pluginapi.E_INVALID, "triggers"},
+	{"trigger invoke name 非法", func(m map[string]any) { m["triggers"] = []string{"invoke:Restart"} }, pluginapi.E_INVALID, "triggers"},
 	{"依赖 id 非法", func(m map[string]any) { m["depends_on"] = []string{"Bad"} }, pluginapi.E_INVALID, "depends_on"},
 	{"场景标签非法", func(m map[string]any) { m["scenario_tags"] = []string{"k8s"} }, pluginapi.E_INVALID, "scenario_tags"},
 	{"深度等级非法", func(m map[string]any) { m["depth_level"] = "gold" }, pluginapi.E_INVALID, "depth_level"},
@@ -200,25 +201,26 @@ func manyCapabilities(n int) []string {
 	return items
 }
 
-// TestParseTriggers 覆盖 triggers 必填口径：空数组合法、元素为 object{type,name}。
+// TestParseTriggers 覆盖 triggers 必填口径：字符串数组，元素 "<type>:<name>"。
 func TestParseTriggers(t *testing.T) {
 	empty := baseManifest()
-	empty["triggers"] = []any{}
+	empty["triggers"] = []string{}
 	if got := parse(t, empty); len(got.Triggers) != 0 {
 		t.Fatalf("空 triggers 应解析为空切片，实际 %v", got.Triggers)
 	}
 
 	filled := baseManifest()
-	filled["triggers"] = []map[string]any{
-		{"type": "event", "name": "cert.renew_due"},
-		{"type": "invoke", "name": "site.status"},
-		{"type": "schedule", "name": "daily@03:00"},
+	filled["triggers"] = []string{
+		"event:cert.renew_due",
+		"schedule:daily@03:00",
+		"invoke:restart",
+		"invoke:site.restart",
 	}
 	got := parse(t, filled)
-	if len(got.Triggers) != 3 {
+	if len(got.Triggers) != 4 {
 		t.Fatalf("合法 triggers 应全部保留，实际 %v", got.Triggers)
 	}
-	if got.Triggers[0].Type != "event" || got.Triggers[0].Name != "cert.renew_due" {
-		t.Fatalf("trigger 字段解析错误: %+v", got.Triggers[0])
+	if got.Triggers[0] != "event:cert.renew_due" {
+		t.Fatalf("trigger 应原样保留，实际 %q", got.Triggers[0])
 	}
 }

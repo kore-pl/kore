@@ -37,14 +37,6 @@ type Resources struct {
 	PidsMax int `json:"pids_max"`
 }
 
-// Trigger 是 triggers 的元素：type 取 event|schedule|invoke，name 是匹配名。
-type Trigger struct {
-	// Type 触发类型：event（kore 事件）/ schedule（宿主调度器，M2 生效）/ invoke（外部调用）。
-	Type string `json:"type"`
-	// Name 匹配名：event/invoke 形如 "cert.renew_due"，schedule 为宿主调度器表达式。
-	Name string `json:"name"`
-}
-
 // Manifest 是 info.json 的内存表示：12 个必填字段 + 可选扩展字段。
 type Manifest struct {
 	// ID 插件 id（同时决定 socket、目录与二进制名）。
@@ -65,8 +57,9 @@ type Manifest struct {
 	Resources Resources `json:"resources"`
 	// RequiresKore 内核版本区间（如 ">=0.1.0 <0.2.0"），M1 只校验存在性。
 	RequiresKore string `json:"requires_kore"`
-	// Triggers 触发声明（object[]，元素为 {type, name}）；空数组表示不订阅任何触发。
-	Triggers []Trigger `json:"triggers"`
+	// Triggers 触发声明，元素为 "<type>:<name>"（如 "event:cert.renew_due"）；
+	// 空数组表示不订阅任何触发。
+	Triggers []string `json:"triggers"`
 	// DependsOn 依赖插件 id（M1 只做 DAG 与环校验，不做拓扑安装）。
 	DependsOn []string `json:"depends_on,omitempty"`
 	// Conflicts 冲突插件 id。
@@ -87,7 +80,7 @@ type Manifest struct {
 //
 // 协议口径的 12 个必填字段：id、name、version、protocol、lifecycle、entry、
 // capabilities、resources{memory_mb,cpu_quota,pids_max}、requires_kore、
-// triggers（object[]，元素 {type,name}）。
+// triggers（字符串数组，元素 "<type>:<name>"）。
 // 其中 resources 三项在 validateResources 里按值校验（键存在但值越界同样 E_INVALID），
 // lifecycle 缺省为 lazy（G-14）因此允许省略；其余 9 个键都做存在性检查。
 var requiredKeys = []string{
