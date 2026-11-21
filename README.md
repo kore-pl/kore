@@ -1,5 +1,9 @@
 # kore
 
+[![CI](https://github.com/pengtang1024/kore/actions/workflows/ci.yml/badge.svg)](https://github.com/pengtang1024/kore/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+
 > 状态: draft · 归属: scribe · 更新: 2026-11-21 · 里程碑: M0
 
 **一句话定位**：kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座——一个只做调度的薄壳内核，而不是一个功能面面俱到的大面板。
@@ -16,13 +20,13 @@
 
 kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件一仓。本仓库（`kore`）只放内核、公开协议 SDK、主壳前端与协作中枢。
 
-| 仓库 | 定位 | module 占位 | 状态 |
+| 仓库 | 定位 | module 路径 | 状态 |
 | --- | --- | --- | --- |
-| [`kore`](.) | 内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（唯一协作中枢） | `github.com/kore-project/kore` | M0 已建 |
-| `kore-plugins` | 纯静态索引（`index/plugins.json` + 校验脚本），不审核、不代管包、无账号 | `github.com/kore-project/kore-plugins` | M1 计划 |
-| `kore-plugin-echo` | 示例插件仓库：`main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md` | `github.com/kore-project/kore-plugin-echo` | M1 计划 |
-| `kore-plugin-site` | 站点类插件仓库 | `github.com/kore-project/kore-plugin-site` | M2 计划 |
-| `kore-plugin-backup` | 备份类插件仓库 | `github.com/kore-project/kore-plugin-backup` | M2 计划 |
+| [`kore`](.) | 内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（唯一协作中枢） | `github.com/pengtang1024/kore` | M0 已建 |
+| `kore-plugins` | 纯静态索引（`index/plugins.json` + 校验脚本），不审核、不代管包、无账号 | `github.com/pengtang1024/kore-plugins` | M1 计划 |
+| `kore-plugin-echo` | 示例插件仓库：`main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md` | `github.com/pengtang1024/kore-plugin-echo` | M1 计划 |
+| `kore-plugin-site` | 站点类插件仓库 | `github.com/pengtang1024/kore-plugin-site` | M2 计划 |
+| `kore-plugin-backup` | 备份类插件仓库 | `github.com/pengtang1024/kore-plugin-backup` | M2 计划 |
 
 插件只依赖 `kore/pkg/pluginapi`；`kore` 不 import 任何插件仓库（依赖单向，见 [AGENTS.md](AGENTS.md) G-13）。
 
@@ -182,6 +186,16 @@ go work use kore-plugins              # 需要联调索引脚本时再加
 - **资源门禁**：主壳空载 RSS ≤ 8 MiB、常驻插件单 ≤ 12 MiB / 合计 ≤ 24 MiB、单二进制 ≤ 25 MiB、前端首屏 ≤ 300 KiB gzip、空闲 CPU ≤ 0.1%、空载 goroutine ≤ 20；内存上限靠 `GOMEMLIMIT=6MiB` + `GOGC=100` 守（GOGC 调高只放大堆峰值，不是压上限的工具；实测仍超则降到 `GOGC=50`）。证据口径：`GOGC=100/200` 双跑 × 各 60 点中位数 × `smaps` 拆 `RssAnon` / `RssFile`。
 - **前端栈**：Vue3 + Vite + TS + Element Plus（按需）+ UnoCSS + unplugin-icons；composables 不引 Pinia；插件前端是 ES module，用原生 `import()` 动态加载；`web/dist` 经 `go:embed` 进主壳；默认暗色高密度。
 
+## 开源
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/pengtang1024)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
+
+- **如何贡献**：[CONTRIBUTING.md](CONTRIBUTING.md)——PR 即按 MIT 授权（inbound = outbound），**不要求 CLA**，签名用 `git commit -s`（DCO）；行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+- **安全披露**：[SECURITY.md](SECURITY.md)（披露流程）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
+- **本项目不收集任何遥测**：无账号、无上报、无隐藏出网；空载 `ss -tnp` 为空。
+
 ## 参与方式
 
 kore 由 6 个固定角色的 agent 协作推进：lead 拆解与验收、architect 定边界、implementer 实现、verifier 独立复跑门禁、red-team 蓝军攻击、scribe 维护文档与复盘。
@@ -195,3 +209,9 @@ kore 由 6 个固定角色的 agent 协作推进：lead 拆解与验收、archit
 - **无厂商锁**：不绑定云服务、不绑定商业控制面，换台机器照样跑。
 - **无遥测**：不上报任何使用数据，出网连接为零。
 - **配置明文**：YAML 明文，看得懂、改得动、可版本化。
+
+## License / Contributing / Security
+
+- [License](LICENSE) — MIT，版权人 `pengtang1024`
+- [Contributing](CONTRIBUTING.md) — 开发环境、提交规范、PR 要求与 G-01 ~ G-25 门禁清单
+- [Security](SECURITY.md) — 漏洞披露流程；安全设计见 [docs/SECURITY.md](docs/SECURITY.md)

@@ -1,0 +1,73 @@
+name: CI
+
+# 触发：所有 push 与 PR 都跑；门禁不绿不得合并。
+on:
+  push:
+  pull_request:
+
+# 说明：CI 只跑能在托管 runner 上稳定复现的门禁。
+# `make idle` / `make budget-check` 依赖真实 kored 进程、systemd/cgroup 与 60s 空闲采样，
+# 在共享 runner 上既不可信也不稳定，因此归本地与里程碑门禁（见 .agents/QUALITY-GATES.md），CI 不跑。
+
+jobs:
+  check:
+    name: Build + check (8 segments)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build (CGO off)
+        run: make build
+
+      - name: make check
+        run: make check
+
+      - name: make canonical-check
+        run: make canonical-check
+
+  cross:
+    name: Cross build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./...
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: go build ./...
+
+  docs:
+    name: Docs check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: make docs-check
+        run: make docs-check

@@ -1,0 +1,52 @@
+name: 功能建议
+description: 提出新能力或改进建议（先对照 G-11 非目标清单）
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先读 [docs/VISION.md](https://github.com/pengtang1024/kore/blob/main/docs/VISION.md) 与根 [AGENTS.md](https://github.com/pengtang1024/kore/blob/main/AGENTS.md) 的 G-11：多用户 RBAC、集群/多机、模板市场、厂商云存储深度集成、拖拽建站、多语言（i18n）属于明确不做。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 谁在什么场景下需要它？现在的替代做法是什么？不要只写"希望支持 X"。
+      placeholder: |
+        作为 ...，我希望 ...，以便 ...
+        目前的做法是 ...，痛点是 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 期望的行为、边界与验收方式；若涉及协议/数据格式请注明。
+      placeholder: |
+        建议 ...
+        验收标准 ...
+        兼容性影响 ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: non-goal
+    attributes:
+      label: 是否触及 G-11 非目标
+      description: 若命中，请说明为什么需要在 kore 内解决，而不是交给插件或外部系统。
+      options:
+        - 否，未触及
+        - 是，命中 6 项不做之一（请在下方说明）
+        - 不确定，需要维护者判断
+    validations:
+      required: true
+
+  - type: textarea
+    id: non-goal-detail
+    attributes:
+      label: 非目标说明（选填）
+      description: 若上方选择"是"或"不确定"，请补充理由与替代路径。
+    validations:
+      required: false

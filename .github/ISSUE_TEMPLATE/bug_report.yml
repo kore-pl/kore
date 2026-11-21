@@ -1,0 +1,58 @@
+name: Bug 报告
+description: 报告可复现的缺陷（安全漏洞请勿公开提交，见 SECURITY.md）
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先搜索是否已有同类 issue。
+        **安全漏洞不要开公开 issue**，请按 [SECURITY.md](https://github.com/pengtang1024/kore/blob/main/SECURITY.md) 走邮件披露。
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 最小可复现步骤，按 1. 2. 3. 写清楚；能稳定复现最好。
+      placeholder: |
+        1. 启动 kored ...
+        2. 访问 ...
+        3. 观察 ...
+    validations:
+      required: true
+
+  - type: input
+    id: kored-version
+    attributes:
+      label: kored version
+      description: 粘贴 `kored version` 的输出。
+      placeholder: "kored version 0.1.0 ..."
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / 内核版本
+      description: 例如 Ubuntu 26.04 / Linux 6.17.0；Windows 请写具体 build。
+      placeholder: "Ubuntu 26.04, Linux 6.17.0-xx-generic"
+    validations:
+      required: true
+
+  - type: textarea
+    id: check-output
+    attributes:
+      label: make check 输出
+      description: 在本仓库根目录执行 `make check`，粘贴 9 段结果与退出码。
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 报错原文
+      description: 关键日志、堆栈或错误输出；请脱敏，不要贴口令与密钥。
+      render: shell
+    validations:
+      required: false
