@@ -6,9 +6,9 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 
 ## 1. 存储原则
 
-1. **无独立 DB**：状态只存 `/var/lib/kore/kore.db`（bbolt），不引入 SQLite/Postgres/Redis，不为存储多起一个进程。
+1. **无独立 DB**：状态只存 `/var/lib/kore/state.db`（bbolt），不引入 SQLite/Postgres/Redis，不为存储多起一个进程。
 2. **明文可审计**：配置是 YAML 文本，可 diff、可 grep、可手改；bbolt 里的 value 是 JSON 文本，`kored db dump <bucket>` 可直接打印。
-3. **单文件可备份**：`Tx.CopyFile` 边写边拷出一致快照；备份 = `kore.db` + `config.yaml` + 插件包，三个路径即可重建。
+3. **单文件可备份**：`Tx.CopyFile` 边写边拷出一致快照；备份 = `state.db` + `config.yaml` + 插件包，三个路径即可重建。
 4. **写入有唯一入口**：所有写事务经内核单个 writer goroutine 串行化，禁止业务代码直接 `db.Update`。
 
 ## 2. 分层表
@@ -16,7 +16,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 | 层 | 路径 | 形态 | 生命周期 | 备份 |
 | --- | --- | --- | --- | --- |
 | 配置 | `/etc/kore/config.yaml`（env `KORE_CONFIG` 可覆盖） | YAML 文本，0600 | 长期，人工维护 | 每次备份必带 |
-| 状态 | `/var/lib/kore/kore.db` | bbolt 单文件，0600 | 长期，schema 迁移 | `Tx.CopyFile` 快照 |
+| 状态 | `/var/lib/kore/state.db` | bbolt 单文件，0600 | 长期，schema 迁移 | `Tx.CopyFile` 快照 |
 | 插件 | `/var/lib/kore/plugins/<id>/<version>/`（`bin/<id>` + `web/`） | 目录 + 二进制 | 长期，保留当前与上一版本 | 打包含 sha256 |
 | 日志 | `/var/log/kore/kore.log`、`/var/log/kore/plugins/<id>.log` | 文本，10 MiB 轮转 | 滚动保留 5 份/2 份 | 不备份（可重建） |
 | 任务产物 | `/var/lib/kore/tasks/<plugin>/<ts>.json` | 每次执行的 stdout/stderr 与结果摘要 | 短期，保留 7 天 | 不备份（可重建） |
@@ -44,7 +44,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `auth.session_ttl` | duration | `12h` | 1m–720h；滑动过期（每次鉴权刷新 `expires_at`） |
 | `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` = TLS 或回环 Host 时给会话 cookie 加 `Secure`，否则不加并 WARN |
 | `auth.initialized` | bool | `false` | 首次生成口令后由内核置 `true`；`true` 时启动不再打印临时口令。重置 = 人工置 `false` 并清空 `auth.admin_password_hash`；`initialized=true` 但哈希为空视为不一致，拒绝启动 |
-| `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `kore.db`、`plugins/`、`tasks/` |
+| `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `state.db`、`plugins/`、`tasks/` |
 | `paths.log_dir` | string | `/var/log/kore` | 必须可写；含插件日志子目录 |
 | `paths.run_dir` | string | `/run/kore` | 0700；socket 落此处 |
 | `paths.plugin_dir` | string | `/var/lib/kore/plugins` | 解包目标 |
@@ -82,7 +82,7 @@ auth:
   initialized: false            # 首次生成口令后内核置 true，二次启动不再打印
 
 paths:
-  state_dir: "/var/lib/kore"          # kore.db / plugins / tasks
+  state_dir: "/var/lib/kore"          # state.db / plugins / tasks
   log_dir: "/var/log/kore"            # kore.log / plugins/<id>.log
   run_dir: "/run/kore"                # kore.sock / plugins/<id>.sock
   plugin_dir: "/var/lib/kore/plugins"
@@ -136,7 +136,7 @@ cert_renew:                     # 唯一允许的常驻定时器，默认关
 
 ## 5. bbolt 设计
 
-数据库：`/var/lib/kore/kore.db`，`bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1*time.Second, NoSync: false})`；page size 4096。键为 UTF-8 字符串（时间序靠可排序编码），值为 JSON 对象（UTF-8，无缩进）；单值上限 1 MiB，超限视为设计错误。MVP 不建 `users` bucket（单管理员来自 config）；`tasks` bucket 只存索引，原始输出落 `/var/lib/kore/tasks/`（保留 7 天），两处口径共同构成任务记录。
+数据库：`/var/lib/kore/state.db`，`bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1*time.Second, NoSync: false})`；**锁用 bbolt 内置 flock（`LOCK_EX|LOCK_NB` + `Timeout=1s`），另写 `state.lock` 记录 pid；`internal/core` 不直接调 `syscall`（G-16：平台专有 `syscall` 收在 `internal/platform`）**；page size 4096。键为 UTF-8 字符串（时间序靠可排序编码），值为 JSON 对象（UTF-8，无缩进）；单值上限 1 MiB，超限视为设计错误。MVP 不建 `users` bucket（单管理员来自 config）；`tasks` bucket 只存索引，原始输出落 `/var/lib/kore/tasks/`（保留 7 天），两处口径共同构成任务记录。
 
 | bucket | key 编码 | value JSON schema | 清理策略 |
 | --- | --- | --- | --- |
@@ -174,7 +174,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 - `meta.schema_version` 为整数，M0 = `1`；每次结构变更 +1。
 - 迁移函数注册为有序列表 `migrations[]`，只允许**新增**（1→2、2→3），不允许修改已发布迁移；启动时若 `current < target` 按序执行，每步前后写日志。
-- 迁移前自动备份：`Tx.CopyFile` 到 `kore.db.bak-<ts>`，保留最近 3 份。
+- 迁移前自动备份：`Tx.CopyFile` 到 `state.db.bak-<ts>`，保留最近 3 份。
 - 降级不支持：发现 `current > target`（用旧内核启动新库）→ 拒绝启动，**退出码 4**，提示「数据库 schema 高于当前内核，请升级内核或恢复备份」。
 - 迁移失败：回滚到备份文件（改名替换），**退出码 4**，不半迁移启动。
 
@@ -230,7 +230,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 备份内容（一次 `kored backup --out <dir>`）：
 
-1. `kore.db`：`db.View(func(tx *bbolt.Tx) error { return tx.CopyFile(<dir>/kore.db, 0600) })`，得到一致快照，无需停服。
+1. `state.db`：`db.View(func(tx *bbolt.Tx) error { return tx.CopyFile(<dir>/state.db, 0600) })`，得到一致快照，无需停服。
 2. `config.yaml`：原样复制（含 0600 权限）。
 3. 插件包：`/var/lib/kore/plugins/` 下已安装版本目录打包为 `plugins.tar.gz`。
 4. `manifest.json`：`{"created_at","kore_version","schema_version","files":[{"path","sha256","size"}]}`。

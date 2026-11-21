@@ -62,7 +62,7 @@
 | 降级 | degraded | 插件进程还在但连续 ping 超时，路由暂停新调用的中间态 | A·C | 不是 failed；degraded 会自愈，failed 需人工 enable |
 | 故障域 | failure domain | 单个组件崩溃时受影响的范围边界 | V·A·C | 不是"高可用"；kore 不承诺自动容错，只承诺**影响可控** |
 | 单实例锁 | single-instance lock | `flock /run/kore/kore.lock`，保证同一宿主只有一个 kored | A·C | 不是 pid 文件；flock 由内核释放，崩溃不留幽灵锁 |
-| 状态目录 | state dir | `/var/lib/kore`（`KORE_STATE_DIR`），含 `kore.db`、`plugins/`、`tasks/` | V·A·C | 不是配置目录；配置在 `/etc/kore/config.yaml` |
+| 状态目录 | state dir | `/var/lib/kore`（`KORE_STATE_DIR`），含 `state.db`、`plugins/`、`tasks/` | V·A·C | 不是配置目录；配置在 `/etc/kore/config.yaml` |
 | 资源预算 | resource budget | 门禁级资源上限：主壳 ≤ 8 MiB、同时常驻 ≤3 个/单 ≤12 MiB/合计 ≤24 MiB、二进制 ≤ 25 MiB、首屏 ≤ 300 KiB gzip、空闲 CPU ≤0.1% | V·A | 不是"优化目标"；超了判未完成，不合并 |
 | 空载 RSS | idle RSS | 启动后无请求、稳定 60 s 取中位数的常驻内存 | V·A·C | 不是峰值 RSS；度量口径 `ps -o rss= -p PID`（KiB/1024） |
 | 内存上限 | GOMEMLIMIT | `main` 启动时 `debug.SetMemoryLimit(6<<20)` 的软上限：GC 为守住上限更积极，超限不 OOM | A·C | 不是 cgroup/Job Objects 的硬限；硬限由 resource 后端负责 |

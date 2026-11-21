@@ -5,6 +5,22 @@
 七阶段固定顺序：**提案 → 双评审 → 拆解 → 实现 → 验证 → 蓝军 → 归档复盘**。
 不合并、不跳步、不并行跨阶段——上一阶段的产出文件不存在，下一阶段不许开工。
 
+## 阶段收口：每阶段一条台账（G-23）
+
+七阶段各自结束时**必须落一条 LOG 条目**——没有条目的阶段视为未收口，下一阶段不得开工。台账是判断留痕，不替代 [BOARD.md](BOARD.md)（状态）与 [JOURNAL.md](JOURNAL.md)（教训），三者分工见 [LOG/README.md](LOG/README.md) §4。
+
+| 阶段 | 必须登记 | 落点 |
+| --- | --- | --- |
+| 一 提案 | 提案 id、提出者、要解决什么、被否方案 | [LOG/DISPATCH.md](LOG/DISPATCH.md) 的 task 行 + 提案文件 |
+| 二 双评审 | 双方 VERDICT、REVISE / REJECT 的理由与可执行修改项 | 评审文件；形成裁决的进 [LOG/DECISIONS.md](LOG/DECISIONS.md) |
+| 三 拆解 | task / owner / 写域 / 依赖 / 验收命令 | [LOG/DISPATCH.md](LOG/DISPATCH.md) |
+| 四 实现 | 交付物、commit、自测证据位置 | [LOG/DISPATCH.md](LOG/DISPATCH.md) 同一行回填，不另开行 |
+| 五 验证 | PASS / FAIL、阻断级 vs 记录级、报告路径 | 验收报告；判据变更进 [LOG/DECISIONS.md](LOG/DECISIONS.md) |
+| 六 蓝军 | 问题单编号、回派 owner、签收状态 | 攻击记录 + [LOG/DISPATCH.md](LOG/DISPATCH.md) 的回派行 |
+| 七 归档 | session 摘要、本里程碑裁决汇总、台账完整性检查 | `LOG/sessions/<日期>-<里程碑>.md` |
+
+登记纪律（当天登记、补记标注、派发即登记）见 [LOG/README.md](LOG/README.md) §3。**裁决条目必须写清被否决的选项**；只写结论的条目不合格，按未登记处理。
+
 ## 1. 阶段一：提案
 
 - 入口条件：有明确需求或问题单；提出者能说清"要解决什么"与"不做什么"。

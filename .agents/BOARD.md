@@ -86,6 +86,8 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 
 M0 期间产生过分歧、且必须以裁决收口的口径。后续任何任务先读这里，不要再以"某份正文当前这么写"为依据推翻。
 
+**判断留痕见 [`.agents/LOG/`](LOG/)**：本板只存裁决结论与任务状态；选项、被否决方案与依据在台账，两者冲突时以 ADR + 台账为准（G-23）。
+
 | # | 裁决 | 依据 |
 | --- | --- | --- |
 | 1 | 二进制 / 进程 / systemd `ExecStart` = `kored`；项目 / 仓库 / Go module = `kore`；systemd unit = `kore.service` | daemon 惯例与 `cmd/kored/` 同源；`Makefile` 已为 `APP ?= kored` / `BIN ?= ./bin/kored`；scribe 反证后 lead 改判 |

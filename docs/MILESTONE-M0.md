@@ -165,6 +165,13 @@ make help && make docs-check && make check
 
 ## 5. 已知缺口与 M1 入口条件
 
+### 5.0 M1 收尾技术债（登记，不阻塞 M0）
+
+| # | 位置 | 事实 | 处置 | 期限 |
+| --- | --- | --- | --- | --- |
+| D-1 | `cmd/kored/serve.go`（**241 行，超单文件 200 行上限**） | 启动装配 / 信号处理 / 资源锚点（`setRuntimeLimits`）混在一个文件 | 按职责拆分：`serve.go`（装配）/ `signals.go`（SIGHUP/SIGTERM）/ `runtime_limits.go`（`GOGC` / `GOMEMLIMIT` / `GOMAXPROCS` 锚点，保持 CORE §7 语义） | M1 收尾前 |
+
+
 **已知缺口（不影响 M0 判定，但必须在 M1 前处理）**
 
 1. 无源码：`make build` / `vet` / `test` / `mem` / `frontend` 在 M0 输出 `[SKIP]`（`make check` 内的 2/3、3/3 源码检查才是 `[N/A]`），属合法状态；M1 Sprint 1 必须让 `build` 先转 OK。

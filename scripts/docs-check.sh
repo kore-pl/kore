@@ -27,13 +27,29 @@ flush_details() {
 }
 section() { printf '\n-- %s --\n' "$*"; }
 
-# 文档范围：docs/ 与 .agents/ 下全部 *.md（递归）
+# 文档范围：docs/ 与 .agents/ 下全部 *.md（递归），排除 .agents/verify/（冻结证据）
 DOC_FILES=()
+EVIDENCE_FILES=()
 while IFS= read -r f; do
   if [ -n "$f" ]; then
     DOC_FILES+=("$f")
   fi
-done < <(find docs .agents -type f -name '*.md' 2>/dev/null | sort || true)
+done < <(find docs .agents -type f -name '*.md' 2>/dev/null | grep -v '^\.agents/verify/' | sort || true)
+while IFS= read -r f; do
+  if [ -n "$f" ]; then
+    EVIDENCE_FILES+=("$f")
+  fi
+done < <(find .agents/verify -type f -name '*.md' 2>/dev/null | sort || true)
+
+# 链接检查范围 = 文档 + 证据（证据里引用 docs/... 也必须可达）
+LINK_FILES=()
+for f in "${DOC_FILES[@]+"${DOC_FILES[@]}"}" "${EVIDENCE_FILES[@]+"${EVIDENCE_FILES[@]}"}"; do
+  LINK_FILES+=("$f")
+done
+
+printf '[INFO] 已排除 .agents/verify/（冻结证据，按证据规范而非文档模板）\n'
+printf '[INFO] 文档计数: %d 份（docs/**.md + .agents/**.md，不含 verify）· 证据计数: %d 份（.agents/verify/，仅参与链接检查）\n' \
+  "${#DOC_FILES[@]}" "${#EVIDENCE_FILES[@]}"
 
 # 提取 markdown 链接（跳过 ``` / ~~~ 围栏代码块），输出形如 [text](target) 或 ![alt](target)
 links_of() {
@@ -123,13 +139,13 @@ fi
 flush_details
 
 # ---------------------------------------------------------------- 3/6 相对链接
-section "3/6 相对链接可达性"
-if [ "${#DOC_FILES[@]}" -eq 0 ]; then
-  failed "未发现待校验文档，相对链接检查无对象"
+section "3/6 相对链接可达性（文档 + 冻结证据）"
+if [ "${#LINK_FILES[@]}" -eq 0 ]; then
+  failed "未发现待校验文档或证据，相对链接检查无对象"
 else
   LINK_CHECKED=0
   LINK_BROKEN=0
-  for f in "${DOC_FILES[@]}"; do
+  for f in "${LINK_FILES[@]}"; do
     dir=$(dirname "$f")
     while IFS= read -r raw; do
       if [ -z "$raw" ]; then

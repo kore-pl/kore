@@ -27,7 +27,7 @@ M0 只交付 `kore` 仓库的文档与骨架，**不含任何插件仓库与索�
 | A5 | 兼容基线文档 | `docs/COMPATIBILITY.md` | architect | 150–300 行；三平台矩阵 3 行 + Linux 发行版明细 10 行；降级规则逐条给触发条件与用户可见结果；无"可能不支持"类模糊表述；构建参数与 ADR-0009 一致 | A2 |
 | B1 | 插件协议 | `docs/PLUGIN-PROTOCOL.md` | architect | 200–300 行；4 字节大端长度前缀 + JSON、帧上限 8 MiB；**4 个必选方法 + 1 条必选事件通道**；错误体 3 字段；包结构与 `requires_kore` | A3 |
 | B2 | 资源模型 | `docs/RESOURCE-MODEL.md` | architect | 150–250 行；6 条硬预算逐条给测量方法与超限处置；cgroup 路径 | A3 |
-| B3 | 数据模型 | `docs/DATA-MODEL.md` | architect | 150–250 行；`kore.db` 表/字段/索引命名；迁移只追加；任务模型 | A3 |
+| B3 | 数据模型 | `docs/DATA-MODEL.md` | architect | 150–250 行；`state.db` 表/字段/索引命名；迁移只追加；任务模型 | A3 |
 | C1 | 前端规格 | `docs/FRONTEND.md` | architect | 150–250 行；技术栈逐项；composables 不引 Pinia；插件前端 ES module + 原生 `import()`；默认暗色 | A2 |
 | C2 | 安全模型 | `docs/SECURITY.md` | architect | 150–250 行；鉴权、8 项能力白名单、UDS 权限、隔离、无联网校验、无隐藏上报 | A3, B2 |
 | C3 | 十四篇 ADR + 仓库清单 | `docs/DECISIONS/0001-0014`、`docs/REPOS.md` | architect | 14 篇各 40–120 行（6 节结构）；`0008` 多仓库拓扑含 R1–R8；`0009` 兼容基线；`0010` 平台五接口；`0011` SDK 嵌套 module；`0012` 商店与预设；`0013` 极致资源；`0014` v1 范围与深度分级（12 生产 / 8 基础 / 6 不做）；`REPOS.md` 与 ROADMAP §2 一致 | A1–C2 起稿后 |

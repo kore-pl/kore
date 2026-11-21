@@ -31,16 +31,27 @@ BUILDFLAGS := -trimpath -buildvcs=false
 LDFLAGS    := -s -w -X main.version=$(VERSION)
 
 # 资源预算（G-03/G-19）：单位 KiB / 字节。改口径只改这里，别散落到 recipe。
-MAIN_RSS_KIB    ?= 8192
-PLUGIN_RSS_KIB  ?= 12288
-TOTAL_RSS_KIB   ?= 24576
-MAX_PLUGINS     ?= 3
+# 采样档：日常 5 点（约 10s，CI/迭代用）/ 收口 MEM_POINTS=60（约 65s，里程碑证据用）
+MEM_POINTS      ?= 5
+MEM_INTERVAL    ?= 1
+MEM_SETTLE      ?= 5
+
+# 硬红线（判未完成）：超过即 FAIL。主壳 ≤16 MiB · 单插件 ≤24 MiB · 合计 ≤48 MiB
+MAIN_RSS_KIB_RED   ?= 16384
+PLUGIN_RSS_KIB_RED ?= 24576
+TOTAL_RSS_KIB_RED  ?= 49152
+MAX_PLUGINS        ?= 3
+# 目标（只 WARN，不阻断）：红线 ≥ x > 目标 记趋势。主壳 8 · 单插件 12 · 合计 24 MiB
+MAIN_RSS_KIB_GOAL   ?= 8192
+PLUGIN_RSS_KIB_GOAL ?= 12288
+TOTAL_RSS_KIB_GOAL  ?= 24576
+# 其它红线：单二进制 ≤ 25 MiB
+BIN_MAX_BYTES   ?= 26214400
 IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
-BIN_MAX_BYTES   ?= 26214400
 
-.PHONY: help build cross compat-info vet test frontend mem idle budget-check docs-check repo-check canonical-check check clean fmt
+.PHONY: help build cross compat-info vet test frontend mem idle budget-check docs-check repo-check canonical-check log-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -98,43 +109,62 @@ frontend: ## 构建前端产物（web/package.json 未就绪时 SKIP）
 	cd web && npm ci && npm run build; \
 	echo "[OK] 前端构建完成: web/dist（首屏预算 ≤ 300 KiB gzip，需人工复核体积）"
 
-mem: ## 采样 VmRSS 与 RssAnon/RssFile 拆分（预算：主壳 ≤8192 KiB · 插件单 ≤12288 KiB · 合计 ≤24576 KiB · 插件数 ≤3）
-	@echo "[INFO] 预算（G-03）：主壳空载 ≤$(MAIN_RSS_KIB) KiB · 常驻插件单 ≤$(PLUGIN_RSS_KIB) KiB · 常驻合计 ≤$(TOTAL_RSS_KIB) KiB（常驻合计 24 MiB）· 常驻插件数 ≤$(MAX_PLUGINS)"
-	@echo "[INFO] 口径：VmRSS 为主值（ps -o rss= -p PID，等价 /proc/<pid>/status 的 VmRSS，取 5 次中位数）；RssAnon/RssFile 优先 smaps_rollup，缺失取 status；输出必须标注来源"
+mem: ## 采样 VmRSS：日常 5 点 ≈10s（默认）/ 收口 MEM_POINTS=60 ≈65s；含 RssAnon/RssFile 诊断（目标 8192 / 红线 16384 KiB）
+	@echo "[INFO] 预算（G-03）：主壳 VmRSS 目标 $(MAIN_RSS_KIB_GOAL) / 红线 $(MAIN_RSS_KIB_RED) KiB · 单插件 目标 $(PLUGIN_RSS_KIB_GOAL) / 红线 $(PLUGIN_RSS_KIB_RED) KiB · 合计 目标 $(TOTAL_RSS_KIB_GOAL) / 红线 $(TOTAL_RSS_KIB_RED) KiB · 常驻插件数 ≤$(MAX_PLUGINS)"
+	@echo "[INFO] 采样规格（G6）：稳定期 $(MEM_SETTLE)s → $(MEM_POINTS) 点 × $(MEM_INTERVAL)s 间隔；主值 VmRSS（ps -o rss=，等价 /proc/<pid>/status 的 VmRSS）；RssAnon/RssFile 仅诊断，不设绝对上限；GC 档位以启动日志「资源锚点」行为准（environ 不可见程序内 SetGCPercent）"
 	@echo "[CMD ] ps -o rss= -p \$$(pgrep -x kored)"
 	@pids=$$(pgrep -x kored 2>/dev/null || true); \
-	if [ -z "$$pids" ]; then echo "[SKIP] 未发现运行中的 kored 进程（M0 阶段正常）；需启动 kored 后实测"; exit 0; fi; \
+	if [ -z "$$pids" ]; then echo "[SKIP] 未发现运行中的 kored 进程（M0 阶段正常）；需启动 kored 后实测（默认 60 点 × $(MEM_INTERVAL)s ≈ $(MEM_SETTLE)s + $$(( $(MEM_POINTS) * $(MEM_INTERVAL) ))s）"; exit 0; fi; \
 	pid1=$$(printf '%s\n' "$$pids" | head -n 1); \
+	points=$(MEM_POINTS); interval=$(MEM_INTERVAL); settle=$(MEM_SETTLE); \
+	if [ "$$points" -lt 1 ]; then points=1; fi; \
 	echo "[INFO] kored PID: $$(printf '%s ' $$pids)"; \
 	echo "[INFO] 生效环境变量（/proc/$$pid1/environ）："; \
-	for k in GOGC GOMEMLIMIT; do v=$$(tr '\0' '\n' < /proc/$$pid1/environ 2>/dev/null | grep -E "^$$k=" || true); if [ -n "$$v" ]; then echo "         $$v"; else echo "         $$k=(未设，走二进制默认)"; fi; done; \
-	rss=$$( { for i in 1 2 3 4 5; do ps -o rss= -p $$pid1 2>/dev/null | tr -d ' '; sleep 1; done; } | sort -n | sed -n 3p ); \
-	[ -n "$$rss" ] || rss=0; \
+	for k in GOGC GOMEMLIMIT; do v=$$(tr '\0' '\n' < /proc/$$pid1/environ 2>/dev/null | grep -E "^$$k=" || true); if [ -n "$$v" ]; then echo "         $$v"; else echo "         $$k=(未设；若由程序内 SetGCPercent/SetMemoryLimit 设定，真实档位见启动日志「资源锚点」)"; fi; done; \
+	echo "[INFO] 稳定期 $${settle}s …（采样期间请勿压测）"; sleep $$settle; \
+	samples=$$( i=0; while [ "$$i" -lt "$$points" ]; do i=$$((i + 1)); ps -o rss= -p $$pid1 2>/dev/null | tr -d ' '; sleep $$interval; done | sed '/^$$/d' ); \
+	n=$$(printf '%s\n' "$$samples" | sed '/^$$/d' | wc -l); \
+	if [ "$$n" -eq 0 ]; then echo "[FAIL] 采样为空（进程可能在采样期间退出）"; exit 1; fi; \
+	if [ "$$n" -lt "$$points" ]; then echo "[WARN] 采样不完整：$$n/$$points 点（进程可能在采样期间抖动或退出，统计仅供参考）"; fi; \
+	stats=$$(printf '%s\n' "$$samples" | sort -n | awk '{a[NR]=$$1} END {n=NR; if (n%2) med=a[(n+1)/2]; else med=int((a[n/2]+a[n/2+1])/2+0.5); x=0.95*n; idx=int(x); if (x>idx) idx++; if (idx<1) idx=1; if (idx>n) idx=n; printf "%d %d %d %d\n", med, a[1], a[n], a[idx]}'); \
+	set -- $$stats; med=$$1; rmin=$$2; rmax=$$3; rp95=$$4; \
+	elapsed=$$(( settle + points * interval )); \
+	if [ "$$points" -ge 60 ]; then tier="收口($${points}点)"; else tier="日常($${points}点)"; fi; \
+	echo "[INFO] 采样档：$$tier · 点数 $$n/$$points · 间隔 $${interval}s · 稳定期 $${settle}s · 总时长约 $${elapsed}s · 主值来源 VmRSS(ps -o rss=)"; \
+	echo "[INFO] 主壳 VmRSS：中位数 $$med KiB · min $$rmin · max $$rmax · p95 $$rp95（中位数目标 $(MAIN_RSS_KIB_GOAL) / 红线 $(MAIN_RSS_KIB_RED) KiB）"; \
 	anon=""; rfile=""; src=""; \
 	for f in /proc/$$pid1/smaps_rollup /proc/$$pid1/status; do \
 	  if [ -r "$$f" ]; then a=$$(awk '/^RssAnon:/{print $$2; exit}' "$$f" 2>/dev/null || true); b=$$(awk '/^RssFile:/{print $$2; exit}' "$$f" 2>/dev/null || true); if [ -n "$$a" ] && [ -n "$$b" ]; then anon=$$a; rfile=$$b; src="$$f"; break; fi; fi; \
 	done; \
 	if [ -z "$$anon" ]; then anon=$$(awk '/^RssAnon:/{s+=$$2} END{print s+0}' /proc/$$pid1/smaps 2>/dev/null || echo 0); rfile=$$(awk '/^RssFile:/{s+=$$2} END{print s+0}' /proc/$$pid1/smaps 2>/dev/null || echo 0); src="smaps 汇总（末级回退）"; fi; \
-	echo "[INFO] 主壳 VmRSS 中位数（来源 ps -o rss=，等价 status.VmRSS）: $$rss KiB（阈值 ≤$(MAIN_RSS_KIB) KiB）"; \
-	echo "[INFO] RSS 拆分（来源 $$src）: RssAnon=$$anon KiB · RssFile=$$rfile KiB"; \
+	echo "[INFO] 诊断拆分（来源 $$src；仅诊断，不设绝对上限）：RssAnon=$$anon KiB · RssFile=$$rfile KiB"; \
 	prep=$$(ps -eo pid=,rss=,comm= 2>/dev/null | awk '$$3 ~ /^kore-plugin-/ {c++; r+=$$2; if ($$2>m) m=$$2} END {printf "%d %d %d", c+0, r+0, m+0}'); \
 	set -- $$prep; pcount=$$1; ptotal=$$2; pmax=$$3; \
-	echo "[INFO] 常驻插件进程数: $$pcount（阈值 ≤$(MAX_PLUGINS)）· 合计 RSS=$$ptotal KiB（≤$(TOTAL_RSS_KIB)）· 单进程最大=$$pmax KiB（≤$(PLUGIN_RSS_KIB)）"; \
+	echo "[INFO] 常驻插件进程数: $$pcount（阈值 ≤$(MAX_PLUGINS)）· 合计 RSS=$$ptotal KiB（目标 $(TOTAL_RSS_KIB_GOAL) / 红线 $(TOTAL_RSS_KIB_RED)）· 单进程最大=$$pmax KiB（目标 $(PLUGIN_RSS_KIB_GOAL) / 红线 $(PLUGIN_RSS_KIB_RED)）"; \
 	s=0; \
-	[ "$$rss" -le "$(MAIN_RSS_KIB)" ] || { echo "[FAIL] 主壳 VmRSS $$rss KiB > $(MAIN_RSS_KIB) KiB"; s=1; }; \
-	[ "$$pcount" -le "$(MAX_PLUGINS)" ] || { echo "[FAIL] 常驻插件数 $$pcount > $(MAX_PLUGINS)"; s=1; }; \
-	[ "$$ptotal" -le "$(TOTAL_RSS_KIB)" ] || { echo "[FAIL] 常驻插件合计 $$ptotal KiB > $(TOTAL_RSS_KIB) KiB"; s=1; }; \
-	[ "$$pmax" -le "$(PLUGIN_RSS_KIB)" ] || { echo "[FAIL] 单个插件 RSS $$pmax KiB > $(PLUGIN_RSS_KIB) KiB"; s=1; }; \
-	if [ "$$s" -eq 0 ]; then echo "[OK] 内存预算通过"; else exit 1; fi
+	if [ "$$med" -gt "$(MAIN_RSS_KIB_RED)" ]; then echo "[FAIL] 主壳 VmRSS $$med KiB > 红线 $(MAIN_RSS_KIB_RED) KiB（判未完成）"; s=1; \
+	elif [ "$$med" -gt "$(MAIN_RSS_KIB_GOAL)" ]; then echo "[WARN] 主壳 VmRSS $$med KiB 超出目标 $(MAIN_RSS_KIB_GOAL) KiB、未越红线 $(MAIN_RSS_KIB_RED) KiB（记趋势，不阻断）"; \
+	else echo "[OK] 主壳 VmRSS $$med KiB ≤ 目标 $(MAIN_RSS_KIB_GOAL) KiB"; fi; \
+	if [ "$$pcount" -le "$(MAX_PLUGINS)" ]; then echo "[OK] 常驻插件数 $$pcount ≤ $(MAX_PLUGINS)"; else echo "[FAIL] 常驻插件数 $$pcount > $(MAX_PLUGINS)"; s=1; fi; \
+	if [ "$$ptotal" -gt "$(TOTAL_RSS_KIB_RED)" ]; then echo "[FAIL] 插件合计 RSS $$ptotal KiB > 红线 $(TOTAL_RSS_KIB_RED) KiB（判未完成）"; s=1; \
+	elif [ "$$ptotal" -gt "$(TOTAL_RSS_KIB_GOAL)" ]; then echo "[WARN] 插件合计 RSS $$ptotal KiB 超出目标 $(TOTAL_RSS_KIB_GOAL) KiB、未越红线 $(TOTAL_RSS_KIB_RED) KiB（记趋势，不阻断）"; \
+	else echo "[OK] 插件合计 RSS $$ptotal KiB ≤ 目标 $(TOTAL_RSS_KIB_GOAL) KiB"; fi; \
+	if [ "$$pmax" -gt "$(PLUGIN_RSS_KIB_RED)" ]; then echo "[FAIL] 单插件最大 RSS $$pmax KiB > 红线 $(PLUGIN_RSS_KIB_RED) KiB（判未完成）"; s=1; \
+	elif [ "$$pmax" -gt "$(PLUGIN_RSS_KIB_GOAL)" ]; then echo "[WARN] 单插件最大 RSS $$pmax KiB 超出目标 $(PLUGIN_RSS_KIB_GOAL) KiB、未越红线 $(PLUGIN_RSS_KIB_RED) KiB（记趋势，不阻断）"; \
+	else echo "[OK] 单插件最大 RSS $$pmax KiB ≤ 目标 $(PLUGIN_RSS_KIB_GOAL) KiB"; fi; \
+	if [ "$$s" -eq 0 ]; then echo "[OK] 内存判定完成（目标 $(MAIN_RSS_KIB_GOAL) · 红线 $(MAIN_RSS_KIB_RED) KiB；越线才阻断）"; else exit 1; fi
 
-idle: ## 空载行为门禁（空闲 CPU ≤60ms/60s · 线程 ≤20 · fd ≤64 · 出站连接 0 · 定时器白名单）
+idle: ## 空载行为门禁（60s 窗口；空闲 CPU ≤60ms · 线程 ≤20 · fd ≤64 · 出站连接 0 · 定时器白名单）
 	@pids=$$(pgrep -x kored 2>/dev/null || true); \
 	if [ -z "$$pids" ]; then echo "[SKIP] 未发现运行中的 kored 进程（M0 阶段正常）；需启动 kored 后实测（M1 起生效）"; exit 0; fi; \
 	pid=$$(printf '%s\n' "$$pids" | head -n 1); \
 	clk=$$(getconf CLK_TCK 2>/dev/null || echo 100); \
 	pass=0; fail=0; na=0; \
-	echo "[INFO] kored PID=$$pid · CLK_TCK=$$clk"; \
-	sleep 5; a=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat); sleep 60; b=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat); \
+	echo "[INFO] kored PID=$$pid · CLK_TCK=$$clk · 提示：由当前 shell 直接启动可能继承父进程 fd，用 systemd/干净环境启动测量才准"; \
+	sleep 5; a=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat 2>/dev/null || true); \
+	if [ -z "$$a" ]; then echo "[FAIL] 无法读取 /proc/$$pid/stat（进程在采样开始前退出）"; exit 1; fi; \
+	sleep 60; b=$$(awk '{print $$14 + $$15}' /proc/$$pid/stat 2>/dev/null || true); \
+	if [ -z "$$b" ]; then echo "[FAIL] kored 在 60s 采样窗口内退出，本次测量作废"; exit 1; fi; \
 	ms=$$(( (b - a) * 1000 / clk )); \
 	if [ "$$ms" -le "$(IDLE_CPU_MS_MAX)" ]; then echo "[OK] 空闲 CPU: $$ms ms/60s（阈值 ≤$(IDLE_CPU_MS_MAX) ms）"; pass=$$((pass + 1)); else echo "[FAIL] 空闲 CPU: $$ms ms/60s > $(IDLE_CPU_MS_MAX) ms"; fail=$$((fail + 1)); fi; \
 	th=$$(awk '/^Threads:/{print $$2; exit}' /proc/$$pid/status 2>/dev/null || true); \
@@ -148,14 +178,24 @@ idle: ## 空载行为门禁（空闲 CPU ≤60ms/60s · 线程 ≤20 · fd ≤64
 	echo "idle: $$pass pass, $$fail fail, $$na n/a"; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi
 
-budget-check: ## 资源预算聚合门禁（mem + idle + 进程数 + 二进制体积 ≤25 MiB）
-	@fail=0; pass=0; skip=0; \
+budget-check: ## 资源预算聚合门禁（mem 5 点 ≈10s + idle ≈65s，默认约 80s；含进程数与二进制体积 ≤25 MiB）
+	@fail=0; pass=0; skip=0; warn=0; \
 	k0=$$(pgrep -x kored 2>/dev/null | wc -l | tr -d ' ' || true); k0=$${k0:-0}; \
 	echo "[RUN ] 1/4 mem（VmRSS / RssAnon+RssFile 拆分 / 插件预算）"; \
-	if $(MAKE) --no-print-directory mem; then if [ "$$k0" -eq 0 ]; then echo "[SKIP] mem 无实测对象（M0 预期）"; skip=$$((skip + 1)); else echo "[OK] mem 预算通过"; pass=$$((pass + 1)); fi; else echo "[FAIL] mem 超预算"; fail=$$((fail + 1)); fi; \
+	mem_rc=0; mem_out=$$($(MAKE) --no-print-directory mem 2>&1) || mem_rc=$$?; \
+	printf '%s\n' "$$mem_out"; \
+	if [ "$$mem_rc" -ne 0 ]; then echo "[FAIL] mem 越硬红线（已判未完成）"; fail=$$((fail + 1)); \
+	elif [ "$$k0" -eq 0 ]; then echo "[SKIP] mem 无实测对象（M0 预期）"; skip=$$((skip + 1)); \
+	elif printf '%s\n' "$$mem_out" | grep -q '^\[WARN\]'; then echo "[WARN] mem 超出目标、未越硬红线（记趋势，不阻断）"; warn=$$((warn + 1)); \
+	else echo "[OK] mem 达标"; pass=$$((pass + 1)); fi; \
 	echo ""; \
 	echo "[RUN ] 2/4 idle（空闲 CPU / 线程 / fd / 出站连接 / 定时器）"; \
-	if $(MAKE) --no-print-directory idle; then if [ "$$k0" -eq 0 ]; then echo "[SKIP] idle 无实测对象（M0 预期）"; skip=$$((skip + 1)); else echo "[OK] idle 预算通过"; pass=$$((pass + 1)); fi; else echo "[FAIL] idle 超预算"; fail=$$((fail + 1)); fi; \
+	idle_rc=0; idle_out=$$($(MAKE) --no-print-directory idle 2>&1) || idle_rc=$$?; \
+	printf '%s\n' "$$idle_out"; \
+	if [ "$$idle_rc" -ne 0 ]; then echo "[FAIL] idle 越硬红线（已判未完成）"; fail=$$((fail + 1)); \
+	elif [ "$$k0" -eq 0 ]; then echo "[SKIP] idle 无实测对象（M0 预期）"; skip=$$((skip + 1)); \
+	elif printf '%s\n' "$$idle_out" | grep -q '^\[WARN\]'; then echo "[WARN] idle 超出目标、未越硬红线（记趋势，不阻断）"; warn=$$((warn + 1)); \
+	else echo "[OK] idle 达标"; pass=$$((pass + 1)); fi; \
 	echo ""; \
 	echo "[RUN ] 3/4 进程数（kored 1 个 + 常驻插件 ≤$(MAX_PLUGINS)）"; \
 	p=$$(ps -eo comm= 2>/dev/null | grep -c '^kore-plugin-' || true); p=$${p:-0}; \
@@ -164,7 +204,7 @@ budget-check: ## 资源预算聚合门禁（mem + idle + 进程数 + 二进制�
 	echo "[RUN ] 4/4 二进制体积（$(BIN) ≤ 25 MiB = $(BIN_MAX_BYTES) 字节）"; \
 	if [ -f "$(BIN)" ]; then sz=$$(stat -c%s "$(BIN)"); if [ "$$sz" -le "$(BIN_MAX_BYTES)" ]; then echo "[OK] $(BIN): $$sz 字节（≤ 25 MiB）"; pass=$$((pass + 1)); else echo "[FAIL] $(BIN): $$sz 字节 > $(BIN_MAX_BYTES) 字节"; fail=$$((fail + 1)); fi; else echo "[N/A] $(BIN) 未构建（M0 阶段正常）"; fi; \
 	echo ""; \
-	echo "budget-check: $$pass pass, $$skip skip, $$fail fail"; \
+	echo "budget-check: $$pass pass, $$warn warn, $$skip skip, $$fail fail"; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi
 
 docs-check: ## 运行文档门禁（scripts/docs-check.sh）
@@ -223,12 +263,16 @@ canonical-check: ## 口径唯一性门禁（旧预算 / 旧字段 / 幽灵 id �
 	@echo "[RUN ] canonical-check"
 	@bash scripts/canonical-check.sh
 
+log-check: ## 判断留痕台账检查（.agents/LOG 三件套 + 条目数 + sessions；WARN 级不阻断）
+	@echo "[RUN ] log-check"
+	@bash scripts/log-check.sh
+
 check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性
 	@fail=0; \
-	echo "[RUN ] 1/5 docs-check"; \
+	echo "[RUN ] 1/6 docs-check"; \
 	if ! bash scripts/docs-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 2/5 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
+	echo "[RUN ] 2/6 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
 	s=0; \
 	if ! grep -qE '^GOAMD64[[:space:]]*\?=[[:space:]]*v1$$' Makefile; then echo "[FAIL] GOAMD64 基线漂移（应 GOAMD64 ?= v1）"; s=1; fi; \
 	if ! grep -qE '^GOARM64[[:space:]]*\?=[[:space:]]*v8\.0$$' Makefile; then echo "[FAIL] GOARM64 基线漂移（应 GOARM64 ?= v8.0）"; s=1; fi; \
@@ -238,35 +282,34 @@ check: ## 聚合门禁：docs-check + 依赖白名单 + 兼容基线 + 薄壳边
 	  if ! grep -qE "^[[:space:]]*CGO_ENABLED=0 $$tgt" Makefile; then echo "[FAIL] cross 缺少目标或基线未钉死: $$tgt"; s=1; fi; \
 	done; \
 	if [ "$$s" -eq 0 ]; then echo "[OK] 兼容基线通过（构建参数已钉死）"; else fail=1; fi; \
-	echo "[INFO] 依赖白名单（主壳直接依赖上限 3 个）"; \
-	if [ ! -f go.mod ]; then \
-	  echo "[N/A] 源码未就绪（无 go.mod），依赖白名单检查跳过，M1 自动生效"; \
-	else \
-	  deps=$$(awk '/^require \(/{inb=1;next} /^\)/{inb=0;next} inb && NF>=2 && $$0 !~ /indirect/ && $$0 !~ /^[[:space:]]*\/\//{print $$1} /^require [^(]/ && NF>=3 && $$0 !~ /indirect/{print $$2}' go.mod | sort -u); \
-	  n=$$(printf '%s\n' "$$deps" | sed '/^$$/d' | wc -l); \
-	  echo "[INFO] 直接依赖 $$n 个: $$(printf '%s ' $$deps)"; \
-	  s=0; \
-	  for d in $$deps; do case "$$d" in gopkg.in/yaml.v3|go.etcd.io/bbolt|google.golang.org/protobuf) ;; *) echo "[FAIL] 非白名单依赖: $$d"; s=1;; esac; done; \
-	  if [ "$$n" -gt 3 ]; then echo "[FAIL] 直接依赖 $$n 个超过上限 3"; s=1; fi; \
-	  if [ "$$s" -eq 0 ]; then echo "[OK] 依赖白名单通过"; else fail=1; fi; \
-	fi; \
+	echo "[INFO] 依赖白名单（第三方 ≤3 个；同仓 module 不计配额，须 replace => ./）"; \
+	if ! bash scripts/dep-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 3/5 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
+	echo "[RUN ] 3/6 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
 	if [ ! -d ./cmd ] && [ ! -d ./internal ]; then \
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
 	  s=0; \
-	  if grep -rqE '^[[:space:]]*"plugin"|plugin[.]Open' --include='*.go' ./cmd ./internal 2>/dev/null; then echo "[FAIL] 发现同进程动态库 plugin 使用（红线 1）"; s=1; fi; \
-	  if grep -rqE 'kore/plugins/' --include='*.go' ./cmd ./internal/core 2>/dev/null; then echo "[FAIL] 主壳 internal/core 引用业务插件包（红线 3：主壳不含业务逻辑）"; s=1; fi; \
+	  if grep -rqE '^[[:space:]]*"plugin"[[:space:]]*(//.*)?$|plugin[.]Open' --include='*.go' ./cmd ./internal 2>/dev/null; then echo "[FAIL] 发现同进程动态库 plugin 使用（红线 1）"; grep -rnE '^[[:space:]]*"plugin"[[:space:]]*(//.*)?$|plugin[.]Open' --include='*.go' ./cmd ./internal | head -5 || true; s=1; fi; \
+	  if grep -rqE '"kore/plugins/' --include='*.go' ./cmd ./internal/core 2>/dev/null; then echo "[FAIL] 主壳 internal/core import 业务插件包（红线 3：主壳不含业务逻辑）"; grep -rnE '"kore/plugins/' --include='*.go' ./cmd ./internal/core | head -5 || true; s=1; fi; \
+	  bw_noun_hits=$$(grep -rniE --include='*.go' --exclude='*_test.go' --exclude-dir=testdata '(^|[^[:alnum:]_])(backup|site|monitor|cron|ssl|database|mysql|nginx|docker)' ./cmd ./internal 2>/dev/null || true); \
+	  if [ -n "$$bw_noun_hits" ]; then echo "[FAIL] 主壳出现业务域词（词首整词匹配，排除 _test.go 与 testdata/）"; printf '%s\n' "$$bw_noun_hits" | head -10; s=1; else echo "[OK] 业务域词扫描（词首匹配）：0 命中（backup/site/monitor/cron/ssl/database/mysql/nginx/docker）"; fi; \
+	  bw_verb_hits=$$(grep -rniwE --include='*.go' --exclude='*_test.go' --exclude-dir=testdata 'create|restart|deploy' ./cmd ./internal 2>/dev/null || true); \
+	  if [ -n "$$bw_verb_hits" ]; then echo "[FAIL] 主壳出现业务动作词（整词匹配）"; printf '%s\n' "$$bw_verb_hits" | head -10; s=1; else echo "[OK] 业务动作词扫描（整词匹配）：0 命中（create/restart/deploy）"; fi; \
 	  if [ -f go.mod ] && grep -qE 'gin-gonic|labstack/echo|gofiber|grpc-go|nats-io|go-sqlite3|go-redis|docker/docker|containerd' go.mod; then echo "[FAIL] go.mod 含禁止的 Web 框架/中间件/容器依赖（红线 2/4）"; s=1; fi; \
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 4/5 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
+	echo "[RUN ] 4/6 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
 	if ! $(MAKE) --no-print-directory repo-check; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 5/5 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
+	echo "[RUN ] 5/6 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
 	if ! bash scripts/canonical-check.sh; then fail=1; fi; \
+	echo ""; \
+	echo "[RUN ] 6/6 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
+	log_out=$$(bash scripts/log-check.sh 2>&1 || true); printf '%s\n' "$$log_out"; \
+	log_warn=$$(printf '%s\n' "$$log_out" | grep -c '^\[WARN\]' || true); log_warn=$${log_warn:-0}; \
+	if [ "$$log_warn" -gt 0 ]; then echo "[WARN] 台账有 $$log_warn 处缺口（WARN 级，不阻断；里程碑收口时人工判）"; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"

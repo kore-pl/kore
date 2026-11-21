@@ -45,8 +45,8 @@
 ### 2.2 `internal/core/store`
 
 - **职责**：打开/关闭 bbolt（`0600`、`Timeout=1s`），定义 6 个 bucket：`meta`（schema 版本、安装时间、kore 版本）、`plugins`（清单与安装元数据）、`plugin_state`（desired/actual 状态与重启计数）、`tasks`（任务索引，原始输出落 `/var/lib/kore/tasks/`）、`sessions`（会话哈希→过期时间）、`audit`（审计，保留 90 天）。单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`（不建 `users`）。提供 `View`/`Update` 事务封装与错误分类。
-- **输入输出**：输入 `path=/var/lib/kore/kore.db` 与 bucket/key/value；输出类型化错误：`ErrNotFound`、`ErrConflict`、`ErrCorrupt`、`ErrSchemaTooNew`。值大小上限 1 MiB，超限直接拒绝（大对象是设计错误）。
-- **失败模式与处理**：文件锁被占/损坏 → 退出码 4，日志给损坏页偏移与"从 `kore.db.bak` 恢复"指引；schema 版本高于二进制 → 退出码 4（拒绝降级写）；磁盘满 → 事务回滚，返回 `E_INTERNAL` 且 `message` 写明"磁盘空间不足"；事务超过 500 ms → WARN（长事务是设计味道）。
+- **输入输出**：输入 `path=/var/lib/kore/state.db` 与 bucket/key/value；输出类型化错误：`ErrNotFound`、`ErrConflict`、`ErrCorrupt`、`ErrSchemaTooNew`。值大小上限 1 MiB，超限直接拒绝（大对象是设计错误）。
+- **失败模式与处理**：文件锁被占/损坏 → 退出码 4，日志给损坏页偏移与"从 `state.db.bak` 恢复"指引；schema 版本高于二进制 → 退出码 4（拒绝降级写）；磁盘满 → 事务回滚，返回 `E_INTERNAL` 且 `message` 写明"磁盘空间不足"；事务超过 500 ms → WARN（长事务是设计味道）。
 - **明确不做什么**：不暴露 SQL/查询语言；不存业务数据；不做跨 bucket 长事务；不做自动修复（损坏只报告，不猜）；不缓存热数据（bbolt 自身 mmap 即缓存）。
 
 ### 2.3 `internal/core/auth`
@@ -65,7 +65,7 @@
 
 ### 2.5 `internal/core/registry`
 
-- **职责**：插件包 `<id>-<version>.tar.gz` 校验与原子安装（解压到 `/var/lib/kore/plugins/.staging/<id>-<version>/` 后 `rename` 到 `<id>/<version>/`）；`info.json` 12 个必填字段校验：`id,name,version,protocol,lifecycle,entry,capabilities[],resources{memory_mb,cpu_quota,pids_max},triggers[]`；**`lifecycle` 取值 `resident|lazy|oneshot`（缺省 `lazy`；旧字段名已废弃、不保留别名）**；capabilities 必须是能力白名单 **8 项**子集（`site:read` `site:write` `db:read` `db:write` `net:read` `net:write` `system:read` `system:admin`）；维护 installed/enabled 状态并持久化到 `plugins` bucket。
+- **职责**：插件包 `<id>-<version>.tar.gz` 校验与原子安装（解压到 `/var/lib/kore/plugins/.staging/<id>-<version>/` 后 `rename` 到 `<id>/<version>/`）；`info.json` 12 个必填字段校验：`id,name,version,protocol,lifecycle,entry,capabilities[],resources{memory_mb,cpu_quota,pids_max},triggers[]`；**`lifecycle` 取值 `resident|lazy|oneshot`（缺省 `lazy`；旧字段名已废弃、不保留别名）**；capabilities 按**两段模型**校验：6 个特权能力（`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`）+ 插件自有 `<id>:<action>`（域必须等于自身 id），语法/重复/>16 项拒绝（详见 PLUGIN-PROTOCOL §3.1.2）；维护 installed/enabled 状态并持久化到 `plugins` bucket。
 - **输入输出**：输入 multipart 包（`POST /api/v1/plugins`，body ≤ 32 MiB）或 `{id}` 路径参数；输出插件视图 `{id,name,version,lifecycle,state,capabilities,resources,installedAt}`。安装为原子操作：任何一步失败都清理 `.staging`，不留半装状态。
 - **失败模式与处理**：tar 路径穿越（`..`/绝对路径/符号链接逃逸）→ 400 `E_INVALID` 且拒绝整包；缺字段/类型错/版本非 semver → 400 `E_INVALID` 带字段名；同 id 同版本已存在 → 409 `E_CONFLICT`；降级安装（新版本 < 已装）→ 400 `E_INVALID`；解压后总大小 > 128 MiB、单文件 > 64 MiB 或文件数 > 2000 → 400 `E_INVALID`（防 zip bomb）；磁盘满 → 507 语义（映射 `E_INTERNAL` + 明确 message）。
 - **明确不做什么**：不做签名密钥管理（M4 才强校验，MVP 只存 `signature` 文件不验）；不做依赖解析（插件是静态二进制）；不启动/停止进程（交 supervisor）；不做插件市场、审核、评分、遥测。
@@ -160,7 +160,7 @@
 
 ### 4.2 健康检查
 
-握手：插件 `connect` 后 **2 s 内**必须发 `kore.hello`，含 `{id,version,protocol,pid,capabilities[]}`。校验 `id`/`version`/`protocol` 与清单一致、`capabilities` 为清单子集；任一不符 → SIGKILL → `failed`。
+握手：插件 `connect` 后 **2 s 内**必须发 `kore.hello`，含 `{id,version,protocol,pid,capabilities[]}`。校验 `id`/`version`/`protocol` 与清单一致、`capabilities` ⊆ `info.json` 声明且已授予；任一不符 → SIGKILL → `failed`。
 
 存活：`kore.ping` 每 **10 s** 一次，单次超时 **2 s**。连续 **3 次**超时 → `degraded`（暂停路由新调用，返回 503 `E_UPSTREAM`），继续探测；60 s 内无任何成功响应（≈连续 **6 次** ping 失败）→ 重启；任一 ping 成功 → 回 `ready` 并清零计数。
 
@@ -214,14 +214,15 @@ ftruncate(fd,0); write(fd, "<pid>\n")
 | `log.level` | 是 | 下一条日志即生效 |
 | `log.rotate.max_size_mb`、`log.rotate.max_backups` | 是 | 下一次写入/轮转生效 |
 | `auth.session_ttl` | 是 | 只影响新会话与后续续期判断 |
-| `auth.admin_password_hash` | 是 | 只影响新登录，既有会话不失效 |
+| `auth.admin_password_hash` | 是 | 只影响新登录，**既有会话不失效**；如需强制全部下线必须重启内核（改哈希不吊销会话） |
 | `security.login_rate_limit.attempts`、`.window`、`.lock` | 是 | 只影响新计数与新锁定 |
 | `resources.defaults.memory_mb`、`.cpu_quota`、`.pids_max` | 是 | 只对之后拉起的插件生效；已运行进程的 cgroup 不改 |
 | `resources.enforce` | 是 | 下一次限额写入生效 |
 | `plugins.allow_unsigned` | 是 | 下一次安装校验生效 |
 | `plugins.autostart` | 否 | 启动序列已执行，改后需重启内核 |
+| `server.*` 中的**超时类**字段（读 / 写 / 空闲超时；当前 `DATA-MODEL.md` §3 未登记，登记后按本行规则热更） | 是 | 只对之后建立的连接生效，已有连接不变 |
 | `server.socket`、`server.addr`、`server.tls` | 否 | 需重新 bind，重启内核 |
-| `paths.state_dir`、`paths.log_dir`、`paths.run_dir`、`paths.plugin_dir` | 否 | 目录与文件句柄已打开 |
+| `paths.state_dir`（任务卡曾写 `server.state_dir`，键名以 `DATA-MODEL.md` §3 的 `paths.*` 为准）、`paths.log_dir`、`paths.run_dir`、`paths.plugin_dir` | 否 | 目录与文件句柄已打开 |
 | `web/dist` 静态资源（embed） | 否 | 编进二进制，需重新构建 |
 | `cert_renew.enabled`、`cert_renew.interval` | 是 | 唯一允许的常驻定时器，默认关闭；`enabled=false` 时不创建任何 ticker |
 
@@ -241,7 +242,6 @@ Type=simple
 ExecStart=/usr/local/bin/kored --config /etc/kore/config.yaml
 Environment=KORE_CONFIG=/etc/kore/config.yaml
 Environment=KORE_STATE_DIR=/var/lib/kore
-Environment=GOGC=100
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=15
@@ -264,7 +264,7 @@ NoNewPrivileges=no
 WantedBy=multi-user.target
 ```
 
-内存调优（不在 systemd 里设 `GOMEMLIMIT`）：`GOGC=100` 保持默认、**不调高**——GOGC 调高意味着下一次 GC 在 live heap 的更高倍数处触发，只会放大堆峰值；堆上限由 `main` 启动时 `debug.SetMemoryLimit(6 << 20)`（6 MiB 软上限）约束，GC 会为守住上限更主动。若实测空载仍 > 8192 KiB，降 `GOGC=50` 兜底并把实测值写进 ADR。
+内存调优（三者均由 `cmd/kored/serve.go` 的 `setRuntimeLimits()` **显式设置**（锚点在此钉死），且都可被同名环境变量覆盖，供消融实验）：运行时默认 **`GOGC=50` + `GOMEMLIMIT=6MiB`（`debug.SetMemoryLimit(6 << 20)`）+ `GOMAXPROCS` 上限 8（仅 CPU>8 时收敛）**。依据（M1-02 实测）：默认档空载 **8472 KiB 超预算**，调整后 **7832 KiB**；详见 ADR-0015。为什么不调高 GOGC：GOGC 越高，下一次 GC 在 live heap 的更高倍数处触发，只会放大堆峰值；GOMEMLIMIT 是软上限，GC 会为守住上限更主动。**systemd unit 里不再单独设 `GOGC`**，以 `main` 的显式设置为准（环境变量仍可覆盖）。
 
 要点：`Delegate=yes` 让 `/sys/fs/cgroup/kore` 归本 unit 管，主壳才能创建 `<id>.slice`；`Restart=on-failure` 与 `RestartSec=2` 是"内核崩了 2 s 回来"的兜底；`LimitNOFILE=65536` 覆盖 SSE + 插件连接；`ReadWritePaths` 精确列出运行期写入点，其余文件系统只读；`NoNewPrivileges=no` 是 M0/M2 的临时妥协（创建插件用户需要 setuid），M3 收窄 capability 后必须改回 `yes` 并写 ADR。改完执行 `systemctl daemon-reload && systemd-analyze verify /etc/systemd/system/kore.service`。
 
@@ -289,7 +289,7 @@ WantedBy=multi-user.target
 
 ## 9. 内核"永不膨胀"守卫
 
-全部落成 `make gate` 的检查项，M1 起进 CI；任一失败即不得合并。
+全部落成 `make gate` 的检查项，M1 起进 CI；任一失败即不得合并。**膨胀告警的处置顺序**：先看是否多了**设计要素**（模块 / 依赖 / 进程 / 定时器 / 转发层），再看是否多了**代码量**，最后才看参数——对应 [VISION.md](./VISION.md) §7 原则 1「设计优化优先于代码优化」。
 
 | # | 守卫 | 命令 | 判据 |
 | --- | --- | --- | --- |

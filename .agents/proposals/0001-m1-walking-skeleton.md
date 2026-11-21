@@ -21,7 +21,7 @@
 
 | # | 不确定性 | 证明成功（命令级判据） | 判为失败 | 失败后的处置 |
 | --- | --- | --- | --- | --- |
-| ① | 单二进制 ≤25 MiB 且空载 RSS ≤8 MiB | `stat -c%s bin/kored` ≤26214400；`GOGC=100`（默认臂）与 `GOGC=200`（对照臂）各采 60 点中位数 ≤8192 KiB；`RssAnon ≤5120` / `RssFile ≤2048`（优先 `smaps_rollup`，缺失回退 `status` 并标注来源；Tier A 下限 4.18 恒有 smaps_rollup）；空载 60s CPU ≤60ms、goroutine ≤20、fd ≤64、出站 0 | 体积超限；任一组中位数 >8192；只有单点采样/只有对照臂一组；空闲项任一超限 | 默认口径 `GOMEMLIMIT=6 MiB` + `GOGC=100`；仍超降 `GOGC=50`；再超砍 embed 与启动全表扫描，**不改阈值** |
+| ① | 单二进制 ≤25 MiB 且空载 RSS ≤8 MiB | `stat -c%s bin/kored` ≤26214400；默认档 `GOGC=50` 与对照档 `GOGC=100`/`200` 各采 60 点中位数 ≤8192 KiB；`VmRSS` 为唯一主值，`RssAnon`/`RssFile` 只作**诊断拆分、不设绝对上限**——静态二进制代码页映射使 `RssFile` 恒在 5 MiB 量级，设绝对值必假红；防映射型膨胀改判**增量**：`RssFile` 相对空载基线增长 ≤512 KiB；来源须标注（优先 `smaps_rollup`，缺失回退 `status`）。M1 实测基线：二进制 6,209,698 B / VmRSS 7832 KiB / Threads 13 / fd 6 / idle CPU 0ms（M1-19 对照起点）；空载 60s CPU ≤60ms、goroutine ≤20、fd ≤64、出站 0 | 体积超限；任一组中位数 >8192；只有单点采样/只有对照臂一组；空闲项任一超限 | 默认锚点 `GOMEMLIMIT=6MiB` + `GOGC=50`（环境可覆盖）；门禁仍按 G-03 跑 100/200 双跑；再超先砍 embed 与启动全表扫描，**不改阈值** |
 | ② | UDS 帧编解码 + supervisor 生命周期能否跑通 | 4 个必选方法全通；`kill -9` 后 ≤5s 新 pid 且 ping 200；半包/粘包/`8388608`/`8388609`/0/1 全绿 | 恢复 >5s；分片用例偶发失败；超长帧后连接或内存残留 | 恢复慢 → 崩溃检测走 `cmd.Wait()` 而非 ping 超时；分片 → `io.ReadFull`；超长 → 先判长度、**判定前只有 4 字节栈缓冲** |
 | ③ | 跨仓库依赖能否**只靠 `pkg/pluginapi` 的 tag** 在干净目录成立 | 无同级 kore、无 `go.work`、无 `replace` 时 `go mod download && make dist` 成功；`go list -m all` 只有 `.../pkg/pluginapi`；`git ls-files \| grep -c go.work` = 0 | 依赖 `replace ../kore` 或 `go.work`；或依赖不存在的 tag | 协议包**嵌套 module 独立 tag** `pkg/pluginapi/v0.1.0`（§4.1）：冻结协议 → 发 tag → echo 再依赖；不用 rc |
 
@@ -66,8 +66,8 @@
 | M1-00 | **口径冻结**：F-13 七处冲突取严，只改唯一真源 | kore | architect + scribe | 小 diff + `CS-20261121-01` 登记 | `grep -rl '保留 30 天\|保留 90 天' docs \| wc -l` = 1；`autostart` 默认 `[]` | — |
 | M1-01 | 帧编解码：4B BE + JSON、8 MiB 上限、先校验长度再分配 | kore | implementer | `pkg/pluginapi/frame.go` + 测试 | 往返/分片/粘包/`8388608`/`8388609`/0/1 全绿；**语义判据（不看 grep）**：`ReadFrame` 里 `make([]byte, n)` 必须出现在 `n < 2` 与 `n > MaxFrameSize` 两条校验之后，读代码路径确认两条分支都在分配前返回；超限时零分配、连接关闭。**允许存在 `make([]byte, n)` 字面量，不得据此判 FAIL** | — |
 | M1-02 | 嵌套 module 骨架 + 公开 SDK 面 | kore | implementer | `pkg/pluginapi/go.mod`、`{client,server,types}.go` | `go vet` 通过；假 handler 握手；根 `replace => ./pkg/pluginapi` 生效 | M1-01 |
-| M1-03 | config：默认 + YAML + 未知键 WARN + 校验错误一次报 + SIGHUP | kore | implementer | `internal/core/config/*.go` | 缺必填→exit 2；未知键→WARN 且继续；坏 YAML→行号 | — |
-| M1-04 | store：bbolt 打开 / 6 bucket / schema v1 / 错误分类 | kore | implementer | `internal/core/store/*.go` | 重开库 6 bucket 齐；`schema>1` → `ErrSchemaTooNew` | — |
+| M1-03 | config：默认 + YAML + 未知键 WARN + 校验错误一次报 + SIGHUP | kore | implementer | `internal/core/config/*.go` | 缺必填→exit 2；未知键→WARN 且继续；坏 YAML→行号；SIGHUP 只应用白名单字段，不可热更项 WARN 列名 | — |
+| M1-04 | store：bbolt 打开 / 6 bucket / schema v1 / 错误分类 | kore | implementer | `internal/core/store/*.go` | 重开库 6 bucket 齐；`schema>1`/文件损坏 → `ErrSchemaTooNew`/`ErrCorrupt` → exit 4 | — |
 | M1-05 | auth：PBKDF2、session 落 bbolt、双 cookie 均 `Path=/`、CSRF 常量时间 | kore | implementer | `internal/core/auth/*.go` | 错口令 401；CSRF 缺失 403；`Path=/` 的 `set-cookie` = 2 条 | M1-04 |
 | M1-06 | echo 仓脚手架（M1 第一件事）：仓库/go.mod/info.json/CHANGELOG/Makefile | kore-plugin-echo | implementer | 仓库骨架 | `make dist` 出 tar.gz + sha256；`tar -tzf` 只含 info.json/bin/web | — |
 | M1-07 | kore-plugins 仓：空索引 + schema + 校验脚本 | kore-plugins | implementer | `index/*`、`scripts/validate.sh` | exit 0；坏 sha256 → 非 0 | — |
@@ -80,7 +80,7 @@
 | M1-13 | supervisor 下半：`run.json` + 孤儿三步核对 / shutdown→TERM→KILL / socket 残留清理 | kore | implementer | `supervisor/stop.go` | shutdown ≤5s；`kill -9` 主壳后重启 healthz 200、误杀 0 | M1-12 |
 | M1-14 | httpapi：8 层中间件链 + 7 端点 + healthz + 错误码映射 | kore | implementer | `httpapi/*.go` | 未登录 401；CSRF 403；未知路由 404；body 超限 413 | M1-03, M1-05 |
 | M1-15 | SSE：`GET /events`、`Last-Event-ID` 补发、15s 心跳、64 上限 | kore | implementer | `httpapi/sse.go` | `curl -N` 5s 内见 `event:` 或 `: ping`；断开后 goroutine 回落 | M1-14, M1-09 |
-| M1-16 | `cmd/kored` 装配：`serve`/`install` 子命令 + envprobe 前置 + flock + 退出码 2/3/4/5/6 | kore | implementer | `cmd/kored/main.go` | 二次启动 exit 3；只读 state_dir exit 3；伪造 NFS exit 6；`kill -TERM` exit 0 | M1-12/14/21 |
+| M1-16 | `cmd/kored` 装配：`serve`/`install` 子命令 + envprobe 前置 + flock + 退出码 2/3/4/5/6 | kore | implementer | `cmd/kored/main.go` | 二次启动 exit 3（flock 冲突并回显持有者 pid）；只读 state_dir exit 3；store 打不开 exit 4；伪造 NFS exit 6；`kill -TERM` exit 0 | M1-12/14/21 |
 | M1-17 | Makefile 接线：`mem`/`idle`/`budget-check`/`compat-info` 转真跑 + clean-clone/污染检查（PG-01…05） | kore | implementer | `Makefile`、`scripts/` 门禁脚本 | `make budget-check` exit 0（mem+idle+进程数+体积）；`compat-info` 出两次交叉编译 | M1-16 |
 | M1-18 | echo `main.go`：Dial/Handshake/Serve + 4 方法 + `echo.ping`→pong + `kore.event` | kore-plugin-echo | implementer | `main.go` | 干净目录 `go mod download && make dist`；装进 kore 后 invoke 返回 pong | M1-02, M1-06 |
 | M1-19 | 端到端验收：登录→invoke→kill -9→恢复→RSS 双跑/smaps/形态/空闲 | kore | verifier | `scripts/m1-accept.sh`、`verify/*` | 全流程 exit 0；§8 判据逐项 PASS | M1-17/18/07 |
@@ -149,7 +149,7 @@ store：`Open(path, 0600, &bbolt.Options{Timeout: 1s})`，单 `Update` 建 6 buc
 
 ### 4.6 内存口径与构建（F-01 的正面回答）
 
-启动时 `debug.SetMemoryLimit(6<<20)`（`GOMEMLIMIT` 已由环境设值时尊重环境，供消融用），`GOGC` 保持默认 **100**。理由：对照臂 `GOGC=200` 让 GC 目标 ≈3× live heap，与 8 MiB 方向**相反**；GOMEMLIMIT 才是软上限，它把 200 的堆目标钳回 6 MiB。兜底 `GOGC=50`（ADR-0013 的资源锚点）。 构建：`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$(VERSION)"`（`-buildvcs` 是 build flag，塞进 `-ldflags` 会报 flag 未定义，G-16）；arm64 用 `GOARM64=v8.0`；产物无 INTERP、不链 glibc/musl（Alpine 直接跑，G-16）。
+启动时 `debug.SetMemoryLimit(6<<20)`（`GOMEMLIMIT` 已由环境设值时尊重环境，供消融用），`GOGC` 由 `main` 设 **50**（环境可覆盖）。理由：对照臂 `GOGC=200` 让 GC 目标 ≈3× live heap，与 8 MiB 方向**相反**；GOMEMLIMIT 才是软上限，它把 200 的堆目标钳回 6 MiB。运行时锚点由 `main` 显式设置、可被环境覆盖：`GOGC=50` + `GOMEMLIMIT=6MiB` + `GOMAXPROCS=8`（实测基线即此组合；G-03 的 100/200 双跑是门禁消融，50 是实测与兜底臂）。 构建：`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$(VERSION)"`（`-buildvcs` 是 build flag，塞进 `-ldflags` 会报 flag 未定义，G-16）；arm64 用 `GOARM64=v8.0`；产物无 INTERP、不链 glibc/musl（Alpine 直接跑，G-16）。
 
 ### 4.7 `internal/platform` 五接口（M1 只实现 Linux，但契约先立）
 
@@ -190,7 +190,7 @@ store：`Open(path, 0600, &bbolt.Options{Timeout: 1s})`，单 `Update` 建 6 buc
 
 | # | 风险 | 触发信号 | 预案 |
 | --- | --- | --- | --- |
-| R1 | 空载 RSS 超 8 MiB | 任一组 `GOGC=100/200` 中位数 >8192 或 `RssAnon >5120` | ① 确认 `GOMEMLIMIT=6MiB` 生效（`gctrace=1` 看 goal 被钳）；② `RssAnon` 大查实现、`RssFile` 大查启动全表扫描；③ 降 `GOGC=50`；④ 砍 embed 与未引用资源；⑤ 不改阈值，提 ADR |
+| R1 | 空载 RSS 超 8 MiB | 任一组中位数 >8192；或 `RssFile` 相对空载基线增长 >512 KiB | ① 确认 `GOMEMLIMIT=6MiB` 生效（`gctrace=1` 看 goal 被钳）；② `RssAnon` 涨查堆实现、`RssFile` **增量**查新映射（可执行页/embed 全表扫描）；③ 降 `GOGC=50`；④ 砍 embed 与未引用资源；⑤ 不改阈值，提 ADR |
 | R2 | 干净目录 tag 不可解析 | `go mod download` 报 `unknown revision` | ① 冻结 SDK → 推 `pkg/pluginapi/v0.1.0` → echo 再 tidy；② 联调期用顶层 `go.work`（不提交）；③ CI 断言 `go.work` 与跨仓库 `replace` 均为 0；④ `GOWORK=off` 复跑 |
 | R3 | `go:embed` 空目录 / 隐藏文件膨胀 | `pattern dist: no matching files`；或 `strings bin/kored \| grep -c '\.map'` ≠ 0 | ① `web/dist/index.html` 提交且含 `id="app"`；② build 断言 dist 非空、`.map`/`.vite`/`stats.html` 为 0；③ 用 `dist` 不用 `all:`；④ CI 不跑 npm |
 | R4 | 状态目录误配为网络文件系统 | bbolt 报 `input/output error`；写一半断电后损坏 | ① `statfs` 在 `Open` **之前**拦截 → exit 6；② 验收固定 `/var/lib/kore`；③ tmpfs 允许但 WARN + `state_persistent=false` |
@@ -217,14 +217,14 @@ file bin/kored | grep -qE 'statically linked|static-pie' && echo "static=OK"
 readelf -l bin/kored | grep -c INTERP || echo "no_interp=PASS"        # 0
 make compat-info    # 打印构建参数（GOAMD64/GOARM64、file）+ Windows/macOS 交叉编译
 
-# (2) RSS 消融：默认臂 GOGC=100 与对照臂 GOGC=200 各 60 点中位数 + smaps 拆分
+# (2) RSS 消融：默认档 GOGC=50 与对照档 100/200 各 60 点中位数 + smaps 拆分
 sudo install -d -m 0700 /run/kore /var/lib/kore /var/log/kore; sudo rm -f /run/kore/kore.{sock,lock}
-for g in 100 200; do
+for g in 50 100 200; do
   sudo GOMEMLIMIT=6291456 GOGC=$g ./bin/kored serve install --package "$ECHO_PKG" --config ./testdata/e2e.yaml & sleep .3
   P=$(pgrep -x kored); M=$(for i in $(seq 60); do ps -o rss= -p $P; sleep 1; done | sort -n | sed -n 30p)
   echo "GOGC=$g median=$M anon=$(awk '/^RssAnon:/{print $2}' /proc/$P/smaps_rollup) file=$(awk '/^RssFile:/{print $2}' /proc/$P/smaps_rollup)"
   sudo kill $P; sleep 1
-done    # 判据：两组 median ≤8192、anon ≤5120、file ≤2048，缺一不算过
+done    # 判据：三档 median ≤8192；anon/file 只记录不设限；file 相对空载基线增长 ≤512 KiB
 make budget-check   # 判据：mem 双跑中位数 + idle（60s CPU ≤60ms/线程 ≤20/fd ≤64/出站 0）+ 进程数 + 体积（G-19/G-03）
 
 # (3) 就绪 + 登录 + CSRF + invoke（默认臂运行命令）

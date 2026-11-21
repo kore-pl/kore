@@ -17,31 +17,54 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 
 ## 2. 预算表
 
-| 组件 | 常驻形态 | 预算 | 目标实测 | 测量命令 | 超了怎么办 |
-| --- | --- | --- | --- | --- | --- |
-| 主壳 `kored` | 常驻，空载 | RSS ≤ 8 MiB | 5–6 MiB | `ps -o rss= -p <pid>`（KiB/1024），60s 中位数 | 查 goroutine/缓冲/依赖，再调 GC；不得靠隐藏功能达标 |
-| 主壳空闲 CPU | 常驻 | 60s CPU 时间 ≤ 60ms（≤0.1%） | 10–40ms | `/proc/<pid>/stat` 的 `utime+stime` 两次差值（tick 通常 10ms） | 查定时器/轮询/GC；按 §2.3 门禁定位 |
-| 空载 goroutine | 常驻 | ≤ 20 | 8–16 | `/system/info.goroutines`（`runtime.NumGoroutine`） | 查泄漏 goroutine，禁止每插件一循环 |
-| 同时常驻插件数 | 进程 | ≤ 3（resident + 活跃 lazy） | 1–2 | supervisor 配额 + `pgrep -f '/plugins/<id>/'` | 超配额时最久未用 resident 降级为 lazy，或拒绝启用并提示 |
-| resident 插件（单个） | 常驻 | RSS ≤ 12 MiB | 6–10 MiB | 按插件 pid，60s 中位数 | 定位泄漏或缓存；仍超则拒绝该版本上架 |
-| 常驻插件合计（含活跃 lazy） | 常驻 | RSS ≤ 24 MiB（3 × 12 顶格） | ≤ 20 MiB | 各插件 RSS 求和 | 停用或降级；内核不代偿 |
-| lazy 插件（活跃时） | 按需 | RSS ≤ 12 MiB | 6–10 MiB | 按插件 pid | 同 resident |
-| lazy 空闲退出 | 进程不存在 | `idle_timeout_s` 默认 300s（60–1800） | 300s | 日志 `lazy_stopped` + `pgrep` 无输出 | 查内部 ticker/长连接未释放 |
-| 插件冷启动 | — | 拉起→hello→ready p95 ≤ 300ms | 80–200ms | 日志 `started_at`→`ready` 差值取 p95 | 查 init 阶段网络/DB/目录扫描 |
-| oneshot 插件 | 空闲不存在 | 空闲 RSS = 0 | 0 | `pgrep -f '/plugins/<id>/'` 必须无输出 | 有空闲进程即判失败，查回收路径 |
-| 单二进制 `kored` | 静态文件 | ≤ 25 MiB（26,214,400 B） | 18–22 MiB | `stat -c%s bin/kored` | 砍依赖、去除未用 embed |
-| 插件二进制（单插件仓库产物） | 静态文件 | 建议 ≤ 10 MiB（非硬门禁） | 6–10 MiB | `stat -c%s kore-plugin-<id>/bin/<id>` | `-ldflags="-s -w"`、`CGO_ENABLED=0`、砍依赖 |
-| 插件包 `tar.gz` | 发布产物 | ≤ 15 MiB（硬） | 8–15 MiB | `du -b kore-plugin-<id>/dist/<id>-<version>.tar.gz` | 包内不放源码/`node_modules`，前端只留产物 |
-| 前端首屏 | 静态资源 | ≤ 300 KiB gzip（307,200 B） | 180–250 KiB | 见 §8 的 gzip 统计口径 | 路由拆包、按需引入、删第三方库 |
-| 空载 fd | 常驻 | ≤ 64 | 12–32 | `ls /proc/<pid>/fd | wc -l` | 查泄漏 fd 与未关闭连接 |
-| 空载出站连接 | 常驻 | 0 | 0 | `ss -tnp state established | grep -c kored` | 禁止隐藏上报/心跳；出网只在插件 |
-| 后台定时器 | 常驻 | 0 个（唯一例外：证书续期 `cert_renew.enabled`，默认关） | 0 或 1 | 代码审查 `time.NewTicker`/`time.AfterFunc` 全量清点 | 删除或改事件驱动 |
+| 组件 | 常驻形态 | 预算 | 目标实测 | M1 观测（02d0154） | 测量命令 | 超了怎么办 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 主壳 `kored` | 常驻，空载 | 硬红线 ≤16 MiB | 目标 8 MiB | **7688 KiB**（min 7608 / max 7688） | `ps -o rss= -p <pid>`（KiB/1024），60s 中位数 | 查 goroutine/缓冲/依赖，再调 GC；不得靠隐藏功能达标 |
+| 主壳空闲 CPU | 常驻 | 60s CPU 时间 ≤ 60ms（≤0.1%） | 10–40ms | **0ms/60s** | `/proc/<pid>/stat` 的 `utime+stime` 两次差值（tick 通常 10ms） | 查定时器/轮询/GC；按 §2.4 门禁定位 |
+| 空载 goroutine | 常驻 | ≤ 20 | 8–16 | —（Threads 12 仅旁证） | `/system/info.goroutines`（`runtime.NumGoroutine`） | 查泄漏 goroutine，禁止每插件一循环 |
+| 同时常驻插件数 | 进程 | ≤ 3（resident + 活跃 lazy） | 1–2 | **0** | supervisor 配额 + `pgrep -f '/plugins/<id>/'` | 超配额时最久未用 resident 降级为 lazy，或拒绝启用并提示 |
+| resident 插件（单个） | 常驻 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid，60s 中位数 | 定位泄漏或缓存；仍超则拒绝该版本上架 |
+| 常驻插件合计（含活跃 lazy） | 常驻 | 硬红线 ≤48 MiB | 目标 24 MiB | — | 各插件 RSS 求和 | 停用或降级；内核不代偿 |
+| lazy 插件（活跃时） | 按需 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid | 同 resident |
+| lazy 空闲退出 | 进程不存在 | `idle_timeout_s` 默认 300s（60–1800） | 300s | — | 日志 `lazy_stopped` + `pgrep` 无输出 | 查内部 ticker/长连接未释放 |
+| 插件冷启动 | — | 拉起→hello→ready p95 ≤ 300ms | 80–200ms | — | 日志 `started_at`→`ready` 差值取 p95 | 查 init 阶段网络/DB/目录扫描 |
+| oneshot 插件 | 空闲不存在 | 空闲 RSS = 0 | 0 | — | `pgrep -f '/plugins/<id>/'` 必须无输出 | 有空闲进程即判失败，查回收路径 |
+| 单二进制 `kored` | 静态文件 | 硬红线 ≤25 MiB（26,214,400 B） | 目标 15 MiB | **6,209,698 B（5.92 MiB）** | `stat -c%s bin/kored` | 砍依赖、去除未用 embed |
+| 插件二进制（单插件仓库产物） | 静态文件 | 建议 ≤ 10 MiB（非硬门禁） | 6–10 MiB | — | `stat -c%s kore-plugin-<id>/bin/<id>` | `-ldflags="-s -w"`、`CGO_ENABLED=0`、砍依赖 |
+| 插件包 `tar.gz` | 发布产物 | ≤ 15 MiB（硬） | 8–15 MiB | — | `du -b kore-plugin-<id>/dist/<id>-<version>.tar.gz` | 包内不放源码/`node_modules`，前端只留产物 |
+| 前端首屏 | 静态资源 | ≤ 300 KiB gzip（307,200 B） | 180–250 KiB | — | 见 §8 的 gzip 统计口径 | 路由拆包、按需引入、删第三方库 |
+| 空载 fd | 常驻 | ≤ 64 | 12–32 | **6** | `ls /proc/<pid>/fd | wc -l` | 查泄漏 fd 与未关闭连接 |
+| 空载出站连接 | 常驻 | 0 | 0 | **0** | `ss -tnp state established | grep -c kored` | 禁止隐藏上报/心跳；出网只在插件 |
+| 后台定时器 | 常驻 | 0 个（唯一例外：证书续期 `cert_renew.enabled`，默认关） | 0 或 1 | **0** | 代码审查 `time.NewTicker`/`time.AfterFunc` 全量清点 | 删除或改事件驱动 |
+
+M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **7688 KiB**（min 7608 / max 7688）、Threads 12、空闲 CPU 0ms/60s、fd 6、二进制 6,209,698 B。**作为观测值记录，不作为 M4 收口判据**；收口在 M4 集中瘦身后按目标 8 MiB 争取、硬红线 16 MiB 判。历史值 **7832 / 8472 / 6408** 均在 GC 被关闭或线程数非预期状态下采集，**已作废，仅留档**。
 
 度量固定口径：`ps -o rss= -p PID` 输出 KiB，除以 1024 得 MiB；进程启动后**稳定 60s**再取中位数，禁止用峰值或首次采样值对外声明。二进制与前端用字节数直接比对，不做四舍五入。
 
-### 2.1 场景预设合计预算（v1）
+### 2.1 预算定案与判定口径
 
-首次安装按场景预设装插件；预设合计必须落在「同时常驻 ≤3、目标 ≤19.2 MiB（红线 24 MiB）」内。预设定义由 `kore-plugins/presets/*.json` 承载（G-18 校验），本表是预算基线：
+预算分两层：**硬红线**（判未完成）与**目标**（争取，不判未完成）。
+
+本表为**最终定案（ADR-0016）**，除安全事故或用户明确要求外不再调整；调整须新开 ADR。
+
+| 指标 | 硬红线（判未完成） | 目标（争取，不判） |
+| --- | --- | --- |
+| 主壳空载 VmRSS | ≤16 MiB | 8 MiB |
+| 单常驻插件 | ≤24 MiB | 12 MiB |
+| 常驻合计 | ≤48 MiB（硬红线） | 24 MiB |
+| 同时常驻数 | ≤3（推荐 ≤2） | 1–2 |
+| 单二进制 | ≤25 MiB | 15 MiB |
+| 前端首屏 gzip | ≤300 KiB | — |
+| 空闲 CPU | ≤0.1%（60s ≤60ms） | 0 |
+| goroutine / fd / 出站 | ≤20 / ≤64 / 0 | — |
+
+判定口径：超硬红线 → 判未完成并阻断；硬红线内但高于目标 → 记 WARN + 趋势，不返工；达到目标 → 达标。M4 前做一次集中收敛（「瘦身冲刺」：pprof heap profile + 依赖裁剪 + 延迟初始化），收敛后按目标评比、硬红线判 gate。**差异 <10% 视为噪声**：不重测、不返工；只有跨档差异（如 >1 MiB）才需要追因。
+
+采样精度分档：日常/开发用 `make mem`（默认 **5 点中位数**，约 10s）；里程碑收口 / v1.0 gate 用 `make mem MEM_POINTS=60`（约 65s）。两档口径相同（稳定期采样、来源标注、`RssAnon`/`RssFile` 不做绝对上限），只是点数不同；证据文件必须写明用了哪档。
+
+### 2.2 场景预设合计预算（v1）
+
+首次安装按场景预设装插件；预设合计必须落在「同时常驻 ≤3、目标 ≤19.2 MiB（目标 24 MiB 的 80%；硬红线 48 MiB）」内。预设定义由 `kore-plugins/presets/*.json` 承载（G-18 校验），本表是预算基线：
 
 | 预设 | 常驻插件（memory_mb） | 合计常驻 MiB | 目标 ≤19.2 MiB | 余量 = 24 − 目标 | 常驻进程数 | 合计 pids |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -54,21 +77,21 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 | dev | site(10) | 10 | 通过 | 14 | 1 | 128 |
 | full | site(10) + monitor(6) | 16 | 通过 | 8 | 2 | 256 |
 
-预算余量规则：预设的常驻合计**目标 ≤ 24 MiB × 80% = 19.2 MiB**；24 MiB 是「绝不越过」的红线，不是设计目标。**余量 = 24 − 目标；余量为 0 的预设判 FAIL**，必须把某个 resident 改 lazy 或压缩预算。留 20% 的原因：单插件 RSS 有波动（GC 峰值、连接缓冲）、插件升级会增重、用户可能有临时启用第 3 个 resident 的需求——顶格设计在第一次升级就会破防。因此 db/security 类一律 lazy，不进常驻。
+预算余量规则：预设的常驻合计**目标 ≤ 24 MiB × 80% = 19.2 MiB**；24 MiB 是常驻合计目标（硬红线 48 MiB），不是设计目标。**余量 = 24 − 目标；余量为 0 的预设判 FAIL**，必须把某个 resident 改 lazy 或压缩预算。留 20% 的原因：单插件 RSS 有波动（GC 峰值、连接缓冲）、插件升级会增重、用户可能有临时启用第 3 个 resident 的需求——顶格设计在第一次升级就会破防。因此 db/security 类一律 lazy，不进常驻。
 
 结论：8 个预设目标全部 ≤19.2 MiB（最大 16），最小余量 8 MiB，全部通过；无余量为 0 的预设。常驻插件配额：**硬上限同时 3 个，推荐 ≤2 个**（`site` + `monitor`，16 MiB）；第 3 个槽位留给用户临时启用，不作设计目标。预设只使用 `PLUGIN-CATALOG` 的真实插件 id（`site`/`monitor`/`cron`/`ssl`/`db-mysql`/`db-postgres` 等），`cron` 为 lazy 并由宿主调度器触发，`db`/`security` 类全按 lazy 计 0 常驻。
 
-### 2.2 三种生命周期与资源占用
+### 2.3 三种生命周期与资源占用
 
 | lifecycle | 语义 | 空闲时 | 单插件上限 | 冷启动 |
 | --- | --- | --- | --- | --- |
-| resident | 随 kore 启停的常驻进程，用于事件订阅/长连接 | 进程存在 | RSS ≤ 12 MiB | 首次 hello ≤ 300ms |
-| lazy（默认） | 按需拉起，空闲 `idle_timeout_s`（默认 300s）退出 | 进程不存在，RSS=0 | 活跃时 ≤ 12 MiB | p95 ≤ 300ms |
-| oneshot | 每次调用拉起、执行完退出 | 进程不存在 | 活跃时 ≤ 12 MiB | p95 ≤ 300ms |
+| resident | 随 kore 启停的常驻进程，用于事件订阅/长连接 | 进程存在 | 硬红线 24 / 目标 12 MiB | 首次 hello ≤ 300ms |
+| lazy（默认） | 按需拉起，空闲 `idle_timeout_s`（默认 300s）退出 | 进程不存在，RSS=0 | 活跃时 硬红线 24 / 目标 12 MiB | p95 ≤ 300ms |
+| oneshot | 每次调用拉起、执行完退出 | 进程不存在 | 活跃时 硬红线 24 / 目标 12 MiB | p95 ≤ 300ms |
 
 `lazy` 是默认：18–22 个插件里大多数不应常驻；`resident` 只在确需持续订阅/长连接时声明；`oneshot` 用于批处理。
 
-### 2.3 空闲行为门禁（空载 60s）
+### 2.4 空闲行为门禁（空载 60s）
 
 - CPU 时间：`a=$(awk '{print $14+$15}' /proc/$PID/stat); sleep 60; b=$(awk '{print $14+$15}' /proc/$PID/stat); echo $((b-a))` 必须 ≤ 60（tick，100Hz 下 60 tick = 60ms = 0.1%）。
 - goroutine：`/system/info.goroutines` ≤ 20；`ls /proc/$PID/task | wc -l`（OS 线程）仅作旁证，两者不可互相替代。
@@ -77,7 +100,7 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 - 定时器：仅 `cert_renew`；`grep -rn "time.NewTicker\|time.AfterFunc" internal/` 只允许命中证书续期一处。
 - **禁止轮询**：主壳不得有「每 N 秒拉一次插件状态」的循环；状态变化由插件推 `plugin.health`/`plugin.state` 事件，配置变化走 SIGHUP。
 
-### 2.4 为什么 22 个插件不会变成 22 个进程
+### 2.5 为什么 22 个插件不会变成 22 个进程
 
 绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制——启用第 4 个 resident 时，按 `last_active_at` 把最久未用的 resident 降级为 lazy（先 draining 再 idle），或拒绝启用并提示用户停用其它插件。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由**宿主调度器**（systemd timer / cron.d / launchd / Task Scheduler）触发 `kored invoke`，kore 不自带 scheduler；`cron` 插件是 lazy。
 
@@ -181,7 +204,7 @@ cgroup 缺失或受限**不是**硬要求，任何降级都不触发退出码 6�
 
 | info.json 字段 | cgroup 文件 | 缺省值 | 换算 | 备注 |
 | --- | --- | --- | --- | --- |
-| `resources.memory_mb` | `memory.max` | 12 | ×1048576 字节 | 允许 4–12；常驻合计不超过 24 |
+| `resources.memory_mb` | `memory.max` | 12 | ×1048576 字节 | 允许 4–24（硬红线 24）；常驻合计目标 24、硬红线 48 |
 | `resources.memory_mb` × 0.9 | `memory.high` | 10.8 MiB | 向下取整 | 软限，触发回收不杀 |
 | （固定） | `memory.swap.max` | 0 | — | 不可覆盖 |
 | `resources.cpu_quota` | `cpu.max` | `"50%"` | pct×1000 + ` 100000` | 仅接受 10%–100% 整数百分比 |
@@ -190,7 +213,7 @@ cgroup 缺失或受限**不是**硬要求，任何降级都不触发退出码 6�
 | `lifecycle=lazy` | slice 是否活跃 | — | 活跃时创建 slice；空闲退出后 slice 保留、`cgroup.procs` 为空，下次唤醒直接复用 |
 | `lifecycle=oneshot` | slice 是否活跃 | — | 每次执行复用同一 slice，退出后 `cgroup.procs` 为空 |
 
-插件仓库产物体积是**建议值**，不进 kore 的 G-03 硬门禁：各插件 `make dist` 打印 `stat -c%s` 与 `du -b`，kore 安装时把包体大小记入 `plugins` 记录；超建议值时按上表右列逐项砍，不抬预算。`resources` 缺字段时用上表缺省值并记录 WARN；安装时校验：`memory_mb` 超 12、`cpu_quota` 超 100%、`pids_max` 超 512 一律拒绝安装（`E_INVALID`）。
+插件仓库产物体积是**建议值**，不进 kore 的 G-03 硬门禁：各插件 `make dist` 打印 `stat -c%s` 与 `du -b`，kore 安装时把包体大小记入 `plugins` 记录；超建议值时按上表右列逐项砍，不抬预算。`resources` 缺字段时用上表缺省值并记录 WARN；安装时校验：`memory_mb` 超 24、`cpu_quota` 超 100%、`pids_max` 超 512 一律拒绝安装（`E_INVALID`）。
 
 ## 5. oneshot 调度模型
 
@@ -216,8 +239,9 @@ oneshot 不参与心跳，不注册 bus 常驻路由；并发 2 是硬上限，�
 
 | 手段 | 具体做法 | 预期收益 |
 | --- | --- | --- |
-| GOGC | 主壳与插件统一 `GOGC=100`（`GOMEMLIMIT=6MiB`） | 更早回收，压住 8 MiB 空载；代价是 CPU 略高，须同时过空闲 CPU ≤0.1% 门禁 |
-| GOMEMLIMIT | 主壳固定 `6MiB`（低于 8 MiB 预算，留运行时余量） | 防止突发分配顶穿 RSS；低于稳定工作集会引发 GC 抖动，按 p95 CPU 复核 |
+| GOGC | **运行时默认 `GOGC=50`**（配 `GOMEMLIMIT=6MiB` + `GOMAXPROCS=min(NumCPU,8)`）；证据对照臂另跑 100 / 200 | M1 观测（02d0154）：默认档 7688 KiB 中位（min 7608 / max 7688），低于目标 8 MiB（硬红线 16 MiB）；历史 7832 / 8472 已作废（GC 关闭或线程异常），仅留档 |
+| GOMEMLIMIT | 主壳固定 `6MiB`（低于目标 8 MiB，留运行时余量） | 防止突发分配顶穿 RSS；低于稳定工作集会引发 GC 抖动，按 p95 CPU 复核 |
+| GOMAXPROCS | 主壳 `GOMAXPROCS=min(NumCPU,8)`：≤8 核不收敛，>8 核收敛到 8 | 薄壳无 CPU 密集业务；24 线程时 Go runtime 预留更多栈与 mcache，实测多耗约 600 KiB；2 核小机上保持 2，避免线程超配 |
 | 链接裁剪 | `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"` | 去符号表与调试信息，单二进制通常减 25%–35% |
 | 静态构建 | `CGO_ENABLED=0`，不引 cgo 依赖 | 无 libc 差异、无额外线程与映射，RSS 更可控 |
 | 避免常驻大缓冲 | 帧读写按需分配，单帧上限 8 MiB 但复用 `sync.Pool` 的 4 KiB/64 KiB 档，不预分配 8 MiB | 空载不背峰值内存 |
@@ -225,36 +249,47 @@ oneshot 不参与心跳，不注册 bus 常驻路由；并发 2 是硬上限，�
 | 避免全量加载 | 插件列表/任务列表分页，单页 ≤ 50；图片/前端资源不预读 | 列表请求不产生线性内存 |
 | 日志不缓存 | 日志直写文件 + 10 MiB 轮转，不在内存攒批量 | 避免日志峰值叠加 |
 
-禁止用「调大 GOGC」这类掩盖式手段达标：预算看 RSS 中位数，且必须同时过空闲 CPU 与 goroutine 门禁。
+运行时锚点：`cmd/kored/serve.go` 的 `setRuntimeLimits()` 钉死 `GOGC=50` / `GOMEMLIMIT=6MiB` / `GOMAXPROCS=min(NumCPU,8)`（仅 CPU>8 时收敛），依据 ADR-0015；改动这三个值必须同步本文件与 ADR。
+
+禁止用「调大 GOGC」或「调小 GOMAXPROCS」这类掩耳手段达标：预算看 RSS 中位数，且必须同时过空闲 CPU 与 goroutine 门禁。
 
 ## 7. 度量与回归门禁
 
 采样口径（CI 与验收共用，M1 起可执行）：
 
 ```bash
-# 主壳空载 RSS：启动后等 60s 稳定，1 次/秒采 60 个点取中位数（KiB）
-pid=$(pidof kored)
-for i in $(seq 1 60); do ps -o rss= -p "$pid"; sleep 1; done | sort -n | awk 'NR==30{print $1}'
+# 主壳空载 RSS：稳定期后 1 次/秒采样；日常 5 点（约 10s），收口用 MEM_POINTS=60（约 65s）
+pid=$(pidof kored); points=${MEM_POINTS:-5}
+for i in $(seq 1 "$points"); do ps -o rss= -p "$pid"; sleep 1; done \
+  | sort -n | awk -v n="$points" 'NR==int((n+1)/2){print $1}'
 ```
+
+证据口径分两档：**默认档 `GOGC=50` 必测**；**对照臂 100 / 200** 用于归因，各 60 点取中位数。`VmRSS` 为主值；`RssAnon`/`RssFile` **不设绝对上限**，只作诊断拆分（静态二进制代码页使 `RssFile` 恒在 5 MiB 量级，绝对阈值必假红）：防膨胀按增量判——`RssFile` 相对空载基线的增长 ≤ 512 KiB。拆分优先 `smaps_rollup`，否则 `status` 并标注来源（G-03）。
+
+**bbolt mmap 计入 `RssFile`**：bbolt 会把数据文件 mmap 进地址空间，`RssFile` 随之增长（M1 实测 **+约 6 MiB**），这不是堆压力，也不代表泄漏；判 RSS 时以 `RssAnon` 与 `VmRSS` 趋势为准，勿因 mmap 增长就"优化"。
+
+下表为**最终定案（ADR-0016）**判据：超硬红线 → 失败；介于目标与硬红线 → 警告 + 趋势；≤目标 → 通过（§2.1）。
 
 判定阈值：
 
 | 指标 | 通过 | 警告 | 失败（CI fail） |
 | --- | --- | --- | --- |
-| 主壳空载 RSS 中位数 | ≤ 8192 KiB | 6144–8192 KiB | > 8192 KiB |
+| 主壳空载 RSS 中位数 | ≤ 8192 KiB | 8192–16384 KiB | > 16384 KiB |
 | 主壳空闲 CPU（60s `utime+stime` 差值） | ≤ 60 tick | 40–60 tick | > 60 tick |
 | 空载 goroutine | ≤ 20 | 16–20 | > 20 |
 | 空载 fd | ≤ 64 | 48–64 | > 64 |
 | 空载出站连接 | 0 | — | ≥ 1 |
-| resident 单插件 | ≤ 12288 KiB | 10240–12288 | > 12288 |
-| 常驻合计（含活跃 lazy） | ≤ 24576 KiB | 20480–24576 | > 24576 |
+| resident 单插件 | ≤ 12288 KiB | 12288–24576 KiB | > 24576 KiB |
+| 常驻合计（含活跃 lazy） | ≤ 24576 KiB | 24576–49152 KiB | > 49152 KiB |
 | lazy 空闲退出 | 空闲 300s 后无进程 | — | 300s 后进程仍存活 |
 | 插件冷启动 p95 | ≤ 300ms | 200–300ms | > 300ms |
 | oneshot 空闲进程 | 无 | — | 有任一进程存活 |
 | 插件包 `tar.gz` | ≤ 15,728,640 B | 12–15 MiB | > 15 MiB |
-| `kored` 二进制 | ≤ 26,214,400 B | 24,000,000–26,214,400 | > 26,214,400 |
+| `kored` 二进制 | ≤ 15,728,640 B（目标 15 MiB） | 15,728,640–26,214,400 B | > 26,214,400 B |
 | 前端首屏 gzip | ≤ 307,200 B | 262,144–307,200 | > 307,200 |
 | 背景定时器数量 | ≤ 1 且为证书续期 | — | ≥ 2 或存在非白名单定时器 |
+
+当前基线：**M1 观测（02d0154）7688 KiB 中位**（min 7608 / max 7688，余量约 504 KiB / 6%）；历史 7832 / 8472 / 6408 已作废，仅留档。M1–M3 期间这是**观测值 + 趋势表，不判「未完成」**。风险提示：余量紧张（约 6%），M1-19 用 pprof heap profile 复核；后续模块使 VmRSS 增长 >200 KiB 时优先砍依赖/延迟初始化，不得抬预算。
 
 CI 规则：`make mem` 与 `make idle` 仅在有 `kored` 时生效（M1 起）；M0 只做静态检查（二进制不存在则跳过并标注 N/A）。每次发版前必须跑一次全量预算核对，任一失败项阻塞 tag。
 

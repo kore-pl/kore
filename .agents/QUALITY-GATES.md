@@ -13,7 +13,7 @@
 | G3 | test | `go test -timeout 200s ./...` | 退出码 0，无 FAIL / panic | 修实现或修测试（不得删断言、不得 `-short` 跳过失败用例） | verifier | 合并前 |
 | G4 | docs-check | `make docs-check` | 退出码 0，输出 PASS | 补元信息 / 修链接 / 去占位词后重跑 | implementer + verifier | 检查点 |
 | G5 | 依赖白名单 | `go list -m all` 与 3 项白名单（`yaml.v3` / `bbolt` / `protobuf`）逐项比对 | 白名单外直接依赖数 = 0 | 移除或提 ADR 申请扩白名单，未批准不得合入 | verifier | 合并前 |
-| G6 | 资源预算实测 | `make mem`（等价 `ps -o rss= -p $(pgrep -x kored)` 取 60s 中位数）。内存证据：`/proc/<pid>/status` 的 `VmRSS` 为主值；`RssAnon` / `RssFile` 优先取 `smaps_rollup`，缺失则取 `/proc/<pid>/status`，两者都缺则退化为仅 `VmRSS` 并**必须标注来源**（`smaps_rollup` / `status` / `smaps`）；**未标注来源的证据不成立**。仍要求 `GOGC=100` 与 `GOGC=200` **双跑 × 60 点中位数**；**不再强制要求 `smaps`** | 空载 RSS ≤ 8192 KiB（目标 5–6 MiB，**`GOMEMLIMIT=6MiB` + `GOGC=100`**）；**常驻插件单 ≤ 12288 KiB、合计 ≤ 24576 KiB**；oneshot 空闲 0；**空闲 CPU ≤ 0.1%、空载 goroutine ≤ 20**；单次采样 / 只测一档 GOGC / 未标注数据来源 → 证据不成立 | 定位泄漏/膨胀点，回阶段四优化；调参顺序：先确认 `GOMEMLIMIT=6MiB` 生效，仍超再把 `GOGC` 降到 50；**GOGC 调高只放大堆峰值，守上限的是 GOMEMLIMIT**；不得靠调大预算通过 | verifier | 里程碑 |
+| G6 | 资源预算实测 | `make mem`（等价 `ps -o rss= -p $(pgrep -x kored)` 取 60s 中位数）。内存证据：三档 `GOGC=50`（默认档）/ `100` / `200`（对照臂）**各 60 点中位数**；`VmRSS` 为主值，`RssAnon` / `RssFile` **只作诊断拆分、不设绝对上限**；来源须标注（`smaps_rollup` / `status`）；**原始数据落 `.agents/verify/`**（如 `m1-memory-baseline.md`） | 空载 RSS ≤ 8192 KiB（目标 5–6 MiB，**运行时默认 `GOGC=50` + `GOMEMLIMIT=6MiB`**，对照臂 100 / 200）；**常驻插件单 ≤ 12288 KiB、合计 ≤ 24576 KiB**；oneshot 空闲 0；**空闲 CPU ≤ 0.1%、空载 goroutine ≤ 20**；缺档 / 未标注来源 / 单次采样 → 证据不成立 | 定位泄漏/膨胀点，回阶段四优化；调参顺序：先确认 `GOMEMLIMIT=6MiB` 生效，仍超再把 `GOGC` 降到 50 以下并复测三档；**GOGC 调高只放大堆峰值，守上限的是 GOMEMLIMIT**；不得靠调大预算通过 | verifier | 里程碑 |
 | G7 | 薄壳边界 | `grep -rn "plugins/" internal/core` + 业务词扫描（`create/list/restart/deploy/backup/site/nginx/mysql/docker`） | 两份 grep 命中数均为 0 | 把业务逻辑移进插件；core 只留规则 | verifier | 合并前 |
 | G8 | 二进制体积 | `ls -l bin/kored` | `bin/kored` ≤ 26214400 字节（25 MiB） | 检查依赖与 embed 内容；不得用 UPX 之类混淆手段凑数 | verifier | 里程碑 |
 | G9 | 前端体积 | `du -sb web/dist` + 首屏资源 gzip 后合计 | 首屏 ≤ 307200 字节（300 KiB gzip） | 拆分路由懒加载、按需引入组件；不得删功能充当优化 | verifier | 里程碑 |
@@ -23,6 +23,7 @@
 | G13 | 兼容性（三平台） | ① `make compat-info`（打印 build flags 与 link flags + `file` + `go version -m`）；② `GOOS=windows GOARCH=amd64 go build ./...`；③ `GOOS=darwin GOARCH=arm64 go build ./...`；④ `grep -rn --exclude-dir=platform "syscall\." internal/core`；⑤ `grep -rn "可能不支持" docs/`。flags 口径：**build flags** = `CGO_ENABLED=0 GOAMD64=v1 GOARM64=v8.0 -trimpath -buildvcs=false`（`-buildvcs` 是 build flag，塞进 `-ldflags` 会报 `flag provided but not defined`）；**link flags** = `-s -w` | ① build flags 与上述一致、`file` 为静态无 interpreter、`go version -m` 无 `-buildvcs` 污染；②③ 退出码 0（M1 起）；④ 零命中；⑤ 零命中 | ②③ 挂 → 把平台分支收进 `internal/platform` 或修构建标签；④ 有命中 → 迁进 `internal/platform`；⑤ 有命中 → 把“可能不支持”改成明确降级行为 | verifier | 里程碑 |
 | G14 | 空闲行为 | `make idle`（可用，约 65s）；等价手工取证：`/proc/<pid>/stat` 取 utime+stime 前后差、`/proc/<pid>/task` 计数、`/proc/<pid>/fd` 计数、`ss -tnp` | 空载 60s CPU 时间 ≤ 60ms、goroutine ≤ 20、fd ≤ 64、出站连接 0、定时器仅 `cert_renew`；不得有轮询循环，lazy 插件不得用内部 ticker 续命 | 去掉轮询改事件推送；lazy 插件必须在空闲后真正退出；超预算先砍定时器再谈优化 | verifier | 里程碑 |
 | G15 | 深度等级（M3 起） | `grep -r "depth_level" <插件仓>/info.json`；查对标矩阵标注；查 `production` 插件的 `tests/fault/` 目录 | `depth_level` 存在且 ∈ {`production`,`basic`}；`basic` 在对标矩阵中不得标"生产级"；`production` 必须有 `tests/fault/` 且故障注入用例可跑 | 缺 `depth_level` → 不进商店；标错等级 → 改矩阵并复核；没有 `tests/fault/` → 降级为 `basic` 或补测试 | verifier | 里程碑（M3 起） |
+| G16 | 无副作用的诊断代码（M1 起） | `grep -rn "SetGCPercent(-1)" --include='*.go' .` 与 `grep -rn "SetMemoryLimit(-1)" --include='*.go' .` **双零命中**；另查同形态"设置即读取"API（`debug.SetMemoryLimit` / `debug.SetGCPercent` / `debug.SetMaxThreads` 等传负数的写法） | 两条 grep 命中数均为 0；读取运行时配置只允许 `runtime/metrics`，或记录"自己设置过的值" | 视为 **P0**（会静默改变运行时行为）：日志里的 `SetGCPercent(-1)` 实测会**关闭 GC**；改为记录自己设置的值或走 `runtime/metrics`，并补回归测试（`setRuntimeLimits()` 后分配内存必须观察到 GC 次数增长） | verifier | 合并前 |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
 
@@ -31,7 +32,7 @@
 | 层级 | 时机 | 必跑 | 说明 |
 | --- | --- | --- | --- |
 | 检查点 | 每个自洽改动完成时 | G1、G2、G4（不跑 G13：构建产物未就绪） | 快速反馈，防止把坏代码攒成"大提交" |
-| 合并前 | 任务进入验证阶段 / 合入主干前 | G1–G5、G7、G11（跨仓库变更另加 G12） | 加上测试、依赖、边界、仓库边界；缺一不得合并 |
+| 合并前 | 任务进入验证阶段 / 合入主干前 | G1–G5、G7、G11、G16（跨仓库变更另加 G12） | 加上测试、依赖、边界、仓库边界；缺一不得合并 |
 | 里程碑 | 里程碑收尾 | 上述全部 + G6、G8、G9、G10、G12、G13、G14；G15 自 M3 起加入 | 加实测预算、体积、协议兼容与发行版可移植性，决定里程碑是否成立 |
 
 聚合入口：`make check`。M0 阶段只有 G4 真实可跑，其余按第 4 节记 N/A。

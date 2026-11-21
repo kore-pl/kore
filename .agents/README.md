@@ -56,6 +56,7 @@
 | 任务卡 | [BOARD.md](BOARD.md)（模板 [templates/task.md](templates/task.md)） | lead | Loop 第 3 阶段 |
 | 验收报告 | `.agents/verify/<日期>-<范围>.md`（M0 为 `m0-consistency.md`、`m0-commit-plan.md`） | verifier | Loop 第 5 阶段 |
 | 复盘 | [JOURNAL.md](JOURNAL.md)（模板 [templates/reflection.md](templates/reflection.md)） | scribe | Loop 第 7 阶段 |
+| 判断台账 | [LOG/](LOG/)（`DECISIONS.md` / `DISPATCH.md` / `sessions/`） | scribe | 裁决当天 / 派发时 / 里程碑收口 |
 | 决策 | [docs/DECISIONS/](../docs/DECISIONS/) `NNNN-<slug>.md` | architect | 做出不可逆选择时 |
 | 变更集 | [BOARD.md](BOARD.md)「变更集登记区」 | lead | 跨仓库改动开始时 |
 | 索引条目 | `kore-plugins` 仓库的 `index/plugins.json` | scribe | 插件发版后 |

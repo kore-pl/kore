@@ -107,22 +107,20 @@
 
 | 阶段 | 触发 | 校验内容 | 失败码 |
 | --- | --- | --- | --- |
-| 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | `capabilities[]` 必须全部落在白名单内、无重复、不引用其它插件能力 | `E_INVALID` |
+| 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | 按 §5.2 顺序校验：语法合法、域为 6 特权之一或等于自身 id、无重复、≤16 项 | `E_INVALID` |
 | 启用授予 | `POST /api/v1/plugins/{id}/enable` | 展示声明清单并由用户确认，写入 `plugins` bucket 的 `granted_capabilities` 字段 | `E_CONFLICT`（升级新增能力未重新确认时） |
 | 调用校验 | 每个 `POST /api/v1/invoke/{plugin}/{method}` 帧 | 方法→能力映射表命中，且目标能力已在 `plugins.granted_capabilities` 中 | `E_UNAUTHORIZED` + 审计 `capability.denied` |
 
-### 5.2 能力白名单与语义
+### 5.2 能力模型（两段）
 
-| 能力 | 允许的动作 |
-| --- | --- |
-| `site:read` | 读站点配置与只读状态 |
-| `site:write` | 改站点配置 |
-| `db:read` | 读插件自有数据 |
-| `db:write` | 写插件自有数据 |
-| `net:read` | 出站读请求（M3 起受 egress 策略约束） |
-| `net:write` | 出站写请求 |
-| `system:read` | 读宿主只读信息（负载、磁盘、版本） |
-| `system:admin` | 改宿主状态（服务启停、文件写入）；最高危，启用时强制二次确认 |
+| 段 | 内容 | 归属与语义 |
+| --- | --- | --- |
+| 特权能力（6 个，固定不可扩展） | `system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write` | 对宿主有实际影响，由内核集中校验与授权；`system:admin` 最高危，启用时强制二次确认 |
+| 插件自有能力 | `<plugin-id>:<action>`，**域必须等于声明它的插件 id**（`site` 可声明 `site:read`；`mysql` 不得声明 `site:write`） | 插件自治，内核只校验语法与域归属 |
+
+校验规则（按序，安装时执行）：① 语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；② 域 ∈ 特权集 → 允许；③ 否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；④ 空数组合法，重复项或 >16 项 → `E_INVALID`。
+
+设计理由：**内核不得维护业务域名词表**——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治，新增插件永远不需要改内核（G-01）。
 
 越权一律 `E_UNAUTHORIZED`，`detail` 只含缺失的能力名，不泄露方法内部实现。插件之间不允许互相直接调用；跨插件协作只经主壳 `kore.event` 广播。
 
@@ -131,7 +129,7 @@
 - **系统用户**：每个插件一个 `kore-<id>`（`useradd --system --no-create-home --shell /usr/sbin/nologin`），不与其它插件共享 uid。
 - **目录权限**：`/var/lib/kore/plugins/<id>` 属 `kore-<id>:kore-<id>`，**0750**；`/run/kore` 为 `0700 root:root`；插件 socket `/run/kore/plugins/<id>.sock` 由主壳创建后属 `kore-<id>`、**0600**。
 - **cgroup v2**：`/sys/fs/cgroup/kore/<id>.slice`；控制文件 `memory.max` / `memory.high` / `memory.swap.max` / `cpu.max` / `pids.max` 的取值与默认值以 [RESOURCE-MODEL](./RESOURCE-MODEL.md) 为唯一真源，本文件不复制数值。安全含义：supervisor 在拉起前按 `resources` 声明与全局上限**取小值**后写入，插件无法自报放大；超限分别表现为 OOM kill、限流、fork 失败。oneshot 进程退出后 RSS 计 0。
-- **进程属性**：`cmd.Env` 只传 `KORE_PLUGIN_ID` / `KORE_PROTOCOL` / `KORE_SOCKET`；stdin 关闭；stdout/stderr 重定向到 `/var/log/kore/plugins/<id>.log`。
+- **进程属性**：`cmd.Env` 只传 `KORE_PLUGIN_ID` / `KORE_PLUGIN_SOCK` / `KORE_PLUGIN_TOKEN` / `KORE_STATE_DIR` / `KORE_LOG_DIR`；stdin 关闭；stdout/stderr 重定向到 `/var/log/kore/plugins/<id>.log`。
 
 ### 6.1 明确不做 seccomp / namespace
 
@@ -214,7 +212,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 ## 9. 密钥与配置
 
 - `/etc/kore/config.yaml` 权限 `0600 root:root`；`auth.admin_password_hash` 可读但不可逆，PBKDF2-HMAC-SHA256 600,000 次迭代使单次校验约 0.2s 量级，配合 60s 内 5 次失败锁 300s 的限速后在线爆破不可行。
-- **插件 secret 存储决策**：不把秘密混进状态库，单独存 `/var/lib/kore/secrets/<plugin-id>.json`（`0600 root:root`，目录 `0700`）。理由：状态库备份与导出不连带泄露、单插件可独立轮换与删除、迁移成本与 `kore.db` 解耦。M0–M2 明文（无主密钥时的加密是自欺）；M4 引入主密钥 `/var/lib/kore/master.key`（`0600`），用 XChaCha20-Poly1305 信封加密，文件内保留 `v` 字段支持逐文件迁移。
+- **插件 secret 存储决策**：不把秘密混进状态库，单独存 `/var/lib/kore/secrets/<plugin-id>.json`（`0600 root:root`，目录 `0700`）。理由：状态库备份与导出不连带泄露、单插件可独立轮换与删除、迁移成本与 `state.db` 解耦。M0–M2 明文（无主密钥时的加密是自欺）；M4 引入主密钥 `/var/lib/kore/master.key`（`0600`），用 XChaCha20-Poly1305 信封加密，文件内保留 `v` 字段支持逐文件迁移。
 - 配置热重载**不重读** `auth.admin_password_hash`，防止替换配置文件后提权；改口令需重启并写审计 `config.change`。
 - 环境变量白名单：`KORE_CONFIG`、`KORE_STATE_DIR`、`KORE_HTTP_ADDR`、`KORE_WEB_DEV`、`KORE_LOG_LEVEL`，其余忽略。
 

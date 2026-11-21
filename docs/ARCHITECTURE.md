@@ -24,7 +24,7 @@
      /api/v1/*  HTTP/1.1        │        SSE /api/v1/events
      静态 /  /assets/*  /plugin-assets/<id>/*
                   ┌──────────────▼─────────────────────────────────────────────┐
-                  │ kored 主壳：单进程 · 单二进制 · systemd 托管 · 空载 ≤ 8 MiB  │
+                  │ kored 主壳：单进程 · 单二进制 · systemd 托管 · 空载 目标8/红线16 MiB│
                   │                                                            │
                   │   httpapi ──► auth ──► registry ──► supervisor ──► bus      │
                   │      │          │          │            │           │       │
@@ -39,7 +39,7 @@
 ┌──────────────────┐   ┌──────────────────────┐   ┌──────────────────────────────┐
 │ 常驻插件 site     │   │ 一次性插件 backup     │   │ 旁挂资源（全部文件系统落点）  │
 │ 由 supervisor    │   │ 触发才拉起，用完即退   │   │ 配置 /etc/kore/config.yaml    │
-│ 常驻并在途可用    │   │                      │   │ 状态 /var/lib/kore/kore.db    │
+│ 常驻并在途可用    │   │                      │   │ 状态 /var/lib/kore/state.db    │
 │ 单实例 ≤ 24 MiB  │   │ 空闲 RSS = 0          │   │      /var/lib/kore/plugins/   │
 │ socket:          │   │ socket:              │   │      /var/lib/kore/tasks/     │
 │ plugins/site.sock│   │ plugins/backup.sock  │   │ 日志 /var/log/kore/kore.log   │
@@ -64,7 +64,7 @@
 | --- | --- | --- | --- |
 | L0 协议层 | `pkg/pluginapi/`（公开协议 SDK） | 仅 Go 标准库（`encoding/json`、`encoding/binary`、`errors`） | import `internal/core/*`；import 任何业务包；引入第三方库 |
 | L1 内核层 | `internal/core/{httpapi,auth,registry,supervisor,bus,store,config}` | 标准库 + `pkg/pluginapi` + 白名单 3 依赖（`yaml.v3`、`bbolt`、M3 的 `protobuf`） | import `plugins/**`；Web 框架；SQL/ORM；gRPC/NATS/Redis/容器 SDK |
-| L2 壳层 | `cmd/kored/` | `internal/core/*`、`pkg/pluginapi`、标准库 | 业务逻辑；直接读写 `kore.db` 表结构（必须经 store） |
+| L2 壳层 | `cmd/kored/` | `internal/core/*`、`pkg/pluginapi`、标准库 | 业务逻辑；直接读写 `state.db` 表结构（必须经 store） |
 | L3 插件层 | 独立仓库 `kore-plugin-<id>/`（各自独立 `go.mod`） | `github.com/kore-project/kore/pkg/pluginapi`（tag 依赖，协议类型与帧编解码）+ 标准库 + 插件自选依赖 | import `internal/*`（Go 不可见）；import 其他插件；共享进程内存 |
 | L4 前端 | `web/`（Vue 3 + Vite + TS） | 仅 HTTP API `/api/v1/*` 与静态资源 | import Go 包；直接访问文件系统；绕过 auth 拿数据 |
 
@@ -99,7 +99,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | --- | --- | --- | --- | --- |
 | 生命周期 | systemd 托管，常驻 | 跟随 enable 常驻；热升级新旧短暂共存 | 调用拉起 → 空闲 300 s 退出 → RSS 归 0 | 触发拉起 → 执行 → 立即退出 |
 | 实例数 | 单实例（flock 保证） | 每插件 1 个，**同时 ≤3 个** | 每插件 1 个（按需），不计入常驻配额 | 同一插件同一时刻 ≤ 1 个（串行队列） |
-| 内存预算 | 空载 ≤ 8 MiB（目标 5–6；`GOGC=100` + `GOMEMLIMIT=6MiB`） | 单 ≤ 12 MiB；**推荐 2 个/16 MiB**，上限 3 个/24 MiB | 峰值 ≤ 12 MiB；空闲 0 | 峰值 ≤ 16 MiB；空闲 0 |
+| 内存预算 | 空载 **目标 ≤8 MiB / 红线 ≤16 MiB**（`GOGC=50` + `GOMEMLIMIT=6MiB`） | 单 ≤ 12 MiB；**推荐 2 个/16 MiB**，上限 3 个/24 MiB | 峰值 ≤ 12 MiB；空闲 0 | 峰值 ≤ 16 MiB；空闲 0 |
 | 运行用户 | root（M3 起收窄 capabilities） | `kore-<id>` 系统用户 | 同左 | 同左 |
 | 隔离手段 | systemd unit + 单实例锁 | cgroup v2 `/sys/fs/cgroup/kore/<id>.slice` | 同左，退出即释放 | 同左，退出即释放 |
 | socket | `/run/kore/kore.sock`（可选 `127.0.0.1:8787`） | `/run/kore/plugins/<id>.sock` | 同左，退出后清理 | 同左，退出后清理 |
@@ -193,7 +193,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | 3 | 确保 `/var/lib/kore`（0700）、`/var/lib/kore/plugins`、`/var/lib/kore/tasks` 存在 | 无权限 → 退出码 3 |
 | 4 | `flock /run/kore/kore.lock`（`LOCK_EX\|LOCK_NB`），写入 pid | 已被占用 → 退出码 3，提示持有者 pid |
 | 5 | 初始化 logger（`/var/log/kore/kore.log`，启动期同时 stderr） | 打不开 → 退出码 4 |
-| 6 | 打开 bbolt `/var/lib/kore/kore.db`（0600，`Timeout=1s`），建 6 个 bucket：`meta` / `plugins` / `plugin_state` / `tasks` / `sessions` / `audit`（单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`），校验 schema 版本 | 打不开/版本更高 → 退出码 4 |
+| 6 | 打开 bbolt `/var/lib/kore/state.db`（0600，`Timeout=1s`），建 6 个 bucket：`meta` / `plugins` / `plugin_state` / `tasks` / `sessions` / `audit`（单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`），校验 schema 版本 | 打不开/版本更高 → 退出码 4 |
 | 7 | 孤儿清理：扫 `/var/lib/kore/plugins/*/run.json`，按 pid + `/proc/<pid>/stat` starttime 核对 | 无法核对 → 只删 socket，不动进程 |
 | 8 | bind `/run/kore/kore.sock`（先 unlink 旧文件，`umask 0077`）；按配置可选 bind `127.0.0.1:8787` | bind 失败 → 退出码 5 |
 | 9 | registry 从 bucket 加载已安装清单与 enable 状态 | 单条清单损坏 → 标记该插件 failed，不阻塞启动 |
@@ -265,7 +265,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | resident 插件 OOM（cgroup 超限） | 该插件进程被内核 kill | 同上；`info.json.resources.memory_mb` 决定天花板 | 状态 `failed`，`detail` 指向 `/var/log/kore/plugins/<id>.log` |
 | oneshot 插件崩/超时 | 仅本次任务 | 不自动重启，任务记录标失败；下次触发重新拉起 | 本次调用 502 + E_UPSTREAM；任务列表出现失败记录 |
 | 插件死循环占满 CPU | 该 cgroup 受限，主壳与其他插件不受影响 | `cpu_quota` 限流；red-team 需验证主壳调度不被拖慢 | 该插件响应变慢，其他功能正常 |
-| bbolt 文件损坏 | 主壳无法启动（store 打不开） | 退出码 4；从 `/var/lib/kore/kore.db.bak` 恢复或重装（配置与插件包仍在） | 服务不可用，日志给出损坏页与恢复指引 |
+| bbolt 文件损坏 | 主壳无法启动（store 打不开） | 退出码 4；从 `/var/lib/kore/state.db.bak` 恢复或重装（配置与插件包仍在） | 服务不可用，日志给出损坏页与恢复指引 |
 | 磁盘写满 / `/run` 被清理 | 日志停写、bbolt 事务失败、安装失败 / socket 丢失 | 写操作 507 语义 + `healthz` 仍 200；socket 启动即重建 | 安装失败但只读可用；重启后自动恢复 |
 | SSE 客户端断开 | 无影响（仅该连接） | 客户端带 Last-Event-ID 重连，缓冲补发 | 前端自动重连，缺口时 `resync` 全量刷新 |
 | 会话存储不可写 | 新登录失败，已登录会话仍可用（内存态未持久化部分） | 返回 500 E_INTERNAL；修复磁盘后恢复 | 登录页报错，既有页面在会话过期前可用 |
@@ -288,7 +288,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | --- | --- | --- |
 | 1 | 不得含业务语义（业务词表见 CORE §9） | 直接拒绝，改由插件实现 |
 | 2 | 不得新增直接依赖（白名单 3 个已封顶） | 拒绝，或先走 ADR 改白名单（需 red-team 评估体积/攻击面） |
-| 3 | 不得突破资源预算（空载 ≤ 8 MiB，二进制 ≤ 25 MiB） | 拒绝，除非同 ADR 内给出替换/削减方案 |
+| 3 | 不得突破资源预算（空载红线 ≤16 MiB、目标 8 MiB，二进制 ≤ 25 MiB） | 拒绝，除非同 ADR 内给出替换/削减方案 |
 | 4 | 不得引入常驻进程/端口/中间件；必须给出失败域与回滚路径（关掉即恢复旧行为） | 踩红线②直接拒绝；不允许"只能前进"的设计 |
 | 6 | 必须同步 [CORE.md](./CORE.md)、[ARCHITECTURE.md](./ARCHITECTURE.md) 与 ADR | 文档不一致不得合并 |
 
@@ -311,7 +311,7 @@ ADR 文件命名 `docs/DECISIONS/<4 位序号>-<kebab-slug>.md`（如 `0002-uds-
 
 插件**不在本仓库**：`site` / `backup` 分别是独立仓库 `kore-plugin-site` / `kore-plugin-backup`，索引在 `kore-plugins`；kore 只提供 `pkg/pluginapi` 与安装/运行机制（见 [REPOS.md](./REPOS.md)）。`kored` 的 CLI 子命令（serve / db dump / backup / restore / invoke / version）见 [CORE.md](./CORE.md) §10。
 
-运行时落点（与目录布局区分）：配置 `/etc/kore/config.yaml`；状态 `/var/lib/kore/{kore.db,plugins,tasks}`；socket `/run/kore/kore.sock` 与 `/run/kore/plugins/<id>.sock`；日志 `/var/log/kore/kore.log` 与 `/var/log/kore/plugins/<id>.log`；锁 `/run/kore/kore.lock`。
+运行时落点（与目录布局区分）：配置 `/etc/kore/config.yaml`；状态 `/var/lib/kore/{state.db,plugins,tasks}`；socket `/run/kore/kore.sock` 与 `/run/kore/plugins/<id>.sock`；日志 `/var/log/kore/kore.log` 与 `/var/log/kore/plugins/<id>.log`；锁 `/run/kore/kore.lock`。
 
 ## 11. 设计权衡
 

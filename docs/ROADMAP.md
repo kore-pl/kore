@@ -221,8 +221,8 @@ kore 仓库内部：cmd/kored → internal/core/* → internal/platform/*；core
 - **插件发布（各插件仓库）**：独立 tag → `make dist` → `<id>-<version>.tar.gz` + sha256 → release；`info.json` 必须含 `requires_kore` / `depends_on` / `scenario_tags`。
 - **预设与索引发布（kore-plugins）**：更新 `index/plugins.json` 与 `presets/*.json` → `make presets-check` / 校验脚本通过 → 独立 tag；不做审核、不代管包、无账号。
 - **兼容矩阵**：M3 起每次发布前跑矩阵（kore N/N-1 × 插件版本 × `requires_kore`），矩阵不通过不发版；M4 起叠加三平台 smoke。
-- **回滚条件（任一命中即回滚并冻结发布）**：空载 RSS 超 8 MiB 连续 3 次采样；崩溃重启 ≥3 次/10 分钟；鉴权回归；插件安装/启用失败率 >5%；预设装不起来；索引 sha256 与发布物不符；`kore.db` 迁移不可逆；越权或签名绕过。
-- **版本保留**：`kore` 保留当前 + 上一版 2 个二进制（`/usr/local/lib/kore/kored-<version>`）；每个插件保留 2 个版本；索引与预设保留上一版；`kore.db` 升级前备份。
+- **回滚条件（任一命中即回滚并冻结发布）**：空载 RSS 超 8 MiB 连续 3 次采样；崩溃重启 ≥3 次/10 分钟；鉴权回归；插件安装/启用失败率 >5%；预设装不起来；索引 sha256 与发布物不符；`state.db` 迁移不可逆；越权或签名绕过。
+- **版本保留**：`kore` 保留当前 + 上一版 2 个二进制（`/usr/local/lib/kore/kored-<version>`）；每个插件保留 2 个版本；索引与预设保留上一版；`state.db` 升级前备份。
 - **回滚顺序**：停服 → 换回主壳 → 恢复 DB（如需）→ 按变更集逆序回退插件与索引/预设 → 起服 → 复跑该里程碑门禁 → 复盘入 `.agents/`。
 
 ## 11. 里程碑变更规则

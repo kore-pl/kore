@@ -28,16 +28,7 @@
 
 包内结构固定：`info.json` + `bin/<id>`（0755 静态二进制）+ 可选 `web/`（标准 ES module，入口 `web/index.js`）与 `signature`，不含源码。
 
-`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库结构：
-
-```text
-kore-plugin-<id>/
-├── main.go          # 仅 import github.com/kore-project/kore/pkg/pluginapi
-├── info.json
-├── web/             # 可选前端
-├── Makefile         # build / dist / clean；dist 产物进 release
-└── CHANGELOG.md
-```
+`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库固定含 `main.go`（仅 import `github.com/kore-project/kore/pkg/pluginapi`）、`info.json`、可选 `web/`、`Makefile`（`build`/`dist`/`clean`）、`CHANGELOG.md`。
 
 ### 2.2 解包与命名规则
 
@@ -66,7 +57,7 @@ kore-plugin-<id>/
 | lifecycle | string | 是 | — | `resident` \| `lazy`（默认）\| `oneshot`（原 `type` 字段名废弃） |
 | idle_timeout_s | int | 否 | `300` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
 | entry | string | 是 | — | 相对包根的可执行路径，固定 `bin/<id>` |
-| capabilities | string[] | 是 | — | 白名单：`site:read` `site:write` `db:read` `db:write` `net:read` `net:write` `system:read` `system:admin`；空数组合法 |
+| capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；空数组合法 |
 | resources.memory_mb | int | 是 | — | 4–12（常驻与活跃 lazy 上限 12，见 RESOURCE-MODEL） |
 | resources.cpu_quota | string | 是 | — | `"10%"`–`"100%"`，映射 `cpu.max` |
 | resources.pids_max | int | 是 | — | 16–512 |
@@ -91,6 +82,14 @@ kore-plugin-<id>/
 3. 按拓扑序安装（同层按 id 字典序稳定排序）；依赖缺失回 `E_NOTFOUND`，版本不满足 `requires_kore`/`depends_on` 版本区间回 `E_UNSUPPORTED`。
 4. 任一步失败按 SCENARIOS.md 的回滚策略处理已装部分；协议侧只提供钩子——`kore.hello` 成功前不标记 `installed`，失败时内核删除刚装目录并恢复 `plugin_state`。
 
+### 3.1.2 capabilities 模型（两层）
+
+**特权能力**（内核唯一白名单，6 个、固定不可扩展）：`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，对宿主有实际影响，由内核集中校验授权；**插件自有能力** `<plugin-id>:<action>`，域必须等于声明它的插件 id（`site` 可声明 `site:read`，`mysql` 不得声明 `site:write`）。
+
+**校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；空数组合法，重复项或 >16 项 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
+
+**设计理由**：内核不得维护业务域名词表——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治；新增插件永远不需要改内核。
+
 ### 3.2 resident 示例（site）
 
 ```json
@@ -114,7 +113,7 @@ kore-plugin-<id>/
   "id": "backup", "name": "备份执行器", "version": "0.1.0",
   "protocol": "kore.plugin.v1", "requires_kore": ">=0.1.0 <0.2.0", "lifecycle": "oneshot",
   "entry": "bin/backup",
-  "capabilities": ["db:read", "system:read"],
+  "capabilities": ["system:read", "backup:run"],
   "resources": { "memory_mb": 8, "cpu_quota": "100%", "pids_max": 256 },
   "triggers": [{ "type": "http", "name": "backup.run" }, { "type": "cli", "name": "backup.run" }],
   "depends_on": [], "conflicts": [], "scenario_tags": ["data", "ops"], "size_bytes": 20971520,
@@ -181,7 +180,7 @@ kore-plugin-<id>/
   "methods":[{"name":"site.list","idempotent":true,"timeout_ms":15000}]}}
 ```
 
-- `methods` 为可选能力表：只有在此声明 `idempotent: true` 的业务方法才允许内核自动重试（§10）；`encoding` 声明本连接编码（MVP 恒为 `json`，M3 可为 `protobuf`）。协商顺序固定：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 平台身份校验（peercred 或 HMAC，§17）→ `capabilities` ⊆ 清单 → 登记路由；任一步失败回 `E_UNSUPPORTED` / `E_UNAUTHORIZED` 并 SIGKILL 不进入 ready（防 kore 降级）。握手超时 2s，超时或出错杀进程置 `failed`，`session_id` 每次启动唯一、重启后旧 session 作废。
+- `methods` 为可选能力表：只有在此声明 `idempotent: true` 的业务方法才允许内核自动重试（§10）；`encoding` 声明本连接编码（MVP 恒为 `json`，M3 可为 `protobuf`）。协商顺序固定：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 平台身份校验（peercred 或 HMAC，§17）→ `capabilities` ⊆ `info.json` 声明 → 登记路由；任一步失败回 `E_UNSUPPORTED` / `E_UNAUTHORIZED` 并 SIGKILL 不进入 ready（防 kore 降级）。握手超时 2s，超时或出错杀进程置 `failed`，`session_id` 每次启动唯一、重启后旧 session 作废。
 
 ## 6. 生命周期状态机
 
@@ -189,7 +188,7 @@ kore-plugin-<id>/
 
 | 从 | 到 | 触发者 | 动作 | 超时 | 失败去向 |
 | --- | --- | --- | --- | --- | --- |
-| installed | enabled | 运维 `POST /plugins/{id}/enable` | 校验 info.json、capabilities ⊆ 白名单、签名策略，写 `plugin_state.desired=enabled` | — | 保持 installed |
+| installed | enabled | 运维 `POST /plugins/{id}/enable` | 校验 info.json、capabilities 声明合法（§3.1.2）、签名策略，写 `plugin_state.desired=enabled` | — | 保持 installed |
 | enabled | starting | supervisor（enable / autostart / 退避重启） | 建 cgroup、以 `kore-<id>` 拉起 `bin/<id>`、主壳创建 socket | 进程创建 3s | failed |
 | starting | ready | supervisor | 2s 内收到合法 `kore.hello`，登记 bus 路由 | hello ≤ 2s | failed（SIGKILL，10 分钟内不自动重试） |
 | ready | degraded | supervisor | ping 连续 3 次超时（10s 周期、单次 2s）→ 暂停新调用路由（503 + `E_UPSTREAM`），继续探测 | 30s | — |
@@ -299,7 +298,7 @@ kore-plugin-<id>/
 
 ## 14. 安全约束
 
-- socket 权限：`/run/kore/kore.sock` 与运行目录 0700/0600、属主为主壳运行用户；插件 socket 由主壳（root）创建后 `chown kore-<id>`、0600，仅该插件可读写。内核 `accept` 后用内核凭据（Linux `SO_PEERCRED`、macOS `LOCAL_PEERCRED`、Windows HMAC 见 §17）校验 uid/pid，不符即关闭连接并记审计。capabilities 校验点两处：**bus**（方法级最小权限）与 **supervisor**（拉起前按 capabilities 决定用户组、可写目录、cgroup、是否允许出网），两处都过才放行，缺一即 `E_UNAUTHORIZED`；协议不携带用户凭据、插件不得外报，`net:write` 仅表示允许出网、不表示允许上传遥测。
+- socket 权限：`/run/kore/kore.sock` 与运行目录 0700/0600、属主为主壳运行用户；插件 socket 由主壳（root）创建后 `chown kore-<id>`、0600，仅该插件可读写。内核 `accept` 后用内核凭据（Linux `SO_PEERCRED`、macOS `LOCAL_PEERCRED`、Windows HMAC 见 §17）校验 uid/pid，不符即关闭连接并记审计。capabilities 校验点三处（§3.1.2：安装声明 / 启用授予 / 调用校验）；**supervisor** 另在拉起前按能力收紧用户组、可写目录、cgroup 与出网，运行时与方法级两关都过才放行，缺一即 `E_UNAUTHORIZED`；协议不携带用户凭据、插件不得外报，`net:write` 仅表示允许出网、不表示允许上传遥测。
 
 ## 15. 插件 SDK 最小接口
 
@@ -319,8 +318,7 @@ echo 插件骨架（约 30 行，`kore-plugin-echo/main.go` 为 M1 验证件）�
 
 ```go
 func main() {
-    h := &echo{}
-    conn, err := pluginapi.Dial(os.Getenv("KORE_PLUGIN_SOCK")); if err != nil { log.Fatal(err) } // echo.sock
+    h := &echo{}; conn, err := pluginapi.Dial(os.Getenv("KORE_PLUGIN_SOCK")); if err != nil { log.Fatal(err) } // echo.sock
     defer conn.Close(); if err := pluginapi.Handshake(conn, h, "echo", "0.1.0"); err != nil { log.Fatal(err) }
     pluginapi.Serve(conn, h) // 阻塞，读帧→分发→写 response；kore.shutdown 后返回
 }

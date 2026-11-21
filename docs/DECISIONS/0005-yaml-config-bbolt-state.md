@@ -10,8 +10,8 @@ kore 需要两类数据：**人要读写、要版本化的配置**（监听地�
 ## 决策
 
 - **配置**：单一 YAML 文件 `/etc/kore/config.yaml`（env `KORE_CONFIG` 覆盖），权限 `0600 root:root`，解析用 `gopkg.in/yaml.v3`；变更走"校验 → 写临时文件 → `rename` 原子替换"，热重载只重读非安全关键字段（`auth.admin_password_hash` 不热重载）。
-- **状态**：`go.etcd.io/bbolt` 单文件 `/var/lib/kore/kore.db`，权限 `0600`；bucket 固定为 **6 个**：`meta`（schema 版本）、`plugins`（含 `granted_capabilities` 字段）、`plugin_state`、`tasks`、`sessions`、`audit`；不建 `users`、不单设 `grants`、不设 `secrets`。
-- **迁移**：`meta.schema_version` 整数；启动时逐版本执行迁移函数，只前进不回退；迁移前 `kore.db.bak-<version>` 备份一份。
+- **状态**：`go.etcd.io/bbolt` 单文件 `/var/lib/kore/state.db`，权限 `0600`；bucket 固定为 **6 个**：`meta`（schema 版本）、`plugins`（含 `granted_capabilities` 字段）、`plugin_state`、`tasks`、`sessions`、`audit`；不建 `users`、不单设 `grants`、不设 `secrets`。
+- **迁移**：`meta.schema_version` 整数；启动时逐版本执行迁移函数，只前进不回退；迁移前 `state.db.bak-<version>` 备份一份。
 - 写路径统一经 `internal/core/store`，禁止在业务处直接开事务；只读路径用 `View`，写路径用 `Update` 且保持短事务（不做网络/进程 IO）。
 
 ## 备选方案对比
@@ -27,7 +27,7 @@ kore 需要两类数据：**人要读写、要版本化的配置**（监听地�
 
 ## 后果
 
-**正面**：配置可 diff、可回滚、可被配置管理工具纳管；状态单文件，备份 = `cp kore.db`；`CGO_ENABLED=0` 静态编译成立；bbolt 的 `Update` 保证多 bucket 写入原子，插件安装"写 `plugins` 台账（含 `granted_capabilities`）+ 写 `audit`"可在一个事务里完成。
+**正面**：配置可 diff、可回滚、可被配置管理工具纳管；状态单文件，备份 = `cp state.db`；`CGO_ENABLED=0` 静态编译成立；bbolt 的 `Update` 保证多 bucket 写入原子，插件安装"写 `plugins` 台账（含 `granted_capabilities`）+ 写 `audit`"可在一个事务里完成。
 
 **负面**：bbolt 单写事务串行，长事务会阻塞所有写（必须短小）；没有查询语言，按插件/时间范围检索要建二级索引 bucket 或全遍历；YAML 解析对缩进敏感，配置错误要靠启动期校验拦下并给出字段级错误。
 
@@ -38,8 +38,8 @@ kore 需要两类数据：**人要读写、要版本化的配置**（监听地�
 ```bash
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/kored ./cmd/kored   # 无 CGO 依赖
 go list -m all | grep -E 'sqlite|postgres|pgx|mysql' || echo "无 SQL 驱动"
-file /var/lib/kore/kore.db                                                    # "data"，非 SQLite 头
-stat -c '%a %U:%G' /etc/kore/config.yaml /var/lib/kore/kore.db                # 600 root:root
+file /var/lib/kore/state.db                                                    # "data"，非 SQLite 头
+stat -c '%a %U:%G' /etc/kore/config.yaml /var/lib/kore/state.db                # 600 root:root
 # schema 迁移幂等：连续启动两次，版本不变
 ./kored --check-config && ./kored --check-config
 ```
