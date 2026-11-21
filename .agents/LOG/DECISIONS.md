@@ -44,8 +44,10 @@
 
 | 2026-11-22 | SDK v0.1.0 发布后不可消费，如何处置 | lead（收口补正，verifier 报告触发） | ①改写 / 删除 `pkg/pluginapi/v0.1.0` tag（proxy / sumdb 已缓存，会导致永久 checksum mismatch，否）②**发 `v0.1.1` + `retract v0.1.0`**（选）③不回滚、要求消费者用 `go.work`（违背"跨仓库只靠 tag"判据，否） | ②：已发布 tag 保持不动，在 `pkg/pluginapi/go.mod` 声明 `retract v0.1.0` 并发布 `pkg/pluginapi/v0.1.1`；echo 升依赖后重发 `v0.1.1` | Go module 发布物的不可变性：proxy.golang.org / sum.golang.org 已缓存 v0.1.0 的 `.mod`，改写会让所有消费者永久 checksum mismatch（不可恢复）；要求消费者用 `go.work` 等于把缺陷转嫁给每个下游，且判定上直接违背「跨仓库只依赖 tag」的 M1 验收判据 | `pkg/pluginapi/go.mod`、tag `pkg/pluginapi/v0.1.1`、`kore-plugin-echo` `go.mod` + tag `v0.1.1`、`.agents/BOARD.md` / `.agents/JOURNAL.md` | `GOWORK=off go get github.com/pengtang1024/kore/pkg/pluginapi@v0.1.1` 退出码 0（`GOPROXY=direct` 与 `proxy.golang.org` 双路径）；`go list -m -versions` 仅列 v0.1.1（v0.1.0 已被 retract 过滤）；echo 干净 clone `GOWORK=off make build` / `make dist` 退出码 0 |
 
+| 2026-11-22 | 子 agent 连续崩溃时如何派发 | 用户指令（M2 开工）→ lead | ①原样重派（否——已失败 3 次）②继续砍任务（否——砍一半仍失败，假设已证伪）③**先派极简 probe 验机制，再瘦身 prompt 重派**（选） | ③：先派极简 probe 用 30 秒验证 subagent 机制；正常则用极简 prompt 重派；规则文档让 agent 按需自读；`subagent_fork` 因注入超大会话上下文失败，禁用 | `probe-fresh` 落盘成功证明 subagent 机制正常；`auth-min` 用 5 行极简 prompt 一次落盘成功（3 文件 + 4 测试 PASS + `make check` 9/9） | `AGENTS.md` §4 派发纪律（"派发必须自包含"边界重解释为：自包含 = 任务 + 验收，不是把所有规则塞进 prompt）、`.agents/JOURNAL.md`、`.agents/LOG/README.md` | `probe-fresh.txt` 曾落盘（已清理）；`auth-min` 3 文件落盘 + `make check` 9/9 |
+
 ## 统计
 
-- 条目：**31 条**（覆盖 M0 / M1 的拓扑、协议、生命周期、预算、范围、门禁、验收、协作纪律、归属许可、数据形状十类裁决；第 21–29 条为 2026-11-22 当天登记，非回填；第 30 条为能力模型回填补记——原缺条，收口时按 G-23 补齐；第 31 条为发布链 P0 处置，2026-11-22 当天登记）。
+- 条目：**32 条**（覆盖 M0 / M1 的拓扑、协议、生命周期、预算、范围、门禁、验收、协作纪律、归属许可、数据形状十类裁决；第 21–29 条为 2026-11-22 当天登记，非回填；第 30 条为能力模型回填补记——原缺条，收口时按 G-23 补齐；第 31 条为发布链 P0 处置，2026-11-22 当天登记；第 32 条为 M2 开工子 agent 派发纪律，2026-11-22 当天登记）。
 - 被否决选项：每条至少 1 项，最多 7 项（IPC 线格式）。
 - 未覆盖：M2 及以后尚未发生的裁决不入表；`cron` 插件的具体调度条目格式属 M2 提案范围。

@@ -158,3 +158,12 @@
 | 把"下游文档当前文本"当准绳：2 字节帧头、`.sock.new`、`argon2id` 三处口径各自传播一轮，越传越像"已经定了" | ADR 是唯一准绳：改协议 / 数据 / 资源口径前先查 `docs/DECISIONS/`；ADR 与正文冲突时以 ADR 为准并同步正文，不许反向覆盖；发现冲突报告 lead 等裁决 | [WORKFLOW.md](WORKFLOW.md) §8 第 6 条硬规则 + 每 sprint 末「ADR ↔ 正文」对账 |
 | SDK tag 切在 module 改名之前，tag 内容仍是旧 module 路径；本地 `go.work` 把依赖指回工作树，验收全程没碰过远端 tag，直到干净 clone 才暴露 | **发布物要从远端 ref 回验**：`git clone` 新目录 + `GOWORK=off` + 只读 mod 模式跑消费方构建；本地 `go.work` 参与验收 ＝ 把「跨仓库只依赖 tag」判据关掉；tag 切点必须在口径改名之后 | G-15 变更集（远端 ref 复验）+ G-17（replace / go.work 纪律）+ 本条 M1 复盘 |
 | 同一概念在不同轨道各写一种名字：二进制/进程名曾一边写 `kore`（`Makefile` 的 `BIN ?= ./bin/kore`、`PLAN`/`ROADMAP` 的 `bin/kore`），另一边写 `kored`（`ARCHITECTURE`/`CORE`/`GLOSSARY`/`VISION` 与 `cmd/kored/`）；Loop 阶段数曾一边七阶段（地基契约），一边 8 步（`MILESTONE-M0`/`PLAN`） | **裁决（2026-11-21 lead）：二进制/进程/systemd `ExecStart` 统一为 `kored`（daemon 惯例，与 `cmd/kored/` 同源）；项目名与 Go module 保持 `kore`；systemd unit 名 `kore.service`；Kore Loop 统一七阶段（第 7 阶段=归档复盘）。** 教训不变：跨轨并行前先对齐词表（术语以 `docs/GLOSSARY.md` 为准），出现第二种写法先改回词表再写内容，不由各轨道各自发明 | G4（元信息/链接）+ G6 文档同步 + M0-G 交叉一致性核对 |
+
+#### M2 开工：子 agent 三次崩溃与 prompt 瘦身（2026-11-22）
+
+- **事实**：3 次带完整规则注入的 prompt（AGENTS 全文 + PUA + 10 用例）全部中途失败、零落盘；`probe-fresh` 用 30 秒极简 prompt 成功；`auth-min` 用 5 行极简 prompt 一次落盘成功（3 文件 + 4 测试 PASS + `make check` 9/9）。
+- **根因假设**（假设，未证实）：不是任务太大，是 **prompt 过重**触发新模型输入处理失败；`subagent_fork` 另因注入超大会话上下文失败（终端失败观察，不计任务失败）。
+- **沉淀规则**：**派发 prompt 只写任务本身**——规则文档让 agent 按需自己读；验收命令写清即可，不要把门禁全文 / PUA 契约 / 全部用例塞进 prompt。probe 证明机制正常后，先看 prompt 复杂度，再怀疑 agent。
+- **已内化模式**：以后每次派子 agent，prompt 默认极简（任务 + 写域 + 验收），规则文档让 agent 自读；此条不再单独标 `[PUA生效]`，是默认义务。
+- **有味道的交付**（agent 可见 PUA 输出原文，逐字保留）：
+  > 底层逻辑闭环了：从口令校验、会话落库、中间件拦截到 cmd 装配，一条线端到端拉通。4 个测试 + 4 项验收全绿，make check 9 段全过——这次配得上 P8。
