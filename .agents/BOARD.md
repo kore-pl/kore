@@ -47,7 +47,7 @@
 | 里程碑 | 名称 | 状态 | 收口日期 | 证据 |
 | --- | --- | --- | --- | --- |
 | M0 | 文档与骨架 | completed | 2026-11-21 | [verify/m0-consistency-r5.md](verify/m0-consistency-r5.md)（PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-21 两条 M0 复盘 |
-| M1 | 行走骨架 | blocked | —（代码 2026-11-22 完成；发布链 P0 未闭环） | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（运行时 VERDICT PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」§4.5 / §5；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md)。**阻断项**：`GOWORK=off` 干净 clone `go mod download` 报 `module declares its path as: github.com/kore-project/... but was required as: github.com/pengtang1024/...`；`CS-M1-01` 降为 blocked |
+| M1 | 行走骨架 | completed | 2026-11-22 | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（运行时 VERDICT PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」§4.5 / §5；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md)。**收口补正（2026-11-22）**：收口时因发布链 P0（`pkg/pluginapi/v0.1.0` tag 内容声明旧 module 路径，`GOWORK=off` 干净 clone 报 `module declares its path as: github.com/kore-project/... but was required as: github.com/pengtang1024/...`）临时降为 blocked；处置为 `retract v0.1.0` + 发 `pkg/pluginapi/v0.1.1`，echo 升 v0.1.1 后干净 clone `build` / `dist` 通过，`CS-M1-01` 置 confirmed |
 
 ### 4.2 M0 轨道（7 条，已收口）
 
@@ -79,12 +79,12 @@
 
 | id | subject | owner | status | scope | blocked_by | 变更集 | evidence | revision |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| M1-A | 协议与公开 SDK：frame / envelope / timeout + 嵌套 module | implementer | completed | `pkg/pluginapi/` | — | CS-M1-01 | 705 行 / 10 文件；`go test -count=1 ./pkg/pluginapi` ok；tag `pkg/pluginapi/v0.1.0`；根 `go.mod` `replace => ./pkg/pluginapi` | 1 |
+| M1-A | 协议与公开 SDK：frame / envelope / timeout + 嵌套 module | implementer | completed | `pkg/pluginapi/` | — | CS-M1-01 | 705 行 / 10 文件；`go test -count=1 ./pkg/pluginapi` ok；重发 tag `pkg/pluginapi/v0.1.1`（`90e9fdd`，含 `retract v0.1.0`；首版 `v0.1.0` 已废弃）；根 `go.mod` `replace => ./pkg/pluginapi` | 2 |
 | M1-B | 内核 7/9 模块 + envprobe / platform 支撑包 | implementer | completed | `internal/core/`, `internal/platform/` | — | — | `internal/core` 7,414 行 + `platform` 880 行；`go test -count=1 ./...` 10 包全 ok；auth / market 未做，`routes()` 回 501 | 1 |
 | M1-C | `cmd/kored` 装配：`install` / `serve` 子命令 | implementer | completed | `cmd/kored/` | M1-B | — | 20 文件 1,910 行；11 步 E2E（验收报告 §C）全通过 | 1 |
 | M1-D | 9 段门禁接线（含 canonical / oss / case） | implementer | completed | `Makefile`, `scripts/` | M1-B | — | `make check` **9/9**：docs 6 / dep 2 / thin-shell 4 / repo 5 / canonical 9 / log 8 / wt 4 / oss 8 / case 5 | 1 |
 | M1-E | 开源六件套 + CI 模板 | scribe | completed | `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CHANGELOG.md`, `.github/workflows/` | — | — | `make oss-check` 8 pass / 0 warn / 0 fail | 1 |
-| M1-F | 跨仓库：echo 验证插件 + 首次公开 | implementer | completed | `../kore-plugin-echo` | M1-A | CS-M1-01 | `make dist` → `echo-0.1.0.tar.gz` 1,258,020 B + `.sha256`；`git ls-remote` 双仓 main 可达 | 1 |
+| M1-F | 跨仓库：echo 验证插件 + 首次公开 | implementer | completed | `../kore-plugin-echo` | M1-A | CS-M1-01 | 首版 `make dist` → `echo-0.1.0.tar.gz` 1,258,020 B + `.sha256`；重发 `v0.1.1`（`10cc6eb`，依赖 SDK v0.1.1）→ `echo-0.1.1.tar.gz` 1,258,133 B，干净 clone `GOWORK=off make build` / `make dist` 退出码 0；`git ls-remote` 双仓 main 可达 | 2 |
 | M1-G | 独立验收（verifier ≠ implementer） | verifier | completed | `.agents/verify/` | M1-A…F | — | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md) VERDICT PASS、阻断 0；`make mem MEM_POINTS=60` 中位 9,664 KiB | 1 |
 
 轨道说明：M1-A 冻结协议面（SDK 先于内核发版）；M1-B 是主链，auth / market 的缺席见 [JOURNAL](JOURNAL.md) M1 段第 5 节；M1-C 只做装配不写业务；M1-D 让每条命令都有落点；M1-E 满足 G-26 发布红线；M1-F 证明"插件只依赖公开 SDK"成立；M1-G 由非实现者复跑全部命令。
@@ -106,7 +106,7 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | 变更集 | 目标 | 涉及仓库（tag / commit） | kore 协议影响 | 合并顺序 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
-| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `2616374`（tag `pkg/pluginapi/v0.1.0` → `3a59b98`）；`kore-plugin-echo` @ `3422c10`（tag `v0.1.0`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 本地 `make check` 9/9、`go build`/`go test` 通过；`git ls-remote` 双仓可达。**但** `GOWORK=off` 干净 clone `go mod download` FAIL（`pkg/pluginapi/v0.1.0` 声明旧 module 路径 `kore-project`，proxy 已缓存该 `.mod`） | blocked |
+| CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `90e9fdd`（tag `pkg/pluginapi/v0.1.1`；首版 `pkg/pluginapi/v0.1.0` → `3a59b98` 已 retract）；`kore-plugin-echo` @ `10cc6eb`（tag `v0.1.1`；首版 `v0.1.0` → `3422c10`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 本地 `make check` 9/9、`go build`/`go test` 通过；`git ls-remote` 双仓可达。**收口补正**：SDK v0.1.0 因 module 路径缺陷 retract，已发 v0.1.1；echo 升 v0.1.1 并干净 clone 验证通过。`GOWORK=off go get ...@v0.1.1` 退出码 0（`GOPROXY=direct` / `proxy.golang.org` 双路径）；`go list -m -versions` 仅列 v0.1.1；`/tmp` 干净 clone `GOWORK=off make build` / `make dist` 退出码 0 | confirmed |
 
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 

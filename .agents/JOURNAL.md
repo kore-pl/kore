@@ -66,7 +66,7 @@
 | 差距 | **发布链 P0**：`pkg/pluginapi/v0.1.0`（tag `3a59b98`）的 `go.mod` 仍声明旧路径 `github.com/kore-project/...`，干净目录解析直接失败（本地 `kore-plugin-echo/go.work` 把缺陷完全掩盖）；另有 auth 未做（§2.1 in-scope 内，回 501）、market 未做（属 M2 商店）、web 壳未交付（无 `web/`）、退避重启 / 心跳 / 孤儿核对按 M1-12/13 延期；空载 VmRSS 9,664 KiB 超目标 8,192、未越红线 16,384 |
 | 根因 | 23 条任务按「保 §1 三个不确定性 + §8 反向验收」收敛；auth / market / web 不在 install→serve→enable→invoke→disable→SIGTERM 主链上，被让位给门禁与开源发布；缺口写进本文第 5 节，没有用 N/A 冒充通过 |
 | 沉淀 | ① 里程碑验收 = 可演示的最小闭环，不是 in-scope 全勾；② 规则与判据是同一契约的两个副本，必须同轮改 + 反向验证；③ schema 先 lock 再派发；④ 外部依赖每个前提都要一次真实探测；⑤ 判据对准风险，不对准形式 |
-| 下次动作 | **第 0 件（P0）**：在 `2616374`/`fc66a99`（module 路径已正确）切 `pkg/pluginapi/v0.1.1`，echo `require` 升到 v0.1.1，删本地 `go.work` 后 `GOWORK=off` 干净 clone 复验；之后再补 auth（PBKDF2 + 双 cookie + CSRF）与 market 安装端点，最后开前端 |
+| 下次动作 | **第 0 件（P0）**：在 `2616374`/`fc66a99`（module 路径已正确）切 `pkg/pluginapi/v0.1.1`，echo `require` 升到 v0.1.1，删本地 `go.work` 后 `GOWORK=off` 干净 clone 复验；之后再补 auth（PBKDF2 + 双 cookie + CSRF）与 market 安装端点，最后开前端。**（2026-11-22 已完成：`retract v0.1.0` + `pkg/pluginapi/v0.1.1`，见 §5）** |
 
 #### 1. 里程碑目标
 
@@ -131,13 +131,13 @@
 
 #### 5. 结论与 M2 前置
 
-**M1 = 条件 PASS（收口挂起）**：不确定性①与②有本轮实测证据（二进制 7.57 MB / VmRSS 9,664 KiB 红线内 / 11 步 E2E / idle 5 pass / `make check` 9/9），独立 verifier 报告的运行时结论无阻断项；**不确定性③ FAIL**——干净目录只靠 `pkg/pluginapi/v0.1.0` 构建不成立（tag 内容声明旧 module 路径），本地之所以通过是因为 `go.work` 指回工作树。
+**M1 = PASS（completed，2026-11-22 收口补正）**：不确定性①与②有本轮实测证据（二进制 7.57 MB / VmRSS 9,664 KiB 红线内 / 11 步 E2E / idle 5 pass / `make check` 9/9），独立 verifier 报告的运行时结论无阻断项；**不确定性③在首次收口时 FAIL**——干净目录只靠 `pkg/pluginapi/v0.1.0` 构建不成立（tag 内容声明旧 module 路径，详见 §4.5），本地之所以通过是因为 `go.work` 指回工作树。**该 P0 已于同日处置并复验通过**；本节保留原始事故与结论演变，作为「发布物 ≠ 工作树」的教训记录。
 
-按 proposal §1 的判据表，「依赖 replace / go.work / 不存在的 tag」属**判为失败**，所以本轮只能给条件 PASS：**代码完成、收口挂在发布链 P0 上**，待 `v0.1.1` 切出并 `GOWORK=off` 干净 clone 复验通过后再置 completed（BOARD 里程碑状态与 `CS-M1-01` 已同步降级）。
+**P0 处置结果（2026-11-22）**：`v0.1.0` 发布物不可改写（proxy.golang.org / sum.golang.org 已缓存其 `.mod`，改写会让所有消费者的校验和永久失败），故在 `pkg/pluginapi/go.mod` 加 `retract v0.1.0` 并发布 `pkg/pluginapi/v0.1.1`（tag 指向 `90e9fdd`）；echo `require` 升到 v0.1.1 并重发 `v0.1.1`（tag 指向 `10cc6eb`）。复验：`/tmp` 干净目录 `GOWORK=off go get ...@v0.1.1` 退出码 0（`GOPROXY=direct` 与 `https://proxy.golang.org,direct` 双路径均通过）、`go list -m -versions` 只列 v0.1.1（v0.1.0 已被 retract 过滤）；echo 干净 clone `GOWORK=off make build` / `make dist` 退出码 0。BOARD 里程碑与 `CS-M1-01` 已同步置 completed / confirmed；裁决见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 第 31 条。
 
 **下个里程碑开工前必须先做**（缺一项不开工）：
 
-0. **重切 SDK tag（P0，唯一阻断项）**：在 module 路径已正确的提交（`2616374` 或 `fc66a99`）切 `pkg/pluginapi/v0.1.1`；`v0.1.0` **不要改写**——proxy.golang.org 已缓存其 `.mod`（`module declares its path as: github.com/kore-project/...`），改写会让所有消费者的校验和永久失败；在 `pkg/pluginapi/go.mod` 里 `retract v0.1.0`，echo 升 `require` 到 v0.1.1，删本地 `go.work` 后复验 `GOWORK=off go mod download && make dist`。
+0. ~~重切 SDK tag（P0，唯一阻断项）~~ **已完成（2026-11-22 收口补正）**：`retract v0.1.0` + 发布 `pkg/pluginapi/v0.1.1`（`90e9fdd`）；echo `require` 升 v0.1.1、重发 `v0.1.1`（`10cc6eb`）；`GOWORK=off` 干净目录 `go get` 与干净 clone `make build` / `make dist` 全部通过。原始约束保留：`v0.1.0` **不要改写**——proxy.golang.org 已缓存其 `.mod`，改写会让所有消费者的校验和永久失败。
 1. **补 auth 与 market**：auth 是 §2.1 内欠账，不补则前端无法登录、CSRF 无法验证；market 不补则 `CS-M1-01` 之后没有安装链路可测。
 2. **把 M1-08/09/12/13 遗留写进 M2 任务卡**：capability 方法级校验、audit 写入、bus 多路复用、退避重启 / 心跳 / 孤儿核对——每项都要有验收命令，不接受「顺手做了」。
 3. **两条技术债立项**：`registry/validate.go` 241 行（超 200 行上限，M0 遗留 D-1 同类）与 VmRSS 9,664 KiB（RssFile 6,624 KiB 主体查 bbolt mmap + embed 页，归 M4 设计层，不调阈值）。
