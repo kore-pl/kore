@@ -3,7 +3,7 @@ module github.com/pengtang1024/kore
 go 1.26
 
 require (
-	github.com/pengtang1024/kore/pkg/pluginapi v0.1.0
+	github.com/pengtang1024/kore/pkg/pluginapi v0.1.1
 	go.etcd.io/bbolt v1.3.11
 	gopkg.in/yaml.v3 v3.0.1
 )
