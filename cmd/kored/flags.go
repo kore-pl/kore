@@ -28,30 +28,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, error) {
 	return serveOptions{config: *configPath, stateDir: *stateDir}, nil
 }
 
-// runInstall 只解析 --package / --scenario 并明确回"未实现（M2）"，不写任何安装逻辑。
-func runInstall(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	packagePath := fs.String("package", "", "插件包路径（M2 实现）")
-	scenario := fs.String("scenario", "", "场景预设 id（M2 实现）")
-	if err := fs.Parse(args); err != nil {
-		return exitConfig
-	}
-	if *packagePath == "" && *scenario == "" {
-		fmt.Fprintln(stderr, "install: 必须指定 --package 或 --scenario")
-		printInstallUsage(stderr)
-		return exitConfig
-	}
-	fmt.Fprintf(stdout, "install: 未实现（M2）——参数已解析 package=%q scenario=%q\n", *packagePath, *scenario)
-	return exitOK
-}
-
 // printServeUsage 打印 serve 参数说明。
 func printServeUsage(w io.Writer) {
 	fmt.Fprintln(w, "用法: kored serve [--config <path>] [--state-dir <dir>]")
-}
-
-// printInstallUsage 打印 install 参数说明。
-func printInstallUsage(w io.Writer) {
-	fmt.Fprintln(w, "用法: kored install --package <tar.gz> | --scenario <id>")
 }

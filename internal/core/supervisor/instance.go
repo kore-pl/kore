@@ -1,0 +1,146 @@
+package supervisor
+
+import (
+	"net"
+	"os/exec"
+	"sync"
+	"time"
+
+	"github.com/kore-project/kore/internal/core/registry"
+)
+
+// instance 是单个插件的运行态；所有字段读写都在 mu 下，避免与 reaper 竞争。
+type instance struct {
+	manifest *registry.Manifest
+	socket   string
+
+	mu       sync.Mutex
+	state    State
+	cmd      *exec.Cmd
+	conn     net.Conn
+	listener net.Listener
+	restarts int
+	lastErr  string
+	startAt  time.Time
+	exited   chan struct{}
+}
+
+// newInstance 创建未启动的运行态。
+func newInstance(manifest *registry.Manifest, socket string) *instance {
+	return &instance{manifest: manifest, socket: socket, state: StateStopped}
+}
+
+// currentState 读当前状态。
+func (i *instance) currentState() State {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.state
+}
+
+// setState 覆盖状态。
+func (i *instance) setState(state State) {
+	i.mu.Lock()
+	i.state = state
+	i.mu.Unlock()
+}
+
+// beginStart 进入 starting：重置失败原因与开始时间，并为本次启动新建退出信号。
+func (i *instance) beginStart() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.state = StateStarting
+	i.startAt = time.Now()
+	i.lastErr = ""
+	i.exited = make(chan struct{})
+}
+
+// deadline 返回本次启动的 hello 硬截止时间；已过期时第二返回值为 false。
+func (i *instance) deadline(timeout time.Duration) (time.Time, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.startAt.IsZero() {
+		return time.Time{}, false
+	}
+	limit := i.startAt.Add(timeout)
+	return limit, time.Now().Before(limit)
+}
+
+// attachListener 登记本次启动的监听器。
+func (i *instance) attachListener(listener net.Listener) {
+	i.mu.Lock()
+	i.listener = listener
+	i.mu.Unlock()
+}
+
+// listenerRef 取当前监听器（可能在并发停止后为 nil）。
+func (i *instance) listenerRef() net.Listener {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.listener
+}
+
+// attachProcess 登记已成功 exec 的进程。
+func (i *instance) attachProcess(cmd *exec.Cmd) {
+	i.mu.Lock()
+	i.cmd = cmd
+	i.mu.Unlock()
+}
+
+// exitedRef 取本次启动的退出信号；未启动时为 nil。
+func (i *instance) exitedRef() chan struct{} {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.exited
+}
+
+// takeRuntime 取出并清空 listener/conn/cmd，调用方负责关闭。
+func (i *instance) takeRuntime() (net.Listener, net.Conn, *exec.Cmd) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	listener, conn, cmd := i.listener, i.conn, i.cmd
+	i.listener, i.conn, i.cmd = nil, nil, nil
+	return listener, conn, cmd
+}
+
+// markReady 记录握手成功：连接交给 bus 转发使用。
+func (i *instance) markReady(conn net.Conn) {
+	i.mu.Lock()
+	i.state = StateReady
+	i.conn = conn
+	i.mu.Unlock()
+}
+
+// markFailed 记录启动失败并累计重启次数。
+func (i *instance) markFailed(cause error) {
+	i.mu.Lock()
+	i.state = StateFailed
+	i.restarts++
+	i.lastErr = cause.Error()
+	i.mu.Unlock()
+}
+
+// markStopped 记录已停止。
+func (i *instance) markStopped() {
+	i.mu.Lock()
+	i.state = StateStopped
+	i.mu.Unlock()
+}
+
+// snapshot 生成运行时视图（PID 取自进程句柄，进程已回收时为 0）。
+func (i *instance) snapshot() View {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	pid := 0
+	if i.cmd != nil && i.cmd.Process != nil {
+		pid = i.cmd.Process.Pid
+	}
+	return View{
+		ID:        i.manifest.ID,
+		State:     i.state,
+		PID:       pid,
+		Restarts:  i.restarts,
+		LastError: i.lastErr,
+		Socket:    i.socket,
+		StartedAt: i.startAt,
+	}
+}

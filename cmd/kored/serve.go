@@ -28,7 +28,10 @@ func runServe(args []string, stderr io.Writer) int {
 	if err != nil {
 		return exitConfig
 	}
-	cfg := loadConfig(opts, stderr)
+	cfg, code := loadConfig(opts, stderr)
+	if code != exitOK {
+		return code
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	limits := setRuntimeLimits()
 	logRuntimeLimits(limits)
@@ -40,13 +43,22 @@ func runServe(args []string, stderr io.Writer) int {
 	for _, warning := range report.Warnings {
 		slog.Warn("环境降级", "detail", warning)
 	}
+	st, code := openStore(cfg, stderr)
+	if code != exitOK {
+		return code
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			slog.Warn("状态库关闭失败", "err", err)
+		}
+	}()
 	server, code := startHTTP(app, cfg, report)
 	if code != exitOK {
 		return code
 	}
 	slog.Info("kore ready", "pid", os.Getpid(), "version", version,
 		"socket", filepath.Join(app.Paths.Dir(platform.DirRun), "kore.sock"), "addr", cfg.Addr)
-	waitForExit(app.Signals, server)
+	waitForExit(app.Signals, server, &cfg)
 	return exitOK
 }
 
@@ -205,8 +217,8 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report) (*htt
 	return server, exitOK
 }
 
-// waitForExit 阻塞等待停止信号；SIGHUP 只记录（热重载待 M1-03）。
-func waitForExit(signals platform.Signals, server *httpapi.Server) {
+// waitForExit 阻塞等待停止信号；SIGHUP 按白名单热重载配置。
+func waitForExit(signals platform.Signals, server *httpapi.Server, cfg *config) {
 	for {
 		select {
 		case <-signals.Shutdown():
@@ -214,7 +226,7 @@ func waitForExit(signals platform.Signals, server *httpapi.Server) {
 			signals.Stop()
 			return
 		case <-signals.Reload():
-			slog.Warn("收到 SIGHUP：配置热重载待 M1-03 实现，保留当前配置")
+			cfg.reload()
 		}
 	}
 }

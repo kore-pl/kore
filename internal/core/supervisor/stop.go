@@ -1,0 +1,77 @@
+package supervisor
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"time"
+
+	"github.com/kore-project/kore/pkg/pluginapi"
+)
+
+// shutdownMethod 是优雅停止的协议方法名。
+const shutdownMethod = "kore.shutdown"
+
+// Stop 优雅停止插件：kore.shutdown → 等宽限期 → SIGKILL；退出后清理 socket。
+//
+// 幂等：stopped / draining 直接返回。在途调用的连接会被关闭，bus 侧按 E_UPSTREAM
+// 处理（M1 不跟踪在途计数，drain 的「等在途结束」归 M1-09 的 pending map）。
+func (m *Manager) Stop(ctx context.Context, id string) error {
+	inst, ok := m.lookup(id)
+	if !ok {
+		return nil
+	}
+	switch inst.currentState() {
+	case StateStopped, StateDraining:
+		return nil
+	}
+	inst.setState(StateDraining)
+	listener, conn, cmd := inst.takeRuntime()
+	if conn != nil {
+		m.sendShutdown(inst.manifest.ID, conn)
+	}
+	if cmd != nil && cmd.Process != nil {
+		if !waitChan(ctx, inst.exitedRef(), m.opts.ShutdownGrace) {
+			if err := cmd.Process.Kill(); !isProcessDone(err) {
+				m.logger.Warn("SIGKILL 插件失败", "plugin_id", id, "err", err)
+			}
+			waitChan(context.Background(), inst.exitedRef(), defaultKillWait)
+		}
+	}
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if listener != nil {
+		_ = listener.Close()
+	}
+	m.removeSocket(inst.socket)
+	inst.markStopped()
+	m.logger.Info("插件已停止", "plugin_id", id)
+	return nil
+}
+
+// sendShutdown 发 kore.shutdown 请求；写失败只 WARN，剩余宽限期后仍走 SIGKILL。
+func (m *Manager) sendShutdown(id string, conn net.Conn) {
+	requestID, err := randomHex(16)
+	if err != nil {
+		m.logger.Warn("生成 shutdown 请求 id 失败", "plugin_id", id, "err", err)
+		return
+	}
+	graceMS := int(m.opts.ShutdownGrace / time.Millisecond)
+	params, err := json.Marshal(map[string]any{"reason": "disable", "grace_ms": graceMS})
+	if err != nil {
+		m.logger.Warn("序列化 shutdown 参数失败", "plugin_id", id, "err", err)
+		return
+	}
+	request := &pluginapi.Request{
+		Type:      pluginapi.TypeRequest,
+		ID:        requestID,
+		Method:    shutdownMethod,
+		Params:    params,
+		TimeoutMS: graceMS,
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(defaultKillWait))
+	if err := pluginapi.WriteJSON(conn, request); err != nil {
+		m.logger.Warn("发送 kore.shutdown 失败", "plugin_id", id, "err", err)
+	}
+}
