@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/kore-project/kore/pkg/pluginapi"
 )
 
 // version 由构建参数注入（make build 的 -X main.version=...）。
@@ -36,8 +38,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "serve":
 		return runServe(args[1:], stderr)
 	case "version":
-		// TODO(M1-03)：pkg/pluginapi 尚未导出 Protocol 常量，先与 docs 同步写死；SDK 补齐后改为引用。
-		fmt.Fprintf(stdout, "kored %s\n协议 kore.plugin.v1\n", version)
+		fmt.Fprintf(stdout, "kored %s\n协议 %s\n", version, pluginapi.Protocol)
 		return exitOK
 	case "install":
 		return runInstall(args[1:], stdout, stderr)

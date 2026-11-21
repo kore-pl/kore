@@ -47,20 +47,23 @@ func runServe(args []string, stderr io.Writer) int {
 	return exitOK
 }
 
-// maxProcs 是主壳的并行度上限。
+// maxProcs 是主壳的并行度上限（仅 CPU 核数超限时收敛）。
 //
-// 主壳是 I/O 型薄壳（UDS 调用 + 静态资源），8 个 P 足够；而每个 P 的 mcache、g0 栈与
-// GC 工作线程会随核数线性推高空载 RSS 与线程数。24 核实测（GOGC=50）：默认 24 P 空载
-// 8040 KiB / 13 线程（距 8192 KiB 只剩 152 KiB），8 P 为 7220 KiB / 7 线程；大机器上
-// 也保持确定。
+// 主壳是 I/O 型薄壳（UDS 调用 + 静态资源），少量 P 即可支撑；而每个 P 的 mcache、
+// g0 栈与 GC 工作线程会随核数线性推高空载 RSS 与线程数。实测数据见
+// `.agents/verify/m1-memory-baseline.md`（三档 × 60 点），此处不写死具体 KiB。
 const maxProcs = 8
 
-// setRuntimeLimits 钉死主壳的资源锚点（CORE §7）：
+// setRuntimeLimits 钉死主壳的资源锚点（口径见 docs/CORE.md 资源调优一节 +
+// docs/DECISIONS/0015-runtime-resource-anchors.md）：
 //
 //   - 堆软上限 6 MiB：GOMEMLIMIT 已由环境设置时尊重环境（消融对照用）；
-//   - GC 目标比例 50：GOGC 已设置时尊重环境，未设时取 CORE §7 的兜底值
-//     （默认 100 实测空载 7820 KiB、单次请求后 8056 KiB，余量不足 2%；50 为 6408 KiB）；
-//   - 并行度上限 8：仅在 CPU 核数超过上限时收敛，小机器不受影响。
+//   - GC 目标比例 50（默认档）：GOGC 已设置时尊重环境，未设时才取该兜底值；
+//   - 并行度上限 8：GOMAXPROCS 已设置时尊重环境（消融对照用），否则仅在
+//     CPU 核数超过上限时收敛，小机器不受影响。
+//
+// 三者都是"未显式设置才生效"，因此外部可用 GOGC / GOMEMLIMIT / GOMAXPROCS
+// 覆盖做消融实验；实测数据见 `.agents/verify/m1-memory-baseline.md`（三档 × 60 点）。
 func setRuntimeLimits() {
 	if os.Getenv("GOMEMLIMIT") == "" {
 		debug.SetMemoryLimit(6 << 20)
@@ -68,7 +71,7 @@ func setRuntimeLimits() {
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(50)
 	}
-	if runtime.NumCPU() > maxProcs {
+	if os.Getenv("GOMAXPROCS") == "" && runtime.NumCPU() > maxProcs {
 		runtime.GOMAXPROCS(maxProcs)
 	}
 }
