@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/installer"
@@ -65,6 +66,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Addr:           cfg.Addr,
 		Backend:        svc.backend,
 		Auth:           svc.auth,
+		LoginLimiter:   loginLimiter(cfg),
 		Market:         buildMarket(cfg, svc),
 		AuditLister:    &auditListerFromStore{db: svc.db},
 		InstallRefresh: svc.reloadOne,
@@ -137,4 +139,17 @@ func closeStore(state storeCloser) {
 type storeCloser interface {
 	// Close 关闭状态库，重复调用幂等。
 	Close() error
+}
+
+// loginLimiter 按配置装配登录失败限速器（docs/SECURITY §3.5 / CORE §2.3）。
+//
+// 口径来自 security.login_rate_limit（默认 5 次 / 60s 窗口 / 锁 300s）；
+// 配置快照缺失时退回 auth 包默认值，绝不因为配置缺位而跳过限速。
+// 状态是纯内存，重启清零（不假装持久化）。
+func loginLimiter(cfg config) *auth.LoginLimiter {
+	if cfg.snapshot == nil {
+		return auth.NewLoginLimiter(auth.DefaultMaxFailures, auth.DefaultWindow, auth.DefaultLockout)
+	}
+	r := cfg.snapshot.Security.LoginRateLimit
+	return auth.NewLoginLimiter(r.Attempts, r.Window, r.Lock)
 }

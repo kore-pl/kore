@@ -27,7 +27,7 @@
 | 威胁 | 场景 | 影响 | 缓解 | 残余风险 |
 | --- | --- | --- | --- | --- |
 | 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时口令走明文 |
-| 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（每 IP + 全局桶）、恒定时间比较 | 慢速低频爆破（单机场景收益低） |
+| 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（进程内存全局桶，见 §3.5）、恒定时间比较 | 慢速低频爆破（单机场景收益低）；锁定期随重启清零 |
 | CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token + `X-Kore-CSRF` + Origin 校验 | 同站 XSS 可绕过全部三层 |
 | 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、12h 滑动 TTL、登出即删、绑 UA 指纹哈希 | 同机 root 可读浏览器进程内存 |
 | 插件越权调用 | 低权插件请求 `system:admin` 方法 | 宿主被改写 | capabilities 三处校验（安装/授予/调用）+ 审计 | 用户安装时授予过宽能力 |
@@ -89,7 +89,13 @@
 
 ### 3.5 登录限速
 
-两个令牌桶同时生效：per-IP（取 `RemoteAddr`；UDS 下地址恒为 local，实际退化为全局桶）与全局桶，**60s 窗口内 5 次失败即锁定 300s**（与 [CORE](./CORE.md) / [DATA-MODEL](./DATA-MODEL.md) 的 `security.login_rate_limit` 同口径）。命中返回 `E_RATELIMIT` 并带 `Retry-After`；失败与限速都写审计，不区分"账号不存在/口令错误"。
+**单一全局桶**：`internal/core/auth/ratelimit.go` 的 `LoginLimiter` 实现，口径取 `security.login_rate_limit`——**60s 窗口内 5 次失败即锁定 300s**（与 [CORE](./CORE.md) §2.3 / [DATA-MODEL](./DATA-MODEL.md) §3 同口径）。单管理员体系下只有一个账号，key 固定 `"admin"`；接口保留 key 参数，后续要做 per-IP 桶按客户端标识分桶即可，无需改类型。**不做 per-IP 桶**：UDS 下 `RemoteAddr` 恒为 local，per-IP 桶退化成全局桶，多一层分桶无实际收益，M1 起只维护全局桶。
+
+判定顺序：`Allow("admin")` 在口令校验**之前**，锁定期内连正确口令也拒（避免用正确口令探测解锁时机），返回 429 `E_RATELIMIT` 且 `Retry-After` 给剩余秒数（向上取整、最小 1）；口令错 `RecordFailure`，成功 `RecordSuccess` 清零。锁定到期后计数一并清零，重新从零累计。
+
+**实现约束**：零 ticker / 零 AfterFunc / 零后台 goroutine（G-19），过期条目在判定路径上惰性清理，空闲零开销；**状态只在进程内存，重启清零**（限速状态持久化排在 M3，见 §10 附则）。`security.login_rate_limit.*` 可 SIGHUP 热更，已累计计数与进行中的锁定不变。
+
+**未落地项（如实标注）**：`auth.login` / `ratelimit.hit` 审计事件尚未实现——当前限速只作用于请求响应，不写审计；审计落地前，登录失败与限速命中只能从进程日志（WARN 级 `E_RATELIMIT`）取证。
 
 ## 4. CSRF
 

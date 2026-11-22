@@ -52,7 +52,8 @@
 ### 2.3 `internal/core/auth`
 
 - **职责**：单用户口令校验、会话签发/校验/吊销、登录限速。口令哈希用标准库 `crypto/pbkdf2`（PBKDF2-HMAC-SHA256，迭代 600000，salt 16 B，key 32 B），存储格式 `pbkdf2-sha256$600000$<salt-b64>$<hash-b64>`；口令来源是配置 `auth.admin_password_hash`（无用户表，见 §2.2 store）。会话 token 32 B 随机（`crypto/rand`），`sessions` 的 key 为 token 的 `sha256`（64 位小写 hex），明文 token 不落库；Cookie 名 `kore_session`，`HttpOnly`、`SameSite=Strict`、`Path=/`、HTTPS 下 `Secure`；TTL 12 h，剩余 < 2 h 时滑动续期。登录成功时同时下发两个 cookie：`kore_session`（HttpOnly、SameSite=Strict）与 `kore_csrf`（32 B 随机，`crypto/rand` base64url；`SameSite=Strict`；**不设 HttpOnly**——前端需读取后回填 `X-Kore-CSRF` 头，这正是双提交的机制；不设 Path 限制）；登出与 session 过期时一并失效。`kore_csrf` 与 `kore_session` 绑定同一会话记录，校验时用常量时间比较。
-- **输入输出**：`POST /api/v1/auth/login {username,password}` → `Set-Cookie` + `{username,expiresAt}`；`POST /api/v1/auth/logout` → 删会话 + 清 Cookie；`GET /api/v1/self` → 当前用户；中间件输入 Cookie，输出 `Session` 或 `401`。登录限速 5 次/60 s 每 IP，触发后锁 5 分钟。
+- **输入输出**：`POST /api/v1/auth/login {username,password}` → `Set-Cookie` + `{username,expiresAt}`；`POST /api/v1/auth/logout` → 删会话 + 清 Cookie；`GET /api/v1/self` → 当前用户；中间件输入 Cookie，输出 `Session` 或 `401`。
+- **登录限速（`ratelimit.go`）**：纯内存滑动窗口计数器，口径取 `security.login_rate_limit`（默认 **60 s 窗口内失败 5 次即锁 300 s**）。`Allow(key)` 在口令校验**之前**判定，锁定期内连正确口令也回 429 `E_RATELIMIT` + `Retry-After`（秒，向上取整、最小 1）；口令错记 `RecordFailure`，登录成功 `RecordSuccess` 清零。单管理员体系下 key 固定 `"admin"` 构成**全局桶**（接口保留 key 参数，供后续 per-IP 分桶），不做 per-IP 桶——UDS 下 `RemoteAddr` 恒为 local，per-IP 桶等同于全局桶，多一层无收益。**零 ticker / 零 AfterFunc / 零后台 goroutine**（G-19）：过期条目在 `Allow`/`Record*` 调用路径上按次数惰性清理。**状态只在进程内存，重启清零**（不持久化；持久化限速状态排在 M3）。`security.login_rate_limit.*` 属 SIGHUP 热更白名单，重载后调 `Server.ApplyLoginPolicy` 立刻生效，**已累计的窗口计数与进行中的锁定不变**，只影响之后的判定与新锁定。
 - **失败模式与处理**：口令错 → 401 `E_UNAUTHORIZED`，响应耗时恒定在 150–250 ms（防时序侧信道）；超限 → 429 `E_RATELIMIT`，`Retry-After` 给剩余秒数；会话过期 → 401 且清 Cookie；store 不可用 → 500 `E_INTERNAL`；`auth.admin_password_hash` 为空 → 首启 bootstrap：用 `crypto/rand` 生成 24 字符口令（base32 字母表剔除 `0/O/1/I`），写回 PBKDF2 哈希并置 `auth.initialized=true`，明文口令**只打印到 stderr/tty 一次**（不进日志文件，日志只记 `auth.admin_initialized`）；生成失败、配置文件不可写，或 `auth.initialized=true` 但哈希为空 → 退出码 2（不降级为空口令启动）。
 - **明确不做什么**：不做多用户/注册/找回密码/2FA/RBAC；不做 JWT（避免密钥轮换与吊销难题）；不引入 `golang.org/x/crypto`（bcrypt/argon2 破依赖白名单）；不把会话放进程内存（重启即全员掉线不可接受）。
 
@@ -143,7 +144,7 @@
 | 4 | `body_limit` | `/invoke` 8 MiB；`POST /plugins` 32 MiB；其余 64 KiB（硬上限 1 MiB） | 413 `E_INVALID` |
 | 5 | `auth` | 校验 `kore_session`；豁免 `POST /auth/login`、`GET /-/healthz`、`GET /`、`GET /assets/*` | 401 `E_UNAUTHORIZED` |
 | 6 | `csrf` | 校验 `X-Kore-CSRF` 头与 `kore_csrf` cookie 双提交（常量时间比较）；豁免 `GET`/`HEAD`/`OPTIONS`、`POST /auth/login`（尚无会话）、`GET /-/healthz` | 403 `E_UNAUTHORIZED` |
-| 7 | `rate_limit` | `/auth/login` 5 次/60 s/IP；`/invoke` 120 次/60 s/会话 | 429 `E_RATELIMIT` |
+| 7 | `rate_limit` | `/auth/login` 5 次/60 s（全局桶，key=`admin`，见 §2.3）；`/invoke` 120 次/60 s/会话 | 429 `E_RATELIMIT` |
 | 8 | `router` | 匹配路径与方法，进入 handler | 404 `E_NOTFOUND` / 405 `E_INVALID` |
 
 设计理由：`csrf` 必须在 `auth` 之后（先有会话才有 token 可比对）、在 `rate_limit` 之前（拒绝伪造请求不应消耗业务限速桶）；`rate_limit` 放在 `auth` 之后，未登录流量不消耗业务限速桶（登录接口自身有独立桶）；`body_limit` 放在 `auth` 之前，超大 body 不进入鉴权与业务路径；`recover` 必须在 `access_log` 之前才能记录 500 的真实来源。`GET /-/healthz` 绕过 auth、csrf 与 rate_limit，`access_log` 降为 DEBUG（避免探活刷日志）。

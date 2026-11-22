@@ -44,6 +44,10 @@ type Options struct {
 	Backend Backend
 	// Auth 是鉴权管理器；nil 表示不启用鉴权（测试与 M0 探活骨架用）。
 	Auth *auth.Manager
+	// LoginLimiter 是登录失败限速器；nil 时跳过限速（测试与骨架兼容）。
+	// 生产必装配：cmd/kored 按 security.login_rate_limit 注入，缺装配等于
+	// 文档承诺的 429/Retry-After 不存在（见 docs/SECURITY §3.5）。
+	LoginLimiter *auth.LoginLimiter
 	// Market 是软件商店后端；nil 表示 store/* 端点回 501 E_UNSUPPORTED。
 	Market *market.Service
 	// CapabilityResolver 解析请求的 subject 与其 granted capabilities；
@@ -115,6 +119,7 @@ type Server struct {
 	mux            *http.ServeMux
 	httpServer     *http.Server
 	auth           *auth.Manager
+	loginLimiter   *auth.LoginLimiter
 	market         *market.Service
 	capResolver    CapabilityResolver
 	capAuditor     CapabilityAuditor
@@ -128,7 +133,7 @@ type Server struct {
 func New(opts Options, transport platform.Transport) *Server {
 	server := &Server{
 		opts: opts, transport: transport, mux: http.NewServeMux(),
-		auth: opts.Auth, market: opts.Market,
+		auth: opts.Auth, loginLimiter: opts.LoginLimiter, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 	}

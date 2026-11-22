@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,10 @@ import (
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
+
+// loginRateKey 是登录限速的 key。单管理员体系下只有一个账号，用固定 key
+// 构成全局桶（与 docs/SECURITY §3.5「UDS 下退化为全局桶」口径一致）。
+const loginRateKey = "admin"
 
 // loginRequest / sessionBody 是登录与会话查询的显式请求/响应结构。
 type loginRequest struct {
@@ -26,7 +31,27 @@ type sessionBody struct {
 }
 
 // handleLogin 校验口令，成功签发会话并下发 cookie。
+//
+// 限速（docs/SECURITY §3.5）：先 Allow 后校验口令——锁定期内连正确口令也拒，
+// 避免"用正确口令探测是否已解锁"；拒绝回 429 E_RATELIMIT + Retry-After（秒）。
+// 计数口径为失败次数，成功登录清零。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.loginLimiter != nil {
+		if ok, retryAfter := s.loginLimiter.Allow(loginRateKey); !ok {
+			// Retry-After 取整到秒并向上取整：不足 1s 也给 1，避免 0 被读成"立即重试"。
+			seconds := int64((retryAfter + time.Second - 1) / time.Second)
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+			// 只记 key 与剩余秒数，绝不记口令；审计事件（auth.login/ratelimit.hit）
+			// 尚未实现，此 WARN 是当前唯一取证信号（docs/SECURITY §3.5）。
+			slog.Warn("登录限速命中", "key", loginRateKey, "retry_after_s", seconds)
+			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT,
+				"登录失败次数过多，请稍后重试", "")
+			return
+		}
+	}
 	var req loginRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&req); err != nil {
@@ -35,6 +60,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := s.auth.Verify(req.Password)
 	if err != nil || !ok {
+		if s.loginLimiter != nil {
+			s.loginLimiter.RecordFailure(loginRateKey)
+		}
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "口令错误", "")
 		return
 	}
@@ -42,6 +70,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeFailure(w, err)
 		return
+	}
+	if s.loginLimiter != nil {
+		s.loginLimiter.RecordSuccess(loginRateKey)
 	}
 	s.auth.SetCookie(w, token)
 	// 双提交要求前端能读到与 X-Kore-CSRF 头同名比对的值，故 kore_csrf
@@ -52,6 +83,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionBody{Authenticated: true, ExpiresAt: formatExpiry(session.ExpiresAt)})
+}
+
+// ApplyLoginPolicy 热更登录限速口径（SIGHUP 白名单 security.login_rate_limit.*）。
+// 未装配 limiter 时静默忽略：骨架/测试不因缺限速而 panic。
+func (s *Server) ApplyLoginPolicy(maxFailures int, window, lockout time.Duration) {
+	if s.loginLimiter == nil {
+		return
+	}
+	s.loginLimiter.SetPolicy(maxFailures, window, lockout)
 }
 
 // setCSRFCookie 下发 kore_csrf：非 HttpOnly（双提交要求前端可读），
