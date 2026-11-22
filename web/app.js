@@ -874,27 +874,105 @@
     start();
   }
 
-  function renderDashboard() {
-    var root = el('div');
-    root.appendChild(renderTopbar());
+  /* ===================== 视图路由（侧栏壳由 shell.js 提供） =====================
+     只有登录成功后的 renderDashboard 注册路由；login / offline 仍走整页替换。
+     store / monitor / settings 三个视图由独立模块提供，模块缺席时退化为 .stub 占位，
+     壳不依赖它们存在（谁先到谁上，不阻塞首屏）。 */
+  function moduleView(globalName, stubText) {
+    return function (box) {
+      var mod = window[globalName];
+      if (mod && typeof mod.render === 'function') return mod.render(box);
+      box.appendChild(el('div', 'stub', stubText));
+    };
+  }
 
-    var content = el('main', 'content');
-    if (state.notice) {
-      var bar = noticeBar(state.notice);
-      bar.id = 'kore-notice';
-      content.appendChild(bar);
+  function viewNotice(box) {
+    if (!state.notice) return;
+    var bar = noticeBar(state.notice);
+    bar.id = 'kore-notice';
+    box.appendChild(bar);
+  }
+
+  function pluginSummaryPanel() {
+    var enabled = 0, ready = 0, failed = 0;
+    for (var i = 0; i < state.plugins.length; i++) {
+      var p = state.plugins[i] || {};
+      if (p.enabled === true) enabled++;
+      if (p.state === 'ready') ready++;
+      if (p.state === 'failed') failed++;
     }
-    content.appendChild(renderInfoPanel());
-    content.appendChild(renderPluginsPanel());
-    renderPluginUis(content, { status: 'fulfilled', value: { plugins: state.plugins } });
+    var box = panel('插件概览', 'GET ' + ENDPOINTS.plugins, [
+      row('已安装', fmtInt(state.plugins.length)),
+      row('已启用', fmtInt(enabled)),
+      row('运行中', fmtInt(ready)),
+      row('异常', fmtInt(failed))
+    ]);
+    var meta = el('div', 'panel-meta actions');
+    var more = el('button', 'btn', '查看全部插件');
+    more.type = 'button';
+    more.addEventListener('click', function () { window.KoreShell.navigate('plugins'); });
+    meta.appendChild(more);
+    box.appendChild(meta);
+    return box;
+  }
 
+  function renderDashboardView(box) {
+    viewNotice(box);
+    box.appendChild(renderInfoPanel());
+    box.appendChild(pluginSummaryPanel());
     var meta = el('div', 'panel-meta actions');
     var retry = el('button', 'btn', '重新检测');
     retry.type = 'button';
     retry.addEventListener('click', start);
     meta.appendChild(retry);
-    content.appendChild(meta);
+    box.appendChild(meta);
+  }
 
+  function renderPluginsView(box) {
+    viewNotice(box);
+    box.appendChild(renderPluginsPanel());
+    renderPluginUis(box, { status: 'fulfilled', value: { plugins: state.plugins } });
+  }
+
+  var SHELL_ROUTES = [
+    { id: 'dashboard', label: '概览', icon: '📊', render: renderDashboardView },
+    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', '软件商店（store.js 提供）') },
+    { id: 'plugins', label: '已装插件', icon: '📦', render: renderPluginsView },
+    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', '监控（monitor.js 提供）') },
+    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', '设置（settings.js 提供）') }
+  ];
+
+  function renderDashboard() {
+    if (!window.KoreShell || typeof window.KoreShell.mount !== 'function') {
+      renderLegacyDashboard(); // 壳缺席：退回单页，面板不因缺一个脚本而白屏
+      return;
+    }
+    // 首次登录挂壳；后续数据刷新只重绘当前视图，不重建导航（否则丢失视图与滚动位置）。
+    var mounted = !!document.getElementById('view');
+    if (!mounted) window.KoreShell.mount(SHELL_ROUTES);
+    else window.KoreShell.navigate(window.KoreShell.current() || 'dashboard');
+
+    var top = document.getElementById('kore-topbar');
+    if (top) {
+      top.textContent = '';
+      top.appendChild(renderTopbar());
+    }
+  }
+
+  // 视图模块（如 settings.js 退出登录）显式回到站点根 = 归位意图：
+  // 鉴权状态只有本文件持有，故由这里重新探测，而不是让视图模块自己猜会话。
+  if (window.addEventListener) {
+    window.addEventListener('kore:root', function () { resetAndStart(); });
+  }
+
+  function renderLegacyDashboard() {
+    var root = el('div');
+    root.appendChild(renderTopbar());
+    var content = el('main', 'content');
+    viewNotice(content);
+    content.appendChild(renderInfoPanel());
+    content.appendChild(renderPluginsPanel());
+    renderPluginUis(content, { status: 'fulfilled', value: { plugins: state.plugins } });
     root.appendChild(content);
     if (app.replaceChildren) app.replaceChildren(root);
     else { app.innerHTML = ''; app.appendChild(root); }

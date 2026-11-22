@@ -1085,3 +1085,206 @@ button:disabled, .btn:disabled {
   .store-preset-btn { min-height: var(--kore-touch); }
   .store-btn-install, .store-btn-danger { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
 }
+
+/* ===== 布局壳：左侧固定导航 + 视图区（web/shell.js）——仅追加，不改既有类 =====
+   桌面：nav 固定 200px 在左，内容右列独立滚动；
+   640–1023：nav 收窄为 168px（图标+文字仍并列）；
+   <640：nav 变顶部横向滚动条（不占纵向空间），触摸目标 ≥44px（裁决41）。
+   色值全部走 :root 令牌；断点沿用 §3 的 640 / 1024，禁 JS 探测。 */
+.kore-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
+.kore-nav {
+  flex: 0 0 200px;
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-1);
+  padding: var(--kore-space-3) var(--kore-space-2);
+  background: var(--kore-bg-1);
+  border-right: 1px solid var(--kore-border-1);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.kore-nav-brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--kore-space-2);
+  padding: 0 var(--kore-space-2) var(--kore-space-3);
+  border-bottom: 1px solid var(--kore-border-2);
+  margin-bottom: var(--kore-space-2);
+}
+
+.kore-nav-brand-name {
+  font-size: var(--kore-font-16);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.kore-nav-brand-sub {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+/* 导航项：按钮语义（键盘可达 / 可聚焦），命中区撑满 nav 宽 */
+.kore-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--kore-space-3);
+  width: 100%;
+  min-height: 38px;
+  padding: 0 var(--kore-space-3);
+  color: var(--kore-text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--kore-radius-control);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kore-nav-item:hover {
+  color: var(--kore-text-1);
+  background: var(--kore-bg-2);
+  border-color: var(--kore-border-2);
+}
+
+/* 当前项：左侧色条 + 背景 + 文字提亮，三重通道不只靠颜色 */
+.kore-nav-item.is-active {
+  color: var(--kore-text-1);
+  background: var(--kore-bg-2);
+  border-color: var(--kore-border-1);
+  box-shadow: inset 3px 0 0 var(--kore-info);
+  font-weight: 600;
+}
+
+.kore-nav-item.is-active:hover { border-color: var(--kore-border-1); }
+
+.kore-nav-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+  font-size: var(--kore-font-14);
+  line-height: 1;
+}
+
+.kore-nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右侧列：顶栏 + 视图，内容区独立滚动 */
+.kore-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.kore-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--kore-bg-0);
+  border-bottom: 1px solid var(--kore-border-1);
+}
+
+/* app.js 仍产出 .topbar；嵌进壳时去掉自身边框，避免双层描边 */
+.kore-topbar .topbar { border-bottom: 0; background: transparent; }
+
+.view {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--kore-space-6) var(--kore-space-4);
+}
+
+.view > .panel:last-child { margin-bottom: 0; }
+
+/* 占位：视图模块未就位时的明确缺口，不留空白迷惑用户 */
+.stub {
+  padding: var(--kore-space-6);
+  color: var(--kore-text-3);
+  font-size: var(--kore-font-13);
+  text-align: center;
+  background: var(--kore-bg-1);
+  border: 1px dashed var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+}
+
+/* 平板：导航略收窄，内容仍是左右结构 */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .kore-nav { flex-basis: 168px; width: 168px; }
+  .kore-nav-item { gap: var(--kore-space-2); padding: 0 var(--kore-space-2); }
+  .view { padding: var(--kore-space-4) var(--kore-space-3); }
+}
+
+/* 手机（< 640px）：导航转顶部横向滚动条；触摸目标 ≥44px */
+@media (max-width: 639px) {
+  .kore-shell { flex-direction: column; }
+
+  .kore-nav {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    flex: 0 0 auto;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--kore-space-1);
+    padding: var(--kore-space-2) var(--kore-space-2);
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--kore-border-1);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .kore-nav::-webkit-scrollbar { display: none; }
+
+  /* 品牌块在小屏让位给导航项（竖向文字条会挤掉首屏） */
+  .kore-nav-brand { display: none; }
+
+  .kore-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: var(--kore-touch);
+    padding: 0 var(--kore-space-3);
+    white-space: nowrap;
+  }
+
+  .kore-nav-item.is-active { box-shadow: inset 0 -3px 0 var(--kore-info); }
+
+  .kore-nav-label { overflow: visible; text-overflow: clip; }
+
+  .kore-col { flex: 1 1 auto; min-height: 0; }
+  .kore-topbar { position: static; }
+  .view { padding: var(--kore-space-4) var(--kore-space-3); max-width: none; }
+  .stub { padding: var(--kore-space-4); }
+}
+
+/* 手机顶栏瘦身：nav 已承载品牌，这里只保留连接状态与退出，省下首屏纵向空间 */
+@media (max-width: 639px) {
+  .kore-topbar .brand-sub { display: none; }
+  .kore-topbar .topbar { min-height: 0; padding: var(--kore-space-2) var(--kore-space-3); }
+  .kore-topbar .conn { gap: var(--kore-space-1); }
+  .kore-topbar .conn .btn { min-height: var(--kore-touch); }
+}
+
+/* 手机再瘦一档：nav 已有 kore 品牌，顶栏 brand 冗余 → 只留状态与退出 */
+@media (max-width: 639px) {
+  .kore-topbar .brand { display: none; }
+  .kore-topbar .conn { flex-wrap: nowrap; overflow-x: auto; width: 100%; }
+}
