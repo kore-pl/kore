@@ -44,9 +44,22 @@
     if (tone === 'ok' || tone === 'warn' || tone === 'fail') dot.classList.add(tone);
     c.appendChild(dot); c.appendChild(el('span', null, text)); return c;
   }
-  function flag(value, skipped, yes, no) {
-    if (skipped) return chip('na', '已跳过');
-    return value ? chip('ok', yes) : chip('fail', no);
+  // 三态标志：通过 / 未检测（环境限制）/ 失败。把"没测"和"测挂"分开，
+  // 否则本机没装 nginx 会被显示成红色站点故障。
+  function flag(value, skipped, yes, no, detail) {
+    if (skipped) {
+      var na = chip('na', '未检测（未配置 nginx）');
+      na.title = '本机没有可用的 nginx，未执行该项检测；这不是站点故障';
+      return na;
+    }
+    var badge = value ? chip('ok', yes) : chip('fail', no);
+    if (!value && detail) badge.title = detail;
+    return badge;
+  }
+  // summarize 取失败输出首行，列表用一行摘要，完整输出留给详情页。
+  function summarize(text) {
+    var line = String(text || '').split('\n')[0].trim();
+    return line.length > 90 ? line.slice(0, 90) + '…' : line;
   }
   function setStatus(text, tone) {
     if (!S.status) return;
@@ -76,7 +89,7 @@
     table.appendChild(row('域名', data.domain || '—'));
     if (data.vhost_path) table.appendChild(row('vhost 路径', el('span', 'mono', data.vhost_path)));
     if (data.backup_path) table.appendChild(row('备份路径', el('span', 'mono', data.backup_path)));
-    table.appendChild(row('nginx -t', flag(data.test_passed, data.test_skipped, '通过', '未通过')));
+    table.appendChild(row('nginx -t', flag(data.test_passed, data.test_skipped, '通过', '失败', data.test_output)));
     table.appendChild(row('已 reload', flag(data.reloaded, data.reload_skipped, '已重载', '未重载')));
     if (data.applied !== undefined) table.appendChild(row('整体生效', flag(data.applied, false, '已生效', '未生效')));
     if (data.created !== undefined) table.appendChild(row('新建片段', data.created ? '是' : '否（覆盖已有）'));
@@ -140,8 +153,10 @@
     table.appendChild(row('在插件清单内', d.managed ? '是' : '否'));
     table.appendChild(row('vhost 文件', d.conf_exists ? '存在' : '缺失'));
     table.appendChild(row('站点根目录', d.site_dir_exists ? '存在' : '缺失或未配置'));
-    table.appendChild(row('nginx -t', flag(d.test_passed, d.test_skipped, '通过', '未通过')));
-    table.appendChild(row('已被 nginx 加载', d.load_checked ? (d.loaded ? '是' : '否') : '未检查'));
+    table.appendChild(row('nginx -t', flag(d.test_passed, d.test_skipped, '通过', '失败', d.test_output)));
+    table.appendChild(row('已被 nginx 加载', d.reload_skipped
+      ? flag(false, true, '是', '否')
+      : (d.load_checked ? (d.loaded ? '是' : '否') : '未检查')));
     if (d.test_output) {
       var pre = el('pre', 'site-test-output', d.test_output);
       table.appendChild(row('nginx -t 输出', pre));
@@ -168,8 +183,12 @@
       var state = add(tr, el('td', 'site-state'));
       state.dataset.label = '生效状态';
       state.appendChild(flag(site.exists, false, 'vhost 存在', 'vhost 缺失'));
-      state.appendChild(flag(site.test_ok, false, 'nginx -t 通过', 'nginx -t 未通过'));
-      state.appendChild(flag(site.reloaded, false, '已加载', '未加载'));
+      state.appendChild(flag(site.test_ok, site.test_skipped, 'nginx -t 通过', 'nginx -t 失败', site.test_output));
+      state.appendChild(flag(site.reloaded, site.reload_skipped, '已加载', '未加载'));
+      if (!site.test_ok && !site.test_skipped && site.test_output) {
+        var why = add(state, el('span', 'row-note-fail site-test-brief', summarize(site.test_output)));
+        why.title = site.test_output;
+      }
       var ops = add(tr, el('td', 'cell-ops'));
       ops.dataset.label = '操作';
       var detail = add(ops, el('button', 'btn', '查看状态')); detail.type = 'button';
