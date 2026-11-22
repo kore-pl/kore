@@ -10,8 +10,8 @@
   // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
   var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   function fresh() {
-    return { root: null, status: null, statusError: '', rules: [], rulesError: '', rulesLoaded: false,
-      canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
+    return { root: null, status: null, statusError: '', rules: [], rulesError: '', rulesErrorCode: '', rulesErrorHint: '',
+      rulesLoaded: false, canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
       deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false };
   }
   var S = fresh();
@@ -40,7 +40,7 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error((data.code ? data.code + '：' : '') + (data.message || ('请求失败（HTTP ' + res.status + '）')));
-        err.code = data.code || ''; throw err;
+        err.code = data.code || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -60,6 +60,29 @@
     var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
     add(h, el('span', 'panel-title', title));
     return { panel: p, head: h, meta: add(h, el('span', 'panel-meta', metaText || '')) };
+  }
+  // rootGuide：非 root 的折叠提权指引。默认收起，标题只讲「需要 root 权限」，
+  // 原始错误放在二级折叠里——不把 ERROR: You need to be root 直接铺在页面上。
+  function rootGuide(hint, raw) {
+    var box = el('div', 'fw-callout-warn fw-root-guide');
+    box.setAttribute('role', 'status');
+    add(box, el('div', 'fw-callout-title', '防火墙管理需要 root 权限'));
+    add(box, el('p', 'fw-callout-text',
+      '当前 kored 以非 root 身份运行，读不到也改不了 ufw 规则。这是权限限制，不是登录失效，无需重新登录。'));
+    var details = add(box, el('details', 'fw-details'));
+    add(details, el('summary', null, '查看如何配置'));
+    add(details, el('p', 'fw-callout-text', '在服务器上以 root 重启 kored，然后刷新本页：'));
+    add(details, el('pre', 'fw-cmd', 'sudo systemctl restart kore'));
+    add(details, el('p', 'fw-callout-text',
+      'systemd 部署用上面的命令；开发态直接启动可用 sudo ./bin/kored serve --config <你的配置>。' +
+      'kore 不会给单个请求加 sudo，也不会让插件自己提权；root 动作经内核 root-action 通道代理（ADR-0018）。'));
+    if (hint) add(details, el('p', 'fw-callout-text', '后端提示：' + hint));
+    if (raw) {
+      var more = add(details, el('details', 'fw-details'));
+      add(more, el('summary', null, '查看原始错误'));
+      add(more, el('pre', null, raw));
+    }
+    return box;
   }
   function fmtPort(v) { return v === '' || v === null || v === undefined ? 'any' : String(v); }
   function actionKls(a) { return a === 'allow' ? 'is-allow' : (a === 'deny' ? 'is-deny' : 'is-reject'); }
@@ -100,15 +123,17 @@
       add(cell, el('span', 'fw-stat-label', item[0])); add(cell, el('span', 'fw-stat-value', item[1]));
     });
     if (!st.available) {
-      var call = add(box, el('div', 'fw-callout-warn'));
-      add(call, el('div', 'fw-callout-title', '当前环境无法读取防火墙状态'));
-      var p = add(call, el('p', 'fw-callout-text', '当前环境无法读取防火墙状态：' + (st.error || '原因未知') +
-        '。防火墙管理需要 root 权限（kored 需以 root 运行或配置 systemd 权限）。表单已禁用，仅保留只读展示；提权后刷新本页。 '));
-      var guide = add(p, el('a', 'fw-perm-link', '查看提权说明'));
-      guide.href = RUNBOOK_PRIV; guide.target = '_blank'; guide.rel = 'noopener noreferrer';
-      var details = add(call, el('details', 'fw-details'));
-      add(details, el('summary', null, '查看原始错误'));
-      add(details, el('pre', null, st.error || '（无更多信息）'));
+      if (st.error_code === 'E_NEED_ROOT') {
+        // root 缺失是权限限制，不是登录失效：只给一条折叠指引，不铺原始英文错误。
+        add(box, rootGuide(st.hint, st.error));
+      } else {
+        var call = add(box, el('div', 'fw-callout-warn'));
+        add(call, el('div', 'fw-callout-title', '当前环境无法读取防火墙状态'));
+        var p = add(call, el('p', 'fw-callout-text', '当前环境无法读取防火墙状态：' + (st.error || '原因未知') +
+          '。表单已禁用，仅保留只读展示；排除原因后刷新本页。 '));
+        var guide = add(p, el('a', 'fw-perm-link', '查看运行手册'));
+        guide.href = RUNBOOK_PRIV; guide.target = '_blank'; guide.rel = 'noopener noreferrer';
+      }
     }
     var can = S.canWrite;
     // 状态说了算：能写才解锁表单，否则一律禁用（非 root 时不再让用户白填一遍）。
@@ -125,8 +150,16 @@
     if (!S.rulesHost) return;
     S.rulesHost.textContent = ''; S.rulesCount.textContent = S.rulesLoaded ? S.rules.length + ' 条' : '';
     if (S.rulesError) {
-      S.rulesHost.appendChild(notice('读取规则失败：' + S.rulesError));
-      add(S.rulesHost, el('div', 'panel-empty', '非 root 时 ufw 规则不可读，页面保留只读状态并禁用写操作。'));
+      if (S.rulesErrorCode === 'E_NEED_ROOT') {
+        S.rulesHost.appendChild(rootGuide(S.rulesErrorHint, S.rulesError));
+        add(S.rulesHost, el('div', 'panel-empty', '规则列表在 root 权限下才能读取；提权后点「刷新」即可恢复。'));
+      } else if (S.rulesErrorCode === 'E_UNAUTHORIZED') {
+        S.rulesHost.appendChild(notice('登录已失效，请重新登录后再查看防火墙规则。'));
+        add(S.rulesHost, el('div', 'panel-empty', '当前会话没有权限；重新登录后刷新本页。'));
+      } else {
+        S.rulesHost.appendChild(notice('读取规则失败：' + S.rulesError));
+        add(S.rulesHost, el('div', 'panel-empty', '读取失败时页面保留只读状态并禁用写操作。'));
+      }
       return;
     }
     if (!S.rulesLoaded) { add(S.rulesHost, el('div', 'muted fw-loading', '正在读取规则…')); return; }
@@ -261,13 +294,14 @@
     });
   }
   function loadRules() {
-    S.rulesLoaded = false; S.rulesError = ''; paintRules();
+    S.rulesLoaded = false; S.rulesError = ''; S.rulesErrorCode = ''; S.rulesErrorHint = ''; paintRules();
     invoke('firewall.rules', {}).then(function (data) {
       if (S.destroyed) return;
       S.rules = data.rules || []; S.rulesLoaded = true; paintRules();
     }, function (err) {
       if (S.destroyed) return;
-      S.rulesError = err.message; S.rulesLoaded = true; paintRules();
+      S.rulesError = err.message; S.rulesErrorCode = err.code || ''; S.rulesErrorHint = err.hint || '';
+      S.rulesLoaded = true; paintRules();
     });
   }
   function render(container) {

@@ -515,7 +515,7 @@
     pingBtn.type = 'button';
     if (!enabled || plugin.state !== 'ready' || !ping.supported) {
       pingBtn.disabled = true;
-      pingBtn.title = !enabled ? '插件未启用，先点「启用」'
+      pingBtn.title = !enabled ? '插件已停用，先点「启用」'
         : (plugin.state !== 'ready' ? '插件当前空闲（lazy 按需启动，未驻留进程）'
           : '该插件不支持 ping 方法');
     }
@@ -528,7 +528,7 @@
     if (!ping.supported) note.textContent = '该插件不支持 ping 方法';
     else if (ping.error) { note.textContent = 'ping 失败：' + ping.error; note.className = 'row-note row-note-fail'; }
     else if (ping.result) { note.textContent = 'ping → ' + ping.result; note.className = 'row-note row-note-ok'; }
-    else if (!enabled) note.textContent = '未启用';
+    else if (!enabled) note.textContent = '已停用（可点「启用」）';
     else if (plugin.state !== 'ready') {
       note.textContent = String(plugin.lifecycle || '') === 'lazy' ? '空闲（按需启动）'
         : '状态 ' + (plugin.state || '未知');
@@ -589,9 +589,9 @@
   // lazy 语义：lifecycle=lazy 的插件按需拉起、空闲退出以省资源，stopped 是正常空闲而非故障。
   var LAZY_IDLE_TIP = '按需启动（lazy）：收到请求才拉起，空闲时退出以省资源；这是正常状态，不是故障。';
 
-  // 四态：运行中（绿）/ 空闲（蓝，lazy+已启用+未运行）/ 未启用（灰，期望停用）/ 异常（红）。
+  // 四态：运行中（绿）/ 空闲（蓝，lazy+已启用+未运行）/ 已停用（灰，期望停用）/ 异常（红）。
   function pluginStateTag(plugin) {
-    // 缺 state 时按"未运行"处理：宁可显示空闲/未启用，也不无证据地宣称运行中。
+    // 缺 state 时按"未运行"处理：宁可显示空闲/已停用，也不无证据地宣称运行中。
     var st = String(plugin.state || 'stopped');
     var desired = String(plugin.desired || (plugin.enabled === true ? 'enabled' : 'disabled'));
     var lazy = String(plugin.lifecycle || '') === 'lazy';
@@ -599,7 +599,7 @@
       return { cls: 'ok', text: '运行中', title: '进程已就绪，可处理请求。' };
     }
     if (st === 'stopped' && desired === 'disabled') {
-      return { cls: 'na', text: '未启用', title: '期望状态为停用：不会处理请求，点「启用」后生效。' };
+      return { cls: 'na', text: '已停用', title: '用户已停用：不会处理请求，点行内「启用」后生效。' };
     }
     if (st === 'stopped' && desired === 'enabled' && lazy) {
       return { cls: 'na', info: true, text: '空闲', title: LAZY_IDLE_TIP };
@@ -753,10 +753,10 @@
     var cols = ['插件', '版本', '最新版本', '深度', '生命周期', '状态', '操作'];
     for (var c = 0; c < cols.length; c++) {
       var th = el('th', null, cols[c]);
-      // 状态列表头带 lazy 语义说明：绿=运行中 / 蓝=空闲（正常）/ 灰=未启用 / 红=异常。
+      // 状态列表头带 lazy 语义说明：绿=运行中 / 蓝=空闲（正常）/ 灰=已停用 / 红=异常。
       if (cols[c] === '状态') {
         th.title = '运行中=进程就绪；空闲=已启用的 lazy 插件按需启动、空闲退出以省资源（正常）；' +
-          '未启用=期望停用；异常=启动失败或非预期退出。';
+          '已停用=用户主动停用（正常，不是故障）；异常=启动失败或非预期退出。';
       }
       headRow.appendChild(th);
     }
@@ -789,11 +789,11 @@
     return c;
   }
 
-  // 顶部汇总条：已启用 N · 运行中 M · 空闲 K · 未启用 J —— 蓝色"空闲"不再被读成故障。
+  // 顶部汇总条：已启用 N · 运行中 M · 空闲 K · 已停用 J —— 蓝色"空闲"不再被读成故障。
   function summaryBarText() {
     var c = pluginCounts();
     return '已启用 ' + fmtInt(c.enabled) + ' · 运行中 ' + fmtInt(c.running) +
-      ' · 空闲 ' + fmtInt(c.idle) + ' · 未启用 ' + fmtInt(c.disabled);
+      ' · 空闲 ' + fmtInt(c.idle) + ' · 已停用 ' + fmtInt(c.disabled);
   }
 
   // 顶部汇总条：N 个已安装 / M 个可升级 + 一键全部升级 + 批量进度。
@@ -1285,7 +1285,7 @@
     table.appendChild(row('已启用', fmtInt(c.enabled)));
     table.appendChild(row('运行中', fmtInt(c.running)));
     table.appendChild(row('空闲', fmtInt(c.idle)));
-    table.appendChild(row('未启用', fmtInt(c.disabled)));
+    table.appendChild(row('已停用', fmtInt(c.disabled)));
     table.appendChild(row('异常', fmtInt(c.failed)));
     box.appendChild(table);
     var hint = el('p', 'panel-meta', '空闲 = 已启用的 lazy 插件按需启动、空闲时退出以省资源，属正常行为。');

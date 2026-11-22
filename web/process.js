@@ -8,9 +8,11 @@
   var API = '/api/v1/invoke/process/';
   var TIMEOUT_MS = 15000;
   var SIGNALS = ['TERM', 'KILL', 'HUP', 'INT'];
+  // 进程表默认只渲染 20 行（每次加载更多 +20）；接口单次最多返回 500 条。
+  var PAGE_SIZE = 20, FETCH_LIMIT = 500;
   function fresh() {
     return { items: [], total: 0, sort: 'cpu', q: '', firstSample: false, rawNote: '', loading: false,
-      loadError: '', detail: null, detailPid: 0, detailError: '', confirm: false, signal: 'TERM',
+      shown: PAGE_SIZE, loadError: '', detail: null, detailPid: 0, detailError: '', confirm: false, signal: 'TERM',
       killResult: null, killError: '', killBusy: false, tree: null, treeError: '', treeOpen: false, destroyed: false };
   }
   var S = fresh();
@@ -57,6 +59,9 @@
       throw err;
     });
   }
+  function fmtInt(n) {
+    return typeof n === 'number' && isFinite(n) ? n.toLocaleString('zh-CN') : '—';
+  }
   function fmtKiB(kib) {
     if (typeof kib !== 'number' || !isFinite(kib)) return '—';
     var mib = kib / 1024;
@@ -81,14 +86,19 @@
       add(box, el('p', 'proc-empty-text', '进程列表加载失败：' + S.loadError));
       var retry = add(box, el('button', 'btn', '重试')); retry.type = 'button';
       on(retry, load);
+      paintMore();
       return;
     }
     var q = S.q.trim().toLowerCase();
     var rows = q ? S.items.filter(function (it) {
       return (it.name || '').toLowerCase().indexOf(q) >= 0 || (it.cmdline || '').toLowerCase().indexOf(q) >= 0;
     }) : S.items;
-    S.countMeta.textContent = S.items.length ? rows.length + ' / ' + S.total + ' 个进程' : '';
-    if (!S.items.length) { add(host, el('div', 'proc-empty-text', S.loading ? '正在读取进程列表…' : '没有可显示的进程')); return; }
+    var displayTotal = q ? rows.length : (S.total || rows.length);
+    var shown = Math.min(S.shown, rows.length);
+    S.countMeta.textContent = S.items.length
+      ? '已显示 ' + fmtInt(shown) + ' / 共 ' + fmtInt(displayTotal) + ' 个进程' + (q ? '（已过滤）' : '')
+      : '';
+    if (!S.items.length) { add(host, el('div', 'proc-empty-text', S.loading ? '正在读取进程列表…' : '没有可显示的进程')); paintMore(); return; }
     var table = add(host, el('table', 'proc-table'));
     var htr = add(add(table, el('thead')), el('tr'));
     [['pid', 'PID', 'pid'], ['name', '名称', 'name'], ['user', '用户', ''], ['state', '状态', ''],
@@ -105,7 +115,7 @@
       on(btn, function () { if (S.sort === col[2]) return; S.sort = col[2]; load(); });
     });
     var body = add(table, el('tbody'));
-    rows.forEach(function (item) {
+    rows.slice(0, shown).forEach(function (item) {
       var tr = add(body, el('tr', 'proc-row')); tr.tabIndex = 0;
       var open = function () { openDetail(item.pid); };
       on(tr, open);
@@ -125,6 +135,38 @@
       var cmd = add(tr, el('td', 'proc-cmd', item.cmdline || '—'));
       cmd.title = item.cmdline || '';
     });
+    paintMore();
+  }
+  // paintMore：底部固定显示「已显示 X / 共 Y 个进程」+「加载更多」。
+  // 接口最多返回 500 条；到上限后说明剩余需后端扩上限，不假装还能加载。
+  function paintMore() {
+    if (!S.moreHost) return;
+    S.moreHost.textContent = '';
+    if (S.loadError || !S.items.length) return;
+    var q = S.q.trim().toLowerCase();
+    var rows = q ? S.items.filter(function (it) {
+      return (it.name || '').toLowerCase().indexOf(q) >= 0 || (it.cmdline || '').toLowerCase().indexOf(q) >= 0;
+    }) : S.items;
+    var displayTotal = q ? rows.length : (S.total || rows.length);
+    var shown = Math.min(S.shown, rows.length);
+    var row = add(S.moreHost, el('div', 'db-auto-actions proc-more-row'));
+    add(row, el('span', 'muted', '已显示 ' + fmtInt(shown) + ' / 共 ' + fmtInt(displayTotal) + ' 个进程'));
+    if (shown < rows.length) {
+      var more = add(row, el('button', 'btn btn-ghost', '加载更多'));
+      more.type = 'button'; on(more, loadMore);
+    } else if (!q && S.total > S.items.length) {
+      add(row, el('span', 'muted', '（接口单次最多 ' + fmtInt(FETCH_LIMIT) + ' 条，剩余 ' +
+        fmtInt(S.total - S.items.length) + ' 个未返回）'));
+    }
+  }
+  function loadMore() {
+    var q = S.q.trim().toLowerCase();
+    var rows = q ? S.items.filter(function (it) {
+      return (it.name || '').toLowerCase().indexOf(q) >= 0 || (it.cmdline || '').toLowerCase().indexOf(q) >= 0;
+    }) : S.items;
+    if (S.shown >= rows.length) return;
+    S.shown = Math.min(S.shown + PAGE_SIZE, rows.length);
+    paintTable();
   }
   function paintConfirm(host, d) {
     var box = add(host, el('div', 'proc-confirm'));
@@ -263,8 +305,8 @@
     });
   }
   function load() {
-    S.loading = true; S.loadError = ''; paintTable();
-    invoke('process.list', { sort: S.sort, limit: 100 }).then(function (d) {
+    S.loading = true; S.loadError = ''; S.shown = PAGE_SIZE; paintTable();
+    invoke('process.list', { sort: S.sort, limit: FETCH_LIMIT }).then(function (d) {
       if (S.destroyed) return;
       S.items = d.items || []; S.total = d.total || 0; S.firstSample = !!d.first_sample; S.rawNote = d.cpu_note || '';
 
@@ -283,7 +325,7 @@
     var tools = add(root, el('div', 'proc-toolbar'));
     S.qEl = add(tools, el('input', 'proc-input proc-search'));
     S.qEl.type = 'search'; S.qEl.placeholder = '过滤名称 / 命令行'; S.qEl.setAttribute('aria-label', '过滤进程');
-    S.qEl.addEventListener('input', function () { S.q = S.qEl.value; paintTable(); });
+    S.qEl.addEventListener('input', function () { S.q = S.qEl.value; S.shown = PAGE_SIZE; paintTable(); });
     var refresh = add(tools, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
     on(refresh, load);
     S.countMeta = add(tools, el('span', 'proc-count muted', ''));
@@ -293,6 +335,7 @@
     add(ph, el('span', 'panel-title', '进程列表'));
     add(ph, el('span', 'panel-meta', '点列头排序 · 点行看详情'));
     S.tableHost = add(panel, el('div', 'proc-table-host'));
+    S.moreHost = add(panel, el('div', 'proc-more'));
     S.mask = add(root, el('div', 'proc-mask')); S.mask.hidden = true; on(S.mask, closeDrawer);
     S.drawer = add(root, el('aside', 'proc-drawer')); S.drawer.hidden = true;
     S.drawer.setAttribute('role', 'dialog'); S.drawer.setAttribute('aria-modal', 'true'); S.drawer.setAttribute('aria-label', '进程详情');

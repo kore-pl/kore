@@ -10,6 +10,7 @@
   function fresh() {
     return { root: null, instances: [], selected: '', loadError: '', info: null, infoError: '',
       keys: [], pattern: '*', limit: 200, scanned: 0, truncated: false, keysLoaded: false, keysError: '',
+      shown: 50, step: 50, totalKeys: 0, loadingMore: false,
       activeKey: null, value: null, valueError: '', checked: Object.create(null), notice: '',
       busy: false, destroyed: false, discoveryState: 'loading', discovery: null, discoveryError: '',
       autoNotice: null, autoPending: false };
@@ -286,8 +287,22 @@
       on(card, function () { selectInstance(inst.name); });
     });
   }
+  // keyspaceTotal 汇总 INFO keyspace 各 db 的键数：分页的「共 N 个键」用它，
+  // 不用 SCAN 返回的 scanned（那是本次扫描到的条数，不是键空间总量）。
+  function keyspaceTotal(info) {
+    var ks = (info && info.keyspace) || {}, total = 0, found = false;
+    Object.keys(ks).forEach(function (name) {
+      var m = /keys=(\d+)/.exec(String(ks[name] || ''));
+      if (!m) return;
+      total += parseInt(m[1], 10) || 0;
+      found = true;
+    });
+    return found ? total : 0;
+  }
   function paintInfo() {
     if (!S.infoHost) return;
+    S.totalKeys = keyspaceTotal(S.info);
+    paintKeyFooter();
     S.infoPanel.hidden = !S.selected; S.infoHost.textContent = '';
     if (!S.selected) return;
     if (S.infoError) { S.infoHost.appendChild(notice('信息读取失败：' + S.infoError)); return; }
@@ -320,27 +335,50 @@
     S.delBtn.disabled = S.busy || !n;
     S.delBtn.textContent = n ? '删除选中（' + n + '）' : '删除选中';
   }
+  function paintKeyFooter() {
+    if (!S.keysMoreHost) return;
+    S.keysMoreHost.textContent = '';
+    if (!S.keysLoaded || S.keysError) return;
+    var total = S.totalKeys, unknown = total <= 0;
+    if (unknown) total = S.keys.length;
+    var shown = Math.min(S.shown, S.keys.length);
+    var row = add(S.keysMoreHost, el('div', 'db-auto-actions redis-key-more'));
+    add(row, el('span', 'muted', (unknown && S.truncated ? '已显示 ' + fmtInt(shown) + ' / 至少 ' + fmtInt(total)
+      : '已显示 ' + fmtInt(shown) + ' / 共 ' + fmtInt(total)) + ' 个键'));
+    var canMore = S.shown < total && (S.shown < S.keys.length || S.truncated);
+    if (canMore) {
+      var more = add(row, el('button', 'btn btn-ghost', S.loadingMore ? '加载中…' : '加载更多'));
+      more.type = 'button'; more.disabled = S.loadingMore;
+      on(more, loadMoreKeys);
+    } else if (S.truncated && S.totalKeys > S.keys.length) {
+      add(row, el('span', 'muted', '（已达查询上限，可调大「上限」后重新查询）'));
+    }
+  }
   function paintKeys() {
     if (!S.keysHost) return;
     S.keysHost.textContent = '';
-    S.keyCount.textContent = S.keysLoaded ? ('扫描 ' + fmtInt(S.scanned) + ' 个') : '';
-    if (S.truncated) S.keyCount.appendChild(el('span', 'db-truncated', '（已达上限，结果被截断）'));
+    S.keyCount.textContent = S.keysLoaded ? ('已加载 ' + fmtInt(S.keys.length) + ' 个') : '';
+    if (S.truncated) S.keyCount.appendChild(el('span', 'db-truncated', '（结果被截断）'));
     paintDeleteBtn();
-    if (S.keysError) { S.keysHost.appendChild(notice('扫描键失败：' + S.keysError)); return; }
-    if (!S.keysLoaded) { add(S.keysHost, el('div', 'muted redis-loading', '正在扫描键…')); return; }
-    if (!S.keys.length) { add(S.keysHost, el('div', 'panel-empty', '没有匹配的键。')); return; }
+    if (S.keysError) { S.keysHost.appendChild(notice('扫描键失败：' + S.keysError)); paintKeyFooter(); return; }
+    if (!S.keysLoaded) { add(S.keysHost, el('div', 'muted redis-loading', '正在扫描键…')); paintKeyFooter(); return; }
+    if (!S.keys.length) { add(S.keysHost, el('div', 'panel-empty', '没有匹配的键。')); paintKeyFooter(); return; }
+    // 只渲染前 shown 行：键空间可能有数千个键，全量渲染会让页面长到十几屏。
+    var rows = S.keys.slice(0, S.shown);
     var scroll = add(S.keysHost, el('div', 'redis-key-host')), table = add(scroll, el('table', 'redis-table'));
     var htr = add(add(table, el('thead')), el('tr'));
     var checkAll = add(add(htr, el('th', 'redis-check-cell')), el('input', 'redis-check'));
-    checkAll.type = 'checkbox'; checkAll.setAttribute('aria-label', '全选当前键'); checkAll.checked = S.keys.every(function (e) { return !!S.checked[e.key]; });
+    checkAll.type = 'checkbox'; checkAll.setAttribute('aria-label', '全选当前页键');
+    checkAll.checked = rows.length > 0 && rows.every(function (e) { return !!S.checked[e.key]; });
     checkAll.addEventListener('change', function () {
-      S.checked = Object.create(null);
-      if (checkAll.checked) S.keys.forEach(function (e) { S.checked[e.key] = true; });
+      rows.forEach(function (e) {
+        if (checkAll.checked) S.checked[e.key] = true; else delete S.checked[e.key];
+      });
       paintKeys();
     });
     ['键名', '类型', 'TTL'].forEach(function (t) { add(htr, el('th', null, t)); });
     var tbody = add(table, el('tbody'));
-    S.keys.forEach(function (entry) {
+    rows.forEach(function (entry) {
       var active = S.activeKey && S.activeKey.key === entry.key;
       var tr = add(tbody, el('tr', 'redis-row' + (active ? ' is-active' : ''))); tr.tabIndex = 0;
       if (active) tr.setAttribute('aria-current', 'true');
@@ -354,6 +392,34 @@
       add(tr, el('td', 'redis-key', entry.key)); add(tr, el('td', 'redis-type', entry.type || '—'));
       add(tr, el('td', 'redis-ttl', fmtTTL(entry.ttl_s))); on(tr, function () { loadValue(entry); });
       tr.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); loadValue(entry); } });
+    });
+    paintKeyFooter();
+  }
+  // loadMoreKeys：每次 +step；已加载的行用完且后端还有剩余时，按更大 limit 重新拉取。
+  // 「上限」输入框仍是初始上限，加载更多在此基础上按需上调，不静默丢数据。
+  function loadMoreKeys() {
+    if (S.loadingMore) return;
+    var next = S.shown + S.step;
+    if (next <= S.keys.length) { S.shown = next; paintKeys(); return; }
+    if (!S.truncated) { S.shown = Math.min(next, S.keys.length); paintKeys(); return; }
+    var name = S.selected; if (!name) return;
+    var want = Math.min(10000, Math.max(next, S.keys.length + S.step, S.limit));
+    if (want <= S.keys.length) {
+      S.shown = S.keys.length; paintKeyFooter();
+      return;
+    }
+    S.loadingMore = true; paintKeyFooter();
+    invoke('redis.keys', { instance: name, pattern: S.pattern, limit: want }).then(function (data) {
+      if (S.destroyed || S.selected !== name) return;
+      S.loadingMore = false;
+      S.keys = data.keys || []; S.scanned = data.scanned || 0; S.truncated = !!data.truncated;
+      S.keysLoaded = true; S.shown = Math.min(next, S.keys.length);
+      var keep = Object.create(null);
+      S.keys.forEach(function (e) { if (S.checked[e.key]) keep[e.key] = true; });
+      S.checked = keep; paintKeys();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.loadingMore = false; S.keysError = err.message; paintKeys();
     });
   }
   function valueTable(headers, rows) {
@@ -391,6 +457,7 @@
     if (!name || S.selected === name) return;
     S.selected = name; S.info = null; S.infoError = ''; S.keys = []; S.keysLoaded = false;
     S.keysError = ''; S.activeKey = null; S.value = null; S.valueError = ''; S.notice = ''; S.truncated = false; S.scanned = 0;
+    S.shown = S.step; S.totalKeys = 0; S.loadingMore = false;
     S.checked = Object.create(null); paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintValue(); loadInfo(); loadKeys(); }
   function loadInstances(reset) {
     if (reset) { S.selected = ''; S.info = null; S.keys = []; S.keysLoaded = false; S.autoNotice = null; }
@@ -434,7 +501,9 @@
   }
   function loadKeys() {
     var name = S.selected; if (!name) return;
-    S.keysLoaded = false; S.keysError = ''; S.truncated = false; S.scanned = 0; paintKeys();
+    S.keysLoaded = false; S.keysError = ''; S.truncated = false; S.scanned = 0;
+    // 搜索 / pattern 变化一律回到第一页：默认只渲染 50 行，避免页面长度失控。
+    S.shown = S.step; S.loadingMore = false; paintKeys();
     invoke('redis.keys', { instance: name, pattern: S.pattern, limit: S.limit }).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.keys = data.keys || []; S.scanned = data.scanned || 0; S.truncated = !!data.truncated; S.keysLoaded = true;
@@ -547,7 +616,7 @@
     }
     on(query, runSearch);
     S.patternInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') runSearch(); });
-    S.keysHost = add(keys.panel, el('div', 'redis-keys')); S.confirmHost = add(keys.panel, el('div', 'redis-confirm-host'));
+    S.keysHost = add(keys.panel, el('div', 'redis-keys')); S.keysMoreHost = add(keys.panel, el('div', 'redis-keys-more')); S.confirmHost = add(keys.panel, el('div', 'redis-confirm-host'));
     var value = panel('值', ''); S.valuePanel = value.panel; S.valuePanel.hidden = true; add(S.root, S.valuePanel);
     S.valueMeta = add(value.meta, el('span', null, '')); add(value.meta, el('span', null, '点击任意键查看'));
     S.valueHost = add(S.valuePanel, el('div', 'redis-value'));

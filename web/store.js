@@ -19,8 +19,10 @@
     { id: 'data', label: '数据库', tags: ['data'] }, { id: 'ops', label: '运维', tags: ['ops'] },
     { id: 'sec', label: '安全', tags: ['sec'] }];
   var CN = { web: '站点', app: '运行时', data: '数据库', ops: '运维', sec: '安全' };
+  // 商店每页 12 个卡片（24 个插件正好 2 页），避免分类筛选后某类很多时页面无限拉长。
+  var PAGE_SIZE = 12;
   var S = { plugins: [], presets: [], installed: Object.create(null), status: Object.create(null),
-    cat: 'all', q: '', grid: null, empty: null, stats: null, notice: null,
+    cat: 'all', q: '', page: 1, grid: null, empty: null, stats: null, notice: null,
     summary: null, batchStatus: null,
     batch: { running: false, done: 0, total: 0, failed: [], message: '' },
     restart: null, restartCode: null };
@@ -281,15 +283,36 @@
   function renderGrid() {
     if (!S.grid) return;
     var list = visible();
+    var pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (S.page > pages) S.page = pages;
+    if (S.page < 1) S.page = 1;
+    var start = (S.page - 1) * PAGE_SIZE;
+    var pageList = list.slice(start, start + PAGE_SIZE);
     S.grid.textContent = '';
-    list.forEach(function (p) { S.grid.appendChild(renderCard(p)); });
+    pageList.forEach(function (p) { S.grid.appendChild(renderCard(p)); });
     S.empty.hidden = list.length !== 0;
+    renderPager(list.length, pages);
     var up = upgradable().length;
     S.stats.textContent = (S.plugins.length
       ? '共 ' + S.plugins.length + ' 个插件 · 已安装 ' + Object.keys(S.installed).length + ' 个' +
         (up ? ' · ' + up + ' 个可升级' : ' · 全部已是最新')
-      : '索引暂不可用') + ' · 当前显示 ' + list.length + ' 个';
+      : '索引暂不可用') + ' · 匹配 ' + list.length + ' 个 · 第 ' + S.page + '/' + pages +
+      ' 页（每页 ' + PAGE_SIZE + ' 个）';
     renderSummary();
+  }
+  // renderPager：上一页 / 页码 / 下一页；只有一页时不渲染多余控件。
+  function renderPager(total, pages) {
+    if (!S.pager) return;
+    S.pager.textContent = '';
+    if (!total) return;
+    var row = add(S.pager, el('div', 'db-auto-actions store-pager'));
+    var prev = add(row, el('button', 'btn btn-ghost', '上一页'));
+    prev.type = 'button'; prev.disabled = S.page <= 1;
+    on(prev, function () { if (S.page > 1) { S.page--; renderGrid(); } });
+    add(row, el('span', 'muted', '第 ' + S.page + ' / ' + pages + ' 页 · 共 ' + total + ' 个插件'));
+    var next = add(row, el('button', 'btn btn-ghost', '下一页'));
+    next.type = 'button'; next.disabled = S.page >= pages;
+    on(next, function () { if (S.page < pages) { S.page++; renderGrid(); } });
   }
 
   // 安装端点要求本地包路径：只有后端明确要求时才在卡片内展开，页面不常驻技术输入框。
@@ -565,12 +588,13 @@
     root.appendChild(renderPresets());
     var bar = add(root, el('div', 'store-bar'));
     var search = add(bar, input('store-search', '按 id / 名称搜索插件', '搜索插件', 'search'));
-    search.addEventListener('input', function () { S.q = search.value; renderGrid(); });
+    search.addEventListener('input', function () { S.q = search.value; S.page = 1; renderGrid(); });
     var cats = add(bar, el('div', 'store-cats'));
     cats.setAttribute('role', 'group'); cats.setAttribute('aria-label', '按分类筛选');
     CATS.forEach(function (c) {
       var b = add(cats, on(el('button', 'store-cat', c.label), function () {
         S.cat = c.id;
+        S.page = 1;
         var all = cats.querySelectorAll('.store-cat');
         for (var i = 0; i < all.length; i++) {
           all[i].setAttribute('aria-pressed', all[i].dataset.cat === c.id ? 'true' : 'false');
@@ -581,6 +605,7 @@
       b.setAttribute('aria-pressed', c.id === S.cat ? 'true' : 'false');
     });
     S.grid = add(root, el('div', 'store-grid'));
+    S.pager = add(root, el('div', 'store-pager-host'));
     S.empty = add(root, el('p', 'store-empty', '没有匹配的插件'));
     S.empty.hidden = true;
   }
