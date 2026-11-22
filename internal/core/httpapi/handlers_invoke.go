@@ -21,7 +21,10 @@ const (
 )
 
 // methodPattern 是业务方法名语法：单段动词或点分多段（PLUGIN-PROTOCOL §7.2）。
-var methodPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`)
+// 段首必须小写；段内允许字母（含大写，camelCase）、数字、下划线与连字符——
+// 插件按自身命名声明 site.bindSSL / site.setRewrite 这类方法，入口必须与
+// 插件方法注册表同口径，否则声明了却调不到。
+var methodPattern = regexp.MustCompile(`^[a-z][A-Za-z0-9_-]*(\.[a-z][A-Za-z0-9_-]*)*$`)
 
 // handleInvoke 把 HTTP body 当作插件方法参数转发给 bus，成功时直接返回业务 result。
 //
