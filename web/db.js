@@ -4,6 +4,8 @@
    插件 businessVerb 只剥 "db-mysql." 前缀，裸动词（如 instances）会 E_NOTFOUND「未知方法」——
    方法段必须写完整限定名，不得退化为裸动词。
    写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。
+   L2 管理（建库/删库/建用户/授权/导入导出）在 web/db-l2.js，首次执行写操作或展开
+   「用户与授权」时才注入（/assets/db-l2.js）；删库/删用户必须手输名称后才解锁提交。
    易用性（USABILITY 原则 2）：打开页面先问 discover.discover.services，探测到本机
    MySQL/MariaDB 时给「自动检测横幅 + 一键连接」；host/port/user 由检测结果预填并标
    「已自动填入」，用户只需填密码。探测不到时给安装指引与手动配置入口。 */
@@ -15,7 +17,8 @@
     return { instances: [], selected: '', status: null, dbs: [], result: null, loadError: '',
       statusError: '', dbError: '', dbLoaded: false, queryError: '', busy: false, destroyed: false,
       discoveryState: 'loading', discovery: null, discoveryError: '',
-      autoNotice: null, autoPending: false };
+      autoNotice: null, autoPending: false, selectedDb: '', includeSystem: false, l2Promise: null,
+      l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -79,6 +82,86 @@
     var n = el('div', 'db-notice', text);
     n.setAttribute('role', 'alert');
     return n;
+  }
+  var SYSTEM_DBS = ['mysql', 'information_schema', 'performance_schema', 'sys'];
+  // ensureL2 只在首次执行写操作或展开用户区时注入 db-l2.js；失败清缓存，允许下次重试。
+  function ensureL2() {
+    if (window.KoreDbL2) return Promise.resolve(window.KoreDbL2);
+    if (S.l2Promise) return S.l2Promise;
+    S.l2Promise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = '/assets/db-l2.js'; script.async = true;
+      script.onload = function () {
+        if (!window.KoreDbL2) { S.l2Promise = null; reject(new Error('db-l2.js 未导出 KoreDbL2')); return; }
+        resolve(window.KoreDbL2);
+      };
+      script.onerror = function () { S.l2Promise = null; reject(new Error('db-l2.js 加载失败')); };
+      document.head.appendChild(script);
+    });
+    return S.l2Promise;
+  }
+  function l2Ctx() {
+    return {
+      instance: S.selected, el: el, add: add, dbs: S.dbs.slice(),
+      selectedDb: S.selectedDb || (S.dbs.length ? S.dbs[0] : ''),
+      invoke: invoke,
+      errText: function (err) { return err && err.message ? err.message : String(err); },
+      hint: function (text) { return hintFor(text); },
+      loadDbs: loadDbs, notice: l2Notice,
+      onUsersChanged: function () { if (S.l2UsersHandle) S.l2UsersHandle.reload(); }
+    };
+  }
+  function withL2(fn) {
+    ensureL2().then(function (mod) { fn(mod, l2Ctx()); }, function (err) {
+      l2Notice('L2 管理模块加载失败：' + err.message + '。刷新页面后重试。', 'warn');
+    });
+  }
+  function l2Notice(text, tone) {
+    if (!S.l2NoticeHost) return;
+    S.l2NoticeHost.textContent = '';
+    S.l2NoticeHost.appendChild(el('p', 'db-l2-notice ' + (tone || 'ok'), text));
+  }
+  function l2Btn(label, fn) {
+    var b = el('button', 'btn btn-ghost', label);
+    b.type = 'button'; on(b, fn); return b;
+  }
+  // L2 的样式跟随 db.js（行布局在首屏绘制时就要生效），按选择器分组压到最少行数。
+  var L2_CSS = '.db-toolbar{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;padding:var(--kore-space-2) var(--kore-space-4) 0}' +
+    '.db-toolbar .btn,.db-row-ops .btn,.db-l2-row-ops .btn{min-height:32px;padding:0 var(--kore-space-2);font-size:var(--kore-font-12)}' +
+    '@media (min-width:1024px){.db-db-panel .db-db-op{display:none}}' +
+    '.db-sys-toggle{min-height:32px;gap:var(--kore-space-1);color:var(--kore-text-2);font-size:var(--kore-font-12)}' +
+    '.db-row{display:flex;align-items:center;gap:var(--kore-space-1);flex-wrap:wrap}' +
+    '.db-row .db-db{flex:1 1 60px;width:auto;min-width:0}.db-row-ops{display:flex;gap:var(--kore-space-1);flex:0 0 auto}' +
+    '.db-row .db-db-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+    '.db-l2-notice{margin:0 var(--kore-space-4) var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-3);' +
+    'border-radius:var(--kore-radius-control);font-size:var(--kore-font-13);word-break:break-word}' +
+    '.db-l2-notice.ok{color:var(--kore-success);border:1px solid var(--kore-success)}' +
+    '.db-l2-notice.warn{color:var(--kore-danger);border:1px solid var(--kore-danger)}' +
+    '.db-l2-panel{margin-top:var(--kore-space-4)}' +
+    '.db-l2-summary{display:flex;align-items:center;gap:var(--kore-space-2);cursor:pointer;' +
+    'padding:var(--kore-space-3) var(--kore-space-4);list-style:none;min-height:var(--kore-touch)}' +
+    '.db-l2-summary::-webkit-details-marker{display:none}.db-l2-summary::before{content:"▸";color:var(--kore-text-3)}' +
+    '.db-l2-panel[open] .db-l2-summary::before{content:"▾"}' +
+    '.db-l2-users{padding:0 var(--kore-space-4) var(--kore-space-3)}' +
+    '.db-l2-users-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-2);flex-wrap:wrap}' +
+    '.db-l2-ops,.db-l2-row-ops{display:flex;gap:var(--kore-space-1);flex-wrap:wrap}' +
+    '.db-l2-note{margin:0 0 var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
+    '.db-l2-users-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-13)}' +
+    '.db-l2-users-table th{text-align:left;color:var(--kore-text-2);font-weight:600;padding:var(--kore-space-1) var(--kore-space-2)}' +
+    '.db-l2-users-table td{padding:var(--kore-space-1) var(--kore-space-2);border-top:1px solid var(--kore-border-1)}' +
+    '.db-l2-user,.db-l2-host{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}' +
+    '.db-l2-locked{color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
+    '.db-l2-warn{margin:0;padding:var(--kore-space-2) var(--kore-space-3);color:var(--kore-danger);' +
+    'border:1px solid var(--kore-danger);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);line-height:1.5}' +
+    '.db-l2-input-row{display:flex;gap:var(--kore-space-2);align-items:center}' +
+    '.db-l2-input-row .field-input{flex:1 1 auto;min-width:0}' +
+    '.db-l2-checks{display:flex;flex-wrap:wrap;gap:var(--kore-space-1) var(--kore-space-3)}' +
+    '.db-l2-checks .field-check{min-height:32px}.db-l2-copy{color:var(--kore-success)}.db-l2-error{padding:var(--kore-space-2) 0}';
+  function ensureL2Style() {
+    if (document.getElementById('kore-db-l2-style')) return;
+    var style = document.createElement('style');
+    style.id = 'kore-db-l2-style'; style.textContent = L2_CSS;
+    document.head.appendChild(style);
   }
   function currentInstance() {
     for (var i = 0; i < S.instances.length; i++) {
@@ -343,11 +426,23 @@
     if (!S.dbLoaded) { add(S.dbHost, el('div', 'db-list-hint muted', '正在读取数据库…')); return; }
     if (!S.dbs.length) { add(S.dbHost, el('div', 'db-list-hint muted', '没有可展示的数据库（系统库已过滤）')); return; }
     S.dbs.forEach(function (name) {
-      var row = add(S.dbHost, el('button', 'db-db'));
-      row.type = 'button';
-      add(row, el('span', 'db-db-name', name));
-      add(row, el('span', 'db-db-op', 'SHOW TABLES'));
-      on(row, function () { useDb(name); });
+      var row = add(S.dbHost, el('div', 'db-row'));
+      var main = add(row, el('button', 'db-db'));
+      main.type = 'button';
+      add(main, el('span', 'db-db-name', name));
+      add(main, el('span', 'db-db-op', 'SHOW TABLES'));
+      on(main, function () { useDb(name); });
+      var ops = add(row, el('div', 'db-row-ops'));
+      add(ops, l2Btn('导出', function () {
+        withL2(function (mod, ctx) { mod.openExport(ctx, name); });
+      }));
+      // 系统库行不给删除入口：后端对 mysql / information_schema / performance_schema / sys
+      // 在任何 confirm 下都返回 E_UNAUTHORIZED，前端先按名单隐藏，避免留一条必然失败的路径。
+      if (SYSTEM_DBS.indexOf(name) < 0) {
+        add(ops, l2Btn('删除', function () {
+          withL2(function (mod, ctx) { mod.confirmDropDb(ctx, name); });
+        }));
+      }
     });
   }
   function paintQueryNotice() {
@@ -393,6 +488,7 @@
   function paintDetail() {
     var host = S.detailHost;
     host.textContent = '';
+    S.l2UsersHandle = null; S.l2NoticeHost = null;
     var inst = currentInstance();
     if (!inst) return;
     var statusPanel = add(host, el('section', 'panel'));
@@ -406,6 +502,25 @@
     var dbHead = add(dbPanel, el('div', 'panel-head'));
     add(dbHead, el('span', 'panel-title', '数据库'));
     S.dbCount = add(dbHead, el('span', 'panel-meta', ''));
+    // 工具栏单独成行：库面板在桌面端只有 260px，塞进 panel-head 会把标题挤成竖排。
+    var headOps = add(dbPanel, el('div', 'db-toolbar'));
+    headOps.appendChild(l2Btn('新建数据库', function () {
+      withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
+    }));
+    headOps.appendChild(l2Btn('导入', function () {
+      withL2(function (mod, ctx) { mod.openImport(ctx); });
+    }));
+    // 系统库默认被插件过滤；需要核对系统库（并确认它们没有删除入口）时显式纳入。
+    var sysToggle = add(headOps, el('label', 'field field-check db-sys-toggle'));
+    var sysBox = add(sysToggle, el('input', null));
+    sysBox.type = 'checkbox'; sysBox.checked = !!S.includeSystem;
+    add(sysToggle, el('span', null, '显示系统库'));
+    sysToggle.title = '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
+    sysToggle.addEventListener('change', function () {
+      S.includeSystem = sysBox.checked;
+      loadDbs();
+    });
+    S.l2NoticeHost = add(dbPanel, el('div', 'db-l2-notice-host'));
     S.dbHost = add(dbPanel, el('div', 'db-list'));
     paintDbs();
     var sqlPanel = add(layout, el('section', 'panel db-sql-panel'));
@@ -427,10 +542,23 @@
     S.queryNoticeHost = add(sqlPanel, el('div', 'db-query-notice'));
     S.resultHost = add(sqlPanel, el('div', 'db-result'));
     paintQueryNotice(); paintRunState(); paintResult();
+    // 用户管理放在折叠区：账号列表要额外查 mysql.user，不展开就不发这次查询。
+    var users = add(host, el('details', 'panel db-l2-panel'));
+    var sum = add(users, el('summary', 'db-l2-summary'));
+    add(sum, el('span', 'panel-title', '用户与授权'));
+    add(sum, el('span', 'panel-meta', '创建账号 · 授权 · 删除'));
+    S.l2UsersHost = add(users, el('div', 'db-l2-users'));
+    users.addEventListener('toggle', function () {
+      if (!users.open || !S.l2UsersHost) return;
+      withL2(function (mod, ctx) {
+        if (S.l2UsersHandle) S.l2UsersHandle.destroy();
+        S.l2UsersHandle = mod.mountUsers(ctx, S.l2UsersHost);
+      });
+    });
   }
   function selectInstance(name) {
     if (!name || S.selected === name) return;
-    S.selected = name; S.status = null; S.dbs = []; S.result = null;
+    S.selected = name; S.status = null; S.dbs = []; S.result = null; S.selectedDb = '';
     S.statusError = ''; S.dbError = ''; S.queryError = ''; S.dbLoaded = false; S.busy = false;
     paintInstances();
     paintDetail();
@@ -439,6 +567,7 @@
   }
   function useDb(name) {
     if (!S.sql) return;
+    S.selectedDb = name;
     S.sql.value = 'SHOW TABLES FROM `' + String(name).replace(/`/g, '``') + '`';
     S.sql.focus();
     runQuery();
@@ -475,7 +604,9 @@
     var name = S.selected;
     if (!name) return;
     S.dbLoaded = false; paintDbs();
-    invoke('db-mysql.databases', { instance: name }).then(function (data) {
+    var params = { instance: name };
+    if (S.includeSystem) params.include_system = true;
+    invoke('db-mysql.databases', params).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.dbs = data.databases || []; S.dbLoaded = true; paintDbs();
     }, function (err) {
@@ -564,6 +695,7 @@
     if (!container) return null;
     S = fresh();
     container.textContent = '';
+    ensureL2Style();
     var root = add(container, el('section', 'db'));
     S.root = root;
     var head = add(root, el('header', 'view-head'));
