@@ -56,7 +56,7 @@ paths:
 http://127.0.0.1:8787/
 ```
 
-这是 `kored` 自己托管的面板主壳（`web/dist` 三件套经 `web/embed.go` 编进二进制，由 httpapi 的 `GET /`、`GET /app.js`、`GET /style.css` 提供）。其它路径（如 `/nonexistent`）返回 404，没有 SPA 兜底。`/-/healthz` 仍可供探针使用（返回 200 `{"status":"ok"}`）。
+这是 `kored` 自己托管的面板主壳（`web/dist` 七个产物经 `web/embed.go` 编进二进制）。路由只有两条：`GET /` 提供 `index.html`，`GET /assets/{file}` 提供其余静态资源（按后缀决定 Content-Type，只认单段文件名与 `.js/.css/.html` 后缀）。首屏加载四件套（`index.html` + `style.css` + `app.js` + `shell.js`），`store.js` / `monitor.js` / `settings.js` 三个视图模块在切到对应视图时才按需注入——首屏体积不随视图数增长。其它路径（如 `/nonexistent`）返回 404，没有 SPA 兜底。`/-/healthz` 仍可供探针使用（返回 200 `{"status":"ok"}`）。
 
 ## 5. 首次登录与 CSRF
 
@@ -65,7 +65,7 @@ http://127.0.0.1:8787/
 3. 之后的写请求（POST/PUT/DELETE 等）必须带请求头 `X-Kore-CSRF: <kore_csrf 的值>`，且浏览器同时携带 `kore_csrf` cookie；两者不一致或缺任一，返回 401 `CSRF 校验失败`。GET 请求无需 CSRF 头。
 4. 口令错误 5 次（60 秒窗口内）会锁 300 秒，别硬试。
 
-> 安全边界：面板静态三件套在鉴权白名单内（无敏感数据，未登录也能加载登录界面）；所有管理 API 仍强制会话校验，不因静态托管削弱。不要把 `server.addr` 改成 `0.0.0.0` 或把 `cookie_secure` 关掉暴露到不安全网络。
+> 安全边界：`/` 与 `/assets/` 前缀在鉴权白名单内（面板静态壳无敏感数据，未登录也能加载登录界面）；白名单只认前缀一条、不枚举文件名。所有管理 API 仍强制会话校验，不因静态托管削弱。不要把 `server.addr` 改成 `0.0.0.0` 或把 `cookie_secure` 关掉暴露到不安全网络。
 
 ## 停止
 

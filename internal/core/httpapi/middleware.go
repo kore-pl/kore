@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -34,14 +35,16 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// isPublicPath 返回无需鉴权的路径（健康检查、登录与主壳静态三件套）。
+// isPublicPath 返回无需鉴权的路径（健康检查、登录与主壳静态壳资源）。
 //
-// 主壳面板壳（index.html/app.js/style.css）只含静态 UI 骨架、无任何敏感数据，
-// 放行以便浏览器未登录时也能加载登录界面；所有 /api/v1/* 端点仍强制会话校验，
-// 鉴权逻辑不下放。插件资产（/plugin-assets/*）不在白名单内。
+// 主壳面板壳只含静态 UI 骨架与前端代码、无任何敏感数据，放行以便浏览器未登录时
+// 也能加载登录界面；静态资源统一走 /assets/ 前缀，白名单只认这一条前缀，不枚举
+// 具体文件名（内核不认识前端视图名，G-01）。所有 /api/v1/* 端点仍强制会话校验，
+// 鉴权逻辑不下放；插件资产（/plugin-assets/*）不在白名单内。视图模块自身的数据
+// 请求走 /api/v1/*，未登录仍 401——放行只覆盖静态文件本体。
 func isPublicPath(path string) bool {
 	return path == "/-/healthz" || path == "/api/v1/auth/login" ||
-		path == "/" || path == "/app.js" || path == "/style.css"
+		path == "/" || strings.HasPrefix(path, staticURLPrefix)
 }
 
 // CSRF 双提交 token 的载体：非 HttpOnly cookie + 同名请求头（SECURITY.md §4）。

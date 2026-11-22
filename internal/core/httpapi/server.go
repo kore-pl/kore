@@ -23,12 +23,34 @@ import (
 	"github.com/pengtang1024/kore/web"
 )
 
-// 主壳静态资源在 web.Dist 中的精确路径（embed 编译期保证存在）。
+// 主壳静态资源在 web.Dist 中的根与入口路径（embed 编译期保证存在）。
+// 除根 HTML 外，其余资源统一走 /assets/{file} 前缀，由后缀白名单判定 Content-Type，
+// 内核不认识任何具体前端文件名——新增视图模块无需改本包（G-01：内核不维护业务域词表）。
 const (
+	staticDistRoot  = "dist/"
 	staticIndexPath = "dist/index.html"
-	staticAppJSPath = "dist/app.js"
-	staticCSSPath   = "dist/style.css"
+
+	// 静态资源 URL 前缀与允许的后缀（后缀即 Content-Type 的唯一判定依据）。
+	staticURLPrefix = "/assets/"
+	contentTypeHTML = "text/html; charset=utf-8"
+	contentTypeJS   = "application/javascript; charset=utf-8"
+	contentTypeCSS  = "text/css; charset=utf-8"
 )
+
+// assetContentType 按后缀返回 Content-Type；不在白名单内的后缀一律拒绝（空串表示不支持）。
+// 用后缀而不是文件名判定：后端只承诺"是什么类型"，不对前端文件清单做业务枚举。
+func assetContentType(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".js"):
+		return contentTypeJS
+	case strings.HasSuffix(name, ".css"):
+		return contentTypeCSS
+	case strings.HasSuffix(name, ".html"):
+		return contentTypeHTML
+	default:
+		return ""
+	}
+}
 
 // Options 是 httpapi 的启动参数，由 cmd/kored 装配。
 type Options struct {
@@ -210,22 +232,42 @@ func (s *Server) serve(listener net.Listener) {
 	}
 }
 
-// staticRoutes 注册主壳静态三件套。三条精确路由优先于 "/" 兜底：
+// staticRoutes 注册主壳静态资源。精确路由优先于 "/" 兜底：
 // 根路径用 "GET /{$}"（{$} 锚定精确根，Go 1.22+ ServeMux 语义），
 // 若写成 "GET /" 会与 "/api/v1/store/" 等子路径模式冲突并 panic（实测）；
 // 其它路径仍由 routes() 的 "/" 兜底 → 404。
+//
+// 资源统一走 "/assets/" 前缀（Go 1.22 的尾斜杠子树模式），由 handleAsset 做
+// "文件名净度 + 后缀白名单" 双重校验，再按精确路径读 embed。不逐文件注册，
+// 故新增前端文件不需要改本包——内核不认识任何具体视图名（G-01）。
 func (s *Server) staticRoutes() {
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
-	s.mux.HandleFunc("GET /app.js", s.handleAppJS)
-	s.mux.HandleFunc("GET /style.css", s.handleStyleCSS)
+	s.mux.HandleFunc("GET "+staticURLPrefix, s.handleAsset)
 }
 
-// staticFile 从 embed.FS 读取精确路径并写出；embed 编译期已保证存在，
-// 读取失败只可能是运行期数据损坏 → 500，绝不回落到其它文件（无 SPA 兜底）。
+// handleAsset 托管 /assets/{file}：只认单段文件名（不含 / 与 ..）、只认白名单后缀。
+// 拒绝即 404，与未知路由同口径——不泄露"文件存在但类型不支持"这类区分。
+func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, staticURLPrefix)
+	if name == "" || strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
+		s.handleNotFound(w, r)
+		return
+	}
+	contentType := assetContentType(name)
+	if contentType == "" {
+		s.handleNotFound(w, r)
+		return
+	}
+	staticFile(w, staticDistRoot+name, contentType)
+}
+
+// staticFile 从 embed.FS 读取精确路径并写出；embed 编译期已保证首屏三件套存在。
+// 运行期读取失败按"资源不存在"处理并回 404 E_NOTFOUND（不是 500）：
+// 视图模块缺失属于部署不完整，语义上就是该 URL 不存在，不该伪装成服务端故障。
 func staticFile(w http.ResponseWriter, path, contentType string) {
 	data, err := web.Dist.ReadFile(path)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "E_INTERNAL", "静态资源读取失败", path)
+		writeError(w, http.StatusNotFound, "E_NOTFOUND", "静态资源不存在", path)
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -235,15 +277,5 @@ func staticFile(w http.ResponseWriter, path, contentType string) {
 
 // handleIndex 提供主壳 HTML 壳（浏览器面板入口）。
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
-	staticFile(w, staticIndexPath, "text/html; charset=utf-8")
-}
-
-// handleAppJS 提供主壳脚本。
-func (s *Server) handleAppJS(w http.ResponseWriter, _ *http.Request) {
-	staticFile(w, staticAppJSPath, "application/javascript; charset=utf-8")
-}
-
-// handleStyleCSS 提供主壳样式。
-func (s *Server) handleStyleCSS(w http.ResponseWriter, _ *http.Request) {
-	staticFile(w, staticCSSPath, "text/css; charset=utf-8")
+	staticFile(w, staticIndexPath, contentTypeHTML)
 }

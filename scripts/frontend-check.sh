@@ -24,8 +24,11 @@ if [ -n "$JUNK" ]; then
 fi
 printf '[OK] dist 无 source map / .vite / 全量字体\n'
 
-# 首屏三件套：index.html + style.css + app.js，按 gzip -9 合计
-FILES=("$DIST/index.html" "$DIST/style.css" "$DIST/app.js")
+# 首屏四件套：index.html + style.css + app.js + shell.js，按 gzip -9 合计。
+# shell.js 是布局壳（侧栏导航 + 视图路由），与 app.js 同批同步加载，故计入首屏；
+# store.js / monitor.js / settings.js 三个视图模块按需注入（web/app.js 的 ensureModule），
+# 不计首屏——首屏体积不随视图数增长（FRONTEND §7：d(首屏)/d(视图数)=0）。
+FILES=("$DIST/index.html" "$DIST/style.css" "$DIST/app.js" "$DIST/shell.js")
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     printf '[FAIL] 首屏文件缺失: %s\n' "$f"

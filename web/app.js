@@ -876,13 +876,90 @@
 
   /* ===================== 视图路由（侧栏壳由 shell.js 提供） =====================
      只有登录成功后的 renderDashboard 注册路由；login / offline 仍走整页替换。
-     store / monitor / settings 三个视图由独立模块提供，模块缺席时退化为 .stub 占位，
-     壳不依赖它们存在（谁先到谁上，不阻塞首屏）。 */
-  function moduleView(globalName, stubText) {
+     store / monitor / settings 三个视图模块**懒加载**：切到该视图时才注入
+     <script src="/assets/store.js">，不进首屏（FRONTEND §7：d(首屏)/d(视图数)=0）。
+     模块缺席或加载失败时明确报错到容器，不退化成"空白页"——静默失败不可接受。 */
+  var VIEW_MODULES = Object.create(null); // url → { state: 'loading'|'ready'|'error', error, waiters }
+
+  // ensureModule 保证同一脚本只注入一次；并发切视图共用同一个 promise（不重复请求）。
+  // 若模块已被 index.html 预先加载（window 上已有导出），直接复用，不重复注入第二次。
+  function ensureModule(url, globalName) {
+    var entry = VIEW_MODULES[url];
+    if (!entry && window[globalName] && typeof window[globalName].render === 'function') {
+      VIEW_MODULES[url] = { state: 'ready', error: null, promise: Promise.resolve(window[globalName]) };
+      return VIEW_MODULES[url].promise;
+    }
+    if (entry && entry.state === 'ready') {
+      if (window[globalName] && typeof window[globalName].render === 'function') {
+        return Promise.resolve(window[globalName]);
+      }
+      // 脚本已执行但导出缺失：视为契约破坏，明确报错而不是静默。
+      return Promise.reject(new Error(url + ' 未导出 ' + globalName + '.render'));
+    }
+    if (entry && entry.promise) return entry.promise;
+
+    var record = { state: 'loading', error: null };
+    record.promise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+      script.onload = function () {
+        var mod = window[globalName];
+        if (!mod || typeof mod.render !== 'function') {
+          record.state = 'error';
+          record.error = new Error(url + ' 已加载但未导出 ' + globalName + '.render');
+          reject(record.error);
+          return;
+        }
+        record.state = 'ready';
+        resolve(mod);
+      };
+      script.onerror = function () {
+        record.state = 'error';
+        record.error = new Error(url + ' 加载失败（HTTP 错误或网络中断）');
+        reject(record.error);
+      };
+      document.head.appendChild(script);
+    });
+    // 失败后允许下次切视图重试：清掉缓存记录，不把一次网络抖动变成永久白屏。
+    record.promise.catch(function () { delete VIEW_MODULES[url]; });
+    VIEW_MODULES[url] = record;
+    return record.promise;
+  }
+
+  // moduleView 返回 shell 需要的 render(container)：同步返回 handle，
+  // 异步等模块就绪后再真正渲染；切走时 shell 调 handle.destroy()，
+  // 用它把"迟到的渲染"挡在已卸载的容器外（monitor 的轮询也在这里停）。
+  function moduleView(globalName, url, label) {
     return function (box) {
-      var mod = window[globalName];
-      if (mod && typeof mod.render === 'function') return mod.render(box);
-      box.appendChild(el('div', 'stub', stubText));
+      var live = { destroyed: false, handle: null };
+      box.appendChild(el('div', 'stub', '正在加载' + label + '…'));
+
+      ensureModule(url, globalName).then(function (mod) {
+        if (live.destroyed) return;
+        box.textContent = '';
+        try {
+          var handle = mod.render(box);
+          if (handle && typeof handle.destroy === 'function') live.handle = handle;
+        } catch (err) {
+          box.textContent = '';
+          box.appendChild(el('div', 'stub', label + '渲染失败：' + (err && err.message ? err.message : err)));
+        }
+      }, function (err) {
+        if (live.destroyed) return;
+        box.textContent = '';
+        box.appendChild(el('div', 'stub', label + '不可用：' + (err && err.message ? err.message : '模块加载失败')));
+      });
+
+      return {
+        destroy: function () {
+          live.destroyed = true;
+          if (live.handle && typeof live.handle.destroy === 'function') {
+            try { live.handle.destroy(); } catch (err) { /* 模块清理失败不阻断切视图 */ }
+          }
+          live.handle = null;
+        }
+      };
     };
   }
 
@@ -936,10 +1013,10 @@
 
   var SHELL_ROUTES = [
     { id: 'dashboard', label: '概览', icon: '📊', render: renderDashboardView },
-    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', './store.js', '软件商店') },
+    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
     { id: 'plugins', label: '已装插件', icon: '📦', render: renderPluginsView },
-    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', './monitor.js', '监控') },
-    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', './settings.js', '设置') }
+    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
+    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
   ];
 
   function renderDashboard() {

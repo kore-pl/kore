@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>kore · 控制台</title>
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
   <div id="app">
     <div class="boot">kore 控制台启动中…</div>
   </div>
-  <!-- defer 保序：壳与三个视图模块先于 app.js 就绪，app.js 只在登录成功后 mount。 -->
-  <script src="./shell.js" defer></script>
-  <script src="./store.js" defer></script>
-  <script src="./monitor.js" defer></script>
-  <script src="./settings.js" defer></script>
-  <script src="./app.js" defer></script>
+  <!-- 静态资源统一走 /assets/ 前缀：内核只认前缀 + 后缀白名单，不枚举前端文件名。
+       defer 保序：shell.js（布局壳/视图路由）先于 app.js 就绪，app.js 只在登录成功后 mount。
+       store.js / monitor.js / settings.js 三个视图模块**不在此加载**：由 app.js 的
+       ensureModule 在切到对应视图时动态注入，首屏请求数与视图数无关（FRONTEND §7）。 -->
+  <script src="/assets/shell.js" defer></script>
+  <script src="/assets/app.js" defer></script>
 </body>
 </html>
