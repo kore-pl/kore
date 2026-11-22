@@ -441,227 +441,147 @@ button:disabled, .btn:disabled {
   * { animation: none !important; transition: none !important; }
 }
 
-/* ===== 软件商店（web/store.js）：卡片网格 / 内联图标 / 徽章 / 筛选条 / 搜索框 =====
-   约束同 §5：hex 只出现在 :root，间距走 4/8/12/16/24，圆角 4/6，小屏触摸目标 ≥44px。
-   图标是本机 emoji 字符，不引字体、不引外链图片。 */
-
-.store { display: flex; flex-direction: column; gap: var(--kore-space-4); }
-
-.store-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--kore-space-3);
-}
-
-.store-title { margin: 0; font-size: var(--kore-font-20); font-weight: 600; letter-spacing: .02em; }
-
-.store-sub {
-  margin: var(--kore-space-1) 0 0;
-  font-size: var(--kore-font-12);
-  color: var(--kore-text-2);
-}
-
-.store-pkg { display: flex; flex-direction: column; gap: var(--kore-space-2); flex: 1 1 320px; min-width: 0; }
-.store-pkg-label { font-size: var(--kore-font-12); color: var(--kore-text-3); }
-.store-pkg-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-
-.store-notice { margin: 0; word-break: break-word; }
-/* .notice 自带 display:flex 会覆盖 [hidden] 的 UA display:none，必须显式还原，
-   否则未触发错误时也会渲染一个空的红框（实测截图发现）。 */
-.store-notice[hidden] { display: none; }
-
-/* ---- 预设区：每预设一张小卡，批量安装按钮禁用并注明待补 ---- */
-.store-presets {
-  padding: var(--kore-space-3) var(--kore-space-4) var(--kore-space-4);
-  background: var(--kore-bg-1);
-  border: 1px solid var(--kore-border-1);
-  border-radius: var(--kore-radius-container);
-}
-
-.store-presets-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--kore-space-2);
-  margin-bottom: var(--kore-space-3);
-}
-
-.store-presets-title { margin: 0; font-size: var(--kore-font-14); font-weight: 600; }
-.store-presets-meta { font-size: var(--kore-font-12); color: var(--kore-text-3); }
-
-.store-preset-row {
+/* ===== 设置视图（/settings）：分组卡片 · 只读字段 · 禁用说明 =====
+   只追加本段，不改既有规则；颜色只走 :root 令牌，间距走 4/8/12/16/24。
+   小屏（<640px）单列：字段左标签右值改为上下堆叠，按钮撑满 44px 触摸目标。 */
+.settings-root {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: var(--kore-space-2);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
 }
 
-.store-preset {
-  display: flex;
-  flex-direction: column;
-  gap: var(--kore-space-2);
-  padding: var(--kore-space-3);
-  background: var(--kore-bg-2);
-  border: 1px solid var(--kore-border-2);
-  border-radius: var(--kore-radius-control);
-}
-
-.store-preset-name { font-size: var(--kore-font-13); font-weight: 600; }
-.store-preset-sub { font-size: var(--kore-font-12); color: var(--kore-text-3); }
-.store-preset-btn { width: 100%; }
-.store-preset-note { font-size: var(--kore-font-12); color: var(--kore-text-3); text-align: center; }
-.store-preset-empty { margin: 0; font-size: var(--kore-font-12); color: var(--kore-text-3); }
-
-/* ---- 筛选条：搜索框 + 分类 chips ---- */
-.store-bar { display: flex; flex-direction: column; gap: var(--kore-space-2); }
-
-.store-search { width: 100%; }
-
-.store-cats { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
-
-.store-cat {
-  min-height: 32px;
-  padding: 0 var(--kore-space-3);
+/* 设置页的只读值：等宽 + 次要色，明确「只展示，不可编辑」 */
+.settings-ro {
   color: var(--kore-text-2);
-  background: var(--kore-bg-1);
-  border: 1px solid var(--kore-border-1);
-  border-radius: 999px;
-  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--kore-font-12);
-  cursor: pointer;
+  word-break: break-all;
 }
 
-.store-cat:hover { color: var(--kore-text-1); border-color: var(--kore-border-2); }
-
-/* 选中态用 aria-pressed，兼顾键盘与读屏，不依赖颜色单通道 */
-.store-cat[aria-pressed="true"] {
-  color: var(--kore-bg-0);
-  background: var(--kore-info);
-  border-color: var(--kore-info);
-  font-weight: 600;
-}
-
-/* ---- 卡片网格：1 / 2 / 3 / 4 列自适应 ---- */
-.store-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--kore-space-3); }
-
-.store-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--kore-space-2);
-  padding: var(--kore-space-4);
-  background: var(--kore-bg-1);
-  border: 1px solid var(--kore-border-1);
-  border-radius: var(--kore-radius-container);
-}
-
-.store-card.is-installed { border-color: var(--kore-success); }
-
-.store-card-top { display: flex; align-items: flex-start; gap: var(--kore-space-3); min-width: 0; }
-
-/* 图标圆角方块：固定尺寸 + 居中 emoji，纯 CSS 绘制，无图片请求 */
-.store-icon {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--kore-touch);
-  height: var(--kore-touch);
-  font-size: var(--kore-font-20);
-  line-height: 1;
-  background: var(--kore-bg-2);
-  border: 1px solid var(--kore-border-2);
-  border-radius: var(--kore-radius-container);
-}
-
-.store-card-head { min-width: 0; flex: 1 1 auto; }
-
-.store-card-name {
-  font-size: var(--kore-font-14);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.store-card-sub {
-  display: flex;
-  align-items: baseline;
-  gap: var(--kore-space-2);
-  font-size: var(--kore-font-12);
-  color: var(--kore-text-3);
-}
-
-.store-card-id { overflow-wrap: anywhere; }
-.store-card-ver { flex: 0 0 auto; }
-
-.store-badges { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
-
-.store-badge {
+/* 只读 / 状态标记：点 + 文本双通道（不只靠颜色，FRONTEND §6 红线 9） */
+.settings-flag {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 0 var(--kore-space-2);
+  gap: var(--kore-space-2);
   font-size: var(--kore-font-12);
-  border: 1px solid var(--kore-border-1);
-  border-radius: var(--kore-radius-control);
-  color: var(--kore-text-2);
 }
 
-.store-badge.production { color: var(--kore-success); border-color: var(--kore-success); }
-.store-badge.basic { color: var(--kore-text-3); }
-.store-badge.lifecycle { color: var(--kore-text-2); }
-.store-badge.installed { color: var(--kore-success); border-color: var(--kore-success); font-weight: 600; }
+.settings-flag::before {
+  content: "";
+  width: var(--kore-space-2);
+  height: var(--kore-space-2);
+  border-radius: 50%;
+  background: var(--kore-text-3);
+  flex: 0 0 auto;
+}
 
-.store-desc {
+.settings-flag.ok::before    { background: var(--kore-success); }
+.settings-flag.warn::before  { background: var(--kore-warning); }
+.settings-flag.off::before   { background: var(--kore-text-3); }
+
+.settings-flag.ok   { color: var(--kore-text-1); }
+.settings-flag.warn { color: var(--kore-warning); }
+.settings-flag.off  { color: var(--kore-text-3); }
+
+/* 卡片内的操作行：按钮 + 一句口径说明，说明永远在按钮右侧 */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--kore-space-3);
+  padding: var(--kore-space-3) var(--kore-space-4);
+  border-top: 1px solid var(--kore-border-2);
+}
+
+/* 禁用按钮的说明文字：与按钮同处一行，解释「为什么不能点」 */
+.settings-actions .settings-hint {
   margin: 0;
-  flex: 1 1 auto;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+/* 补充说明：小字、次要色；错误态用危险色左边框，不整块变红 */
+.settings-hint {
+  padding: var(--kore-space-2) var(--kore-space-4);
+  color: var(--kore-text-3);
   font-size: var(--kore-font-12);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.settings-hint-error {
+  margin: var(--kore-space-3) 0;
+  color: var(--kore-text-1);
+  border: 1px solid var(--kore-danger);
+  border-left-width: var(--kore-space-1);
+  border-radius: var(--kore-radius-control);
+  background: var(--kore-bg-1);
+}
+
+/* 资源预算只读表：三列（项 / 红线 / 目标），与 .rows 视觉一致但不复用其 180px 标签宽 */
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--kore-font-12);
+}
+
+.settings-table thead th {
+  text-align: left;
+  padding: var(--kore-space-2) var(--kore-space-4);
+  color: var(--kore-text-3);
+  font-weight: 400;
+  border-bottom: 1px solid var(--kore-border-2);
+  white-space: nowrap;
+}
+
+.settings-table tbody th {
+  width: 180px;
+  text-align: left;
+  padding: var(--kore-space-2) var(--kore-space-4);
   color: var(--kore-text-2);
-  overflow-wrap: anywhere;
+  font-weight: 400;
 }
 
-/* 卡片内状态条：常驻高度，避免出现状态时卡片抖动；空态不占视觉 */
-.store-card-status {
-  min-height: 18px;
-  font-size: var(--kore-font-12);
-  color: var(--kore-text-3);
-  overflow-wrap: anywhere;
+.settings-table tbody td {
+  padding: var(--kore-space-2) var(--kore-space-4);
+  color: var(--kore-text-1);
 }
 
-.store-card-status.is-busy { color: var(--kore-info); }
-.store-card-status.is-ok { color: var(--kore-success); }
-.store-card-status.is-fail { color: var(--kore-danger); }
-.store-card-status.is-note { color: var(--kore-warning); }
+.settings-table tbody tr + tr { border-top: 1px solid var(--kore-border-2); }
 
-.store-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
-.store-btn-install, .store-btn-danger { width: 100%; }
-.store-btn-danger { color: var(--kore-danger); border-color: var(--kore-danger); }
-
-.store-empty {
-  margin: var(--kore-space-6) 0;
-  text-align: center;
-  color: var(--kore-text-3);
+/* 关于页外链：链接是由用户主动点击才发请求，页面本身不加载任何外部资源 */
+.settings-link {
+  color: var(--kore-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
 }
 
-/* 断点：≥640 两列，≥1024 三列，≥1440 四列（值与 §5 断点体系一致） */
-@media (min-width: 640px) {
-  .store-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+.settings-link:hover { color: var(--kore-text-1); }
 
+/* 宽卡片：运行参数 / 关于在双列布局下占满整行 */
+.panel-wide { grid-column: 1 / -1; }
+
+/* 双列布局只在大屏启用；<1024px 一律单列 */
 @media (min-width: 1024px) {
-  .store-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .settings-root { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-@media (min-width: 1440px) {
-  .store-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
-
-/* 小屏（<640px）：单列 + 触摸目标 ≥44px（裁决41） */
+/* 小屏（<640px）：单列 + 标签在上值在下，禁用说明与按钮竖排，触摸目标 ≥44px */
 @media (max-width: 639px) {
-  .store-head { flex-direction: column; align-items: stretch; }
-  .store-pkg { flex: 1 1 auto; }
-  .store-search, .store-pkg-input { min-height: var(--kore-touch); }
-  .store-cat { min-height: var(--kore-touch); padding: 0 var(--kore-space-4); }
-  .store-preset-row { grid-template-columns: minmax(0, 1fr); }
-  .store-preset-btn { min-height: var(--kore-touch); }
-  .store-btn-install, .store-btn-danger { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
+  .settings-actions { flex-direction: column; align-items: stretch; }
+  .settings-actions button { width: 100%; min-height: var(--kore-touch); }
+  .settings-actions .settings-hint { flex: 1 1 auto; }
+
+  .settings-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .settings-table, .settings-table tbody, .settings-table tr { display: block; width: 100%; }
+  .settings-table tbody tr { padding: var(--kore-space-2) 0; }
+  .settings-table tbody th,
+  .settings-table tbody td { display: block; width: auto; padding: var(--kore-space-1) var(--kore-space-4); }
+  .settings-table tbody td::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 84px;
+    color: var(--kore-text-3);
+  }
 }
