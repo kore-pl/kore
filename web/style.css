@@ -2128,3 +2128,27 @@ button:disabled, .btn:disabled {
   .redis-limit-input { width: 100%; }
   .redis-field { flex: 1 1 140px; }
 }
+
+/* ===== 自动检测横幅（web/db.js / web/redis.js） ===== */
+.db-banner-host:empty { display: none; }
+.db-autodetect { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--kore-space-3); margin: 0 0 var(--kore-space-4); padding: var(--kore-space-3) var(--kore-space-4); background: var(--kore-bg-1); border: 1px solid var(--kore-info); border-left: 3px solid var(--kore-info); border-radius: var(--kore-radius-container); }
+.db-autodetect.is-none { border-color: var(--kore-warning); border-left-color: var(--kore-warning); }
+.db-auto-main { display: flex; flex: 1 1 300px; flex-direction: column; gap: 4px; min-width: 0; }
+.db-auto-badge { width: max-content; padding: 0 8px; color: var(--kore-info); border: 1px solid var(--kore-info); border-radius: 999px; font-size: 11px; line-height: 20px; }
+.db-autodetect.is-none .db-auto-badge { color: var(--kore-warning); border-color: var(--kore-warning); }
+.db-auto-title { margin: 0; color: var(--kore-text-1); font-size: var(--kore-font-14); font-weight: 600; word-break: break-word; }
+.db-auto-text { margin: 0; color: var(--kore-text-2); font-size: var(--kore-font-12); line-height: 1.6; word-break: break-word; }
+.db-auto-actions { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.db-auto-result { margin: 4px 0 0; padding: 6px 8px; border-radius: var(--kore-radius-control); font-size: var(--kore-font-12); line-height: 1.6; word-break: break-word; }
+.db-auto-result.ok { color: var(--kore-success); background: rgba(63, 185, 80, .12); }
+.db-auto-result.warn { color: var(--kore-warning); background: var(--kore-warning-bg); }
+.db-inst-hint { margin-top: 2px; color: var(--kore-warning); font-size: var(--kore-font-12); line-height: 1.5; word-break: break-word; }
+.db-advanced { margin-top: var(--kore-space-2); color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.db-advanced summary { cursor: pointer; }
+.db-advanced .empty-state-text { margin-top: 4px; }
+@media (max-width: 639px) {
+  .db-autodetect { flex-direction: column; }
+  .db-auto-main { flex: 0 1 auto; }
+  .db-auto-actions { width: 100%; }
+  .db-auto-actions .btn { flex: 1 1 120px; min-height: var(--kore-touch); }
+}

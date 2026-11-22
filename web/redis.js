@@ -6,12 +6,13 @@
    界面只把键名/类型/值写 textContent，不拼 HTML；删除是页面内二次确认并列出键名。 */
 (function () {
   'use strict';
-  var API = '/api/v1/invoke/redis/', TIMEOUT_MS = 15000;
+  var API = '/api/v1/invoke/redis/', DISCOVER = '/api/v1/invoke/discover/', TIMEOUT_MS = 15000;
   function fresh() {
     return { root: null, instances: [], selected: '', loadError: '', info: null, infoError: '',
       keys: [], pattern: '*', limit: 200, scanned: 0, truncated: false, keysLoaded: false, keysError: '',
       activeKey: null, value: null, valueError: '', checked: Object.create(null), notice: '',
-      busy: false, destroyed: false };
+      busy: false, destroyed: false, discoveryState: 'loading', discovery: null, discoveryError: '',
+      autoNotice: null, autoPending: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -26,13 +27,13 @@
       var kv = parts[i].trim(); if (kv.indexOf(name + '=') === 0) return decodeURIComponent(kv.slice(name.length + 1));
     } return '';
   }
-  function invoke(method, params) {
+  function invokeAt(base, method, params) {
     var token = cookie('kore_csrf'); if (!token) return Promise.reject(new Error('缺少 CSRF 令牌，请刷新页面或重新登录'));
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, TIMEOUT_MS) : null;
     var init = { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token }, body: JSON.stringify(params || {}) };
     if (ctrl) init.signal = ctrl.signal;
-    return fetch(API + method, init).then(function (res) {
+    return fetch(base + method, init).then(function (res) {
       return res.text().then(function (raw) {
         if (timer !== null) clearTimeout(timer);
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
@@ -46,6 +47,7 @@
       throw err;
     });
   }
+  function invoke(method, params) { return invokeAt(API, method, params); }
   function fmtInt(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('zh-CN') : '—'; }
   function fmtUptime(sec) {
     if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) return '—';
@@ -67,29 +69,147 @@
     var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
     add(h, el('span', 'panel-title', title));
     return { panel: p, head: h, meta: add(h, el('span', 'panel-meta', metaText || '')) }; }
+  function dbLabel(svc) { return svc && svc.id === 'redis' ? 'Redis' : 'Redis'; }
+  function shortVersion(version) { return String(version || '').split(/[-~+]/)[0]; }
+  function svcPort(svc) { return svc && svc.port ? svc.port : 6379; }
+  function pickService(list) {
+    var candidates = (list || []).filter(function (s) { return s && s.id === 'redis'; });
+    if (!candidates.length) return null;
+    var running = candidates.filter(function (s) { return s.running; });
+    return running.length ? running[0] : candidates[0];
+  }
+  // hintFor 把后端 error 原文翻译成「怎么办」；NOAUTH 直接给出 requirepass 位置。
+  function hintFor(text) {
+    var msg = String(text || '');
+    if (/NOAUTH|WRONGPASS|AUTH|invalid password|认证/i.test(msg)) {
+      return '请确认 Redis 密码，可在 /etc/redis/redis.conf 的 requirepass 查看；' +
+        'Docker 启动的实例看容器命令里的 --requirepass 或 REDIS_PASSWORD 环境变量。';
+    }
+    if (/refused|连接.*失败|dial tcp/i.test(msg)) {
+      return 'Redis 未在目标端口监听：确认服务已启动（systemctl status redis-server），' +
+        'Docker 用 docker ps 核对端口映射。';
+    }
+    if (/no such host|Name or service not known/i.test(msg)) {
+      return '主机名无法解析：本机 Redis 请填 127.0.0.1，远程实例请填可解析的 IP 或域名。';
+    }
+    return '检查地址、端口和密码，确认 Redis 已启动并允许从本机连接，然后重试。';
+  }
+  function autoBanner() {
+    if (!S.bannerHost) return;
+    var host = S.bannerHost;
+    host.textContent = '';
+    var box = add(host, el('section', 'db-autodetect'));
+    box.setAttribute('role', 'status');
+    var main = add(box, el('div', 'db-auto-main'));
+    var actions = add(box, el('div', 'db-auto-actions'));
+    function badge(text) { add(main, el('span', 'db-auto-badge', text)); }
+    function title(text) { add(main, el('p', 'db-auto-title', text)); }
+    function text(value) { add(main, el('p', 'db-auto-text', value)); }
+    function act(cls, label, fn) { add(actions, btn(cls, label, fn)); }
+
+    if (S.discoveryState === 'loading') {
+      badge('自动检测');
+      title('正在检测本机 Redis…');
+      text('检测只读本机命令与监听端口，不会安装或启动任何服务。');
+      return;
+    }
+    if (S.discoveryState === 'error') {
+      box.classList.add('is-none');
+      badge('自动检测不可用');
+      title('未能完成自动检测');
+      text('原因：' + S.discoveryError + '。可以手动填写连接信息，或点“重新检测”。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    var svc = S.discovery;
+    if (!svc) {
+      box.classList.add('is-none');
+      badge('自动检测');
+      title('未检测到本机 Redis');
+      text('安装服务后刷新本页会自动识别。Debian/Ubuntu：sudo apt install redis-server；' +
+        'RHEL：sudo dnf install redis。已有远程 Redis 可直接手动配置。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    if (!svc.running) {
+      box.classList.add('is-none');
+      badge('自动检测');
+      title('检测到本机 Redis' + (svc.version ? ' ' + shortVersion(svc.version) : '') + '，但服务未运行');
+      text('启动服务后再点“重新检测”：systemctl start redis-server（或 redis）。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    var version = shortVersion(svc.version);
+    badge('自动检测');
+    title('检测到本机 Redis' + (version ? ' ' + version : '') + '（127.0.0.1:' + svcPort(svc) + '）');
+    text(S.autoNotice && S.autoNotice.tone === 'ok'
+      ? '已自动填入主机、端口并连接成功；可在右上角「设置」里修改连接信息。'
+      : '已自动填入主机、端口；点“一键连接”后只需填写密码。');
+    if (S.autoNotice) {
+      add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+    }
+    act('btn-primary', '一键连接', function () { openSettings(true); });
+    act('btn-ghost', '重新检测', detect);
+  }
+  function btn(cls, label, fn) {
+    var b = el('button', 'btn ' + cls, label); b.type = 'button';
+    if (fn) on(b, fn);
+    return b;
+  }
   function paintNotice() {
     if (!S.noticeHost) return;
     S.noticeHost.textContent = ''; if (S.notice) S.noticeHost.appendChild(notice(S.notice, true)); }
   function paintInstances() {
     if (!S.instBody) return;
     S.instBody.textContent = ''; S.instCount.textContent = S.instances.length ? S.instances.length + ' 个连接' : '';
-    if (S.loadError) { S.instBody.appendChild(notice('读取实例失败：' + S.loadError)); return; }
+    if (S.loadError) {
+      var fail = add(S.instBody, el('div', 'empty-state'));
+      add(fail, el('p', 'empty-state-title', '读取实例失败'));
+      add(fail, el('p', 'empty-state-text', S.loadError));
+      add(fail, el('p', 'empty-state-text', '怎么办：' + hintFor(S.loadError)));
+      var retry = add(fail, el('button', 'btn btn-primary', '重新读取'));
+      retry.type = 'button'; on(retry, function () { loadInstances(false); });
+      return;
+    }
     if (!S.instances.length) {
       var empty = add(S.instBody, el('div', 'empty-state'));
       add(empty, el('p', 'empty-state-title', '还没有 Redis 连接'));
-      add(empty, el('p', 'empty-state-text', '先添加一个 Redis 连接：只需主机与端口；密码只读环境变量名，不写入配置文件。'));
-      var addBtn = add(empty, el('button', 'btn btn-primary', '添加连接'));
-      addBtn.type = 'button'; on(addBtn, openSettings); return;
+      var svc = S.discovery, why;
+      if (S.discoveryState === 'loading') {
+        why = '正在检测本机 Redis…检测完成后这里会出现一键连接入口。';
+      } else if (svc && svc.running) {
+        why = '已检测到本机 Redis。点上方“一键连接”，只需填写密码即可。';
+      } else if (svc) {
+        why = '检测到本机 Redis，但服务未运行。启动服务后点上方“重新检测”。';
+      } else {
+        why = '未检测到本机 Redis。安装后刷新本页会自动识别：Debian/Ubuntu 用 sudo apt install redis-server，RHEL 用 sudo dnf install redis。';
+      }
+      add(empty, el('p', 'empty-state-text', why));
+      var ops = add(empty, el('div', 'db-auto-actions'));
+      if (svc && svc.running) {
+        var one = add(ops, el('button', 'btn btn-primary', '一键连接')); one.type = 'button';
+        on(one, function () { openSettings(true); });
+      }
+      var addBtn = add(ops, el('button', 'btn btn-primary', '手动配置'));
+      addBtn.type = 'button'; on(addBtn, function () { openSettings(false); });
+      var re = add(ops, el('button', 'btn btn-ghost', '重新检测')); re.type = 'button'; on(re, detect);
+      return;
     }
     var grid = add(S.instBody, el('div', 'redis-instances'));
     S.instances.forEach(function (inst) {
       var active = inst.name === S.selected, card = add(grid, el('button', 'redis-instance' + (active ? ' is-active' : '')));
       card.type = 'button'; card.setAttribute('aria-pressed', active ? 'true' : 'false');
-      var top = add(card, el('div', 'redis-inst-head')); add(top, el('span', 'redis-inst-name', inst.name));
+      var top = add(card, el('div', 'redis-inst-head')); add(top, el('span', 'redis-inst-name', inst.name === 'default' ? '默认连接' : inst.name));
       top.appendChild(chip(inst.reachable ? 'ok' : 'fail', inst.reachable ? '可达' : '不可达'));
       add(card, el('div', 'redis-inst-meta', (inst.host || '—') + ':' + (inst.port || 6379)));
       if (inst.reachable) add(card, el('div', 'redis-inst-version', (inst.version || '版本未知') + ' · 运行 ' + fmtUptime(inst.uptime_s)));
-      else add(card, el('div', 'redis-inst-error', '连接失败：' + (inst.error || '原因未知'))).title = inst.error || '';
+      else {
+        add(card, el('div', 'redis-inst-error', '连接失败：' + (inst.error || '原因未知'))).title = inst.error || '';
+        add(card, el('div', 'db-inst-hint', '怎么办：' + hintFor(inst.error)));
+      }
       on(card, function () { selectInstance(inst.name); });
     });
   }
@@ -200,11 +320,29 @@
     S.keysError = ''; S.activeKey = null; S.value = null; S.valueError = ''; S.notice = ''; S.truncated = false; S.scanned = 0;
     S.checked = Object.create(null); paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintValue(); loadInfo(); loadKeys(); }
   function loadInstances(reset) {
-    if (reset) { S.selected = ''; S.info = null; S.keys = []; S.keysLoaded = false; }
+    if (reset) { S.selected = ''; S.info = null; S.keys = []; S.keysLoaded = false; S.autoNotice = null; }
     S.loadError = ''; paintInstances();
     invoke('redis.instances', {}).then(function (data) {
       if (S.destroyed) return;
-      S.instances = data.instances || []; paintInstances();
+      S.instances = data.instances || [];
+      if (S.autoPending) {
+        S.autoPending = false;
+        var pick = S.instances.length ? S.instances[0] : null;
+        for (var k = 0; k < S.instances.length; k++) {
+          if (S.instances[k].reachable) { pick = S.instances[k]; break; }
+        }
+        if (pick && pick.reachable) {
+          S.autoNotice = { tone: 'ok', text: '已连接「' + (pick.name === 'default' ? '默认连接' : pick.name) + '」' +
+            (pick.version ? ' · Redis ' + pick.version : '') + '（' + pick.host + ':' + pick.port + '）' };
+        } else if (pick) {
+          S.autoNotice = { tone: 'warn', text: '保存成功，但连接失败：' + (pick.error || '原因未知') +
+            '。怎么办：' + hintFor(pick.error) };
+        } else {
+          S.autoNotice = { tone: 'warn', text: '保存成功，但没有可用的连接；请检查设置后重试。' };
+        }
+        autoBanner();
+      }
+      paintInstances();
       if (!S.selected && S.instances.length) {
         var first = S.instances[0];
         for (var i = 0; i < S.instances.length; i++) if (S.instances[i].reachable) { first = S.instances[i]; break; }
@@ -268,9 +406,33 @@
       S.confirmHost.appendChild(notice('删除失败：' + err.message));
     });
   }
-  function openSettings() {
+  function detect() {
+    S.discoveryState = 'loading'; S.discoveryError = '';
+    autoBanner(); paintInstances();
+    invokeAt(DISCOVER, 'discover.services', {}).then(function (data) {
+      if (S.destroyed) return;
+      S.discovery = pickService(data);
+      S.discoveryState = 'ready';
+      autoBanner(); paintInstances();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.discovery = null; S.discoveryState = 'error'; S.discoveryError = err.message;
+      autoBanner(); paintInstances();
+    });
+  }
+  function openSettings(fromDiscovery) {
     if (!S.root) return;
-    var opts = { title: 'Redis 连接', onSaved: function () { loadInstances(true); } };
+    var svc = S.discovery;
+    var opts = { title: 'Redis 连接', focusKey: 'password' };
+    if (fromDiscovery && svc && svc.running) {
+      opts.prefill = { host: '127.0.0.1', port: svcPort(svc) };
+      opts.autoKeys = { host: true, port: true };
+      opts.autoNote = '已从本机检测结果自动填入主机、端口（标“已自动填入”），只需填写密码。';
+    }
+    opts.onSaved = function () {
+      S.autoPending = true; S.autoNotice = null;
+      loadInstances(true);
+    };
     if (window.KoreShell && typeof window.KoreShell.openConfig === 'function') window.KoreShell.openConfig(S.root, 'redis', opts);
     else if (window.KoreConfig && typeof window.KoreConfig.open === 'function') window.KoreConfig.open(S.root, 'redis', opts);
     else S.noticeHost.appendChild(notice('配置面板不可用，请刷新页面重试')); }
@@ -285,8 +447,9 @@
     var head = add(S.root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', 'Redis')); add(head, el('p', 'view-sub', '连接已有 Redis 实例：查看实例与内存、浏览键、读取值、批量删除。'));
     S.noticeHost = add(S.root, el('div', 'redis-notice-host'));
+    S.bannerHost = add(S.root, el('div', 'db-banner-host'));
     var inst = panel('Redis 实例', ''); add(S.root, inst.panel); S.instCount = add(inst.meta, el('span', null, ''));
-    var gear = add(inst.meta, el('button', 'btn btn-ghost', '设置')); gear.type = 'button'; on(gear, openSettings);
+    var gear = add(inst.meta, el('button', 'btn btn-ghost', '设置')); gear.type = 'button'; on(gear, function () { openSettings(false); });
     S.instBody = add(inst.panel, el('div', 'redis-instance-body'));
     var info = panel('实例信息', '内存 / 连接 / 命中率 / keyspace');
     S.infoPanel = info.panel; S.infoPanel.hidden = true; add(S.root, S.infoPanel); S.infoHost = add(S.infoPanel, el('div', 'redis-info'));
@@ -311,6 +474,8 @@
     var value = panel('值', ''); S.valuePanel = value.panel; S.valuePanel.hidden = true; add(S.root, S.valuePanel);
     S.valueMeta = add(value.meta, el('span', null, '')); add(value.meta, el('span', null, '点击任意键查看'));
     S.valueHost = add(S.valuePanel, el('div', 'redis-value'));
+    autoBanner();
+    detect();
     paintInstances(); paintInfo(); paintKeys(); paintValue(); loadInstances();
     return { destroy: function () { S.destroyed = true; } };
   }

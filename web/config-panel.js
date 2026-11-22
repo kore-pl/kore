@@ -15,6 +15,9 @@
     '.cfg-input{width:100%;box-sizing:border-box;min-height:var(--kore-touch);padding:8px 10px;color:var(--kore-text-1);background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font:inherit}.cfg-input:focus{outline:2px solid var(--kore-info);outline-offset:1px}',
     '.cfg-check{width:20px;height:20px;accent-color:var(--kore-info)}.cfg-help{margin:0;color:var(--kore-text-3);font-size:var(--kore-font-12)}',
     '.cfg-list{display:flex;flex-direction:column;gap:8px}.cfg-list-row{display:flex;align-items:center;gap:8px}.cfg-list-row .cfg-input{flex:1 1 auto}.cfg-remove,.cfg-add{min-height:var(--kore-touch)}.cfg-actions{display:flex;flex-wrap:wrap;gap:8px;padding:0 14px 12px}.cfg-status{min-height:20px;padding:0 14px 12px;font-size:var(--kore-font-12)}.cfg-status-ok{color:var(--kore-success)}.cfg-status-err{color:var(--kore-danger)}.cfg-status-warn{color:var(--kore-warning)}',
+    '.cfg-auto{display:inline-flex;align-items:center;margin-left:6px;padding:0 7px;color:var(--kore-success);background:rgba(63,185,80,.12);border:1px solid var(--kore-success);border-radius:999px;font-size:11px;font-weight:500;vertical-align:1px}',
+    '.cfg-note{margin:0 0 2px;padding:8px 10px;color:var(--kore-text-2);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12)}',
+    '.cfg-auto-hint{color:var(--kore-success)}',
     '.cfg-toast{position:fixed;top:12px;left:50%;z-index:900;transform:translateX(-50%);max-width:min(92vw,560px);padding:10px 16px;color:var(--kore-text-1);background:var(--kore-bg-2);border:1px solid var(--kore-success);border-radius:var(--kore-radius-control);box-shadow:var(--kore-shadow);font-size:var(--kore-font-13)}'
   ].join('');
   function el(tag, cls, text) {
@@ -145,9 +148,10 @@
       reset: function (def) { input.value = def === undefined || def === null ? '' : String(def); }
     };
   }
-  function renderField(field, value) {
+  function renderField(field, value, autoKeys) {
     var box = el('div', 'cfg-field'), label = el('label', 'cfg-label', field.label || field.key);
     if (field.required) add(label, el('span', 'cfg-req', '*'));
+    if (autoKeys && autoKeys[field.key]) add(label, el('span', 'cfg-auto', '已自动填入'));
     add(box, label);
     var control = fieldControl(field, value);
     add(box, control.node);
@@ -200,14 +204,23 @@
     function onKey(ev) { if (ev.key === 'Escape') close(); }
     closeBtn.addEventListener('click', close);
     document.addEventListener('keydown', onKey);
+    var prefill = opts.prefill || {}, autoKeys = opts.autoKeys || {}, focusEntry = null;
     invoke(pluginId, 'get', {}).then(function (data) {
       var schema = data.schema || {}, values = data.values || {}, fields = schema.fields || [], entries = [];
       body.textContent = '';
+      if (opts.autoNote) add(body, el('p', 'cfg-note', opts.autoNote));
       for (var i = 0; i < fields.length; i++) {
         var field = fields[i], current = values[field.key];
         if (current === undefined) current = field['default'];
-        var entry = renderField(field, current);
+        if (Object.prototype.hasOwnProperty.call(prefill, field.key)) current = prefill[field.key];
+        var entry = renderField(field, current, autoKeys);
         entries.push(entry); add(body, entry.box);
+        if (opts.focusKey && field.key === opts.focusKey) focusEntry = entry;
+      }
+      if (focusEntry) {
+        var focusNode = focusEntry.control.node;
+        var inner = focusNode && focusNode.querySelector ? focusNode.querySelector('input,select,textarea') : null;
+        (inner || focusNode).focus();
       }
       var save = el('button', 'btn btn-primary', '保存'), reset = el('button', 'btn btn-ghost', '恢复默认值');
       save.type = 'button'; reset.type = 'button';

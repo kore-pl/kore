@@ -3,13 +3,19 @@
    window.KoreDb.render(container) 调 db-mysql 的 db-mysql.instances / .databases / .query / .status；
    插件 businessVerb 只剥 "db-mysql." 前缀，裸动词（如 instances）会 E_NOTFOUND「未知方法」——
    方法段必须写完整限定名，不得退化为裸动词。
-   写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。 */
+   写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。
+   易用性（USABILITY 原则 2）：打开页面先问 discover.discover.services，探测到本机
+   MySQL/MariaDB 时给「自动检测横幅 + 一键连接」；host/port/user 由检测结果预填并标
+   「已自动填入」，用户只需填密码。探测不到时给安装指引与手动配置入口。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/db-mysql/';
+  var DISCOVER = '/api/v1/invoke/discover/';
   function fresh() {
     return { instances: [], selected: '', status: null, dbs: [], result: null, loadError: '',
-      statusError: '', dbError: '', dbLoaded: false, queryError: '', busy: false, destroyed: false };
+      statusError: '', dbError: '', dbLoaded: false, queryError: '', busy: false, destroyed: false,
+      discoveryState: 'loading', discovery: null, discoveryError: '',
+      autoNotice: null, autoPending: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -20,6 +26,12 @@
   }
   function add(parent, child) { parent.appendChild(child); return child; }
   function on(node, fn) { node.addEventListener('click', fn); return node; }
+  function btn(cls, text, fn) {
+    var b = add(cls.parent, el('button', 'btn ' + cls.cls, text));
+    b.type = 'button';
+    if (fn) on(b, fn);
+    return b;
+  }
   function cookie(name) {
     var parts = document.cookie ? document.cookie.split(';') : [];
     for (var i = 0; i < parts.length; i++) {
@@ -28,10 +40,10 @@
     }
     return '';
   }
-  function invoke(method, params) {
+  function invokeAt(base, method, params) {
     var token = cookie('kore_csrf');
     if (!token) return Promise.reject(new Error('缺少 CSRF 令牌，请刷新页面或重新登录'));
-    return fetch(API + method, {
+    return fetch(base + method, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token },
       body: JSON.stringify(params || {})
@@ -50,6 +62,7 @@
       });
     });
   }
+  function invoke(method, params) { return invokeAt(API, method, params); }
   function fmtInt(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('zh-CN') : '—'; }
   function fmtUptime(sec) {
     if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) return '—';
@@ -73,17 +86,139 @@
     }
     return null;
   }
+  function dbLabel(svc) { return svc && svc.id === 'mariadb' ? 'MariaDB' : 'MySQL'; }
+  function shortVersion(version) { return String(version || '').split(/[-~+]/)[0]; }
+  function svcPort(svc) { return svc && svc.port ? svc.port : 3306; }
+  function pickService(list) {
+    var candidates = (list || []).filter(function (s) {
+      return s && (s.id === 'mariadb' || s.id === 'mysql');
+    });
+    if (!candidates.length) return null;
+    var running = candidates.filter(function (s) { return s.running; });
+    var pool = running.length ? running : candidates;
+    for (var i = 0; i < pool.length; i++) if (pool[i].id === 'mariadb') return pool[i];
+    return pool[0];
+  }
+  // hintFor 把后端 error 原文翻译成「怎么办」；没有命中时给通用排查顺序。
+  function hintFor(text) {
+    var msg = String(text || '');
+    if (/Access denied|1045|28000/i.test(msg)) {
+      return '请确认用户名和密码。密码忘记可在服务器上重置：ALTER USER \'root\'@\'localhost\' IDENTIFIED BY \'<新密码>\'；' +
+        '若只允许本机 socket 登录，请创建可远程登录的账号。';
+    }
+    if (/2002|2003|refused|Can\'t connect|连接.*失败/i.test(msg)) {
+      return '服务没有在目标端口监听：确认数据库已启动（systemctl status mariadb 或 mysqld），或把端口改成实际监听端口。';
+    }
+    if (/Unknown MySQL server host|no such host|Name or service not known/i.test(msg)) {
+      return '主机名无法解析：本机数据库请填 127.0.0.1，远程数据库请填可解析的 IP 或域名。';
+    }
+    if (/password env|密码环境变量/i.test(msg)) {
+      return '密码环境变量未设置：直接在设置里填写“密码”，或启动内核前导出该环境变量。';
+    }
+    return '检查地址、端口、用户名和密码；确认数据库已启动并允许该账号从本机登录，然后重试。';
+  }
+  function autoBanner() {
+    if (!S.bannerHost) return;
+    var host = S.bannerHost;
+    host.textContent = '';
+    var box = add(host, el('section', 'db-autodetect'));
+    box.setAttribute('role', 'status');
+    var main = add(box, el('div', 'db-auto-main'));
+    var actions = add(box, el('div', 'db-auto-actions'));
+    function badge(text) { add(main, el('span', 'db-auto-badge', text)); }
+    function title(text) { add(main, el('p', 'db-auto-title', text)); }
+    function text(value) { add(main, el('p', 'db-auto-text', value)); }
+    function act(cls, label, fn) { add(actions, btn({ parent: actions, cls: cls }, label, fn)); }
+
+    if (S.discoveryState === 'loading') {
+      badge('自动检测');
+      title('正在检测本机 MySQL/MariaDB…');
+      text('检测只读本机命令与监听端口，不会安装或启动任何服务。');
+      return;
+    }
+    if (S.discoveryState === 'error') {
+      box.classList.add('is-none');
+      badge('自动检测不可用');
+      title('未能完成自动检测');
+      text('原因：' + S.discoveryError + '。可以手动填写连接信息，或点“重新检测”。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    var svc = S.discovery;
+    if (!svc) {
+      box.classList.add('is-none');
+      badge('自动检测');
+      title('未检测到本机 MySQL/MariaDB');
+      text('安装服务后刷新本页会自动识别。Debian/Ubuntu：sudo apt install mariadb-server；' +
+        'RHEL：sudo dnf install mariadb-server。已有远程数据库可直接手动配置。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    if (!svc.running) {
+      box.classList.add('is-none');
+      badge('自动检测');
+      title('检测到本机 ' + dbLabel(svc) + (svc.version ? ' ' + shortVersion(svc.version) : '') +
+        '，但服务未运行');
+      text('启动服务后再点“重新检测”：systemctl start ' + (svc.id === 'mariadb' ? 'mariadb' : 'mysql') +
+        '（不同发行版也可能是 mysqld）。');
+      act('btn-ghost', '重新检测', detect);
+      act('btn-primary', '手动配置', function () { openSettings(false); });
+      return;
+    }
+    var label = dbLabel(svc), version = shortVersion(svc.version);
+    badge('自动检测');
+    title('检测到本机 ' + label + (version ? ' ' + version : '') + '（127.0.0.1:' + svcPort(svc) + '）');
+    text(S.autoNotice && S.autoNotice.tone === 'ok'
+      ? '已自动填入主机、端口、用户名并连接成功；可在右上角「设置」里修改连接信息。'
+      : '已自动填入主机、端口、用户名；点“一键连接”后只需填写密码。');
+    if (S.autoNotice) {
+      add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+    }
+    act('btn-primary', '一键连接', function () { openSettings(true); });
+    act('btn-ghost', '重新检测', detect);
+  }
   function paintInstances() {
     if (!S.instBody) return;
     S.instBody.textContent = '';
     S.instCount.textContent = S.instances.length ? S.instances.length + ' 个实例' : '';
-    if (S.loadError) { S.instBody.appendChild(notice('读取实例失败：' + S.loadError)); return; }
+    if (S.loadError) {
+      var fail = add(S.instBody, el('div', 'empty-state db-empty'));
+      add(fail, el('p', 'empty-state-title', '读取实例失败'));
+      add(fail, el('p', 'empty-state-text', S.loadError));
+      add(fail, el('p', 'empty-state-text', '怎么办：' + hintFor(S.loadError)));
+      var retry = add(fail, el('button', 'btn btn-primary', '重新读取'));
+      retry.type = 'button'; on(retry, function () { loadInstances(false); });
+      return;
+    }
     if (!S.instances.length) {
       var empty = add(S.instBody, el('div', 'empty-state db-empty'));
-      add(empty, el('p', 'empty-state-title', '未配置 MySQL 实例'));
-      add(empty, el('p', 'empty-state-text',
-        '内核从环境变量 KORE_MYSQL_INSTANCES 读取实例 JSON 数组，每项含 name / host / port / user / password_env；' +
-        '密码只写环境变量名，启动内核时注入该变量的值。也可用 KORE_MYSQL_CONFIG 指向 JSON 配置文件。修改后需重启内核。'));
+      add(empty, el('p', 'empty-state-title', '还没有数据库连接'));
+      var svc = S.discovery;
+      var why;
+      if (S.discoveryState === 'loading') {
+        why = '正在检测本机数据库…检测完成后这里会出现一键连接入口。';
+      } else if (svc && svc.running) {
+        why = '已检测到本机 ' + dbLabel(svc) + '。点上方“一键连接”，只需填写密码即可。';
+      } else if (svc) {
+        why = '检测到本机 ' + dbLabel(svc) + '，但服务未运行。启动服务后点上方“重新检测”。';
+      } else {
+        why = '未检测到本机 MySQL/MariaDB。安装后刷新本页会自动识别：' +
+          'Debian/Ubuntu 用 sudo apt install mariadb-server，RHEL 用 sudo dnf install mariadb-server。';
+      }
+      add(empty, el('p', 'empty-state-text', why));
+      var ops = add(empty, el('div', 'db-auto-actions'));
+      if (svc && svc.running) {
+        add(ops, btn({ parent: ops, cls: 'btn-primary' }, '一键连接', function () { openSettings(true); }));
+      }
+      add(ops, btn({ parent: ops, cls: 'btn-primary' }, '手动配置', function () { openSettings(false); }));
+      add(ops, btn({ parent: ops, cls: 'btn-ghost' }, '重新检测', detect));
+      var adv = add(empty, el('details', 'db-advanced'));
+      add(adv, el('summary', null, '已有环境变量配置？'));
+      add(adv, el('p', 'empty-state-text',
+        '旧路径 KORE_MYSQL_INSTANCES / KORE_MYSQL_CONFIG 仍然有效，本页不会覆盖它们；' +
+        '本页保存的是“默认连接”。'));
       return;
     }
     var grid = add(S.instBody, el('div', 'db-instances'));
@@ -93,12 +228,15 @@
       card.type = 'button';
       card.setAttribute('aria-pressed', active ? 'true' : 'false');
       var top = add(card, el('div', 'db-inst-head'));
-      add(top, el('span', 'db-inst-name', inst.name));
+      add(top, el('span', 'db-inst-name', inst.name === 'default' ? '默认连接' : inst.name));
       top.appendChild(chip(inst.reachable ? 'ok' : 'fail', inst.reachable ? '可达' : '不可达'));
       add(card, el('div', 'db-inst-meta', (inst.host || '—') + ':' + (inst.port || 3306)));
-      if (inst.reachable) add(card, el('div', 'db-inst-version', inst.version || '版本未知'));
-      else add(card, el('div', 'db-inst-error', '连接失败：' + (inst.error || '原因未知'))).title = inst.error || '';
-
+      if (inst.reachable) {
+        add(card, el('div', 'db-inst-version', inst.version || '版本未知'));
+      } else {
+        add(card, el('div', 'db-inst-error', '连接失败：' + (inst.error || '原因未知'))).title = inst.error || '';
+        add(card, el('div', 'db-inst-hint', '怎么办：' + hintFor(inst.error)));
+      }
       on(card, function () { selectInstance(inst.name); });
     });
   }
@@ -179,7 +317,7 @@
     var statusPanel = add(host, el('section', 'panel'));
     var statusHead = add(statusPanel, el('div', 'panel-head'));
     add(statusHead, el('span', 'panel-title', '实例详情'));
-    add(statusHead, el('span', 'panel-meta', inst.name));
+    add(statusHead, el('span', 'panel-meta', inst.name === 'default' ? '默认连接' : inst.name));
     S.statusHost = add(statusPanel, el('div', 'db-status'));
     paintStatus();
     var layout = add(host, el('div', 'db-layout'));
@@ -264,18 +402,36 @@
       S.dbError = err.message; S.dbLoaded = true; paintDbs();
     });
   }
-  function loadInstances() {
+  function loadInstances(reset) {
+    if (reset) { S.selected = ''; S.status = null; S.dbs = []; S.dbLoaded = false; S.result = null; }
     S.loadError = '';
     paintInstances();
     invoke('db-mysql.instances', {}).then(function (data) {
       if (S.destroyed) return;
       S.instances = data.instances || [];
+      if (S.autoPending) {
+        S.autoPending = false;
+        var first = S.instances.length ? S.instances[0] : null;
+        for (var i = 0; i < S.instances.length; i++) {
+          if (S.instances[i].reachable) { first = S.instances[i]; break; }
+        }
+        if (first && first.reachable) {
+          S.autoNotice = { tone: 'ok', text: '已连接「' + (first.name === 'default' ? '默认连接' : first.name) + '」' +
+            (first.version ? ' · ' + first.version : '') + '（' + first.host + ':' + first.port + '）' };
+        } else if (first) {
+          S.autoNotice = { tone: 'warn', text: '保存成功，但连接失败：' + (first.error || '原因未知') +
+            '。怎么办：' + hintFor(first.error) };
+        } else {
+          S.autoNotice = { tone: 'warn', text: '保存成功，但没有可用的连接；请检查设置后重试。' };
+        }
+        autoBanner();
+      }
       paintInstances();
       if (!S.selected && S.instances.length) {
         // 默认选第一个可达实例，省一次点击；不可达实例仍可手动点开核对完整错误。
         var first = S.instances[0];
-        for (var i = 0; i < S.instances.length; i++) {
-          if (S.instances[i].reachable) { first = S.instances[i]; break; }
+        for (var j = 0; j < S.instances.length; j++) {
+          if (S.instances[j].reachable) { first = S.instances[j]; break; }
         }
         selectInstance(first.name);
       }
@@ -284,19 +440,60 @@
       S.loadError = err.message; paintInstances();
     });
   }
+  function detect() {
+    S.discoveryState = 'loading'; S.discoveryError = '';
+    autoBanner(); paintInstances();
+    invokeAt(DISCOVER, 'discover.services', {}).then(function (data) {
+      if (S.destroyed) return;
+      S.discovery = pickService(data);
+      S.discoveryState = 'ready';
+      autoBanner(); paintInstances();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.discovery = null; S.discoveryState = 'error'; S.discoveryError = err.message;
+      autoBanner(); paintInstances();
+    });
+  }
+  function openSettings(fromDiscovery) {
+    if (!S.root) return;
+    var svc = S.discovery;
+    var opts = { title: '数据库连接', focusKey: 'password' };
+    if (fromDiscovery && svc && svc.running) {
+      opts.prefill = { host: '127.0.0.1', port: svcPort(svc), user: 'root' };
+      opts.autoKeys = { host: true, port: true, user: true };
+      opts.autoNote = '已从本机检测结果自动填入主机、端口、用户名（标“已自动填入”），只需填写密码。';
+    }
+    opts.onSaved = function () {
+      S.autoPending = true; S.autoNotice = null;
+      loadInstances(true);
+    };
+    if (window.KoreShell && typeof window.KoreShell.openConfig === 'function') {
+      window.KoreShell.openConfig(S.root, 'db-mysql', opts);
+    } else if (window.KoreConfig && typeof window.KoreConfig.open === 'function') {
+      window.KoreConfig.open(S.root, 'db-mysql', opts);
+    } else {
+      S.instBody.insertBefore(notice('配置面板不可用，请刷新页面重试'), S.instBody.firstChild);
+    }
+  }
   function render(container) {
     if (!container) return null;
     S = fresh();
     container.textContent = '';
     var root = add(container, el('section', 'db'));
+    S.root = root;
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '数据库'));
-    add(head, el('p', 'view-sub', 'MySQL / MariaDB 实例、库列表与只读 SQL 控制台。'));
+    add(head, el('p', 'view-sub', 'MySQL / MariaDB 实例、库列表与只读 SQL 控制台；本机服务可自动检测并一键连接。'));
+    S.bannerHost = add(root, el('div', 'db-banner-host'));
     var instPanel = add(root, el('section', 'panel')), instHead = add(instPanel, el('div', 'panel-head'));
     add(instHead, el('span', 'panel-title', 'MySQL 实例'));
     S.instCount = add(instHead, el('span', 'panel-meta', ''));
+    var gear = add(instHead, el('button', 'btn btn-ghost', '设置'));
+    gear.type = 'button'; on(gear, function () { openSettings(false); });
     S.instBody = add(instPanel, el('div', 'db-instance-body')); S.detailHost = add(root, el('div', 'db-detail'));
-    loadInstances();
+    autoBanner();
+    detect();
+    loadInstances(false);
     return { destroy: function () { S.destroyed = true; } };
   }
   window.KoreDb = { render: render };

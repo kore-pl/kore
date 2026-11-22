@@ -95,6 +95,32 @@
 
 保存后 `backup.create/list/verify/restore/delete` 下一次调用即用新目录与白名单，`restart_required=false`。`KORE_BACKUP_DIR` / `KORE_BACKUP_ALLOW_ROOTS` 继续兼容。
 
+### 7.3 `kore-plugin-db-mysql`
+
+| key | type | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `host` | `string` | `127.0.0.1` | 默认实例地址 |
+| `port` | `int` | `3306` | 默认实例端口 |
+| `user` | `string` | `root` | 默认实例用户名 |
+| `password` | `string`（`sensitive`） | `""` | 密码，只存本机 0600 文件；`config.get` 只回 `"***"` |
+| `password_env` | `string` | `KORE_MYSQL_PASSWORD` | 密码环境变量名；`password` 优先，旧用户继续生效 |
+| `databases_include_system` | `bool` | `false` | 库列表默认是否包含系统库 |
+
+配置文件只描述实例名 `default`；`KORE_MYSQL_INSTANCES` / `KORE_MYSQL_CONFIG` 的多实例路径继续保留，二者同时存在时 default 由文件配置覆盖。保存后 `db-mysql.instances/databases/query/status` 下一次调用即用新地址，`restart_required=false`。
+
+### 7.4 `kore-plugin-redis`
+
+| key | type | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `host` | `string` | `127.0.0.1` | 主实例地址 |
+| `port` | `int` | `6379` | 主实例端口 |
+| `password` | `string`（`sensitive`） | `""` | 主实例密码，只存本机 0600 文件；`config.get` 只回 `"***"` |
+| `password_env` | `string` | `""` | 主实例密码环境变量名；`password` 优先 |
+| `instances` | `list(string)` | `[]` | 附加实例，每项 `<名称>=<主机>:<端口>` |
+| `password_envs` | `list(string)` | `[]` | 附加实例密码环境变量，每项 `<名称>=<环境变量名>` |
+
+保存后 `redis.instances/info/keys/get/delete` 下一次调用即用新地址，`restart_required=false`；`KORE_REDIS_HOST/PORT/PASSWORD_ENV` 继续兼容。
+
 ## 8. 校验与错误
 
 - 必填缺失、类型不符、路径非绝对、列表含空项、枚举越界：返回 `E_INVALID`，`message` 写「哪一项错 + 怎么改」，不写堆栈。
