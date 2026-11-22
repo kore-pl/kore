@@ -18,6 +18,8 @@
   --kore-border-2: #21262D;
   --kore-shadow: 0 4px 12px rgba(0, 0, 0, .4);
   --kore-overlay: rgba(13, 17, 23, .62);
+  --kore-term-magenta: #BC8CFF;
+  --kore-term-cyan: #39C5CF;
 
   --kore-space-1: 4px;
   --kore-space-2: 8px;
@@ -1569,4 +1571,100 @@ button:disabled, .btn:disabled {
     box-shadow: inset 3px 0 0 var(--kore-info);
   }
   .kore-nav-drawer .kore-nav-label { font-size: var(--kore-font-14); }
+}
+
+/* ===== 终端视图（web/terminal.js）——仅追加，不改既有类 =====
+   令牌口径同 §5：hex 只允许出现在 :root（新增 --kore-term-* 两色），其余一律 var()；
+   间距 4/8/12/16/24，圆角 4/6，触摸目标 ≥44px（裁决41）。屏幕区可滚，透明 textarea
+   覆盖层承接键盘输入；640px 以下终端占满宽度，配合 visualViewport 滚到输入行。 */
+.term {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  height: calc(100vh - var(--kore-topbar-h) - var(--kore-space-6) * 2);
+  min-height: 320px;
+}
+
+.term-bar {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--kore-space-2);
+  margin: 0;
+  border: 1px solid var(--kore-border-1);
+  border-bottom: 0;
+  border-radius: var(--kore-radius-container) var(--kore-radius-container) 0 0;
+}
+
+.term-status { font-size: var(--kore-font-12); }
+.term-ok { color: var(--kore-success); }
+.term-fail { color: var(--kore-danger); }
+.term-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.term-ops .btn { min-height: 32px; padding: 0 var(--kore-space-3); font-size: var(--kore-font-12); }
+
+.term-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--kore-space-3);
+  background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-1);
+  border-radius: 0 0 var(--kore-radius-container) var(--kore-radius-container);
+}
+
+.term-stage:focus-within { border-color: var(--kore-info); }
+
+.term-screen {
+  margin: 0;
+  min-height: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--kore-font-13);
+  line-height: 18px;
+  white-space: pre;
+  color: var(--kore-text-1);
+}
+
+/* 透明覆盖层：点击屏幕即可聚焦并弹键盘；不把 textarea 的任何默认样式露给用户 */
+.term-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  opacity: 0;
+  resize: none;
+  font-size: var(--kore-font-13);
+}
+
+.term-foot {
+  flex: 0 0 auto;
+  padding: var(--kore-space-2) var(--kore-space-1) 0;
+  font-size: var(--kore-font-12);
+  word-break: break-all;
+}
+
+/* SGR：1m 粗体，30-37 / 90-97 前景色（亮色与常规同色，最小实现不拆分） */
+.term-bold { font-weight: 700; }
+.term-fg-30, .term-fg-90 { color: var(--kore-text-3); }
+.term-fg-31, .term-fg-91 { color: var(--kore-danger); }
+.term-fg-32, .term-fg-92 { color: var(--kore-success); }
+.term-fg-33, .term-fg-93 { color: var(--kore-warning); }
+.term-fg-34, .term-fg-94 { color: var(--kore-info); }
+.term-fg-35, .term-fg-95 { color: var(--kore-term-magenta); }
+.term-fg-36, .term-fg-96 { color: var(--kore-term-cyan); }
+.term-fg-37, .term-fg-97 { color: var(--kore-text-1); }
+
+@media (max-width: 639px) {
+  .term {
+    height: calc(100dvh - var(--kore-topbar-h) - 56px - env(safe-area-inset-bottom, 0px) - var(--kore-space-4) * 2);
+    min-height: 300px;
+  }
+  .term-ops .btn { min-height: var(--kore-touch); }
+  .term-stage { padding: var(--kore-space-2); }
+  .term-screen { font-size: var(--kore-font-12); }
 }

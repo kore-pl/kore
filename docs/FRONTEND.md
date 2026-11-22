@@ -250,18 +250,18 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - **mock 策略**：`web/mock/` 下按 URL 命名存放 JSON（如 `plugins.get.json`），vite 插件按 `import.meta.env.DEV` 分支挂中间件；生产构建时该分支被 tree-shake，mock 不进产物。
 - **类型来源**：API 与帧类型以 `pkg/pluginapi` 的 Go 类型为唯一真源。M1 起用 `tygo` 生成 `web/src/types/pluginapi.d.ts`，生成物入库，禁止手改；前端不从后端复制类型。
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
-- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **六个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js`），`make frontend` 打包十个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
+- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **七个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js`），`make frontend` 打包十一个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
 
 ## 9. 构建与 embed（已落地）
 
 ```text
-web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|settings.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
+web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|settings.js|terminal.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
 ```
 
 **状态：已落地**（M2-D 零依赖静态壳，M5 扩到十文件）。当前主壳前端是十文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
 
 - 构建顺序固定：`make frontend`（从 `web/` 复制十个产物到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐十个产物（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
-- **首屏口径（四件套）**：`index.html` + `style.css` + `app.js` + `shell.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这四个）。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块**不进首屏**——由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入 `/assets/<name>.js`，首屏请求数与视图数无关。
+- **首屏口径（四件套）**：`index.html` + `style.css` + `app.js` + `shell.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这四个）。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入；`terminal.js` 是 `shell.js` 内置的第 9 个导航项，同样按需注入 `/assets/terminal.js`。七个模块**都不进首屏**，首屏请求数与视图数无关。
 - embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；**逐个精确列十个文件**，不用 `all:dist`（embed 必须显式列名是 Go 限制，不构成业务词表）：
 
 ```go
@@ -269,7 +269,7 @@ package web
 
 import "embed"
 
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/sites.js dist/tasks.js dist/monitor.js dist/settings.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/sites.js dist/tasks.js dist/monitor.js dist/settings.js dist/terminal.js
 var Dist embed.FS
 ```
 
