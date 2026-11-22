@@ -34,10 +34,10 @@
 
 ## 3. 数据库 / Redis 真机连接
 
-- MySQL 密码：`docker inspect common-mysql` → `MYSQL_ROOT_PASSWORD=root123`；`db-mysql.config.set` HTTP 200，`config.get` 密码回显 `***`，配置文件 0600。
+- MySQL 密码：`docker inspect common-mysql` → `MYSQL_ROOT_PASSWORD=***`；`db-mysql.config.set` HTTP 200，`config.get` 密码回显 `***`，配置文件 0600。
 - `db-mysql.instances` → reachable=true、**server 9.7.1**；`databases` → 5 个真实库：`fees_china`、`fees_china_docker`、`iouf_lives`、`live_games`、`live_token`。
 - `db-mysql.query "SELECT VERSION()"` → **9.7.1 @ b222b5d80edb**（服务端版本，非 mysql 客户端）；`status` → max_connections=151、threads=5、uptime=149758s、slow=0。
-- Redis 密码：`docker inspect common-redis` → `REDIS_PASSWORD=87d6…0e55`（直连原为 NOAUTH）；`redis.config.set` HTTP 200，`config.get` 密码 `***`，0600。
+- Redis 密码：`docker inspect common-redis` → `REDIS_PASSWORD=***`（直连原为 NOAUTH）；`redis.config.set` HTTP 200，`config.get` 密码 `***`，0600。
 - `redis.instances` → reachable=true、**server 7.4.12**、uptime 149760s；`redis.keys` → 10 条真实键（hash/string/set，TTL 461875…-1），全库 DBSIZE=6574。
 
 ## 4. 34 张截图（`.agents/verify/screenshots/`，sha256 前 12 位）

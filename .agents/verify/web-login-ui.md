@@ -43,7 +43,7 @@ CSRF：写请求带 `X-Kore-CSRF: <kore_csrf>`，GET 不带；cookie 缺失先 G
 | --- | --- | --- | --- |
 | ① | 打开 `/` | `#kore-password` + 提交按钮存在；`"后端未连接" in body === false` | `login-01-form.png` |
 | ② | 错误口令 | 错误区 `口令错误，请重试`；仍在登录页；输入框已清空 | `login-02-wrong-password.png` |
-| ③ | 口令 `kore2026` | 系统信息 7 行（0.1.0 / 常驻 0 / 重启 0 / 总数 1 / linux·amd64 / cgroup v2 / 告警 2 条）；echo 行 `stopped`；`kore_csrf` 可读 | `login-03-dashboard.png` |
+| ③ | 口令 `***` | 系统信息 7 行（0.1.0 / 常驻 0 / 重启 0 / 总数 1 / linux·amd64 / cgroup v2 / 告警 2 条）；echo 行 `stopped`；`kore_csrf` 可读 | `login-03-dashboard.png` |
 | ④ | 点「启用」 | 该行 `stopped → ready`；ping 按钮解禁；常驻 `0 → 1` | `login-04-enabled.png` |
 | ⑤ | 点「调用 ping」 | 行内 `ping → {"pong":true}`，class `row-note-ok` | `login-05-ping.png` |
 | 附 | 点「退出」 | 回登录页；`kore_session` 已清除 | `login-06-logout.png` |
@@ -55,7 +55,7 @@ CSRF：写请求带 `X-Kore-CSRF: <kore_csrf>`，GET 不带；cookie 缺失先 G
 | --- | --- | --- | --- |
 | ① | 打开 `http://127.0.0.1:8787/` | `app.js` 38,494 B 与 `web/dist/app.js` 逐字节同长（新二进制已生效）；登录表单渲染，**未**显示「后端未连接」 | `login-09-8787-login.png` |
 | ② | 输入错误口令 | 显示 `口令错误，请重试`，停留登录页 | `login-10-8787-wrong-password.png` |
-| ③ | 输入 `kore2026` | 进面板：系统信息 7 行、`kore_csrf` 可读、有「退出」；插件表 0 行并显示「当前没有已安装插件」空态 | `login-11-8787-dashboard.png` |
+| ③ | 输入 `***` | 进面板：系统信息 7 行、`kore_csrf` 可读、有「退出」；插件表 0 行并显示「当前没有已安装插件」空态 | `login-11-8787-dashboard.png` |
 
 截图 11 张 PNG 魔数校验通过（1280×700 / 780×1688 DPR2）。驱动脚本为一次性脚本，验证后已删（未落工作区）。
 

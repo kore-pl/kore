@@ -2,7 +2,7 @@
 
 # fix-db-invoke 验收报告（真机 · 双端 · G-28）
 - 根因：`web/db.js` 方法段写裸动词 `instances`；`kore-plugin-db-mysql/internal/mysqlop/call.go:40` 的 `methodPrefix="db-mysql."` 只剥该前缀，而内核 `handlers_invoke.go:38-48` 按 `PLUGIN-PROTOCOL §7.2` 原样转发 → 插件回 `E_NOTFOUND 未知方法: instances`，实例卡/库列表/SQL 控制台全不渲染。
-- 隔离实例：`127.0.0.1:18882`（`/tmp/kore-dbfix` 源码副本重建 kored）；**8787 全程未触碰**（首尾 `/-/healthz` 均 200，未重启）。DB：`docker run -d --name kore-db-fix -e MYSQL_ROOT_PASSWORD=test123 -p 13308:3306 mysql:8` → `8.4.13`，库 `kore_fix`、表 `demo`（alpha/beta/gamma 3 行）。插件：`db-mysql 0.1.0` 经 `store/install package_path` 安装 + enable，实例走 `KORE_MYSQL_INSTANCES`，密码只走 `password_env=KORE_MYSQL_PASSWORD`。
+- 隔离实例：`127.0.0.1:18882`（`/tmp/kore-dbfix` 源码副本重建 kored）；**8787 全程未触碰**（首尾 `/-/healthz` 均 200，未重启）。DB：`docker run -d --name kore-db-fix -e MYSQL_ROOT_PASSWORD=*** -p 13308:3306 mysql:8` → `8.4.13`，库 `kore_fix`、表 `demo`（alpha/beta/gamma 3 行）。插件：`db-mysql 0.1.0` 经 `store/install package_path` 安装 + enable，实例走 `KORE_MYSQL_INSTANCES`，密码只走 `password_env=KORE_MYSQL_PASSWORD`。
 ## ① db.js 前后对比（同会话/同 CSRF 实测）
 | 位置 | 改前（裸动词 → 实测 404） | 改后（限定名 → 实测 200） |
 | --- | --- | --- |

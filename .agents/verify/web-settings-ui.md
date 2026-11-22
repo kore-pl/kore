@@ -44,7 +44,7 @@
 | # | 动作 | 实测断言 | 截图 |
 | --- | --- | --- | --- |
 | ① | 打开 `/` | 登录表单存在（`#kore-password`） | — |
-| ② | 口令 `kore2026` | `POST /auth/login` → **200**；cookie = `kore_session` + `kore_csrf` | — |
+| ② | 口令 `***` | `POST /auth/login` → **200**；cookie = `kore_session` + `kore_csrf` | — |
 | ③ | 渲染设置视图 | 四块 `panel-title` = `['账户','安全','运行参数','关于']` | `settings-01-desktop-account-security.png`（95,050 B） |
 | ④ | 退出按钮 | `[data-kore-action=logout]` 存在 | 同上 |
 | ⑤ | 修改口令 | `disabled === true`；说明含 `POST /api/v1/auth/password` 且含 `501` | 同上 |
