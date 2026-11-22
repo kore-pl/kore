@@ -252,27 +252,38 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
 - **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态三件套（`index.html` / `app.js` / `style.css`），`make frontend` 打包到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径卡首屏 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
 
-## 9. 构建与 embed
+## 9. 构建与 embed（已落地）
 
 ```text
-web/src ──vite build──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
+web/index.html|app.js|style.css ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
 ```
 
-- 构建顺序固定：`vite build --outDir dist` → `go build ./cmd/kored`；`Makefile` 的 `build` 目标先跑前端再跑后端，缺 `web/dist` 时 `go build` 直接失败（embed 报错即门禁）。
-- embed 声明放在 `web/embed.go`（`package web`），因为 `//go:embed` 不能引用父目录：
+**状态：已落地**（M2-D 零依赖静态壳）。当前主壳前端是三文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
+
+- 构建顺序固定：`make frontend`（从 `web/` 复制三件套到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。缺 `web/dist` 时 `go build` 直接失败（embed 报错即门禁）。
+- embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；只精确嵌三个文件，不用 `all:dist`：
 
 ```go
 package web
 
 import "embed"
 
-//go:embed all:dist
+//go:embed dist/index.html dist/app.js dist/style.css
 var Dist embed.FS
 ```
 
-- 该 `//go:embed` 只覆盖主壳的 `web/dist`；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
-- 产物文件名带 content hash（`assets/index-<hash>.js`）；`index.html` 以 `Cache-Control: no-store` 提供，hashed 资源 `immutable`。
-- **dev/prod 静态托管分支**：`KORE_WEB_DEV=1` 且非 `release` 构建时，`httpapi` 把非 `/api` 请求反代到 `127.0.0.1:5173`；否则只从 `web.Dist` 读文件，找不到的路径回落到 `index.html`（SPA 兜底），但 `/api` 前缀永不回落。
+- 该 `//go:embed` 只覆盖主壳三件套；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
+- **静态路由（已落地）**：`httpapi`（`internal/core/httpapi/server.go` 的 `staticRoutes()`）注册三条精确路由，从 `web.Dist` 按精确路径读文件，不遍历、不回落：
+
+| 路由 | 资源 | Content-Type |
+| --- | --- | --- |
+| `GET /` | `dist/index.html` | `text/html; charset=utf-8` |
+| `GET /app.js` | `dist/app.js` | `application/javascript; charset=utf-8` |
+| `GET /style.css` | `dist/style.css` | `text/css; charset=utf-8` |
+
+  `index.html` 相对引用 `./app.js` / `./style.css`，三个路径自洽。其它任何路径（含 `/nonexistent`）由 `routes()` 的 `"/"` 兜底返回 404 E_NOTFOUND——**无 SPA 兜底**，未知路径不回落 `index.html`。
+- **鉴权边界**：三条静态路由在 `middleware.go` 的 `isPublicPath` 白名单内（面板壳无敏感数据，未登录也要能加载登录界面）。所有 `/api/v1/*` 端点仍强制会话校验，鉴权与 CSRF 逻辑不因静态托管削弱；插件资产前缀 `/plugin-assets/*` 不在白名单内。
+- **访问方式**：kored 默认只开 UDS（`server.addr` 为空），浏览器访问需在配置里显式写 `server.addr: 127.0.0.1:8787`（MVP 只允许回环地址），然后打开 `http://127.0.0.1:8787/`。完整步骤见根 [QUICKSTART.md](../QUICKSTART.md)。
 - 单二进制 ≤ 25 MiB（含 embed 前端）是门禁级预算，前端合计体积贡献上限按 300 KiB gzip 反推。
 
 ## 10. 可访问性底线

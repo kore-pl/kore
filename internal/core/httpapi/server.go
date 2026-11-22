@@ -20,6 +20,14 @@ import (
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/platform"
+	"github.com/pengtang1024/kore/web"
+)
+
+// 主壳静态资源在 web.Dist 中的精确路径（embed 编译期保证存在）。
+const (
+	staticIndexPath = "dist/index.html"
+	staticAppJSPath = "dist/app.js"
+	staticCSSPath   = "dist/style.css"
 )
 
 // Options 是 httpapi 的启动参数，由 cmd/kored 装配。
@@ -128,6 +136,9 @@ func New(opts Options, transport platform.Transport) *Server {
 		server.capResolver = defaultCapabilityResolver
 	}
 	server.routes()
+	// 主壳静态三件套：精确路径注册，优先于 routes() 里的 "/" 404 兜底。
+	// 面板壳无敏感数据，走鉴权白名单（middleware.isPublicPath）；API 仍全量鉴权。
+	server.staticRoutes()
 	// 中间件链（外层先执行）：req_id → CSRF → auth → handler。
 	// CSRF 在 auth 之前：非法写请求一律先按 CSRF 失败收敛，不泄露会话状态。
 	// 仅装配鉴权时挂 CSRF/auth；M0 探活骨架（auth==nil）保持裸路由。
@@ -192,4 +203,42 @@ func (s *Server) serve(listener net.Listener) {
 	if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("HTTP 服务异常退出", "addr", listener.Addr().String(), "err", err)
 	}
+}
+
+// staticRoutes 注册主壳静态三件套。三条精确路由优先于 "/" 兜底：
+// 根路径用 "GET /{$}"（{$} 锚定精确根，Go 1.22+ ServeMux 语义），
+// 若写成 "GET /" 会与 "/api/v1/store/" 等子路径模式冲突并 panic（实测）；
+// 其它路径仍由 routes() 的 "/" 兜底 → 404。
+func (s *Server) staticRoutes() {
+	s.mux.HandleFunc("GET /{$}", s.handleIndex)
+	s.mux.HandleFunc("GET /app.js", s.handleAppJS)
+	s.mux.HandleFunc("GET /style.css", s.handleStyleCSS)
+}
+
+// staticFile 从 embed.FS 读取精确路径并写出；embed 编译期已保证存在，
+// 读取失败只可能是运行期数据损坏 → 500，绝不回落到其它文件（无 SPA 兜底）。
+func staticFile(w http.ResponseWriter, path, contentType string) {
+	data, err := web.Dist.ReadFile(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "E_INTERNAL", "静态资源读取失败", path)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// handleIndex 提供主壳 HTML 壳（浏览器面板入口）。
+func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
+	staticFile(w, staticIndexPath, "text/html; charset=utf-8")
+}
+
+// handleAppJS 提供主壳脚本。
+func (s *Server) handleAppJS(w http.ResponseWriter, _ *http.Request) {
+	staticFile(w, staticAppJSPath, "application/javascript; charset=utf-8")
+}
+
+// handleStyleCSS 提供主壳样式。
+func (s *Server) handleStyleCSS(w http.ResponseWriter, _ *http.Request) {
+	staticFile(w, staticCSSPath, "text/css; charset=utf-8")
 }

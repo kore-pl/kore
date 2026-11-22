@@ -34,9 +34,14 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// isPublicPath 返回无需鉴权的路径（健康检查与登录）。
+// isPublicPath 返回无需鉴权的路径（健康检查、登录与主壳静态三件套）。
+//
+// 主壳面板壳（index.html/app.js/style.css）只含静态 UI 骨架、无任何敏感数据，
+// 放行以便浏览器未登录时也能加载登录界面；所有 /api/v1/* 端点仍强制会话校验，
+// 鉴权逻辑不下放。插件资产（/plugin-assets/*）不在白名单内。
 func isPublicPath(path string) bool {
-	return path == "/-/healthz" || path == "/api/v1/auth/login"
+	return path == "/-/healthz" || path == "/api/v1/auth/login" ||
+		path == "/" || path == "/app.js" || path == "/style.css"
 }
 
 // CSRF 双提交 token 的载体：非 HttpOnly cookie + 同名请求头（SECURITY.md §4）。
