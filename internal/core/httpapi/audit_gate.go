@@ -24,7 +24,7 @@ func (s *Server) authorizeAuditRead(w http.ResponseWriter, r *http.Request) bool
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, "system:read") {
-		s.auditDenied(subject, "audit", "读取审计需要 system:read 能力")
+		s.auditDenied(subject, "audit", "", "读取审计需要 system:read 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：审计查询需要 system:read 能力", "system:read")
 		return false

@@ -65,20 +65,21 @@ func bootstrap(cfg config) (*platform.Platform, envprobe.Report, int) {
 // startHTTP 装配并启动 httpapi，返回退出码（绑定失败 = 5）。
 func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *service) (*httpapi.Server, int) {
 	server := httpapi.New(httpapi.Options{
-		Version:        version,
-		Report:         report,
-		Paths:          pathsInfo(cfg),
-		SocketPath:     socketPath(app),
-		Addr:           cfg.Addr,
-		Backend:        svc.backend,
-		Auth:           svc.auth,
-		LoginLimiter:   loginLimiter(cfg),
-		Market:         buildMarket(cfg, svc),
-		AuditLister:    &auditListerFromStore{db: svc.db},
-		InstallRefresh: svc.reloadOne,
-		Metrics:        metrics.New(app.Paths.Dir(platform.DirState)),
-		Privilege:      svc.privilege,
-		PluginAuth:     svc.pluginTokenAuth,
+		Version:           version,
+		Report:            report,
+		Paths:             pathsInfo(cfg),
+		SocketPath:        socketPath(app),
+		Addr:              cfg.Addr,
+		Backend:           svc.backend,
+		Auth:              svc.auth,
+		LoginLimiter:      loginLimiter(cfg),
+		Market:            buildMarket(cfg, svc),
+		AuditLister:       &auditListerFromStore{db: svc.db},
+		CapabilityAuditor: (&capabilityAuditorFromStore{db: svc.db}).Audit,
+		InstallRefresh:    svc.reloadOne,
+		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),
+		Privilege:         svc.privilege,
+		PluginAuth:        svc.pluginTokenAuth,
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)

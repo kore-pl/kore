@@ -115,7 +115,7 @@
 | --- | --- | --- | --- |
 | 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | 按 §5.2 顺序校验：非空（≥1 项）、语法合法、域为 6 特权之一或等于自身 id、无重复、≤16 项 | `E_INVALID` |
 | 启用授予 | `POST /api/v1/plugins/{id}/enable` | 展示声明清单并由用户确认，写入 `plugins` bucket 的 `granted_capabilities` 字段 | `E_CONFLICT`（升级新增能力未重新确认时） |
-| 调用校验 | 每个 `POST /api/v1/invoke/{plugin}/{method}` 帧 | 方法→能力映射表命中，且目标能力已在 `plugins.granted_capabilities` 中 | `E_UNAUTHORIZED` + 审计 `capability.denied` |
+| 调用校验 | 每个 `POST /api/v1/invoke/{plugin}/{method}` 帧 | 按目标插件 `capabilities` 的宿主前缀与动作级判定：`read` 任意已登录会话、`write/admin` 需 `system:admin`（或会话能力集含该项），未知宿主动作 fail-closed；内核不维护方法→业务能力映射表（G-01） | `403 E_UNAUTHORIZED`（未知宿主动作 `E_UNSUPPORTED`）+ 审计 `capability.denied` |
 
 ### 5.2 能力模型（两段）
 
@@ -128,7 +128,7 @@
 
 设计理由：**内核不得维护业务域名词表**——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治，新增插件永远不需要改内核（G-01）。
 
-越权一律 `E_UNAUTHORIZED`，`detail` 只含缺失的能力名，不泄露方法内部实现。插件之间不允许互相直接调用；跨插件协作只经主壳 `kore.event` 广播。
+越权一律 `E_UNAUTHORIZED`（invoke 为 `403`，其余为 `401`），`detail` 只含缺失的能力名，不泄露方法内部实现。插件之间不允许互相直接调用；跨插件协作只经主壳 `kore.event` 广播。
 
 ## 6. 插件隔离
 

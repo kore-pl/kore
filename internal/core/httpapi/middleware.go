@@ -187,7 +187,7 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 	}
 	if isManagementPath(r.URL.Path) && !hasCapability(granted, "system:admin") {
 		plugin := managementPluginID(r.URL.Path)
-		s.auditDenied(subject, plugin, "缺少 system:admin 特权能力")
+		s.auditDenied(subject, plugin, managementAction(r.URL.Path), "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
 		return false
 	}
@@ -195,12 +195,13 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 }
 
 // auditDenied 走注入的审计出口；未注入时只记 WARN（挂点见 server.go）。
-func (s *Server) auditDenied(subject, plugin, reason string) {
+// target 是被拒的目标动作：invoke 传方法名，enable/disable 传动作名，空串表示不细分。
+func (s *Server) auditDenied(subject, plugin, target, reason string) {
 	if s.capAuditor != nil {
-		s.capAuditor(subject, plugin, reason)
+		s.capAuditor(subject, plugin, target, reason)
 		return
 	}
-	slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "reason", reason)
+	slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "target", target, "reason", reason)
 }
 
 // sessionFrom 从 cookie 取 token 并校验，返回会话视图。

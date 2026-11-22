@@ -82,8 +82,7 @@ type Options struct {
 	CapabilityResolver CapabilityResolver
 	// CapabilityAuditor 是 capability.denied 的审计出口；nil 时只记 slog WARN。
 	// 挂点：cmd/kored 注入 store.PutAudit（Result=denied），本包不 import store。
-	CapabilityAuditor CapabilityAuditor
-	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
+	CapabilityAuditor CapabilityAuditor // AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
 	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
 	AuditLister AuditLister
 	// InstallRefresh 在 POST /store/install 成功后回调，真正重载 registry/supervisor
@@ -116,8 +115,9 @@ type PluginTokenAuth func(token string) (pluginID string, granted []string, ok b
 // subject 为空表示无凭证；granted 为 6 特权能力或 <plugin-id>:<action> 语法。
 type CapabilityResolver func(*http.Request) (string, []string)
 
-// CapabilityAuditor 记录一次 capability.denied（subject/插件 id/原因）。
-type CapabilityAuditor func(subject, plugin, reason string)
+// CapabilityAuditor 记录一次 capability.denied（subject / 插件 id / 目标动作 / 原因）。
+// 目标动作：invoke 传方法名，管理端点传 enable|disable，提权端点传 action_id。
+type CapabilityAuditor func(subject, plugin, target, reason string)
 
 // 单管理员语义下的 6 个宿主特权能力（与 registry/validate.go 同源，不重复名词表）。
 var adminCapabilities = []string{
@@ -125,6 +125,10 @@ var adminCapabilities = []string{
 }
 
 // defaultCapabilityResolver 从 session cookie 推导 admin 全权；无有效 cookie 返回空 subject。
+//
+// 当前 auth.Session 未携带 capability 字段（单管理员模式），故有效会话一律按 6 项
+// 全权处理；authorizeInvoke 会在首次检查时打一次 WARN 说明降级。多用户接入时
+// 由装配层注入 CapabilityResolver 覆盖本函数即可生效。
 func defaultCapabilityResolver(r *http.Request) (string, []string) {
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil || cookie.Value == "" {
@@ -161,6 +165,16 @@ func pluginIDFromPath(path string) string {
 // managementPluginID 从 /api/v1/plugins/{id}/enable|disable 取插件 id。
 func managementPluginID(path string) string { return pluginIDFromPath(path) }
 
+// managementAction 从 /api/v1/plugins/{id}/enable|disable 取动作名（审计 target 用）。
+func managementAction(path string) string {
+	for _, action := range [...]string{"enable", "disable"} {
+		if strings.HasSuffix(path, "/"+action) {
+			return action
+		}
+	}
+	return ""
+}
+
 // authorizeRootAction 校验提权端点的调用方：管理会话（system:admin）或目标插件自身
 // 的 bearer 身份（且该插件已获 system:admin）。失败时直接写 401 并返回 ok=false。
 func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, target string) (string, bool) {
@@ -170,7 +184,7 @@ func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, tar
 			return "", false
 		}
 		if !hasCapability(actor.grants, "system:admin") {
-			s.auditDenied(actor.id, target, "插件未获 system:admin 能力")
+			s.auditDenied(actor.id, target, "", "插件未获 system:admin 能力")
 			writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：插件需要 system:admin 能力", "system:admin")
 			return "", false
 		}
@@ -185,7 +199,7 @@ func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, tar
 		return "", false
 	}
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, target, "缺少 system:admin 特权能力")
+		s.auditDenied(subject, target, "", "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
 		return "", false
 	}
@@ -209,6 +223,7 @@ type Server struct {
 	market         *market.Service
 	capResolver    CapabilityResolver
 	capAuditor     CapabilityAuditor
+	capDegradeOnce sync.Once
 	auditLister    AuditLister
 	installRefresh func(id string) (string, error)
 	metrics        MetricsCollector

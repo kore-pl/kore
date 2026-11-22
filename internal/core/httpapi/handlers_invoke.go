@@ -28,10 +28,10 @@ var methodPattern = regexp.MustCompile(`^[a-z][A-Za-z0-9_-]*(\.[a-z][A-Za-z0-9_-
 
 // handleInvoke 把 HTTP body 当作插件方法参数转发给 bus，成功时直接返回业务 result。
 //
-// 目标操作校验入口见 authorizeTargetAction（M1 只验 session，TODO 裁决40）；
-// 细粒度方法 → capability 映射仍归 M4，M1 只校验方法名合法。
+// 目标操作校验见 authorizeInvoke：会话有效性 + 按目标插件声明的能力做调用校验
+// （内核只认 system:/net:/proc: 前缀与 read/write/admin 动作分级，不维护业务词表）。
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeTargetAction(w, r) {
+	if !s.authorizeInvoke(w, r) {
 		return
 	}
 	if s.opts.Backend == nil {
@@ -63,7 +63,8 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 
 // validateMethod 校验方法名语法与保留前缀；点分方法的域必须等于路径里的插件 id。
 //
-// M4 会在此处追加 capability 校验（方法所需能力 ⊆ 已授予能力，裁决40），本阶段不做。
+// capability 校验不在方法名层做：内核不维护「方法 → 业务能力」映射表（G-01），
+// 只按目标插件声明的宿主前缀在 authorizeInvoke 里做调用校验。
 func validateMethod(plugin, method string) error {
 	if plugin == "" || !methodPattern.MatchString(method) {
 		return errf(pluginapi.E_INVALID, "方法名 %q 不合法", method)

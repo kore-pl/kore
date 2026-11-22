@@ -94,6 +94,17 @@
 
 **校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
 
+**调用时校验（内核强制）**：`POST /api/v1/invoke/{plugin}/{method}` 在转发前，内核先验会话，再按目标插件 `info.json` 声明的 `capabilities` 判定本次调用是否放行。规则**只看能力字符串的宿主前缀与动作级，不维护「方法 → 业务能力」映射表**（G-01）：
+
+| 声明内容 | 判定 | 说明 |
+| --- | --- | --- |
+| `system:read` / `net:read` / `proc:read` | 任意已登录会话可调 | 只读，不改变宿主状态 |
+| 动作段为 `write` / `admin` 的宿主能力（如 `net:write`、`proc:write`、`system:admin`） | 需 `system:admin`，或会话能力集含该项 | 写 / 管理，最高危 |
+| 插件自有 `<id>:<action>` | 不影响宿主校验 | 归插件自治，内核不解释语义 |
+| 宿主前缀下的未知动作（如 `system:superuser`） | `501 E_UNSUPPORTED` | fail-closed，不降级为只读 |
+
+同一插件声明多项时取最高要求（未知宿主动作 > 写/管理 > 只读 > 无要求）。拒绝 → `403 E_UNAUTHORIZED`（message 写明「该方法需要 `<capability>` 权限」）并写审计 `capability.denied`（subject / 插件 id / 方法 / 原因，`result=denied`）。未声明任何能力 → 不需特权。**当前单管理员模式**：`kore_session` 未携带 capability 字段，有效会话按 6 项全权处理，检查在生产路径恒通过（首次检查打一次 WARN 说明降级）；多用户接入后由装配层注入 capability 解析器即生效。
+
 **设计理由**：内核不得维护业务域名词表——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治；新增插件永远不需要改内核。
 
 ### 3.1.3 root_actions（提权动作清单，ADR-0018）

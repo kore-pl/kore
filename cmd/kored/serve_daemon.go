@@ -102,6 +102,18 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 	return status, nil
 }
 
+// PluginCapabilities 实现 httpapi.PluginCapabilityLookup：只读内存清单的 capabilities。
+//
+// 这是 invoke 调用校验的首选数据源：直接返回 info.json 的声明（Manifest.Capabilities），
+// 不读 bbolt、不组装 PluginStatus、不产生状态回写副作用；能力语义由 httpapi 判定（G-01）。
+func (d *daemon) PluginCapabilities(_ context.Context, id string) ([]string, bool, error) {
+	manifest, ok := d.catalog.Manifest(id)
+	if !ok {
+		return nil, false, nil
+	}
+	return append([]string(nil), manifest.Capabilities...), true, nil
+}
+
 // RootAction 实现 httpapi.RootActionLookup：按 id 从已登记清单查 root 动作。
 //
 // 只查内存清单，不执行、不判断业务含义（G-01）；动作不存在返回 found=false，

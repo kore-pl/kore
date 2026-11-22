@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/store"
@@ -47,4 +48,30 @@ func (a *rootActionAuditor) Record(_ context.Context, ev privilege.Event) error 
 		Result:  ev.Result(),
 		Detail:  ev.Detail(),
 	})
+}
+
+// auditActionCapabilityDenied 是调用校验拒绝的审计动作名（DATA-MODEL §4 审计动作表）。
+const auditActionCapabilityDenied = "capability.denied"
+
+// capabilityAuditorFromStore 把 httpapi 的 capability.denied 出口接到 audit bucket。
+//
+// 这是 invoke 越权审计的落库点：只有拒绝才走本出口，故 result 恒为 denied。
+// 字段映射：subject → subject、插件 id → plugin、被拒方法 → target、原因 → detail.reason。
+// 写入失败只记 WARN（鉴权已是 fail-closed，不因审计失败放行）。
+type capabilityAuditorFromStore struct {
+	db *store.Store
+}
+
+// Audit 实现 httpapi.CapabilityAuditor。
+func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, reason string) {
+	if err := a.db.PutAudit(store.AuditRecord{
+		Subject: subject,
+		Action:  auditActionCapabilityDenied,
+		Plugin:  plugin,
+		Target:  target,
+		Result:  store.AuditResultDenied,
+		Detail:  map[string]string{"reason": reason},
+	}); err != nil {
+		slog.Warn("capability.denied 审计写入失败", "plugin", plugin, "target", target, "err", err)
+	}
 }

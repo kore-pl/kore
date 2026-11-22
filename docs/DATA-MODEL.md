@@ -241,8 +241,8 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `subject` | string | `admin`（管理动作，如 enable / disable）或 `system`（自动事件，如 crash / restart、证书续期） |
-| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
+| `subject` | string | `admin`（管理动作，如 enable / disable）、`system`（自动事件，如 crash / restart、证书续期）或调用方 subject（`capability.denied`） |
+| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `capability.denied` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
 | `plugin` | string | 涉及插件时填写，否则空 |
 | `target` | string | 动作目标（如 `invoke` 时的 `<plugin>.<verb>`、状态值），否则空 |
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |

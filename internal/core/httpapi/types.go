@@ -98,6 +98,16 @@ type RootActionLookup interface {
 	RootAction(ctx context.Context, pluginID, actionID string) (pluginapi.RootAction, bool, error)
 }
 
+// PluginCapabilityLookup 是装配层可选实现的「插件声明能力」只读查询。
+//
+// 返回 info.json 的 capabilities（Manifest.Capabilities 原样）；插件未安装时
+// 第二返回值为 false。实现方只读内存清单，不解释能力语义（G-01）。
+// 未实现时 httpapi 回退到 Backend.Plugin 的 GrantedCapabilities（与清单同源）。
+type PluginCapabilityLookup interface {
+	// PluginCapabilities 返回目标插件声明的能力集；未安装返回 known=false。
+	PluginCapabilities(ctx context.Context, id string) ([]string, bool, error)
+}
+
 // Backend 是 httpapi 对装配层（cmd/kored）的最小依赖。
 //
 // 薄壳边界：httpapi 不直接读 bbolt、不直接 exec 进程，只通过本接口驱动

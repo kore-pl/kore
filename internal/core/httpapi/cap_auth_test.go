@@ -120,10 +120,10 @@ func capEnableRequest(t *testing.T, ts *httptest.Server, cookie string) (int, st
 
 // TestCapabilityDeniedWritesAudit 低权 subject 访问管理端点 → 401、不触发 Enable、审计收到一条 denied。
 func TestCapabilityDeniedWritesAudit(t *testing.T) {
-	type denied struct{ subject, plugin, reason string }
+	type denied struct{ subject, plugin, target, reason string }
 	var records []denied
-	auditor := func(subject, plugin, reason string) {
-		records = append(records, denied{subject, plugin, reason})
+	auditor := func(subject, plugin, target, reason string) {
+		records = append(records, denied{subject, plugin, target, reason})
 	}
 	backend := &capBackend{enabled: make(map[string]bool)}
 	ts, cookie := capSetup(t, capLowPrivResolver, auditor, backend)
@@ -135,8 +135,9 @@ func TestCapabilityDeniedWritesAudit(t *testing.T) {
 	if len(backend.enableLog) != 0 {
 		t.Errorf("越权不得触发 Enable，实际 %v", backend.enableLog)
 	}
-	if len(records) != 1 || records[0].plugin != "system-admin" || records[0].subject != "plugin-site" {
-		t.Errorf("应有一条 capability.denied 审计，实际 %+v", records)
+	if len(records) != 1 || records[0].plugin != "system-admin" || records[0].subject != "plugin-site" ||
+		records[0].target != "enable" {
+		t.Errorf("应有一条 capability.denied 审计（target=enable），实际 %+v", records)
 	}
 }
 
@@ -151,27 +152,5 @@ func TestCapabilityAdminAllowed(t *testing.T) {
 	}
 	if len(backend.enableLog) != 1 || backend.enableLog[0] != "system-admin" {
 		t.Errorf("admin enable 应记录一次调用，实际 %v", backend.enableLog)
-	}
-}
-
-// TestCapabilityInvokeUnaffected invoke 路径不受 capability 注入影响，保持方法合法即放行。
-func TestCapabilityInvokeUnaffected(t *testing.T) {
-	backend := &capBackend{enabled: make(map[string]bool)}
-	ts, cookie := capSetup(t, capLowPrivResolver, nil, backend)
-
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/invoke/site/run", strings.NewReader(`{}`))
-	if err != nil {
-		t.Fatalf("构造请求失败: %v", err)
-	}
-	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
-	req.AddCookie(&http.Cookie{Name: "kore_csrf", Value: "csrf"})
-	req.Header.Set("X-Kore-CSRF", "csrf")
-	resp, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatalf("发请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("invoke 应保持放行，实际 %d", resp.StatusCode)
 	}
 }
