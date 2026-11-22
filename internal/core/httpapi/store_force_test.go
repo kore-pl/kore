@@ -16,9 +16,15 @@ import (
 type forceHTTPInstaller struct {
 	forceCalls int
 	forceID    string
+	previous   string
+	stale      []string
 }
 
 func (f *forceHTTPInstaller) Install(_, _ string) error { return nil }
+
+// PreviousVersion / StaleVersions 让 market 能补齐升级语义字段（可选能力）。
+func (f *forceHTTPInstaller) PreviousVersion(string) (string, error) { return f.previous, nil }
+func (f *forceHTTPInstaller) StaleVersions(string) ([]string, error) { return f.stale, nil }
 
 func (f *forceHTTPInstaller) InstallForce(id, _, _ string) error {
 	f.forceCalls++
@@ -44,7 +50,7 @@ func newForceServer(t *testing.T, inst market.Installer, reload func(string) (st
 // TestStoreInstallForceRoutes 请求体 force=true 必须走 ForceInstaller，
 // 响应携带 reload 结果，且刷新回调仍被调用（安装后真正重载）。
 func TestStoreInstallForceRoutes(t *testing.T) {
-	fake := &forceHTTPInstaller{}
+	fake := &forceHTTPInstaller{previous: "0.1.0", stale: []string{"0.1.0"}}
 	reloads := 0
 	s := newForceServer(t, fake, func(id string) (string, error) {
 		reloads++
@@ -64,6 +70,12 @@ func TestStoreInstallForceRoutes(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"reload":"restarted"`) {
 		t.Fatalf("响应缺 reload=restarted: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"previous_version":"0.1.0"`) {
+		t.Fatalf("响应缺 previous_version: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"stale_versions":["0.1.0"]`) {
+		t.Fatalf("响应缺 stale_versions: %s", rec.Body.String())
 	}
 }
 

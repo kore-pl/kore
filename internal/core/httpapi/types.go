@@ -29,6 +29,14 @@ type PluginStatus struct {
 	Name string `json:"name"`
 	// Version 已安装版本。
 	Version string `json:"version"`
+	// LatestVersion 已验签索引中的版本；索引未收录该插件时为空。
+	// 与 Version 一样是原始数据，由装配层从索引对齐填入，内核不做升级策略判断。
+	LatestVersion string `json:"latest_version,omitempty"`
+	// LatestSHA256 索引声明的包摘要（64 位小写 hex），仅用于展示与核对。
+	LatestSHA256 string `json:"latest_sha256,omitempty"`
+	// UpdateAvailable 已装版本与索引版本不一致（纯数据对齐，不判方向、不判策略）。
+	// 是否"可升级/索引未收录"由前端按语义化版本比较决定。
+	UpdateAvailable bool `json:"update_available"`
 	// Lifecycle 生命周期（resident/lazy/oneshot）。
 	Lifecycle string `json:"lifecycle"`
 	// DepthLevel 深度等级（production/basic）。

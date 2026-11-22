@@ -56,6 +56,7 @@ func (s *Service) installDownload(ctx context.Context, id, version string, force
 		return nil, protocolError(pluginapi.E_INVALID, "索引未声明 download_url", id)
 	}
 	sha := strings.ToLower(found.SHA256)
+	previous := s.previousVersion(id)
 	if force {
 		downloader, ok := s.installer.(ForceURLInstaller)
 		if !ok {
@@ -75,10 +76,7 @@ func (s *Service) installDownload(ctx context.Context, id, version string, force
 			return nil, installError(err)
 		}
 	}
-	return &InstallJob{
-		ID: id + "-" + version, PluginID: id, Version: version,
-		State: "succeeded", Message: "安装完成",
-	}, nil
+	return s.installJob(id, version, previous), nil
 }
 
 // installError 把 installer 的错误分类映射成对外错误码：

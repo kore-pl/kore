@@ -144,3 +144,18 @@ func TestInstallAtomicOnInvalidManifest(t *testing.T) {
 	f.requireNoKey(t, "plugins", "site")
 	f.requireNoKey(t, "plugin_state", "site")
 }
+
+// TestPreviousVersionReadsInstalledRecord 验证升级前快照能读回已装版本。
+func TestPreviousVersionReadsInstalledRecord(t *testing.T) {
+	f := newFixture(t, installer.Limits{})
+	if v, err := installer.PreviousVersion(f.store, "site"); err != nil || v != "" {
+		t.Fatalf("未安装时 previous_version 应为空，实际 %q err=%v", v, err)
+	}
+	pkg := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", validEntries(t, nil))
+	if _, err := f.inst.Install(pkg); err != nil {
+		t.Fatalf("安装应成功: %v", err)
+	}
+	if v, err := installer.PreviousVersion(f.store, "site"); err != nil || v != "0.1.0" {
+		t.Fatalf("安装后 previous_version = %q err=%v，期望 0.1.0", v, err)
+	}
+}

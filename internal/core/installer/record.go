@@ -129,6 +129,36 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	return nil
 }
 
+// PreviousVersion 读取 plugins bucket 里该插件当前记录的版本；未安装返回空串。
+//
+// 供装配层在安装前快照 previous_version（商店升级响应显示 v旧 → v新）；
+// 只读，不依赖 Installer 实例，因此不改变安装器现有的安装/强制安装接口。
+func PreviousVersion(p Persister, id string) (string, error) {
+	if p == nil || id == "" {
+		return "", nil
+	}
+	var version string
+	err := p.View(func(tx *store.Tx) error {
+		raw, getErr := tx.Get(bucketPlugins, id)
+		if getErr != nil {
+			if errors.Is(getErr, store.ErrNotFound) {
+				return nil
+			}
+			return getErr
+		}
+		var existing pluginRecord
+		if unmarshalErr := json.Unmarshal(raw, &existing); unmarshalErr != nil {
+			return unmarshalErr
+		}
+		version = existing.Version
+		return nil
+	})
+	if err != nil {
+		return "", wrap(ErrStore, "读取已装版本失败：%v", err)
+	}
+	return version, nil
+}
+
 // previous 读已装版本与期望状态；不存在返回空串（首次安装）。
 func (in *Installer) previous(id string) (version, desired string, err error) {
 	err = in.store.View(func(tx *store.Tx) error {

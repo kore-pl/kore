@@ -100,4 +100,8 @@ type InstallJob struct {
 	State string `json:"state"`
 	// Message 可读说明。
 	Message string `json:"message"`
+	// PreviousVersion 安装前的已装版本；首次安装为空。升级时供前端显示 v旧 → v新。
+	PreviousVersion string `json:"previous_version,omitempty"`
+	// StaleVersions 插件目录下仍残留的旧版本目录名（不自动删除，供前端提示清理）。
+	StaleVersions []string `json:"stale_versions,omitempty"`
 }

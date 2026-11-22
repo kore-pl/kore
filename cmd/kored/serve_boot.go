@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
@@ -173,6 +176,71 @@ func (m marketInstaller) withForce(id, expectedSHA string, run func(*installer.I
 	installErr := run(inst)
 	m.svc.restoreForInstall(id, wasEnabled, installErr != nil)
 	return installErr
+}
+
+// PreviousVersion 实现 market.PreviousVersionLookup：读已装记录里的版本。
+func (m marketInstaller) PreviousVersion(id string) (string, error) {
+	if m.svc == nil || m.svc.db == nil {
+		return "", nil
+	}
+	return installer.PreviousVersion(m.svc.db, id)
+}
+
+// StaleVersions 实现 market.StaleVersionLister：列出 <plugin_dir>/<id>/ 下
+// 除"当前已装版本"与临时目录之外的版本目录，供前端提示清理（内核不自动删除）。
+func (m marketInstaller) StaleVersions(id string) ([]string, error) {
+	root := m.pluginRoot()
+	entries, err := os.ReadDir(filepath.Join(root, id))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	current, err := m.PreviousVersion(id)
+	if err != nil {
+		return nil, err
+	}
+	stale := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || name == current || !isVersionDirName(name) {
+			continue
+		}
+		stale = append(stale, name)
+	}
+	sort.Strings(stale)
+	return stale, nil
+}
+
+// pluginRoot 返回插件落盘根目录（与 installer 的派生规则一致）。
+func (m marketInstaller) pluginRoot() string {
+	if m.cfg.snapshot != nil {
+		if dir := m.cfg.snapshot.Paths.PluginDir; dir != "" {
+			return dir
+		}
+	}
+	return filepath.Join(m.cfg.StateDir, "plugins")
+}
+
+// isVersionDirName 只认 MAJOR.MINOR.PATCH 三段数字目录，避免把 .staging /
+// <ver>.bak-<ts> 这类临时目录当成可清理版本。
+func isVersionDirName(name string) bool {
+	parts := strings.Split(name, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // newInstaller 构造一个绑定当前状态目录与状态库的安装器。

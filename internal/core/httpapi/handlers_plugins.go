@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
+	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -23,7 +25,39 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	s.alignIndexVersions(plugins)
 	writeJSON(w, http.StatusOK, pluginList{Plugins: plugins})
+}
+
+// alignIndexVersions 把已装视图与已验签索引按 id 对齐，填入 latest_version /
+// latest_sha256 / update_available。
+//
+// G-01 边界：这里只做两个数据源的对齐（索引有该 id、版本字符串是否相同），
+// 不判断"哪个更高"、不决定是否升级、不碰依赖与兼容性——升级语义留在前端与
+// installer/market。索引不可读时保持字段为空并记 WARN：商店页会显示索引错误，
+// 已装插件页不因索引故障整体不可用。
+func (s *Server) alignIndexVersions(plugins []PluginStatus) {
+	if s.market == nil || len(plugins) == 0 {
+		return
+	}
+	index, err := s.market.Load()
+	if err != nil {
+		slog.Warn("已装插件版本对齐失败：索引不可读", "err", err)
+		return
+	}
+	byID := make(map[string]market.Plugin, len(index.Plugins))
+	for _, p := range index.Plugins {
+		byID[p.ID] = p
+	}
+	for i := range plugins {
+		entry, ok := byID[plugins[i].ID]
+		if !ok {
+			continue
+		}
+		plugins[i].LatestVersion = entry.Version
+		plugins[i].LatestSHA256 = entry.SHA256
+		plugins[i].UpdateAvailable = entry.Version != plugins[i].Version
+	}
 }
 
 // handlePluginDetail 返回单个插件视图（GET /api/v1/plugins/{id}）。

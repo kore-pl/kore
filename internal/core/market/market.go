@@ -25,6 +25,20 @@ type ForceInstaller interface {
 	InstallForce(id, path, expectedSHA string) error
 }
 
+// PreviousVersionLookup 是装配层的可选只读能力：返回 id 当前已装版本（未安装为空）。
+// market 在安装**之前**取一次，用于响应里的 previous_version；安装器不改变既有接口。
+type PreviousVersionLookup interface {
+	// PreviousVersion 读取已装版本；未安装返回空串。
+	PreviousVersion(id string) (string, error)
+}
+
+// StaleVersionLister 是装配层的可选只读能力：列出插件目录下残留的旧版本目录名。
+// 只读、不删除；是否清理由用户在前端显式决定（内核不自动清理，避免误删回滚材料）。
+type StaleVersionLister interface {
+	// StaleVersions 返回残留版本目录名（按字典序）；不存在返回空切片。
+	StaleVersions(id string) ([]string, error)
+}
+
 // Options 是 Service 构造参数。
 type Options struct {
 	// IndexDir 是本地索引目录。
@@ -200,7 +214,7 @@ func (s *Service) Update(id, version, packagePath string) (*UpdateResult, error)
 	if err != nil {
 		return nil, err
 	}
-	job, err := installFrom(index, s.installer, id, version, packagePath, false)
+	job, err := s.installFrom(index, id, version, packagePath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +241,7 @@ func (s *Service) Install(id, version, packagePath string) (*InstallJob, error) 
 	if err != nil {
 		return nil, err
 	}
-	return installFrom(index, s.installer, id, version, packagePath, false)
+	return s.installFrom(index, id, version, packagePath, false)
 }
 
 // InstallForce 以强制模式安装本地包：允许覆盖已装同版本（修复/重装）。
@@ -239,31 +253,70 @@ func (s *Service) InstallForce(id, version, packagePath string) (*InstallJob, er
 	if err != nil {
 		return nil, err
 	}
-	return installFrom(index, s.installer, id, version, packagePath, true)
+	return s.installFrom(index, id, version, packagePath, true)
 }
 
 // installFrom 从给定的已验签索引取条目并交给 installer；供 Install/InstallForce 共用。
-func installFrom(index Index, installer Installer, id, version, packagePath string, force bool) (*InstallJob, error) {
+//
+// previous_version 在安装**前**读取（安装后 plugins 记录已被覆盖）；旧版本目录清单
+// 在安装**后**读取，仅回传、不删除。
+func (s *Service) installFrom(index Index, id, version, packagePath string, force bool) (*InstallJob, error) {
 	found, err := findEntry(index, id, version)
 	if err != nil {
 		return nil, err
 	}
-	if installer == nil {
+	if s.installer == nil {
 		return nil, protocolError("E_UNSUPPORTED", "安装后端未装配")
 	}
+	previous := s.previousVersion(id)
 	expected := strings.ToLower(found.SHA256)
 	if force {
-		forced, ok := installer.(ForceInstaller)
+		forced, ok := s.installer.(ForceInstaller)
 		if !ok {
 			return nil, protocolError("E_UNSUPPORTED", "安装后端不支持强制重装")
 		}
 		if err := forced.InstallForce(id, packagePath, expected); err != nil {
 			return nil, installError(err)
 		}
-	} else if err := installer.Install(packagePath, expected); err != nil {
+	} else if err := s.installer.Install(packagePath, expected); err != nil {
 		return nil, installError(err)
 	}
-	return &InstallJob{ID: id + "-" + version, PluginID: id, Version: version, State: "succeeded", Message: "安装完成"}, nil
+	return s.installJob(id, version, previous), nil
+}
+
+// installJob 组装安装结果，并补齐升级语义的可选字段。
+func (s *Service) installJob(id, version, previous string) *InstallJob {
+	job := &InstallJob{
+		ID: id + "-" + version, PluginID: id, Version: version,
+		State: "succeeded", Message: "安装完成",
+		PreviousVersion: previous,
+	}
+	if previous != "" && previous != version {
+		job.Message = fmt.Sprintf("已从 v%s 升级到 v%s", previous, version)
+	}
+	if lister, ok := s.installer.(StaleVersionLister); ok {
+		stale, err := lister.StaleVersions(id)
+		if err != nil {
+			s.logger.Warn("读取旧版本目录失败", "plugin_id", id, "err", err)
+		} else {
+			job.StaleVersions = stale
+		}
+	}
+	return job
+}
+
+// previousVersion 读取已装版本；能力未装配或读取失败时返回空串（不阻断安装）。
+func (s *Service) previousVersion(id string) string {
+	lookup, ok := s.installer.(PreviousVersionLookup)
+	if !ok {
+		return ""
+	}
+	previous, err := lookup.PreviousVersion(id)
+	if err != nil {
+		s.logger.Warn("读取已装版本失败", "plugin_id", id, "err", err)
+		return ""
+	}
+	return previous
 }
 
 // findEntry 在已验签索引中定位 id@版本：未收录 → E_NOTFOUND，版本不符 → E_INVALID。

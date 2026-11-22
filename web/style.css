@@ -334,6 +334,11 @@ html, body {
 .plugin-id-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .plugin-id-alias { color: var(--kore-text-3); font-size: var(--kore-font-12); }
 
+/* 已装插件页「最新版本」列：可升级黄色、最新灰色、索引未收录更淡 */
+.ver-upgradable { color: var(--kore-warning); font-weight: 600; white-space: nowrap; }
+.ver-latest { color: var(--kore-text-3); white-space: nowrap; }
+.ver-muted { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+
 .cell-ops {
   display: flex;
   flex-wrap: wrap;
@@ -1075,6 +1080,27 @@ button:disabled, .btn:disabled {
 .store-badge.basic { color: var(--kore-text-3); }
 .store-badge.lifecycle { color: var(--kore-text-2); }
 .store-badge.installed { color: var(--kore-success); border-color: var(--kore-success); font-weight: 600; }
+.store-badge.muted { color: var(--kore-text-3); border-color: var(--kore-border-1); }
+.store-badge.upgrade { color: var(--kore-warning); border-color: var(--kore-warning); font-weight: 600; }
+
+/* 顶部升级汇总：数字 + 一键全部升级 + 批量进度，一条横向信息带 */
+.store-upgrade-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--kore-space-2) var(--kore-space-3);
+  margin: var(--kore-space-3) 0;
+  padding: var(--kore-space-2) var(--kore-space-3);
+  border: 1px solid var(--kore-border-1);
+  border-left: 3px solid var(--kore-warning);
+  border-radius: var(--kore-radius-container);
+  background: var(--kore-bg-1);
+}
+.store-upgrade-text { font-weight: 600; }
+.store-upgrade-status { flex: 1 1 100%; color: var(--kore-text-2); font-size: var(--kore-font-12); overflow-wrap: anywhere; }
+.store-upgrade-status.is-ok { color: var(--kore-success); }
+.store-upgrade-status.is-fail { color: var(--kore-danger); }
+.store-btn-upgrade { min-width: 132px; }
 
 .store-desc {
   margin: 0;
