@@ -1,6 +1,6 @@
 # .agents · 任务板
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M1
+> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M2
 
 任务板是唯一事实源：谁在做什么、卡在哪、凭什么叫完成，都以本文件为准。对话里的口头约定不算。
 
@@ -48,6 +48,7 @@
 | --- | --- | --- | --- | --- |
 | M0 | 文档与骨架 | completed | 2026-11-21 | [verify/m0-consistency-r5.md](verify/m0-consistency-r5.md)（PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-21 两条 M0 复盘 |
 | M1 | 行走骨架 | completed | 2026-11-22 | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（运行时 VERDICT PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」§4.5 / §5；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md)。**收口补正（2026-11-22）**：收口时因发布链 P0（`pkg/pluginapi/v0.1.0` tag 内容声明旧 module 路径，`GOWORK=off` 干净 clone 报 `module declares its path as: github.com/kore-project/... but was required as: github.com/pengtang1024/...`）临时降为 blocked；处置为 `retract v0.1.0` + 发 `pkg/pluginapi/v0.1.1`，echo 升 v0.1.1 后干净 clone `build` / `dist` 通过，`CS-M1-01` 置 confirmed |
+| M2 | 站点插件 / 商店 / 8 预设 / Web 壳 / Lazy 生命周期 | completed | 2026-11-22 | [verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md)（VERDICT APPROVE，1 项阻断 B1 + 3 记录，阻断当日修复复验）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M2 里程碑复盘」§2/§3；`make check` 10/10；首屏 4151 B；lazy 6 PASS；market 真服务 200/404/501/401；两对 sha 一致；变更集 `CS-M2-01`（见 §5） |
 
 ### 4.2 M0 轨道（7 条，已收口）
 
@@ -107,6 +108,7 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | --- | --- | --- | --- | --- | --- | --- |
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
 | CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `90e9fdd`（tag `pkg/pluginapi/v0.1.1`；首版 `pkg/pluginapi/v0.1.0` → `3a59b98` 已 retract）；`kore-plugin-echo` @ `10cc6eb`（tag `v0.1.1`；首版 `v0.1.0` → `3422c10`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 本地 `make check` 9/9、`go build`/`go test` 通过；`git ls-remote` 双仓可达。**收口补正**：SDK v0.1.0 因 module 路径缺陷 retract，已发 v0.1.1；echo 升 v0.1.1 并干净 clone 验证通过。`GOWORK=off go get ...@v0.1.1` 退出码 0（`GOPROXY=direct` / `proxy.golang.org` 双路径）；`go list -m -versions` 仅列 v0.1.1；`/tmp` 干净 clone `GOWORK=off make build` / `make dist` 退出码 0 | confirmed |
+| CS-M2-01 | M2 五轨收口：site 插件 / 索引仓 market + 签名链 / 8 预设 / web 壳 / lazy 生命周期，含 B1 确定性打包修复与新公钥重签 | `kore` @ `7caa85a`（内核 + 新公钥 `verify.go` + 验收报告）；`kore-plugins` @ `e945aca`（索引 sha 重签 + 8 预设）；`kore-plugin-site` @ `d1690af`（确定性 `dist`）；`kore-plugin-echo` @ `9546a4f`（确定性 `dist`） | 无协议破坏性变更；**新公钥 `faf3a743…1439` 同步内核 `verify.go:16` 与索引 `validate-index.sh:10`，两端 `grep` 逐字相同**；索引 echo/site 两对 sha 与重建包一致 | `kore` 内核先行（新公钥 + market 端点 + verify.go）→ 四仓并行推送（`kore-plugins` 索引重签、`kore-plugin-site` / `kore-plugin-echo` 确定性打包）；新公钥与双 sha 同批发布，禁止新旧混用 | `make check` 10/10 段全绿、首屏 4151 B、lazy 6 PASS、market 真服务 200/404/501/401、验签正反例 3 PASS + 默认拒 2 PASS、8 预设 0 FAIL/0 WARN、两对 sha 一致；详见 [verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md) 与 [JOURNAL.md](JOURNAL.md) M2 复盘 §2 | completed |
 
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 
@@ -152,7 +154,8 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 ## 9. 已知遗留（M0 / M1 记录级，不阻断提交）
 
 - ~~**M1 · P0（阻断收口）**~~ **已闭环（2026-11-22 收口补正）**：SDK tag `pkg/pluginapi/v0.1.0` 不可被消费——内容声明的 module 路径仍是 `github.com/kore-project/kore/pkg/pluginapi`，干净目录 `GOWORK=off go mod download` 失败；proxy.golang.org 已缓存该 `.mod`，**不可改写 tag**，按 `retract v0.1.0` + 发 `pkg/pluginapi/v0.1.1` + echo 升 `require` 至 v0.1.1（tag `v0.1.1`）处置，干净 clone 复验通过。详见 [JOURNAL.md](JOURNAL.md) M1 段 §4.5 与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5 第 0 项。
-- **M1 遗留（8 项）**：见 [JOURNAL.md](JOURNAL.md) 2026-11-22 M1 段「结论与 M2 前置」与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5——auth / market 未做、web 壳未交付、退避重启与心跳按 M1-12/13 延期、capability 方法级校验（M1-08）、audit 写入（M1-09）、bus 多路复用、`registry/validate.go` 241 行超 200 行上限、bbolt mmap 计入 RssFile（M4 瘦身）。
+- ~~**M2 · 阻断 B1（打包不可复现）**~~ **已闭环（2026-11-22 收口）**：`kore-plugin-site` / `kore-plugin-echo` 的 `dist` 原用 `tar -czf` 未固定 mtime/顺序，跨秒重建 sha 漂移（`site` 在 `59b107ba…`/`f9fae467…`/`8579eb37…` 间跳）；相关仓 `dist` 已改确定性打包（`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` + `gzip -9n`，build 加 `GOWORK=off`），索引 sha 与签名链重签、新公钥 `faf3a743…1439` 两端同步。复验：两对 sha 一致、验签正反例全过、`make check` 10/10。沉淀规则"能构建 ≠ 能重建出同一个包"见 [JOURNAL.md](JOURNAL.md) M2 复盘 §3；裁决见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 第 34 条。
+- **M1 遗留（8 项）**：见 [JOURNAL.md](JOURNAL.md) 2026-11-22 M1 段「结论与 M2 前置」与 [docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md) §5——auth / market 未做、web 壳未交付、退避重启与心跳按 M1-12/13 延期、capability 方法级校验（M1-08）、audit 写入（M1-09）、bus 多路复用、`registry/validate.go` 241 行超 200 行上限、bbolt mmap 计入 RssFile（M4 瘦身）。**其中 auth / market / web 壳已于 M2 交付；余项转 M3。**
 - `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
 - `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。
 - C5 口径「22 项能力域：12 项生产级 / 8 项基础级」与 `FEATURE-PARITY:12`「14 项由生产级插件承载」是"插件数 vs 能力域数"两种说法；建议后续在 ROADMAP 该句加"（由 12 个生产级插件承载 14 个域）"限定语。

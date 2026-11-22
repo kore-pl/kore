@@ -175,3 +175,99 @@
 - **M2 提案落盘**：`.agents/proposals/0002-m2-sites-and-market.md` 57 行 5 节，make check 9/9；最可能翻车=R2 索引签名链从 M4 前移到 M2（信任空窗=0），M1 的 store-check 只验字段+sha256，若 M2-B 索引发布链没同步产出签名，商店默认拒绝、E2E-2 全盘不可用，故签名必须与 M2-B 同批交付。
 - **有味道的交付（四）**（agent 可见 PUA 输出原文，逐字保留）：
   > [🟠 阿里味] M2-E lazy 生命周期端到端闭环。因为信任所以简单——但这次是靠真实 `--- PASS` 证据（不是被 SKIP 假象骗过去）交付的。
+
+#### M2 里程碑复盘（2026-11-22）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目标 | M2 五轨道：M2-A `site` 插件 / M2-B `kore-plugins` 索引仓 + market 端点 + 签名链 / M2-C 8 类场景预设 / M2-D web 壳 / M2-E lazy 生命周期，口径见 [proposals/0002-m2-sites-and-market.md](proposals/0002-m2-sites-and-market.md) §2 五轨与 §5 出口三条 E2E |
+| 结果 | 四仓同批收口：`kore` `7caa85a` / `kore-plugins` `e945aca` / `kore-plugin-site` `d1690af` / `kore-plugin-echo` `9546a4f`；`make check` **10/10** 段全绿；首屏 gzip **4151 B**（≤300 KiB）；lazy **6 PASS / 0 SKIP**；market 真服务四端点 **200/404/501/401**；索引 echo 与 site 两对 sha256 与重建包逐字一致 |
+| 差距 | 独立 verifier 首轮验收（[verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md)，修复前快照）挂 **1 项阻断 B1**：`site` 的 `tar -czf` 未固定 mtime/sort，跨秒重建 sha 漂移，索引 sha `59b107ba…` 无法被重建包复现；同批暴露 `go.work` 把 `pluginapi` 编成 `(devel)`、旧私钥残留致签名链需重签。三项当日全部修复并复验，无遗留阻断 |
+| 根因 | 交付链把「能构建」当成了「能重建出同一个包」——构建成功只证明当下产出一个包，没证明任意时刻重建得到同一 sha；`go.work` 与旧私钥都是"本地能过、干净环境/发布链翻车"的同类：工作区状态混进了发布物 |
+| 沉淀 | **"能构建" ≠ "能重建出同一个包"**；发布链必须做冷构建 + 跨秒重建 + `GOWORK=off` 三路径验证，缺一不算可信交付 |
+| 下次动作 | M3 开工前把 oneshot / bus 多路复用 / 心跳退避 / audit 写入立成带验收命令的任务卡；包签名按 M4 排期（索引级签名已在 M2 前移）；store 端点剩余 3 个随 M3 异步队列落地 |
+
+##### 1. 里程碑目标
+
+| 轨道 | 一句话目标（proposal §2） | 出口判据（proposal §2 / §5） |
+| --- | --- | --- |
+| M2-A `site` 插件 | 独立仓 `kore-plugin-site` 提供站点 / 域名 / 反代，`info.json` 声明 `lifecycle=resident`、`depth_level=production`，只依赖公开 SDK | `make dist` 三件套齐 + install → hello → invoke → uninstall；宿主 nginx 共存 `nginx -t` 退出 0、原 vhost `sha256sum` 前后一致 |
+| M2-B 索引仓 + market | 静态 `index/plugins.json` + 7 个 `/api/v1/store/*`，读本地缓存零出站，`refresh` 是唯一联网入口 | 索引签名 + sha256 校验；未签名默认拒、`allow_unsigned` 不入默认配置；验签正反例可用 |
+| M2-C 8 预设 | `presets/*.json` + 构建期 `go:embed` 快照 + 整预设逆序回滚 | `presets-check` id / 区间可解析、同时常驻 ≤3，合计按 resident 实测中位数判红线 |
+| M2-D web 壳 | 商店页 + 首装向导，UnoCSS 原子类裁剪、单二进制 embed | `make frontend` 绿、首屏 ≤300 KiB gzip、dist 无 `*.map` / `.vite` / 全量字体 |
+| M2-E lazy 生命周期 | resident 基础上支持 lazy / oneshot 运行期，空闲 300 s 真退出 | 进程真消失、无 ticker 续命；冷启动 p95 ≤300 ms 记 SLO 不判失败；峰值常驻 ≤3 |
+
+[proposals/0002-m2-sites-and-market.md](proposals/0002-m2-sites-and-market.md) §2 把 M2 拆成五轨，§5 用三条 E2E 定义完成：离线可复现首装、商店装/升/卸闭环 + 签名链可用、site + lazy 守住预算与宿主共存。核心口径沿用现役数字，不引入第二套：常驻合计红线 48 MiB（目标 24）、同时常驻 ≤3（含唤醒中的 lazy）、首屏 ≤300 KiB gzip、lazy 冷启动 p95 ≤300 ms（SLO 不判失败）。边界澄清：本提案的 `market` 指 [CORE.md](../docs/CORE.md) §2.13 软件商店（HTTP 前缀 `/store`），不是 G-11 禁止的"模板市场"；索引仓保持纯静态。
+
+M2 不做（分期，非 G-11）：插件包 ed25519 签名（M4；索引级签名已前移到 M2）、cgroup 强制 / `kore-<id>` 系统用户（M3）、运行时下载（宿主包管理器代劳）、`--allow-partial`、Windows 运行时实现（仅交叉编译）。
+
+##### 2. 交付与证据
+
+本次收口三道门禁自检：`make docs-check` → **6 pass / 0 warn / 0 fail**（58 文档 + 14 证据、305 条相对链接全可达）；`make log-check` → **8 pass / 0 warn**（DECISIONS 34 条、DISPATCH 25 条）；`make check` → **10/10 段全绿，EXIT 0**。
+
+四仓 commit 与合并顺序登记见 [BOARD.md](BOARD.md) §5 `CS-M2-01`：
+
+| 仓库 | commit | 主题 |
+| --- | --- | --- |
+| `kore` | `7caa85a` | 同步索引新公钥（确定性打包 sha 重签）与 M2 跨仓验收报告 |
+| `kore-plugins` | `e945aca` | 8 预设 + 确定性打包 sha 重签（echo/site 新 sha） |
+| `kore-plugin-site` | `d1690af` | `dist` 改确定性打包，修复跨秒重建 sha 漂移（B1） |
+| `kore-plugin-echo` | `9546a4f` | `dist` 改确定性打包（sha256 可复现） |
+
+机械门禁（修复后自检 + 验收报告 A 组原样复跑，逐项对齐）：
+
+| 仓 | 命令 | 结果 |
+| --- | --- | --- |
+| `kore` | `gofmt -l .` / `go vet ./...` | 无输出 / EXIT 0 |
+| `kore` | `go test -timeout 200s ./...` | 12 包全 ok，EXIT 0 |
+| `kore` | `make check`（10 段） | 10/10 全绿，EXIT 0 |
+| `kore-plugin-site` | `go build ./...` / `make build` / `make dist` | 均 EXIT 0 |
+| `kore-plugins` | `validate-index.sh` / `validate-presets.sh` / `make check` | 4 项 OK / 8 预设 0 FAIL / 全过，均 EXIT 0 |
+
+- **门禁**：`make check` **10/10** 段全绿——docs 6 pass / dep 2 pass / thin-shell 4 pass / repo 5 pass / canonical 9 pass / log 8 pass / wt 4 pass / oss 8 pass / case 6 pass / frontend PASS；第 10 段 frontend gzip **4151 B**（index.html 287 + style.css 1550 + app.js 2314），远低于 300 KiB 红线。
+- **lazy**：`go test -run TestLazy -v ./internal/core/supervisor/` → **6 个 `--- PASS`、0 SKIP**，覆盖 LRU 驱逐 / resident 不驱逐 / enable 不起进程 / 首次调用冷启 / 二次复用 / 空闲退出再唤醒。
+- **market 真服务**（UDS，非 httptest）：`GET /api/v1/store/plugins` → **200**（按 id 升序 `[echo, site]`，零出站）；`GET /plugins/echo` → 200、`/plugins/nonexist` → **404 E_NOTFOUND**；`GET /jobs/echo` → **501 E_UNSUPPORTED**（M3 异步队列）；坏签名索引第二服务 → **401 E_UNAUTHORIZED**（默认拒生效）。
+- **两对 sha 一致**：索引声明与重建包逐字相同——echo `eb6b4e97b09a09c11d785a7986acc5b337f40d6fe309d036e75834f6811bf0ed`、site `7fa4515b7cfddb7932ac865d9bcb5bc248ac34f5d5f4e42384410e5f47b5f50c`（修复后重签值）。
+- **公钥一致**：`internal/core/market/verify.go:16` 的 `IndexPublicKeyHex` 与 `kore-plugins/scripts/validate-index.sh:10` 的 `PUB_HEX` 两端 `grep` 逐字相同 = `faf3a743ff24b681618f2f45e34a4410811ee71ad517bd8b9805b95bc7bd1439`。
+- **验签正反例**：`TestVerify` 3 PASS（正例 + 篡改 sig + 篡改 data）、`TestLoadUnsignedRejected` / `TestLoadUnsignedAllowed` 双 PASS；`validate-index.sh` schema / 字段 / id / sha256 / 签名 / 预设引用全 OK；8 预设 validate-presets 0 FAIL / 0 WARN；端到端 `kored install` site 包 EXIT 0。
+
+##### 3. 三次以上重复出现的问题（本条复盘的核心价值）
+
+1. **打包不可复现（B1，最先炸）**：两仓 `dist` 用 `tar -czf … -C stage …`，stage 内文件 mtime 每次重建不同 → tar/gzip 头变化 → sha 漂移。对照实验：echo 原件匹配索引，但 verifier 连续 `make dist` 后分别变成不同 sha（同秒、跨 2s 各一值），site 在 `59b107ba…` / `f9fae467…` / `8579eb37…` 之间跳。**修复**：`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` + `gzip -9n`，site / echo 两仓同批改，重建索引 sha 并重签。
+修复前后 sha 对照（B1 原始证据，索引声明值 vs 真实包值）：
+
+| 插件 | 索引声明 | 修复前重建包 | 修复后 |
+| --- | --- | --- | --- |
+| echo 0.1.1 | `eaa34f25…`（修复前） | 同秒 `7b46687f…` / 跨 2s `c810654c…` ✗ | `eb6b4e97…` 与重建包逐字一致 ✓ |
+| site 0.1.0 | `59b107ba…`（修复前） | `f9fae467…` / `8579eb37…` ✗ | `7fa4515b…` 与重建包逐字一致 ✓ |
+
+修复落地后新增三路径验证：冷构建（无 `go.work`）、跨秒连续两次 `make dist`、`GOWORK=off` 构建，三路径 sha 必须逐字相同才算发布链可用。
+
+2. **`go.work` 把依赖编成 `(devel)`（echo RCA）**：带 `go.work`（`use ../kore/pkg/pluginapi`）构建与冷构建 sha 不同——工作区把 SDK 当本地源码编入，产物带 `(devel)` 版本戳，与按 tag 构建的发布物不是同一个包。**修复**：build / dist 统一加 `GOWORK=off`，与 M1 干净目录验收口径一脉相承。
+3. **公钥 / 签名一致性**：旧私钥清除前签的索引用旧公钥验，重签后内核与索引脚本若不两端同改，真服务 `GET store/plugins` 立刻从 200 掉到 401。**修复**：旧私钥清除后重签，新公钥 `faf3a743…1439` 同步 `verify.go` 与 `validate-index.sh`，两端 `grep` 逐字比对相同才收口。
+4. **沉淀规则**：**"能构建" ≠ "能重建出同一个包"**——构建只证明"当下产出一个包"，可复现交付要求"任意时刻重建得到同一个 sha"。发布链必须做 **冷构建 + 跨秒重建 + `GOWORK=off`** 三路径验证，任一路径产出不同 sha 即判发布链不可用。此规则与 M1「发布物 ≠ 工作树」同类，但 M1 断在 module 路径，M2 断在打包元数据与工作区污染——根因都是"本地状态混进了发布物"。
+
+##### 4. 有味道的交付（agent 可见 PUA 输出原文，逐字保留，不评分）
+
+> 🟠 拿到结果了：两行改动、一次提交、三项验收全绿。中间那次冷构建 FAIL 没被我藏起来——RCA 挖到底是工作区未跟踪的 go.work 联调文件把 pluginapi 编成了 (devel)，屏蔽后两端 sha 严丝合缝。这就是闭环：不是把测试掰绿，是把根因找出来。
+
+##### 5. 结论与 M3 前置
+
+**M2 = completed（2026-11-22 收口）**：五轨均有命令 + 退出码 + 关键输出证据（[verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md) + 本节 §2），三项阻断/根因当日修复并复验，变更集 `CS-M2-01` 登记齐备（G-15 / G-07 / G-23 满足）。M1 遗留的 auth / market / web 壳在 M2 补齐；余项转入 M3。
+
+M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"）：
+
+1. **oneshot 生命周期**：`info.json.lifecycle=oneshot` 运行期支持（M2 已支持 lazy，oneshot 仍缺）。
+2. **bus 多路复用**：M1-12 遗留，事件总线并发订阅与有序投递。
+3. **心跳退避**：M1-13 遗留，重连指数退避 + 孤儿核对。
+4. **audit 写入**：M1-09 遗留，capability 方法级校验（M1-08）配套审计落盘。
+5. **包签名（M4）**：插件包级 ed25519（索引级签名已在 M2 前移，公钥版本兼容窗口已留）。
+6. **store 端点剩余 3 个**：随 M3 异步队列落地 `/store/install` / `jobs/{id}` / `update`（M2 已交付 plugins 列表、单插件查询、jobs 查询、卸载相关 4 端点）。
+
+**M2 没有证明的事**（防止后续引用时被夸大）：
+
+- **包签名**：M2 只交付索引级 ed25519 签名；插件包级签名仍属 M4，不要把"索引验签通过"说成"包签名链路完整"。
+- **冷启动 SLO**：lazy p95 ≤300 ms 是 SLO 记录级指标，本轮只证明了 6 个功能用例 PASS，未做连打 20 次的 p95 压测报告；不得据此宣称 SLO 达标。
+- **宿主 nginx 共存 fixture**：proposal §5 E2E-3 要求的"已有 nginx + default_server"宿主集成测试，本轮验收报告未单列该项命令输出；记为未验证，M3 补。
+- **oneshot 运行期**：M2 只支持 lazy，`oneshot` 仍返回 `E_UNSUPPORTED`；与 M1 的 `lazy` 缺席同类，属分期而非缺陷。
+- **Windows / macOS 运行时**：本轮只做交叉编译（M1 口径延续），Tier B 运行时语义仍是纸面。

@@ -48,8 +48,10 @@
 
 | 2026-11-22 | 索引签名时机（M4 还是 M2） | architect（proposal 0002 §3 R2） | ①M4 再做（有信任空窗，否）②**M2 前移，信任空窗 = 0**（选）③不做签名（否，供应链风险） | ②：索引级 ed25519 签名 M2 落地；公钥内置二进制；未签名索引默认拒绝；签名发布链须与 M2-B 同批交付 | M1 的 store-check 只验三件套 + sha256，无签名步骤；不同步产出签名则商店全盘不可用、E2E-2 失败 | `kore-plugins` 索引仓 Makefile/CI 增签名步骤、内核启动校验、E2E-2 判据 | `.agents/proposals/0002-m2-sites-and-market.md` §3 R2、make check 9/9 |
 
+| 2026-11-22 | 打包确定性与 `go.work` 干扰 | verifier B1 阻断 + echo RCA → lead | ①`tar -czf` 默认（否——stage 内 mtime 每次重建不同，跨秒 sha 漂移，索引声明无法复现）②**确定性 tar + gzip -n**（选）③只在 CI 固定环境（否——本地开发者仍产出不同包，"能构建≠能重建同一个包"） | ②：`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` + `gzip -9n`；build 加 `GOWORK=off`（工作区未跟踪 `go.work` 把 pluginapi 编成 `(devel)`）；新公钥 `faf3a743ff24b681618f2f45e34a4410811ee71ad517bd8b9805b95bc7bd1439` 同步内核 `verify.go:16` 与索引 `validate-index.sh:10`，两端 grep 逐字相同 | verifier B1 对照实验：echo 原件匹配索引，连续 `make dist` 后同秒 / 跨 2s 分别产出不同 sha；site 在 `59b107ba…`/`f9fae467…`/`8579eb37…` 间跳。echo RCA：带 `go.work` 与冷构建 sha 不同，`(devel)` 版本戳混入发布物 | `kore-plugin-site/Makefile`、`kore-plugin-echo/Makefile` 的 `dist`；`kore/internal/core/market/verify.go`；`kore-plugins/index/plugins.json` + `.sig` + `scripts/validate-index.sh`；四仓 commit | 两对 sha 一致（echo `eb6b4e97…` / site `7fa4515b…`）；验签正反例 3 PASS + 默认拒 2 PASS（market 5 PASS）；真服务 200/404/501/401；`make check` 10/10、首屏 4151 B、lazy 6 PASS；四仓 commit `7caa85a`/`e945aca`/`d1690af`/`9546a4f` |
+
 ## 统计
 
-- 条目：**33 条**（覆盖 M0 / M1 / M2 开工的拓扑、协议、生命周期、预算、范围、门禁、验收、协作纪律、归属许可、数据形状、索引签名时机十一类裁决；第 21–29 条为 2026-11-22 当天登记，非回填；第 30 条为能力模型回填补记——原缺条，收口时按 G-23 补齐；第 31 条为发布链 P0 处置，2026-11-22 当天登记；第 32 条为 M2 开工子 agent 派发纪律，2026-11-22 当天登记；第 33 条为索引签名时机，2026-11-22 当天登记）。
+- 条目：**34 条**（覆盖 M0 / M1 / M2 的拓扑、协议、生命周期、预算、范围、门禁、验收、协作纪律、归属许可、数据形状、索引签名时机、打包确定性十二类裁决；第 21–29 条为 2026-11-22 当天登记，非回填；第 30 条为能力模型回填补记——原缺条，收口时按 G-23 补齐；第 31 条为发布链 P0 处置，2026-11-22 当天登记；第 32 条为 M2 开工子 agent 派发纪律，当天登记；第 33 条为索引签名时机，当天登记；第 34 条为打包确定性与 go.work 干扰，M2 收口当天登记）。
 - 被否决选项：每条至少 1 项，最多 7 项（IPC 线格式）。
 - 未覆盖：M2 及以后尚未发生的裁决不入表；`cron` 插件的具体调度条目格式属 M2 提案范围。
