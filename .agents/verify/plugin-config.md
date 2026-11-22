@@ -59,7 +59,7 @@
 - 代码行数：`web/config-panel.js` 250 行；`docs/PLUGIN-CONFIG.md` 114 行。
 
 ## 8. 清理与已知边界
-- 截图用的 chromium 与 `/tmp/kore-cfg-18879` 保留到交接后清理；18879 实例仍在运行，未触碰 8787/18880。
+- 验收后已停止 18879 的 kored 与本轮 chromium，删除 `/tmp/kore-cfg-18879` 与临时脚本；8787（PID 3418127）与 18880 未触碰。
 - 已知边界：`restart_required=true` 分支无真机对象（两试点均可热更），仅由前端代码分支覆盖；`config.set` 不支持删除配置文件恢复 env（清空列表=不用来源，语义明确）。
 - 跨轨改动披露：`Makefile` / `web/embed.go` / `docs/FRONTEND.md` / `QUICKSTART.md` 在本轨干净 HEAD 上只接线 config-panel（17 文件）；`ui-file-site-l2` 轨的 files-l2/site-edit 在该轨提交后变为 19 文件。未提交他轨的 `web/files.js` / `web/sites.js` / `web/style.css` / `web/files-l2.js` / `web/site-edit.js` / `handlers_invoke.go` / 根 `CHANGELOG.md`。
 
