@@ -13,7 +13,7 @@ import (
 
 // 索引级 ed25519 公钥（32 字节 hex，内置于二进制，信任根）。
 // 与 kore-plugins/index/plugins.json.sig 的演示密钥配对；轮换须留旧公钥兼容窗口（提案 0002 §2 M2-B）。
-const IndexPublicKeyHex = "f271723a1636402e891b8f21d3d28f4861ae90e8da3021d5cef5b35b9d027e14"
+const IndexPublicKeyHex = "27e19920dbc0d4c521b58c6a150b4423abe11d2f3a01f891d0be4c721ee439c3"
 
 var (
 	// ErrUnsigned 表示索引未签名或验签失败（默认拒绝）。
