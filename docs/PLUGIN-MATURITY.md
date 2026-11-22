@@ -103,7 +103,7 @@
 
 ## 5. 本轮新发现的缺口（3.5）
 
-以下 7 条均为 Round 2 收口时**新发现**、且未被 §2 的"仍缺"列完全覆盖的缺口；L0 域的整体 noop 问题见 §2，不在这里重复计数。
+以下 8 条均为 Round 2 收口时**新发现**、且未被 §2 的"仍缺"列完全覆盖的缺口（第 8 条为 Round 3 实测补充）；L0 域的整体 noop 问题见 §2，不在这里重复计数。
 
 | # | 缺口 | 代码事实 / 证据 | 处置建议 |
 | --- | --- | --- | --- |
@@ -114,6 +114,7 @@
 | 5 | `ssl` 缺 ACME 自动申请与续期 | `methods.go:104` 的 `issue` 返 `E_UNSUPPORTED`；`internal/certs/renew.go:15` 对 ACME 证书同样返 `E_UNSUPPORTED` | v1.1 引入 ACME 客户端 + DNS-01/HTTP-01；未实现前在 UI 明示"需外部签发后导入" |
 | 6 | 站点在容器模式下 `site_dir_exists` 只看宿主路径 | `inspect.go:74` 用 `os.Stat(root)`；容器内 root 是容器路径，宿主同路径不存在即误报 false | 只读方法内用 `docker exec <container> test -d <root>`，或返回三态 `unknown（容器模式）`，不伪造 false |
 | 7 | 主壳缺全局搜索、告警中心、长任务进度、操作审计入口 | `shell.js` / `app.js` 无搜索；`store.js:275` 仅按时耗伪进度；`internal/core/store/audit.go` 无前端入口 | 合并为 R3-1；进度用 SSE 分阶段事件，审计入口复用现有 audit bucket |
+| 8 | 插件凭据无法跨插件传递：`discover` 探测 MySQL / Redis 服务端版本需要 `MYSQL_PWD` / `REDISCLI_AUTH`，密码却在 `db-mysql` / `redis` 的 `config.json` | 两个密码各存各的 0600 `config.json`（`sensitive`），插件间不共享配置；内核无凭据总线，插件进程只继承 kored 环境 → 未注入时 `version_source` 降级为 `client` / `unknown`；当前靠运维手工 `export`，重启即失效 | 按 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md) §6.1 候选 A：kored 用 `password` + `password_env` 做机械映射注入（不认业务语义，不违反 G-01）；**v1.0 前必须做** |
 
 ## 6. 附录：24 仓方法清单（106 个业务方法）
 

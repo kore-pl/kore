@@ -76,6 +76,27 @@
 - `config.set` 收到 `"***"` 表示「不修改」，保留已存值；只有收到新明文才覆盖。
 - 前端用 `type=password` 渲染，不回显、不写日志、不进审计 detail。
 
+### 6.1 跨插件凭据传递（设计债，v1.0 前必须做）
+
+**问题（2026-11-23 实测）**：插件探测外部服务需要凭据，凭据却存在**另一个插件**的 `config.json` 里，两者互不可见：
+
+- `discover` 要探测 MySQL 服务端版本（`SELECT VERSION()`）与 Redis 服务端版本（`INFO server`），需要 `MYSQL_PWD` / `REDISCLI_AUTH`；
+- 这两个密码由 `db-mysql` / `redis` 插件的配置面板写入 `<state_dir>/plugins/{db-mysql,redis}/config.json`（0600、`sensitive`），插件之间不共享配置；
+- 内核没有凭据总线：插件进程环境 = kored 进程环境（`internal/core/supervisor/start.go` 继承 `os.Environ`），所以 `discover` 拿不到密码，探测只能降级为 `version_source=client`（客户端 `mysql --version`）或 `unknown`；
+- 当前 workaround 是运维在启动 kored 前手工 `export MYSQL_PWD=...` / `export REDISCLI_AUTH=...`——重启即失效、不可审计、不可复制，**不是产品能力**。
+
+**候选方案**：
+
+| 方案 | 做法 | 优点 | 缺点 |
+| --- | --- | --- | --- |
+| **A（推荐）** | kored 启动/重启插件时，读该插件 `config.json` 的 `password` 与 `password_env`，把 `password` 机械映射到 `password_env` 指定的环境变量名并注入子进程 | 凭据仍只存插件自己的 0600 文件；插件代码零改动（继续读环境变量）；内核只做「字段 → 环境变量名」的机械映射，不认识业务语义，不违反 G-01 | kored 需要按插件的 `password_env` 声明做注入；改密码后需重启该插件进程才生效（可接受，`restart_required=true` 语义已存在） |
+| B | `discover` 直接读 `<state_dir>/plugins/*/config.json` | 不依赖内核改动 | 插件间直接耦合：任何插件都能读别人的密码文件，权限边界消失；0600 对同用户多进程等于共享 |
+| C | `discover` 自己的配置面板加「探测凭据」字段 | 实现最简单、职责自洽 | 同一密码存三份（`db-mysql` / `redis` / `discover`），改密必然漂移；用户要重复填写，违反「自动发现、不让人填环境细节」 |
+
+**推荐 A 的边界**：内核只做 `config.password` → `env[password_env]` 的机械映射（`password_env` 缺失则不注入），不维护「MySQL / Redis」名词表、不做凭据轮换、不落日志；`config.get` 仍只回 `"***"`。这样 `discover` 与 `db-mysql` / `redis` 继续只认环境变量，插件契约零改动。
+
+**过期条件**：A 落地并验证（配置面板改密码 → 重启插件 → `discover.services` 的 `version_source=server` 且版本等于服务端实际版本）后，本节降级为历史说明并删除 workaround 描述；在此之前它是**运维手工 workaround**，v1.0 前必须由 A 替代。
+
 ## 7. 试点
 
 ### 7.1 `kore-plugin-logs`
