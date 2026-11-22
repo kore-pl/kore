@@ -21,7 +21,7 @@ const (
 	maxPidsMax  = 512
 	minCPUQuota = 10
 	maxCPUQuota = 100
-	// lazy 空闲退出区间；其它 lifecycle 传值忽略（M1 不实现 lazy）。
+	// lazy 空闲退出区间；其它 lifecycle 传值忽略。
 	minIdleSec = 60
 	maxIdleSec = 1800
 	// maxCapabilities 是单插件能力声明数量上限。
@@ -226,15 +226,15 @@ func (m *Manifest) validateExtras() error {
 
 // RuntimeSupported 报告当前内核能否运行该 lifecycle。
 //
-// M1 运行期只实现 resident；lazy/oneshot 明确拒绝（E_UNSUPPORTED）而不是静默降级，
-// message 固定写明「M2 支持」，便于调用方原样回显给用户。
+// M2 运行期实现 resident 与 lazy（按需冷启 + 空闲退出）；oneshot 明确拒绝
+// （E_UNSUPPORTED，message 写明 M3 支持）而不是静默降级，便于原样回显给用户。
 func (m *Manifest) RuntimeSupported() error {
 	switch m.Lifecycle {
-	case LifecycleResident:
+	case LifecycleResident, LifecycleLazy:
 		return nil
-	case LifecycleLazy, LifecycleOneshot:
+	case LifecycleOneshot:
 		return errf(pluginapi.E_UNSUPPORTED,
-			"插件 %s 的 lifecycle=%s 在 M1 运行期不支持（M2 支持）；当前仅支持 resident", m.ID, m.Lifecycle)
+			"插件 %s 的 lifecycle=oneshot 在 M2 运行期不支持（M3 支持）", m.ID)
 	default:
 		return errf(pluginapi.E_INVALID, "插件 %s 的 lifecycle=%q 非法", m.ID, m.Lifecycle)
 	}

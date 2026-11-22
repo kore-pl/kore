@@ -34,6 +34,10 @@ type Options struct {
 	ShutdownGrace time.Duration
 	// QueueLimit 是同一插件冷启动的并发队列上限（含正在启动者），默认 32。
 	QueueLimit int
+	// MaxSlots 是同时常驻槽位上限（resident + 活跃 lazy），默认 3（G-03 / 提案 §4）。
+	MaxSlots int
+	// IdleTimeout 是 lazy 空闲退出时长，默认 60s；清单 idle_timeout_s 优先。
+	IdleTimeout time.Duration
 	// Logger 可空，默认 slog.Default()。
 	Logger *slog.Logger
 }
@@ -48,6 +52,12 @@ func (o *Options) withDefaults() {
 	}
 	if o.QueueLimit <= 0 {
 		o.QueueLimit = defaultQueueLimit
+	}
+	if o.MaxSlots <= 0 {
+		o.MaxSlots = defaultMaxSlots
+	}
+	if o.IdleTimeout <= 0 {
+		o.IdleTimeout = defaultIdleTimeout
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()

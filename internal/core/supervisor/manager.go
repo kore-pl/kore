@@ -4,7 +4,7 @@
 // 隔离模型（G-04）：socket 由主壳以 server 身份 bind（插件无权自建），插件进程以
 // client 身份 connect；2s 硬超时内未完成 kore.hello 即 SIGKILL 并置 failed。
 //
-// M1 只实现 resident：lazy/oneshot 由 registry 在 enable 阶段拒绝（E_UNSUPPORTED）。
+// M2 实现 resident + lazy；oneshot 由 registry 在 enable 阶段拒绝（E_UNSUPPORTED，M3）。
 // 退避重启、心跳探测、热升级、run.json 孤儿进程核对按任务拆分归 M1-12/13，本包不含
 // 任何 ticker/轮询（G-19）：状态变化全部由调用事件驱动。
 package supervisor
@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -42,6 +43,10 @@ const (
 	defaultShutdownGrace = 5 * time.Second
 	defaultKillWait      = 2 * time.Second
 	defaultQueueLimit    = 32
+	// defaultMaxSlots 是同时常驻槽位上限：resident + 活跃 lazy ≤3（提案 §4 / G-03）。
+	defaultMaxSlots = 3
+	// defaultIdleTimeout 是 lazy 冷启后的空闲退出时长（G-19，任务指定 60s）。
+	defaultIdleTimeout = 60 * time.Second
 )
 
 // Manager 是插件进程监督器；并发安全，状态变更加锁，冷启动由每插件闸门串行。
@@ -51,6 +56,10 @@ type Manager struct {
 	mu      sync.Mutex
 	plugins map[string]*instance
 	gates   map[string]*gate
+	// slotMu 串行 lazy 的槽位准入 + 冷启，保证并发唤醒不突破 maxSlots。
+	slotMu sync.Mutex
+	// useSeq 是全局单调使用序号，供 lazy LRU 比较；零值即可用。
+	useSeq atomic.Uint64
 }
 
 // New 构造 Manager；Transport / Manifests / RunDir 缺一即返回 E_INTERNAL。
@@ -67,39 +76,60 @@ func New(opts Options) (*Manager, error) {
 	}, nil
 }
 
-// Start 幂等启动插件：已 ready 直接返回，failed/stopped 重新冷启动。
+// Start 确保插件就绪。resident 走冷启动；lazy 在 enable 阶段是 no-op
+// （只标记 desired=enabled，进程由首次 Ensure/invoke 按需拉起）。
 func (m *Manager) Start(ctx context.Context, id string) error {
 	inst, err := m.instance(id)
 	if err != nil {
 		return err
+	}
+	if inst.isLazy() {
+		return nil // lazy：enable 不拉起进程，首次 invoke 才冷启
 	}
 	return m.gate(id).do(ctx, func(ctx context.Context) error {
 		return m.startIfNeeded(ctx, inst)
 	})
 }
 
-// Ensure 确保插件就绪并返回主壳持有的 UDS 连接（bus 的转发入口）。
+// Ensure 确保插件就绪并返回主壳持有的 UDS 连接（bus 的转发入口 = invoke 冷启点）。
+// resident 直接取连接；lazy 先过槽位准入（必要时驱逐 LRU），再冷启并重置空闲计时。
 func (m *Manager) Ensure(ctx context.Context, id string) (net.Conn, error) {
-	if err := m.Start(ctx, id); err != nil {
+	inst, err := m.instance(id)
+	if err != nil {
 		return nil, err
 	}
-	inst, ok := m.lookup(id)
-	if !ok {
-		return nil, errf(pluginapi.E_NOTFOUND, "插件 %s 未登记", id)
+	if inst.isLazy() {
+		if err := m.ensureLazy(ctx, inst); err != nil {
+			return nil, err
+		}
+	} else if err := m.gate(id).do(ctx, func(ctx context.Context) error {
+		return m.startIfNeeded(ctx, inst)
+	}); err != nil {
+		return nil, err
 	}
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	if inst.conn == nil {
 		return nil, errf(pluginapi.E_UPSTREAM, "插件 %s 未就绪（state=%s）", id, inst.state)
 	}
+	// 每次 invoke 刷新 LRU 序号与空闲计时（resident 不计时）。
+	if inst.isLazy() {
+		inst.usedAt(m.nextSeq())
+		m.rearmIdleLocked(inst)
+	}
 	return inst.conn, nil
 }
 
-// instance 取（或创建）插件运行态；未安装、未 enable、非 resident 都在此拦截。
+// nextSeq 返回下一个全局使用序号。
+func (m *Manager) nextSeq() uint64 {
+	return m.useSeq.Add(1)
+}
+
+// instance 取（或创建）插件运行态；未安装、未 enable、oneshot 都在此拦截。
 func (m *Manager) instance(id string) (*instance, error) {
 	if !m.opts.Manifests.Enabled(id) {
 		return nil, errf(pluginapi.E_NOTFOUND,
-			"插件 %s 未安装或未 enable（M1 只支持已 enable 的 resident 插件）", id)
+			"插件 %s 未安装或未 enable", id)
 	}
 	manifest, ok := m.opts.Manifests.Manifest(id)
 	if !ok {

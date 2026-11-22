@@ -4,6 +4,7 @@ import (
 	"net"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/registry"
@@ -23,6 +24,23 @@ type instance struct {
 	lastErr  string
 	startAt  time.Time
 	exited   chan struct{}
+
+	// lazy 相关字段：lastUsed 是最近一次 invoke 的单调序号（LRU 依据），
+	// idleGen 是空闲计时代次，idleCancel 非空时持有的计时观察须被取消。
+	lastUsed   atomic.Uint64
+	idleGen    uint64
+	idleCancel chan struct{}
+}
+
+// isLazy 报告该实例是否为惰性生命周期。
+func (i *instance) isLazy() bool {
+	return i.manifest.Lifecycle == registry.LifecycleLazy
+}
+
+// usedAt 记录一次 invoke 的使用序号（返回新序号，供 LRU 比较）。
+func (i *instance) usedAt(seq uint64) uint64 {
+	i.lastUsed.Store(seq)
+	return seq
 }
 
 // newInstance 创建未启动的运行态。

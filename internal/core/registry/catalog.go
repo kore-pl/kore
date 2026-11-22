@@ -15,7 +15,7 @@ type State string
 const (
 	// StateInstalled 已安装未启用。
 	StateInstalled State = "installed"
-	// StateEnabled 已启用（resident 插件由此进入 supervisor 的 starting）。
+	// StateEnabled 已启用（resident 进入 starting，lazy 仅标记期望态）。
 	StateEnabled State = "enabled"
 )
 
@@ -127,9 +127,9 @@ func (c *Catalog) State(id string) (State, bool) {
 	return e.state, true
 }
 
-// Enable 把插件置为 enabled。
+// Enable 把插件置为 enabled（desired=enabled），不负责拉起进程。
 //
-// M1 运行期只支持 resident：lazy / oneshot 返回 E_UNSUPPORTED 且 message 写明 M2 支持，
+// M2 运行期支持 resident 与 lazy；oneshot 返回 E_UNSUPPORTED 且 message 写明 M3 支持，
 // 不做静默降级；未安装返回 E_NOTFOUND。
 func (c *Catalog) Enable(id string) error {
 	c.mu.Lock()

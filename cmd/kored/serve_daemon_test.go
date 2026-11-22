@@ -134,15 +134,16 @@ func TestEnableUnknownNotFound(t *testing.T) {
 	}
 }
 
-// TestLazyEnableUnsupported 验证 lazy 插件 enable 返回 501 E_UNSUPPORTED 且 message 写明 M2。
-func TestLazyEnableUnsupported(t *testing.T) {
+// TestLazyEnableAccepted 验证 M2：lazy 插件 enable 返回 200，只标记 desired=enabled 不起进程。
+func TestLazyEnableAccepted(t *testing.T) {
 	h := newHarness(t, pluginSpec{ID: "lazy", Lifecycle: "lazy"})
 	code, body, _ := h.do(http.MethodPost, pluginPath("lazy", "enable"), nil, nil)
-	if code != http.StatusNotImplemented {
-		t.Fatalf("lazy enable 状态码 = %d，期望 501：%s", code, body)
+	if code != http.StatusOK {
+		t.Fatalf("lazy enable 状态码 = %d，期望 200：%s", code, body)
 	}
-	problem := decodeError(t, body)
-	if problem.Code != "E_UNSUPPORTED" || !strings.Contains(problem.Message, "M2") {
-		t.Fatalf("错误体应为 E_UNSUPPORTED 且写明 M2，实际 %+v", problem)
+	_, listBody, _ := h.do(http.MethodGet, pluginPath("", ""), nil, nil)
+	status := decodeList(t, listBody)[0]
+	if status.State != "stopped" || status.Desired != "enabled" || status.PID != 0 {
+		t.Fatalf("lazy enable 后应 desired=enabled 且未起进程，实际 %+v", status)
 	}
 }

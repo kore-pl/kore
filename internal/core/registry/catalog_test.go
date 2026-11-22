@@ -44,18 +44,33 @@ func TestCatalogEnableResident(t *testing.T) {
 	}
 }
 
-// TestCatalogEnableLazyUnsupported 是 M1 核心反向用例：
-// lifecycle=lazy 的 enable 必须返回 E_UNSUPPORTED，且 message 可读并写明 M2 支持。
-func TestCatalogEnableLazyUnsupported(t *testing.T) {
+// TestCatalogEnableLazy 验证 M2：lazy 插件 enable 成功（只标记期望态，不拉起进程）。
+func TestCatalogEnableLazy(t *testing.T) {
 	manifest := baseManifest()
 	manifest["lifecycle"] = "lazy"
 	catalog := newCatalogWith(t, parse(t, manifest))
+	if err := catalog.Enable("site"); err != nil {
+		t.Fatalf("lazy 插件 enable 应成功: %v", err)
+	}
+	if state, ok := catalog.State("site"); !ok || state != registry.StateEnabled {
+		t.Fatalf("lazy enable 后状态应为 enabled，实际 %v/%v", state, ok)
+	}
+	if !catalog.Enabled("site") {
+		t.Fatalf("lazy enable 后 Enabled 应为 true")
+	}
+}
+
+// TestCatalogEnableOneshotUnsupported oneshot 在 M2 仍返回 E_UNSUPPORTED，message 写明 M3。
+func TestCatalogEnableOneshotUnsupported(t *testing.T) {
+	manifest := baseManifest()
+	manifest["lifecycle"] = "oneshot"
+	catalog := newCatalogWith(t, parse(t, manifest))
 	err := catalog.Enable("site")
 	if codeOf(t, err) != pluginapi.E_UNSUPPORTED {
-		t.Fatalf("lazy enable 应返回 E_UNSUPPORTED，实际 %v", err)
+		t.Fatalf("oneshot enable 应返回 E_UNSUPPORTED，实际 %v", err)
 	}
-	if !containsAll(err.Error(), "lazy", "M2", "resident") {
-		t.Fatalf("message 应可读并写明 M2 支持，实际 %q", err.Error())
+	if !containsAll(err.Error(), "oneshot", "M3") {
+		t.Fatalf("message 应可读并写明 M3 支持，实际 %q", err.Error())
 	}
 	if catalog.Enabled("site") {
 		t.Fatalf("被拒绝的 enable 不得改变状态")

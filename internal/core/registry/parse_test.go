@@ -154,19 +154,21 @@ func TestParseRejectsBrokenJSON(t *testing.T) {
 	}
 }
 
-// TestRuntimeSupported 验证 M1 运行期只支持 resident。
+// TestRuntimeSupported 验证 M2 运行期支持 resident/lazy，oneshot 仍不支持（M3）。
 func TestRuntimeSupported(t *testing.T) {
-	for _, lifecycle := range []registry.Lifecycle{registry.LifecycleLazy, registry.LifecycleOneshot} {
-		manifest := baseManifest()
-		manifest["lifecycle"] = string(lifecycle)
-		got := parse(t, manifest)
-		err := got.RuntimeSupported()
-		if codeOf(t, err) != pluginapi.E_UNSUPPORTED {
-			t.Fatalf("%s 应返回 E_UNSUPPORTED，实际 %v", lifecycle, err)
-		}
-		if !strings.Contains(err.Error(), "M2") {
-			t.Fatalf("%s 的 message 应写明 M2 支持，实际 %q", lifecycle, err.Error())
-		}
+	oneshot := baseManifest()
+	oneshot["lifecycle"] = "oneshot"
+	err := parse(t, oneshot).RuntimeSupported()
+	if codeOf(t, err) != pluginapi.E_UNSUPPORTED {
+		t.Fatalf("oneshot 应返回 E_UNSUPPORTED，实际 %v", err)
+	}
+	if !strings.Contains(err.Error(), "M3") {
+		t.Fatalf("oneshot 的 message 应写明 M3 支持，实际 %q", err.Error())
+	}
+	lazy := baseManifest()
+	lazy["lifecycle"] = "lazy"
+	if err := parse(t, lazy).RuntimeSupported(); err != nil {
+		t.Fatalf("lazy 在 M2 应受支持，实际 %v", err)
 	}
 	if err := parse(t, baseManifest()).RuntimeSupported(); err != nil {
 		t.Fatalf("resident 应受支持，实际 %v", err)
