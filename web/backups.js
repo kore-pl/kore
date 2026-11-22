@@ -7,7 +7,7 @@
   'use strict';
   var API = '/api/v1/invoke/backup/';
   function fresh() {
-    return { backups: [], destroyed: false, status: null, result: null, resultHost: null,
+    return { root: null, backups: [], destroyed: false, status: null, result: null, resultHost: null,
       confirm: null, confirmHost: null, confirmMsg: null, busy: false, name: null, paths: null,
       exclude: null, compression: null, submit: null };
   }
@@ -268,10 +268,26 @@
         setStatus('创建失败：' + err.message, 'fail');
       });
   }
+  function openConfig() {
+    if (!S.root) return;
+    if (!window.KoreShell || typeof window.KoreShell.openConfig !== 'function') {
+      setStatus('配置面板未加载，请刷新页面后重试', 'fail'); return;
+    }
+    window.KoreShell.openConfig(S.root, 'backup', {
+      title: '备份设置',
+      onSaved: function () { loadList(true); }
+    });
+  }
   function build(root) {
-    var head = add(root, el('header', 'view-head'));
-    add(head, el('h2', 'view-title', '备份'));
-    add(head, el('p', 'view-sub', '打包目录、校验完整性、恢复到空目录；恢复与删除都需要页面内二次确认。'));
+    S.root = root;
+    var head = add(root, el('header', 'view-head view-head-split'));
+    var headMain = add(head, el('div', 'view-head-main'));
+    add(headMain, el('h2', 'view-title', '备份'));
+    add(headMain, el('p', 'view-sub', '打包目录、校验完整性、恢复到空目录；恢复与删除都需要页面内二次确认。'));
+    var gear = add(head, el('button', 'btn btn-ghost cfg-gear', '⚙ 设置'));
+    gear.type = 'button';
+    gear.setAttribute('aria-label', '备份设置');
+    on(gear, openConfig);
     S.status = add(root, el('div', 'bak-status muted')); S.status.setAttribute('role', 'status');
     S.confirmHost = add(root, el('div', 'bak-confirm-host'));
     var create = panel(root, '新建备份', 'gzip 或无压缩 tar'), form = add(create, el('form', 'bak-form'));
@@ -284,7 +300,7 @@
     });
     field(form, '压缩', S.compression);
     S.submit = add(form, el('button', 'btn btn-primary bak-submit', '创建备份')); S.submit.type = 'submit';
-    add(form, el('p', 'field-hint span2', '路径必须在插件白名单 KORE_BACKUP_ALLOW_ROOTS 之下；符号链接按链接记录。'));
+    add(form, el('p', 'field-hint span2', '路径必须在「设置」里的允许根路径之下；点右上角设置可改备份目录与白名单。符号链接按链接记录。'));
     form.addEventListener('submit', submitCreate);
     var list = panel(root, '备份列表');
     S.count = list.querySelector('.panel-head').appendChild(el('span', 'panel-meta', ''));

@@ -1,8 +1,9 @@
 /* kore 主壳布局壳：左侧导航 + 视图路由（零框架、零 CDN、无外链）。
-   对外只暴露 window.KoreShell = { mount, navigate, current }：
+   对外只暴露 window.KoreShell = { mount, navigate, current, openConfig }：
      mount(routes)  routes = [{ id, label, render(container) }]（图标按 id 内置为内联 SVG）
      navigate(id)   切视图并写 URL hash（#/<id>），接受 'store' / '#/store' / '/store'
      current()      当前视图 id（未挂载时返回 ''）
+     openConfig(host, pluginId, opts)  按需加载 config-panel.js 并打开插件设置
    设计纪律（FRONTEND §3）：断点是 CSS 的事，JS 不做视口分支；切视图前先给上一个视图
    一次 destroy() 机会（monitor 的轮询必须停），状态用 class + aria-current 双通道，
    不只靠颜色。hash 是唯一真源：前进/后退由 hashchange 驱动，不另存内存栈。 */
@@ -215,8 +216,9 @@
   // 终端 / 数据库 / 日志 / 进程 / SSL / 备份是壳内置的第 9–14 项：index.html 不引脚本，
   // 首次切到该视图才注入 /assets/<模块>.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
   var lazyModules = Object.create(null);
-  function ensureLazy(url, globalName) {
-    if (window[globalName] && typeof window[globalName].render === 'function') {
+  function ensureLazy(url, globalName, ready) {
+    var ok = ready || function (mod) { return mod && typeof mod.render === 'function'; };
+    if (window[globalName] && ok(window[globalName])) {
       return Promise.resolve(window[globalName]);
     }
     if (lazyModules[url]) return lazyModules[url];
@@ -226,9 +228,9 @@
       script.async = true;
       script.onload = function () {
         var mod = window[globalName];
-        if (!mod || typeof mod.render !== 'function') {
+        if (!ok(mod)) {
           delete lazyModules[url];
-          reject(new Error(url + ' 未导出 ' + globalName + '.render'));
+          reject(new Error(url + ' 未导出可用的 ' + globalName));
           return;
         }
         resolve(mod);
@@ -385,5 +387,22 @@
     return currentId;
   }
 
-  window.KoreShell = { mount: mount, navigate: navigate, current: current };
+  // 通用配置面板按需注入：插件视图只挂「设置」入口，不各自实现表单（PLUGIN-CONFIG §9）。
+  function openConfig(host, pluginId, opts) {
+    var box = host || viewBox;
+    if (!box) return null;
+    if (window.KoreConfig && typeof window.KoreConfig.open === 'function') {
+      return window.KoreConfig.open(box, pluginId, opts);
+    }
+    ensureLazy('/assets/config-panel.js', 'KoreConfig', function (mod) {
+      return mod && typeof mod.open === 'function';
+    }).then(function (mod) {
+      mod.open(box, pluginId, opts);
+    }, function (err) {
+      box.appendChild(el('div', 'stub', '配置面板不可用：' + (err && err.message ? err.message : '模块加载失败')));
+    });
+    return null;
+  }
+
+  window.KoreShell = { mount: mount, navigate: navigate, current: current, openConfig: openConfig };
 })();

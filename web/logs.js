@@ -8,7 +8,7 @@
   var API = '/api/v1/invoke/logs/';
   var TIMEOUT_MS = 15000;
   function fresh() {
-    return { sources: [], selected: '', lines: 200, keyword: '', since: '', mode: 'tail', entries: [],
+    return { root: null, sources: [], selected: '', lines: 200, keyword: '', since: '', mode: 'tail', entries: [],
       matches: [], stats: null, count: 0, scanned: 0, truncated: false, lineTruncated: false,
       notice: '', error: '', busy: false, destroyed: false };
   }
@@ -88,7 +88,7 @@
       var empty = add(S.srcHost, el('div', 'empty-state'));
       add(empty, el('p', 'logs-empty-title', '未配置日志来源'));
       add(empty, el('p', 'empty-state-text',
-        '需要在内核环境变量 KORE_LOGS_SOURCES 中登记日志来源（JSON 数组，每项含 name / path / type），修改后重启内核。'));
+        '点击右上角「设置」添加日志来源，保存后立即生效、无需重启；也兼容环境变量 KORE_LOGS_SOURCES。'));
       return;
     }
     S.sources.forEach(function (src) {
@@ -232,10 +232,26 @@
     label.appendChild(control);
     return label;
   }
+  function openConfig() {
+    if (!S.root) return;
+    if (!window.KoreShell || typeof window.KoreShell.openConfig !== 'function') {
+      S.error = '配置面板未加载，请刷新页面后重试'; paintNotices(); return;
+    }
+    window.KoreShell.openConfig(S.root, 'logs', {
+      title: '日志设置',
+      onSaved: function () { S.selected = ''; loadSources(); }
+    });
+  }
   function build(root) {
-    var head = add(root, el('header', 'view-head'));
-    add(head, el('h2', 'view-title', '日志'));
-    add(head, el('p', 'view-sub', '按配置来源查看尾部日志、关键字过滤与全文件搜索；只读，不暴露宿主路径。'));
+    S.root = root;
+    var head = add(root, el('header', 'view-head view-head-split'));
+    var headMain = add(head, el('div', 'view-head-main'));
+    add(headMain, el('h2', 'view-title', '日志'));
+    add(headMain, el('p', 'view-sub', '按配置来源查看尾部日志、关键字过滤与全文件搜索；只读，不暴露宿主路径。'));
+    var gear = add(head, el('button', 'btn btn-ghost cfg-gear', '⚙ 设置'));
+    gear.type = 'button';
+    gear.setAttribute('aria-label', '日志设置');
+    on(gear, openConfig);
     var layout = add(root, el('div', 'logs-layout'));
     var srcPanel = add(layout, el('section', 'panel logs-src-panel'));
     var srcHead = add(srcPanel, el('div', 'panel-head'));

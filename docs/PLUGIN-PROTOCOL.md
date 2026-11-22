@@ -1,6 +1,6 @@
 # 插件协议（kore.plugin.v1）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
 
 本文件是 kore 插件协议的**唯一来源**：帧格式、握手、方法、事件、错误码、超时、心跳与热升级时序以本文为准。架构与实现（`pkg/pluginapi/`、`internal/core/bus/`、`internal/core/supervisor/`）与本文冲突时，先改本文（走 `docs/DECISIONS/` 的 ADR），再改代码。资源侧参数见 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md)，持久化字段见 [DATA-MODEL.md](./DATA-MODEL.md)。
 
@@ -227,10 +227,14 @@
  "params":{"domain":"example.com"},"timeout_ms":15000}
 ```
 
-- `id`：连接内请求标识，32 位小写 hex（16 字节随机），内核生成、插件原样回填，同一连接并发按 id 匹配且不得复用；**编解码层不解析 `id` 语义（只搬运），生成与校验归 `bus`**——M3 protobuf 复用同一入口时不做语义解析。`method`：`<plugin>.<verb>`，`<plugin>` 必须等于自身 id，跨插件名 `E_NOTFOUND`，`kore.*` 业务入口一律 400 `E_INVALID`。
+- `id`：连接内请求标识，32 位小写 hex（16 字节随机），内核生成、插件原样回填，同一连接并发按 id 匹配且不得复用；**编解码层不解析 `id` 语义（只搬运），生成与校验归 `bus`**——M3 protobuf 复用同一入口时不做语义解析。`method`：`<plugin>.<verb>`，`<plugin>` 必须等于自身 id，跨插件名 `E_NOTFOUND`，`kore.*` 业务入口一律 400 `E_INVALID`。**方法段语法**：段首字符必须为小写字母，段内允许字母（含大写，即 camelCase）、数字、`_` 与 `-`——插件按自身命名声明 `site.bindSSL` / `site.setRewrite` 这类方法时，HTTP 入口与内核必须同口径放行，否则会出现“插件声明了却调不到”。
 - `req_id`：**跨进程追踪标识**（HTTP 侧生成并透传，如 `r-01JC8Q3A`）：请求帧必带，响应帧必须原样回显；`id` 只用于连接内匹配，两者不得混用或互相替代。
 - Response 固定字段：`type`、`id`、`req_id`（**必填回显，必须与请求一致**）、`result` 或 `error` 二选一；缺 `req_id` 视为协议违规，调用方按 `E_INVALID` 处理。
 - `params`：JSON 对象，缺省为 `{}`；业务字段由插件定义，必须可向后兼容（加可选字段）。`timeout_ms`：缺省或 `<= 0` 一律视为**未设置**、取默认 15000；有效范围 1000–120000，越界按边界夹取（下限 1000、上限 120000），由调用方在截断处打 WARN（SDK 本身不写日志）。统一入口：HTTP `POST /api/v1/invoke/{plugin}/{method}`，body 即 `params`；内核组装 envelope 后转发，响应解包为 `{result}` 或 `{error}`。
+
+### 7.3 可选配置方法
+
+插件可额外实现 `<id>.config.get` / `<id>.config.set`，把环境变量 + 重启的配置方式换成自描述表单；字段类型、存储路径（`<state_dir>/plugins/<id>/config.json`，0600）、优先级（文件 > 环境变量 > 默认值）与热生效口径见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)。两个方法都是普通业务方法，仍走 §7.2 envelope 与 `POST /api/v1/invoke/{plugin}/{method}`；未实现时返回 `E_NOTFOUND`，不影响插件加载。
 
 ## 8. 事件类型
 
