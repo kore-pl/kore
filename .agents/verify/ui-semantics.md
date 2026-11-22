@@ -3,9 +3,10 @@
 # 三个 UI 语义问题修复与真机验证
 
 ## 0. 环境与口径（先说边界）
-- **真数据来自 8787**：页面里所有 `/api/*` 与 `/-/*` 由 `127.0.0.1:18900` 反代到 `127.0.0.1:8787`（cookie 复用 05:17 已登录会话），插件状态、db-mysql 实例、cron/ufw 权限错误全部是 8787 实时返回。
-- **为什么不是直接打 8787**：8787 的静态资源由 `bin/kored` 编译期内嵌（`web/embed.go`），改 `web/*.js` 必须重建二进制 + 重启才可见。本轮**不重建、不重启**——同会话另有 `fix-discover-creds` / `fix-capability-enforce` 两个 agent 正在改内核并会重启实例，抢着重启会把它们在建的二进制/进程准备好之前打断，也可能撞上「重建覆盖」竞态。因此前端用 `web/dist`（`make frontend` 产物）由回环代理托管，后端仍打真实例。
-- **本轮未改运行态资产**：`.kore-local.yaml` / `.kore-local-state/` / `bin/kored` 均未改动，8787 进程（PID 700480）未重启。**待办**：lead 在兄弟 agent 落定后重建 `bin/kored` 并重启一次，8787 即自动带上本批前端修复（源码与 dist 均已就绪）。
+- **真数据来自 8787（当前进程 PID 845380）**：页面里所有 `/api/*` 与 `/-/*` 由 `127.0.0.1:18900` 反代到 `127.0.0.1:8787`（cookie 复用已登录会话），插件状态、db-mysql 实例、cron/ufw 权限错误全部是该进程实时返回。该进程 05:30:40 由兄弟 agent 重启，二进制仍是 05:07 构建的旧产物（`/assets/app.js` sha `fce10c05` ≠ 本轮 `web/dist` `6ff2dea2`），即**修复尚未在 8787 生效**。
+- **为什么不是直接打 8787**：8787 静态资源由 `bin/kored` 编译期内嵌（`web/embed.go`），改 `web/*.js` 必须重建二进制 + 重启才可见。此刻同一工作区 `fix-capability-enforce` 正改 `internal/core/httpapi/*.go` 与 `cmd/kored/*`（`git status` 可见未提交），**现在 `make build` 会把它未完成的改动编进共享二进制并重启主实例**——这是不可接受的风险，所以本轮不重建、不重启，前端用 `make frontend` 的 `web/dist` 由回环代理托管、后端仍打真实例。
+- **本轮未改运行态资产**：`.kore-local.yaml` / `.kore-local-state/` / `bin/kored` 均未改动；8787 的 05:30:40 重启由兄弟 agent 完成，非本 agent。
+- **待办（交给 lead）**：兄弟 agent 落定后重建 `bin/kored` 并重启一次即可生效——`make build` 依赖 `web-dist`，会自动把本批 `web/*.js` 打进二进制；`web/dist` 已是最新产物。
 
 ## 1. 问题 1：横幅与实例卡自相矛盾（P1）
 | 项 | 内容 |
