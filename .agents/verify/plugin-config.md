@@ -67,5 +67,5 @@
 - `kore-plugin-logs`：`f1ca141`（feat(config): 统一插件配置契约）
 - `kore-plugin-backup`：`bc72ea7`（feat(config): 统一插件配置契约）
 - `kore`：`846f5e97`（feat(config): 契约 + 双插件试点 + 通用配置面板）
-- `kore`：`待回填`（fix(config): 配置面板提交不依赖未提交的 L2 子模块，使干净 HEAD 自洽）
+- `kore`：`9314f76`（fix(config): 配置面板提交不依赖未提交的 L2 子模块，使干净 HEAD 自洽）
 
