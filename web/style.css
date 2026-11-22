@@ -441,6 +441,281 @@ button:disabled, .btn:disabled {
   * { animation: none !important; transition: none !important; }
 }
 
+/* ===== 监控视图（web/monitor.js）——仅追加，不改既有类 =====
+   约束同 §5：hex 不出 :root（全用 var()），间距 4/8/12/16/24，字号 12/13/14/16/20，
+   圆角 4/6；触摸目标 ≥44px（裁决41）。640px 以下单列。 */
+.kore-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-4);
+}
+
+.monitor-banner {
+  padding: var(--kore-space-3) var(--kore-space-4);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-warning);
+  border-left-width: var(--kore-space-1);
+  border-radius: var(--kore-radius-container);
+}
+
+.monitor-banner-title {
+  font-size: var(--kore-font-14);
+  font-weight: 600;
+  margin-bottom: var(--kore-space-1);
+}
+
+.monitor-banner-text {
+  margin: 0;
+  color: var(--kore-text-2);
+  font-size: var(--kore-font-12);
+  word-break: break-word;
+}
+
+.monitor-banner-text + .monitor-banner-text { margin-top: var(--kore-space-1); }
+
+.monitor-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--kore-space-2);
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+}
+
+.monitor-ts { font-size: var(--kore-font-12); }
+
+.monitor-real {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--kore-space-1) var(--kore-space-4);
+  font-size: var(--kore-font-12);
+}
+
+.monitor-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--kore-space-2);
+}
+
+.monitor-mode:empty { display: none; }
+
+/* ===== 卡片网格：手机单列 → 640+ 两列 → 1024+ 三列 ===== */
+.monitor-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--kore-space-3);
+}
+
+.monitor-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  padding: var(--kore-space-3);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+  min-width: 0;
+}
+
+.monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--kore-space-2);
+}
+
+.monitor-title {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+}
+
+.monitor-value {
+  display: flex;
+  align-items: baseline;
+  gap: var(--kore-space-1);
+}
+
+.monitor-num {
+  font-size: var(--kore-font-20);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.monitor-unit {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+.monitor-note {
+  margin: 0;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+  word-break: break-word;
+}
+
+/* ===== sparkline 容器：SVG 撑满宽度，高度固定，不参与布局抖动 ===== */
+.spark-wrap {
+  width: 100%;
+  height: 32px;
+  line-height: 0;
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ===== 状态 chip（点 + 文本双通道，FRONTEND §6 红线 9） ===== */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--kore-space-1);
+  padding: var(--kore-space-1) var(--kore-space-2);
+  min-height: 20px;
+  max-width: 100%;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control);
+  /* 长告警文本可换行：nowrap 会让 chip 撑破 390px 视口（实测 410px → docScrollW 422） */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.chip-ok   { border-color: var(--kore-success); }
+.chip-warn { border-color: var(--kore-warning); }
+.chip-fail { border-color: var(--kore-danger); }
+.chip-na   { color: var(--kore-text-3); }
+
+/* ===== 预算占用条：目标~红线之间黄，超红线红，无数据不填充 ===== */
+.budget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-1);
+}
+
+.budget-track {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  overflow: hidden;
+}
+
+.budget-track-na { border-style: dashed; border-color: var(--kore-text-3); }
+
+/* 未采样时也给出可见的"目标 8 MiB"刻度，避免整条不可见 */
+.budget-track-na .budget-goal { background: var(--kore-warning); }
+
+.budget-fill {
+  height: 100%;
+  width: 0;
+  background: var(--kore-success);
+  transition: width .2s linear;
+}
+
+.budget-fill-na   { background: transparent; }
+.budget-fill-ok   { background: var(--kore-success); }
+.budget-fill-warn { background: var(--kore-warning); }
+.budget-fill-red  { background: var(--kore-danger); }
+
+/* 目标刻度线：目标与红线分界，超出部分即黄区 */
+.budget-goal {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--kore-text-3);
+}
+
+.budget-legend {
+  font-size: var(--kore-font-12);
+}
+
+/* ===== 插件资源表 ===== */
+.monitor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--kore-font-13);
+}
+
+.monitor-table thead th {
+  text-align: left;
+  padding: var(--kore-space-2) var(--kore-space-3);
+  color: var(--kore-text-2);
+  font-size: var(--kore-font-12);
+  font-weight: 400;
+  border-bottom: 1px solid var(--kore-border-2);
+  white-space: nowrap;
+}
+
+.monitor-table tbody tr + tr { border-top: 1px solid var(--kore-border-2); }
+
+.monitor-table td {
+  padding: var(--kore-space-3);
+  vertical-align: middle;
+  word-break: break-word;
+}
+
+.monitor-plugin-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.monitor-plugin-meta { font-size: var(--kore-font-12); }
+
+.cap {
+  display: inline-block;
+  margin: 0 var(--kore-space-1) var(--kore-space-1) 0;
+  padding: 0 var(--kore-space-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+  background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control);
+}
+
+/* 6 个特权能力（system:/net:/proc:）醒目标出：授权面就是攻击面 */
+.cap-priv {
+  color: var(--kore-text-1);
+  border-color: var(--kore-warning);
+}
+
+@media (min-width: 640px) {
+  .monitor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1024px) {
+  .monitor-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* 小屏：插件资源表转卡片式，避免横向滚动；触摸目标 ≥44px */
+@media (max-width: 639px) {
+  .monitor-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .monitor-table, .monitor-table tbody, .monitor-table tr, .monitor-table td { display: block; width: 100%; }
+  .monitor-table tr { padding: var(--kore-space-2) 0 var(--kore-space-3); border-top: 1px solid var(--kore-border-2); }
+  .monitor-table td {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--kore-space-2);
+    align-items: center;
+    padding: var(--kore-space-1) var(--kore-space-4);
+  }
+  .monitor-table td::before {
+    content: attr(data-label);
+    flex: 0 0 84px;
+    color: var(--kore-text-3);
+    font-size: var(--kore-font-12);
+  }
+  .spark-wrap { height: 40px; }
+}
+
 /* ===== 设置视图（/settings）：分组卡片 · 只读字段 · 禁用说明 =====
    只追加本段，不改既有规则；颜色只走 :root 令牌，间距走 4/8/12/16/24。
    小屏（<640px）单列：字段左标签右值改为上下堆叠，按钮撑满 44px 触摸目标。 */
@@ -584,4 +859,229 @@ button:disabled, .btn:disabled {
     min-width: 84px;
     color: var(--kore-text-3);
   }
+}
+
+/* ===== 软件商店（web/store.js）：卡片网格 / 内联图标 / 徽章 / 筛选条 / 搜索框 =====
+   约束同 §5：hex 只出现在 :root，间距走 4/8/12/16/24，圆角 4/6，小屏触摸目标 ≥44px。
+   图标是本机 emoji 字符，不引字体、不引外链图片。 */
+
+.store { display: flex; flex-direction: column; gap: var(--kore-space-4); }
+
+.store-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--kore-space-3);
+}
+
+.store-title { margin: 0; font-size: var(--kore-font-20); font-weight: 600; letter-spacing: .02em; }
+
+.store-sub {
+  margin: var(--kore-space-1) 0 0;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+}
+
+.store-pkg { display: flex; flex-direction: column; gap: var(--kore-space-2); flex: 1 1 320px; min-width: 0; }
+.store-pkg-label { font-size: var(--kore-font-12); color: var(--kore-text-3); }
+.store-pkg-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.store-notice { margin: 0; word-break: break-word; }
+/* .notice 自带 display:flex 会覆盖 [hidden] 的 UA display:none，必须显式还原，
+   否则未触发错误时也会渲染一个空的红框（实测截图发现）。 */
+.store-notice[hidden] { display: none; }
+
+/* ---- 预设区：每预设一张小卡，批量安装按钮禁用并注明待补 ---- */
+.store-presets {
+  padding: var(--kore-space-3) var(--kore-space-4) var(--kore-space-4);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+}
+
+.store-presets-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--kore-space-2);
+  margin-bottom: var(--kore-space-3);
+}
+
+.store-presets-title { margin: 0; font-size: var(--kore-font-14); font-weight: 600; }
+.store-presets-meta { font-size: var(--kore-font-12); color: var(--kore-text-3); }
+
+.store-preset-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: var(--kore-space-2);
+}
+
+.store-preset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  padding: var(--kore-space-3);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control);
+}
+
+.store-preset-name { font-size: var(--kore-font-13); font-weight: 600; }
+.store-preset-sub { font-size: var(--kore-font-12); color: var(--kore-text-3); }
+.store-preset-btn { width: 100%; }
+.store-preset-note { font-size: var(--kore-font-12); color: var(--kore-text-3); text-align: center; }
+.store-preset-empty { margin: 0; font-size: var(--kore-font-12); color: var(--kore-text-3); }
+
+/* ---- 筛选条：搜索框 + 分类 chips ---- */
+.store-bar { display: flex; flex-direction: column; gap: var(--kore-space-2); }
+
+.store-search { width: 100%; }
+
+.store-cats { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+
+.store-cat {
+  min-height: 32px;
+  padding: 0 var(--kore-space-3);
+  color: var(--kore-text-2);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--kore-font-12);
+  cursor: pointer;
+}
+
+.store-cat:hover { color: var(--kore-text-1); border-color: var(--kore-border-2); }
+
+/* 选中态用 aria-pressed，兼顾键盘与读屏，不依赖颜色单通道 */
+.store-cat[aria-pressed="true"] {
+  color: var(--kore-bg-0);
+  background: var(--kore-info);
+  border-color: var(--kore-info);
+  font-weight: 600;
+}
+
+/* ---- 卡片网格：1 / 2 / 3 / 4 列自适应 ---- */
+.store-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--kore-space-3); }
+
+.store-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  padding: var(--kore-space-4);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+}
+
+.store-card.is-installed { border-color: var(--kore-success); }
+
+.store-card-top { display: flex; align-items: flex-start; gap: var(--kore-space-3); min-width: 0; }
+
+/* 图标圆角方块：固定尺寸 + 居中 emoji，纯 CSS 绘制，无图片请求 */
+.store-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--kore-touch);
+  height: var(--kore-touch);
+  font-size: var(--kore-font-20);
+  line-height: 1;
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-container);
+}
+
+.store-card-head { min-width: 0; flex: 1 1 auto; }
+
+.store-card-name {
+  font-size: var(--kore-font-14);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.store-card-sub {
+  display: flex;
+  align-items: baseline;
+  gap: var(--kore-space-2);
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+.store-card-id { overflow-wrap: anywhere; }
+.store-card-ver { flex: 0 0 auto; }
+
+.store-badges { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+
+.store-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--kore-space-2);
+  font-size: var(--kore-font-12);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  color: var(--kore-text-2);
+}
+
+.store-badge.production { color: var(--kore-success); border-color: var(--kore-success); }
+.store-badge.basic { color: var(--kore-text-3); }
+.store-badge.lifecycle { color: var(--kore-text-2); }
+.store-badge.installed { color: var(--kore-success); border-color: var(--kore-success); font-weight: 600; }
+
+.store-desc {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+  overflow-wrap: anywhere;
+}
+
+/* 卡片内状态条：常驻高度，避免出现状态时卡片抖动；空态不占视觉 */
+.store-card-status {
+  min-height: 18px;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+  overflow-wrap: anywhere;
+}
+
+.store-card-status.is-busy { color: var(--kore-info); }
+.store-card-status.is-ok { color: var(--kore-success); }
+.store-card-status.is-fail { color: var(--kore-danger); }
+.store-card-status.is-note { color: var(--kore-warning); }
+
+.store-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.store-btn-install, .store-btn-danger { width: 100%; }
+.store-btn-danger { color: var(--kore-danger); border-color: var(--kore-danger); }
+
+.store-empty {
+  margin: var(--kore-space-6) 0;
+  text-align: center;
+  color: var(--kore-text-3);
+}
+
+/* 断点：≥640 两列，≥1024 三列，≥1440 四列（值与 §5 断点体系一致） */
+@media (min-width: 640px) {
+  .store-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1024px) {
+  .store-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1440px) {
+  .store-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* 小屏（<640px）：单列 + 触摸目标 ≥44px（裁决41） */
+@media (max-width: 639px) {
+  .store-head { flex-direction: column; align-items: stretch; }
+  .store-pkg { flex: 1 1 auto; }
+  .store-search, .store-pkg-input { min-height: var(--kore-touch); }
+  .store-cat { min-height: var(--kore-touch); padding: 0 var(--kore-space-4); }
+  .store-preset-row { grid-template-columns: minmax(0, 1fr); }
+  .store-preset-btn { min-height: var(--kore-touch); }
+  .store-btn-install, .store-btn-danger { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
 }
