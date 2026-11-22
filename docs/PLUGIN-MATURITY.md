@@ -116,6 +116,8 @@
 | 7 | 主壳缺全局搜索、告警中心、长任务进度、操作审计入口 | `shell.js` / `app.js` 无搜索；`store.js:275` 仅按时耗伪进度；`internal/core/store/audit.go` 无前端入口 | 合并为 R3-1；进度用 SSE 分阶段事件，审计入口复用现有 audit bucket |
 | 8 | 插件凭据无法跨插件传递：`discover` 探测 MySQL / Redis 服务端版本需要 `MYSQL_PWD` / `REDISCLI_AUTH`，密码却在 `db-mysql` / `redis` 的 `config.json` | 两个密码各存各的 0600 `config.json`（`sensitive`），插件间不共享配置；内核无凭据总线，插件进程只继承 kored 环境 → 未注入时 `version_source` 降级为 `client` / `unknown`；当前靠运维手工 `export`，重启即失效 | 按 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md) §6.1 候选 A：kored 用 `password` + `password_env` 做机械映射注入（不认业务语义，不违反 G-01）；**v1.0 前必须做** |
 
+| 9 | 槽位被 resident 占满后所有 lazy 插件饿死：`MaxSlots=3` 是 resident + 活跃 lazy 的合并上限，resident 永不驱逐，3 个 resident 并存即无槽可唤醒 lazy | 2026-11-23 实测：`monitor` 声明 `resident` 后与 `site` + `terminal` 占满 3 槽，11 个 lazy 插件（db-mysql / file / backup / redis / logs / firewall / cron / ssl / process / discover / container）调用全部 `429 E_RATELIMIT`；`lazy.go:26` 明写 resident 不可驱逐 | 按 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md) §2.6 候选 A：resident 单独限 2、lazy 至少保留 1 槽；**v1.0 前必须做**（本体已通过 monitor 改 `lazy` 止血） |
+
 ## 6. 附录：24 仓方法清单（106 个业务方法）
 
 | 仓库 | 方法数 | 方法名 | 一句话职责 |

@@ -1,6 +1,6 @@
 # 资源模型（预算 · 隔离 · 度量）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
 
 kore 的资源预算是**门禁**，不是建议值：超了等于没做完。本文件定义每个组件的预算、cgroup v2 落地方式、度量口径与 CI 判定。协议侧字段与错误语义见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)，状态落盘与日志落盘见 [DATA-MODEL.md](./DATA-MODEL.md)。
 
@@ -103,6 +103,20 @@ M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **768
 ### 2.5 为什么 22 个插件不会变成 22 个进程
 
 绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制——启用第 4 个 resident 时，按 `last_active_at` 把最久未用的 resident 降级为 lazy（先 draining 再 idle），或拒绝启用并提示用户停用其它插件。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由**宿主调度器**（systemd timer / cron.d / launchd / Task Scheduler）触发 `kored invoke`，kore 不自带 scheduler；`cron` 插件是 lazy。
+
+### 2.6 槽位分配保护（设计债 · **v1.0 前必须做**）
+
+**问题（2026-11-23 实测 P1 事故）**：`MaxSlots` 是「`resident` + 活跃 `lazy`」的**合并**上限（默认 3，`internal/core/supervisor/manager.go:31`），而 `admitSlot` 对 `resident` **永不驱逐**——全是 resident 时直接拒绝唤醒（`internal/core/supervisor/lazy.go:26` 注释与实现一致）。3 个 resident 并存即把 lazy 的槽位永久占死：`monitor` 声明 `resident` 后与 `site`、`terminal` 占满 3 槽，`db-mysql` / `file` / `backup` / `redis` / `logs` / `firewall` / `cron` / `ssl` / `process` / `discover` / `container` 共 **11 个 lazy 插件的所有调用全部 429**（`E_RATELIMIT`「常驻槽位已满（上限 3，均为 resident）」）。§2.5 描述的「启用第 4 个 resident 时按 `last_active_at` 降级最久未用者」**在实现中并不存在**（即候选 B 未落地），这正是事故能发生的前提。
+
+| 候选 | 做法 | 代价 | 风险 |
+| --- | --- | --- | --- |
+| **A（推荐）** | `MaxSlots` 内对 `resident` 单独限 2，`lazy` 独占至少 1 槽 | 新增 resident 计数与准入分支（约 30 行）+ 新错误码/提示 | 3 个「确需常驻」的场景会被拒，需给出可操作提示 |
+| B | resident 可主动驱逐（proactive eviction），并定义「谁先被踢」 | draining 状态机 + 在途请求中断语义 | 正在处理长连接/流式会话的 resident 被踢会丢会话；优先级规则难向用户解释 |
+| C | `MaxSlots` 可配置（`resources.max_slots`），按机器调 | 配置 schema + SIGHUP 白名单 + 预设预算联动 | 用户调大后可突破「常驻合计 ≤ 48 MiB」红线，必须联合校验合计 RSS |
+
+**推荐 A**：最简单、最安全——把「lazy 永远有位置」变成**结构性保证**，而不是靠插件作者自觉声明正确。B 涉及在途请求语义，v1 前不引入；C 可作为 A 之后的增强（默认仍 3，且必须与 48 MiB 合计预算联合校验）。
+
+**验收判据**：3 个插件同时声明 `resident` 时，第 3 个的 `enable` 返回明确错误（禁止静默降级）；此后任一 lazy 插件唤醒仍满足 300ms 冷启门禁；`lazy_slots_test.go` 增补「3 resident + 1 lazy 仍可唤醒」用例。**★ 必须 v1.0 之前落地**：否则任何插件（含未来第三方）误声明 `resident` 都会复现同类事故，且现场表现为「一堆无关插件同时 429」，定位成本极高。
 
 ## 3. cgroup v2 落地
 
