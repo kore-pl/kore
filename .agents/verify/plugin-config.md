@@ -66,5 +66,5 @@
 ## 9. 提交
 - `kore-plugin-logs`：`f1ca141`（feat(config): 统一插件配置契约）
 - `kore-plugin-backup`：`bc72ea7`（feat(config): 统一插件配置契约）
-- `kore`：本次提交（hash 见下一条回填）
+- `kore`：`846f5e97`（feat(config): 契约 + 双插件试点 + 通用配置面板；本报告随该提交入库，hash 回填见 `git log -- .agents/verify/plugin-config.md`）
 
