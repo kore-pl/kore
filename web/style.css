@@ -1,0 +1,205 @@
+/* kore 主壳前端样式 —— 设计令牌唯一来源：FRONTEND.md §5
+   约束：hex 值只允许出现在 :root；其余一律 var()；间距走 4/8/12/16/24；
+   字号走 12/13/14/16/20；圆角 4/6；阴影至多 1 级。 */
+
+:root {
+  --kore-bg-0: #0D1117;
+  --kore-bg-1: #161B22;
+  --kore-bg-2: #1C2128;
+  --kore-text-1: #E6EDF3;
+  --kore-text-2: #9DA7B3;
+  --kore-text-3: #7D8590;
+  --kore-success: #3FB950;
+  --kore-warning: #D29922;
+  --kore-danger: #F85149;
+  --kore-info: #58A6FF;
+  --kore-border-1: #30363D;
+  --kore-border-2: #21262D;
+  --kore-shadow: 0 4px 12px rgba(0, 0, 0, .4);
+
+  --kore-space-1: 4px;
+  --kore-space-2: 8px;
+  --kore-space-3: 12px;
+  --kore-space-4: 16px;
+  --kore-space-6: 24px;
+
+  --kore-font-12: 12px;
+  --kore-font-13: 13px;
+  --kore-font-14: 14px;
+  --kore-font-16: 16px;
+  --kore-font-20: 20px;
+
+  --kore-radius-control: 4px;
+  --kore-radius-container: 6px;
+  --kore-topbar-h: 48px;
+  --kore-row-h: 32px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--kore-bg-0);
+  color: var(--kore-text-1);
+  font-size: var(--kore-font-13);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.5;
+}
+
+.boot {
+  padding: var(--kore-space-6);
+  color: var(--kore-text-3);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--kore-topbar-h);
+  padding: 0 var(--kore-space-4);
+  background: var(--kore-bg-1);
+  border-bottom: 1px solid var(--kore-border-1);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--kore-space-3);
+}
+
+.brand-name {
+  font-size: var(--kore-font-16);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.brand-sub {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: var(--kore-space-2);
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+}
+
+.dot {
+  width: var(--kore-space-2);
+  height: var(--kore-space-2);
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--kore-text-3);
+}
+
+.dot.ok    { background: var(--kore-success); }
+.dot.warn  { background: var(--kore-warning); }
+.dot.fail  { background: var(--kore-danger); }
+
+.content {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--kore-space-6) var(--kore-space-4);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--kore-space-3);
+  padding: var(--kore-space-3) var(--kore-space-4);
+  margin-bottom: var(--kore-space-4);
+  border: 1px solid var(--kore-warning);
+  border-left-width: var(--kore-space-1);
+  border-radius: var(--kore-radius-container);
+  background: var(--kore-bg-1);
+}
+
+.notice-dot { margin-top: var(--kore-space-2); }
+.notice-title { font-weight: 600; }
+.notice-hint { color: var(--kore-text-2); font-size: var(--kore-font-12); }
+
+.panel {
+  margin-bottom: var(--kore-space-4);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 var(--kore-space-4);
+  border-bottom: 1px solid var(--kore-border-2);
+  background: var(--kore-bg-1);
+}
+
+.panel-title {
+  font-size: var(--kore-font-14);
+  font-weight: 600;
+}
+
+.panel-meta {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+.rows { width: 100%; border-collapse: collapse; }
+
+.rows tr { min-height: var(--kore-row-h); }
+.rows tr + tr { border-top: 1px solid var(--kore-border-2); }
+
+.rows th, .rows td {
+  text-align: left;
+  padding: var(--kore-space-2) var(--kore-space-4);
+  vertical-align: middle;
+}
+
+.rows th {
+  width: 180px;
+  color: var(--kore-text-2);
+  font-size: var(--kore-font-12);
+  font-weight: 400;
+}
+
+.rows td { word-break: break-word; }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--kore-space-2);
+  font-size: var(--kore-font-12);
+}
+
+.muted { color: var(--kore-text-3); }
+.mono  { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+button {
+  min-height: 28px;
+  padding: 0 var(--kore-space-3);
+  color: var(--kore-text-1);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--kore-info); }
+
+:focus-visible {
+  outline: 2px solid var(--kore-info);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

@@ -6,8 +6,9 @@
 
 - **Go 1.26+**（`go.mod` 已声明 `go 1.26`）；构建统一 `CGO_ENABLED=0`。
 - `make build`：构建 `bin/kored`（`-trimpath -buildvcs=false -s -w`）。
-- `make check`：聚合门禁，必须全绿。当前为 **9 段**（docs-check / 依赖白名单 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree 卫生 / `oss-check` / **`case-check`**）。
+- `make check`：聚合门禁，必须全绿。当前为 **10 段**（docs-check / 依赖白名单 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree 卫生 / `oss-check` / **`case-check`** / **`frontend` 首屏体积**）。
   - 第 9 段 `case-check`：大小写一致性——module 路径全小写且无 `!` 转义、无同目录大小写冲突、插件 `id` 小写、文档 GitHub URL 的 owner 段小写。
+  - 第 10 段 `frontend` 首屏体积门禁（≤300 KiB gzip，`make frontend`，G-03 阻断级）。
 - 单测 / 静态检查：`make vet`、`make test`。
 - 资源类改动额外跑 `make mem`；里程碑收口再跑 `make idle` / `make budget-check`（需要真实进程，不在 CI 跑）。
 
@@ -40,7 +41,7 @@ go work sync
 
 ## 4. PR 要求
 
-1. 先 `make check` **9/9 绿**（含 `oss-check`、`case-check`），把关键输出贴进 PR 模板。
+1. 先 `make check` **10/10 绿**（含 `oss-check`、`case-check`、`frontend` 首屏体积），把关键输出贴进 PR 模板。
 2. 插件 PR 必须带 `info.json`、`Makefile` 的 `dist` 目标、`CHANGELOG.md` 三件套。
 3. 改协议或数据格式（`pkg/pluginapi`、`info.json`、索引、预设 schema）**必须附 ADR**，写清兼容性与版本影响。
 4. 一个 PR 只做一件事；无关重构拆开提。

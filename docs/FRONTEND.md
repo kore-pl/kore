@@ -218,6 +218,7 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - **mock 策略**：`web/mock/` 下按 URL 命名存放 JSON（如 `plugins.get.json`），vite 插件按 `import.meta.env.DEV` 分支挂中间件；生产构建时该分支被 tree-shake，mock 不进产物。
 - **类型来源**：API 与帧类型以 `pkg/pluginapi` 的 Go 类型为唯一真源。M1 起用 `tygo` 生成 `web/src/types/pluginapi.d.ts`，生成物入库，禁止手改；前端不从后端复制类型。
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
+- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态三件套（`index.html` / `app.js` / `style.css`），`make frontend` 打包到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径卡首屏 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
 
 ## 9. 构建与 embed
 
