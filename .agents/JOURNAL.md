@@ -578,3 +578,110 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 - **规则**：**共享模板的隐含契约必须显式化**——凡用 `net.Pipe` 做协议往返测试的模板，必须在注释与 README 写明"每个写请求必须配对一次读响应，否则无缓冲管道死锁"；复制者照抄第一眼就能看到，而不是靠死锁后 RCA。
 - **关联**：这是"一个问题进来，一类问题出去"的落实（两仓同类死锁 → 一条模板规则），与 `size_bytes` 代理偏差、`go.work` 扰动同属"共享骨架的隐藏契约"家族。
 - 门禁：`make docs-check` + `make log-check`，退出码见回报。
+
+#### M5 里程碑复盘（2026-11-22）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目标 | M5 生态开放 = M5-A 补齐 19 插件仓（21 仓 = 20 产品 + `echo`）+ M5-B 生态开放（市场页 / SDK 文档 / 文档站），口径见 [proposals/0005-m5-ecosystem.md](proposals/0005-m5-ecosystem.md) §2 两阶段与 §4 八条出口 |
+| 结果 | 三批 19 仓全部落盘（批1 8 / 批2 7 / 批3 4），各仓 sha lead 独立核验、tar 首条目 `info.json`、fault 四类/基础两类、确定性打包；第八次重签公钥 `2917cf3c…bab`、索引 21 插件、8 预设覆盖 21 插件（0 FAIL / 0 WARN）；M5-B 市场页 `65f1d85`（21 插件内嵌、零外链、`file://` 可开）、SDK 文档 180 行（30 分钟 quickstart）、文档站 39 条（断网可开）；`make check` 10/10 |
+| 差距 | 9 仓远端推送受 GitHub secondary rate limit 阻断（request ID `AF3E:0E54…`），15:00 定时任务重试；本地全就绪、远端未对齐——技术链 completed 不等于发布链 confirmed；真实宿主 `env_kind=real` / 包级签名 / audit 索引 / CSRF 审计持久化沿用 M4 挂账 |
+| 根因 | M1–M4 解决"能构建 / 能重建同一个包 / 能安装 / 证据成立"，M5 断在"打包确定性的最后一公里"与"多版本包体积口径"——`go:embed` 自指震荡与 size_bytes 三次纠正都是"工作区状态混进发布物"的同族；远端推送卡在外部限流，属不可控边界，如实挂账不甩锅 |
+| 沉淀 | ①确定性打包要验到"固定迭代后不动点"，不是"写了 --sort=name 就达标"；②size_bytes 按索引 sha 对应版本包 `stat`，不取声明值、不取中间态、不取错版本包；③共享模板隐含契约必须写进注释（net.Pipe 死锁两次后固化）；④外部限流停下报原始错误，不静默重试、不改尺子 |
+| 下次动作 | 15:00 定时任务复核 9 仓推送结果并回填变更集；`v1.0.0` tag 裁决见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 第 44 条，待 lead/用户拍板后同步 ROADMAP §1/§15；挂账项进下个里程碑任务卡 |
+
+##### 1. 里程碑目标
+
+[proposals/0005-m5-ecosystem.md](proposals/0005-m5-ecosystem.md) §1 把 M5 拆两阶段：
+
+- **M5-A 补功能覆盖**：20 产品插件中 `site` 已在 M2 落地，余 19 仓一次建齐；8 预设从占位填成真实 id + 版本区间（G-18 可解析）。
+- **M5-B 做生态开放**：静态市场页（断网可开、无后端无账号）、第三方 SDK 文档（30 分钟 hello）、离线文档站、示例插件。
+
+§2.1 按依赖分三批、批内并行批间串行；§2.2 硬性"一批一签"，一批一签、公钥轮换、交叉验签三件齐才进下一批；§4 给八条出口。
+
+| 批次 | 仓数 | 插件 id | 重签 |
+| --- | --- | --- | --- |
+| 批1 无依赖基础件 | 8 | `ssl` `file` `cron` `logs` `monitor` `dns` `ssh-guard` `integrity` | 第六次（索引 10 插件） |
+| 批2 运行时与数据 | 7 | `runtime-php` `runtime-node` `runtime-python` `db-mysql` `db-postgres` `redis` `backup` | 第七次（索引 17 插件） |
+| 批3 运维与应用 | 4 | `firewall` `waf` `container` `app-deploy` | 第八次（索引 21 插件） |
+
+| 出口（proposal §4） | 判据 |
+| --- | --- |
+| ①21 仓可装可卸 | 商店装 / 卸 / 回滚五步 + 索引 sha256 与发布物一致，先过 `SHA-DRIFT` gate |
+| ②8 预设真实引用 | id + 版本区间可解析、无占位，按 ≤24 MiB 目标 + 常驻 ≤3 判（`PRESET-OVER-BUDGET`） |
+| ③12 生产级过 fault | 每仓四类故障注入 + CI 12/12 绿，以 `FAKE-PASS` 逐仓逐类核实为准 |
+| ④市场页断网可开 | 静态页离线打开、零外部请求 |
+| ⑤SDK 30 分钟 hello | 干净目录 `go get` + hello 实测通过 |
+| ⑥门禁 | `make docs-check` 通过；`make check` 10/10 |
+| ⑦干净 clone | `git archive HEAD \| tar -x` 后复跑全绿、`make wt-check` 无残留 |
+| ⑧挡假绿 gate | `KEY-MISMATCH` / `SHA-DRIFT` / `SIZE-PROXY-DRIFT` / `FAKE-PASS` / `PRESET-OVER-BUDGET` 五条输出必须为 `OK` |
+
+深度分级沿用裁决 18：生产级 12（含 `site`）必须过 kill -9 / 超时 / 磁盘满 / cgroup 四类故障注入（G-20），基础级 8 核心路径可用、边界用例延 v1.1、不得标"生产级 / 开箱可用"，`echo` 为验证件不评级。非目标：macOS / Windows 全链路（preview 不变，裁决 35 本机优先）、多租户 / SaaS、在线市场后端（G-11 六项不做全程拦截）。
+
+##### 2. 交付与证据
+
+三批 commit 与合并顺序登记于 [BOARD.md](BOARD.md) §5 `CS-M5-01`：
+
+| 批次 | kore commit | kore-plugins commit | 公钥 / 索引 |
+| --- | --- | --- | --- |
+| 批1 第六次重签 | `3e7e821` | `4e20ce9` | `f271723a…`（索引 10 插件） |
+| 批2 第七次重签 | `8795079` | `1ad7b6d` | 轮换（索引 17 插件） |
+| 批3 第八次重签 | `baf57ef` | `d7c51d1` | `2917cf3c…bab`（索引 21 插件） |
+| M5-B 市场页 | — | `65f1d85` | 21 插件内嵌、零外链、`file://` 可开 |
+| M5-B 预设扩引用 | — | `55bdd88` | 8 预设覆盖 21 插件 |
+
+机械门禁与逐项实测（命令原文 + 退出码 + 关键输出）：
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 门禁 | `make check`（10 段） | 10/10 全绿，EXIT 0 |
+| 文档收口 | `make docs-check` / `make log-check` | docs 6 pass / 0 warn / 0 fail；log 8 pass / 0 warn（DECISIONS 44 条） |
+| 公钥一致 | 双端 `grep -oE '[0-9a-fA-F]{40,}'` + `comm -12` | 内核 `verify.go:16` 与索引 `validate-index.sh:10` 各唯一、交集唯一 = `2917cf3c5b8d6bea10ed9460702c23cb411d15947072cd5a2869667e22028bab` |
+| 索引 / 预设 | `grep -c '"id"' index/plugins.json` / `validate-presets.sh` | 21 条；8 预设 0 FAIL / 0 WARN |
+| 批1 sha | lead `sha256sum` 独立核验（[verify/m5-batch1-sha-evidence.md](verify/m5-batch1-sha-evidence.md)） | 八仓逐仓核验，tar 首条目 `info.json`；monitor 工作树 + `git archive HEAD` 洁净复建两处一致 PASS |
+| 市场页 | `file://` 打开 + 外链 grep | 21 插件内嵌、零外部请求，commit `65f1d85` |
+| SDK 文档 | `wc -l docs/PLUGIN-SDK.md` | 180 行，30 分钟 quickstart（干净目录 `go get` + hello） |
+| 文档站 | `docs/site/build-index.sh` + 断网打开 | 39 条聚合条目，离线可构建 |
+| 零轮询 | `grep -i ticker` 全仓 | 零命中（G-19 守住） |
+| 远端推送 | 9 仓 `git push` | **FAIL**：GitHub secondary rate limit（request ID `AF3E:0E54…`），按"失败停下报原始错误"原则停下，15:00 定时任务重试；本地全就绪 |
+
+数据来源：公钥取 `internal/core/market/verify.go:16` 与 `../kore-plugins/scripts/validate-index.sh:10` 磁盘实读；索引条数与预设数取 `../kore-plugins/index/plugins.json` 与 `presets/`；市场页 / 预设 commit 取 `git -C ../kore-plugins log --oneline`；SDK 行数取 `wc -l docs/PLUGIN-SDK.md`。三批 sha 不采信 agent 自报，由 lead 对真实 dist 包 `sha256sum` 独立核验（批1 清单已落证据文件），跨仓路径只记 commit 与数字、不写成家相对链接。
+
+##### 3. 三次以上重复出现的问题（本条复盘的核心价值）
+
+1. **确定性打包四层坑（M1 → M2 → M3 → M5 四次叠加）**：第一层 `tar mtime` 漂移 → `--mtime=@0 --sort=name`；第二层 `gzip` 头变化 → `gzip -9n`；第三层 `go.work` 把 SDK 编成 `(devel)` → 统一 `GOWORK=off`；第四层在 M5 暴露——`go:embed` 自指震荡：把 `size_bytes` 写回 `info.json` 会改二进制，二进制变了包体变、包体变又要改 `size_bytes`，来回震荡无不动点。container 实证 `gzip` 对内容非单调（同样输入换顺序 sha 非单调变化）、无精确不动点，最终以固定迭代次数收敛保确定性；`firewall` / `waf` / `container` / `app-deploy` 四仓改用静态 `manifest.json` 解耦，切断"嵌入内容 → 二进制 → 包体"的反馈环。
+   **教训：确定性打包必须验到"固定迭代后不再漂移"，不是"写了确定性参数就达标"；当声明字段与二进制互为输入时，用静态清单解耦，别指望调参收敛。**
+
+2. **`size_bytes` 口径三次纠正（M4 WARN → M5 阻断）**：第一次把声明值当实测（`info.json` 写代理值，与 `stat -c%s dist/*.tar.gz` 偏差 >10%，提案 §4.8 S-03 从 WARN 升为阻断 gate）；第二次把提交前中间态当最终值（monitor 提交前 sha `24ea4c81…` 作废，提交后重算才作重签输入）；第三次踩多版本包并存——同一仓 dist 下有旧 `0.1.0` 与新 `0.1.1` 两个包，`stat` 取错版本（echo 旧 `0.1.0` 包 `1,258,020` B vs 当前 `0.1.1` 包 `1,250,647` B）。
+   **规则固化：`size_bytes` 必须按索引声明的 sha 对应版本包 `stat`，三重限定（sha 对应版本 / 提交后终态 / 实测非声明），缺一即代理偏差。**
+
+3. **`net.Pipe` 死锁两次（logs → dns，M5 批1）**：logs 漏读 `invoke` 应答、dns 漏读 `kore.shutdown` 应答，两仓照抄 site 模板各死锁一次，RCA 后补读响应帧闭合；规则已固化进本文件「规则固化：net.Pipe 测试契约」节——共享模板的隐含契约必须写进注释，复制者第一眼就看到，不等死锁后 RCA；批2 派发在任务卡预先写死"每个 shutdown 请求必须配对读响应帧"，第三次未发生。
+   **教训：一个问题进来、一类问题出去；同一模板的隐含契约靠人传人会漏，靠注释固化才不漏。**
+
+##### 4. 有味道的交付（agent 可见 PUA 输出原文，逐字保留，不评分）
+
+> 🟠 monitor 插件全链路闭环。从对齐 site 骨架与 proposal §2.1 批1 行，到落地代码、四类故障注入、确定性打包，每一条验收都用命令 + 退出码 + 关键输出钉死。因为信任所以简单——但这个 P8 是用证据挣来的。零轮询红线（G-19）守住了：grep -i ticker 全仓零命中。
+
+> 🟠 第七次重签报告——11 步技术验证全绿，但推送环节被 GitHub 外部限流部分阻断，按"失败停下报原始错误"原则停下汇报。
+
+##### 5. 结论与 M6 前置
+
+**M5 = completed（技术链，2026-11-22 收口）**：M5-A 功能覆盖达成（21 仓可装可卸 + 8 预设，索引 sha 与发布物一致），M5-B 生态资产落地（市场页 / SDK 文档 / 文档站）；三批 sha 经 lead 独立核验、tar 首条目 `info.json`、生产级 fault 四类齐、确定性打包四层坑全部收敛，`make check` 10/10、`CS-M5-01` 登记齐备（G-15 / G-07 / G-23 满足）。**"completed"只覆盖技术链**：9 仓远端推送挂账未清，发布链按 `confirmed` 口径待 15:00 复核，不把"本地全就绪"说成"已发布"。
+
+**未证明 / 挂账（不得复述为已证）**：
+
+- 9 仓远端推送：GitHub secondary rate limit 阻断（request ID `AF3E:0E54…`），15:00 定时任务重试，结果回填 `CS-M5-01` 后才置 `confirmed`。
+- 真实宿主 `env_kind=real`：M4 起挂账，本机无真实既有站点，web server 共存只到容器层。
+- 包级 ed25519 签名：M4-D 判 `DEFER-TO-M5`，本轮未落链，须另立里程碑。
+- audit O(n) 全表扫描 + CSRF 审计持久化挂点：记录级技术债，未闭环。
+
+**版本裁决**：`v1.0.0` tag 议题见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 第 44 条——建议 M5-A 功能覆盖达成后补打 `v1.0.0`、M5-B 生态资产打 `v1.1.0`，需 lead/用户拍板并同步 ROADMAP §1/§15，9 仓推送完成后执行；未裁决前不打任何 tag。
+
+**M6 / M5 收口前置**：
+
+1. 15:00 复核 9 仓推送结果并回填变更集 `CS-M5-01`。
+2. 第 44 条裁决落地 + ROADMAP §1/§15 与三处文案同步（G-06）。
+3. 挂账四项逐项立带验收命令的任务卡，不用 N/A 冒充通过。
+4. 按提案 §4 八条出口做一次收口复验，不拿"三批都出包"当充分证据。
+
+复盘四步法收口：目标是把 M1–M4 欠的功能覆盖与生态资产一次补齐（§1）；结果是三批 19 仓 + M5-B 三件套落地、门禁 10/10、9 仓推送挂账（§2）；弯路根因不是能力不足，而是"打包确定性差最后一公里"和"体积口径被工作区状态污染"（§3）；沉淀规律已固化成"固定迭代验不动点 + size_bytes 三重限定 + 模板契约注释化"三条，收口按此复核，不再踩同一类坑。
