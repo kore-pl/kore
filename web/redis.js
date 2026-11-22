@@ -72,11 +72,32 @@
   function dbLabel(svc) { return svc && svc.id === 'redis' ? 'Redis' : 'Redis'; }
   function shortVersion(version) { return String(version || '').split(/[-~+]/)[0]; }
   function svcPort(svc) { return svc && svc.port ? svc.port : 6379; }
+  // 与 db.js 同一口径：0.2.0 起用 client_version / server_version / version_source，
+  // 0.1.0 只有 version（客户端 `--version` 输出）。旧字段按客户端版本归一，绝不当服务端；
+  // 旧版发现到运行中的服务却没有版本时降级为 client（空版本），不误判成「未检测到」。
+  function normalizeService(svc) {
+    if (!svc) return null;
+    if (!svc.version_source) {
+      if (svc.version) {
+        svc.client_version = svc.version;
+        svc.version_source = 'client';
+      } else if (svc.found && svc.running) {
+        svc.version_source = 'client';
+      } else {
+        svc.version_source = 'unknown';
+      }
+    }
+    return svc;
+  }
+  // 三态优先级：server（真实服务端版本）→ found && running（可能只有客户端版本）→ 空态。
   function pickService(list) {
-    var candidates = (list || []).filter(function (s) { return s && s.id === 'redis'; });
-    if (!candidates.length) return null;
-    var running = candidates.filter(function (s) { return s.running; });
-    return running.length ? running[0] : candidates[0];
+    var candidates = (list || []).map(normalizeService).filter(function (s) {
+      return s && s.id === 'redis';
+    });
+    var server = candidates.filter(function (s) { return s.version_source === 'server'; });
+    if (server.length) return server[0];
+    var running = candidates.filter(function (s) { return s.found && s.running; });
+    return running.length ? running[0] : null;
   }
   // hintFor 把后端 error 原文翻译成「怎么办」；NOAUTH 直接给出 requirepass 位置。
   function hintFor(text) {
@@ -133,21 +154,45 @@
       act('btn-primary', '手动配置', function () { openSettings(false); });
       return;
     }
+    if (svc.version_source !== 'server' && svc.version_source !== 'client') {
+      // unknown：不显示横幅，回落到空态（detect 已把 unknown 置空，这里只作收口）。
+      S.discovery = null;
+      autoBanner();
+      return;
+    }
     if (!svc.running) {
       box.classList.add('is-none');
       badge('自动检测');
-      title('检测到本机 Redis' + (svc.version ? ' ' + shortVersion(svc.version) : '') + '，但服务未运行');
+      var stopped = shortVersion(svc.server_version || svc.client_version);
+      title('检测到本机 Redis' + (stopped ? ' ' + stopped : '') + '，但服务未运行');
       text('启动服务后再点“重新检测”：systemctl start redis-server（或 redis）。');
       act('btn-ghost', '重新检测', detect);
       act('btn-primary', '手动配置', function () { openSettings(false); });
       return;
     }
-    var version = shortVersion(svc.version);
+    if (svc.version_source === 'server') {
+      // server：版本来自真实服务端 INFO（可能带密码），可以放心展示。
+      var serverVersion = shortVersion(svc.server_version);
+      badge('自动检测');
+      title('检测到本机 Redis' + (serverVersion ? ' ' + serverVersion : '') +
+        '（127.0.0.1:' + svcPort(svc) + '）');
+      text(S.autoNotice && S.autoNotice.tone === 'ok'
+        ? '已自动填入主机、端口并连接成功；可在右上角「设置」里修改连接信息。'
+        : '已自动填入主机、端口；点“一键连接”后只需填写密码。');
+      if (S.autoNotice) {
+        add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+      }
+      act('btn-primary', '一键连接', function () { openSettings(true); });
+      act('btn-ghost', '重新检测', detect);
+      return;
+    }
+    // client：只拿到客户端版本，服务端不可达/需要密码——绝不把 client_version 当服务端版本。
+    var clientVersion = String(svc.client_version || '').trim();
     badge('自动检测');
-    title('检测到本机 Redis' + (version ? ' ' + version : '') + '（127.0.0.1:' + svcPort(svc) + '）');
-    text(S.autoNotice && S.autoNotice.tone === 'ok'
-      ? '已自动填入主机、端口并连接成功；可在右上角「设置」里修改连接信息。'
-      : '已自动填入主机、端口；点“一键连接”后只需填写密码。');
+    title('检测到本机 Redis 客户端（未连上服务端，需要密码）');
+    text('本机只探测到' + (clientVersion ? '客户端版本 ' + clientVersion : '客户端，未拿到版本号') +
+      '，没有连上服务端；连上真实服务端后这里会显示服务端版本。' +
+      '已自动填入主机、端口；点“一键连接”后只需填写密码。');
     if (S.autoNotice) {
       add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
     }
@@ -181,7 +226,10 @@
       if (S.discoveryState === 'loading') {
         why = '正在检测本机 Redis…检测完成后这里会出现一键连接入口。';
       } else if (svc && svc.running) {
-        why = '已检测到本机 Redis。点上方“一键连接”，只需填写密码即可。';
+        var detected = svc.version_source === 'server'
+          ? ' ' + shortVersion(svc.server_version)
+          : ' 客户端（未连上服务端，需要密码）';
+        why = '已检测到本机 Redis' + detected + '。点上方“一键连接”，只需填写密码即可。';
       } else if (svc) {
         why = '检测到本机 Redis，但服务未运行。启动服务后点上方“重新检测”。';
       } else {
@@ -412,6 +460,8 @@
     invokeAt(DISCOVER, 'discover.services', {}).then(function (data) {
       if (S.destroyed) return;
       S.discovery = pickService(data);
+      // version_source=unknown：没有任何可信版本来源 → 不显示横幅，走空态。
+      if (S.discovery && S.discovery.version_source === 'unknown') S.discovery = null;
       S.discoveryState = 'ready';
       autoBanner(); paintInstances();
     }, function (err) {
