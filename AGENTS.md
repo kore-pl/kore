@@ -121,6 +121,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
 - [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 开源化政策（MIT）与 CI / 模板。
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件。
+- [docs/DECISIONS/0018-privilege-model.md](docs/DECISIONS/0018-privilege-model.md) — 提权模型：插件保持低权、root 动作经内核代理（systemd transient unit）；非 root 一律 `available=false` + 可操作提示，提权审计 fail-closed。
 - [docs/CORE.md](docs/CORE.md) — **九个内核模块**（config / store / auth / httpapi / registry / supervisor / bus / installer / market）+ 4 个支撑小节（logger / static / sse / envprobe），合计 §2 共 13 小节；HTTP API **21 个端点**：14 业务 + 7 store，前缀 `/api/v1`；另有 `/-/healthz` 与 3 条静态前缀。
 - [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准。
 - [docs/PLUGIN-MATURITY.md](docs/PLUGIN-MATURITY.md) — **补全工作的唯一依据**：22 能力域成熟度分级（L0–L3）+ 竞品能力对照 + 逐条缺口 + Round 2 五批任务与依赖；动插件前先读对应行。

@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
 
 # kore 安全模型（SECURITY）
 
@@ -287,3 +287,12 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 **M4**：ed25519 强制签名 + 公钥轮换流程、主密钥信封加密 `/var/lib/kore/secrets/*.json`、可选 seccomp 配置文件（opt-in，加载失败降级为不启用并告警）、SBOM 生成、依赖 CVE 扫描进 CI。
 
 两条不变式贯穿所有阶段：主壳是唯一裁决点；任何"方便"的改动不得让插件获得跨信任边界的能力。
+
+## 15. 提权模型（ADR-0018）
+
+需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，插件自身永不获得 root。方案对比、分阶段路径与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)。
+
+- **降级必须显式**：非 root / 无 systemd / polkit 拒绝时，插件返回 `available=false` + `E_NEED_ROOT`（无 systemd 为 `E_NO_SYSTEMD`）+ 可操作 `hint`；禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
+- **审计 fail-closed**：每次提权（含被拒绝的）写 `root.action`（谁 / 何时 / 哪个插件与动作 / argv 脱敏 / 结果）；审计写入失败时动作不执行。
+- **不可回滚动作**（防火墙 / IP 与路由 / 服务重启 / 包卸载 / 删备份 / 容器删除）需一次性 `confirm` 令牌二次确认，一次一确认，不批量静默执行。
+- **当前漂移（不掩盖）**：本文 §2 / §6 描述的"主壳 root、插件 `kore-<id>`"尚未实现——实测 kored 与插件同为 uid 1000，`internal/core/supervisor/start.go:80` 继承启动用户身份；以 ADR-0018 的分阶段路径为准，落地时同步本节。
