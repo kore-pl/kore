@@ -55,16 +55,17 @@
 ## 7. 门禁（命令 + 退出码）
 - logs 仓：`make check` → **0**（gofmt clean / vet / 5 包 test 全 ok）；`make build && make dist` 两次 → **0/0**，sha `7f655b9b47c8…` 两次一致。
 - backup 仓：`make check` → **0**；`make build && make dist` 两次 → **0/0**，sha `779fbdb5d69e…` 两次一致。
-- kore 仓：`go vet ./...` → **0**；`make frontend` → **0**（首屏 gzip 36758 B / 307200 B）；`make docs-check` → **0**（6 pass / 0 warn / 0 fail）；`make check` → **0**（10/10 段）。
+- kore 仓：`go vet ./...` → **0**；`make frontend` → **0**（本轨干净 HEAD 为 17 文件，首屏 gzip 36758 B / 307200 B）；`make docs-check` → **0**（6 pass / 0 warn / 0 fail）；`make check` → **0**（10/10 段）。
 - 代码行数：`web/config-panel.js` 250 行；`docs/PLUGIN-CONFIG.md` 114 行。
 
 ## 8. 清理与已知边界
 - 截图用的 chromium 与 `/tmp/kore-cfg-18879` 保留到交接后清理；18879 实例仍在运行，未触碰 8787/18880。
 - 已知边界：`restart_required=true` 分支无真机对象（两试点均可热更），仅由前端代码分支覆盖；`config.set` 不支持删除配置文件恢复 env（清空列表=不用来源，语义明确）。
-- 跨轨改动披露：`Makefile` / `web/embed.go` / `docs/FRONTEND.md` / `QUICKSTART.md` 提交时同时包含 `ui-file-site-l2` 轨已有的 18→19 文件接线（files-l2/site-edit），本轨只追加 config-panel；未提交他轨的 `web/files.js` / `web/sites.js` / `web/style.css` / `handlers_invoke.go` / 根 `CHANGELOG.md`。
+- 跨轨改动披露：`Makefile` / `web/embed.go` / `docs/FRONTEND.md` / `QUICKSTART.md` 在本轨干净 HEAD 上只接线 config-panel（17 文件）；`ui-file-site-l2` 轨的 files-l2/site-edit 在该轨提交后变为 19 文件。未提交他轨的 `web/files.js` / `web/sites.js` / `web/style.css` / `web/files-l2.js` / `web/site-edit.js` / `handlers_invoke.go` / 根 `CHANGELOG.md`。
 
 ## 9. 提交
 - `kore-plugin-logs`：`f1ca141`（feat(config): 统一插件配置契约）
 - `kore-plugin-backup`：`bc72ea7`（feat(config): 统一插件配置契约）
-- `kore`：`846f5e97`（feat(config): 契约 + 双插件试点 + 通用配置面板；本报告随该提交入库，hash 回填见 `git log -- .agents/verify/plugin-config.md`）
+- `kore`：`846f5e97`（feat(config): 契约 + 双插件试点 + 通用配置面板）
+- `kore`：`待回填`（fix(config): 配置面板提交不依赖未提交的 L2 子模块，使干净 HEAD 自洽）
 
