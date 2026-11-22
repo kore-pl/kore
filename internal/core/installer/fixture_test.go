@@ -17,6 +17,11 @@ import (
 	"github.com/pengtang1024/kore/internal/core/store"
 )
 
+// discardLogger 返回丢弃输出的 logger，避免测试刷屏。
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 // fixture 是隔离的测试环境：临时状态目录 + 已打开状态库 + 安装器。
 type fixture struct {
 	inst     *installer.Installer

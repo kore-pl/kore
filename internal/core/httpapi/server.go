@@ -84,10 +84,11 @@ type Options struct {
 	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
 	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
 	AuditLister AuditLister
-	// InstallRefresh 在 POST /store/install 成功后回调，增量刷新 registry 使新装
-	// 插件立即可 enable/invoke（缺口2）。由 cmd/kored 装配层注入（ReloadOne：
-	// 读 store 已装记录 → 装载清单 → 登记 catalog）；nil 时不刷新（测试/未装配）。
-	InstallRefresh func(id string) error
+	// InstallRefresh 在 POST /store/install 成功后回调，真正重载 registry/supervisor
+	// 使新装或升级的插件立即可 enable/invoke（缺口2 与热升级 P0）。由 cmd/kored
+	// 装配层注入（reloadOne：停旧进程 → 读新清单 → Replace → 按 desired 拉起）。
+	// 返回 reloaded / restarted；nil 时不刷新（测试/未装配）。
+	InstallRefresh func(id string) (string, error)
 	// Metrics 是系统资源采样器；nil 时 GET /api/v1/system/metrics 回 501。
 	// 由 cmd/kored 注入（状态目录来自平台层），本包不持有目录解析逻辑。
 	Metrics MetricsCollector
@@ -151,7 +152,7 @@ type Server struct {
 	capResolver    CapabilityResolver
 	capAuditor     CapabilityAuditor
 	auditLister    AuditLister
-	installRefresh func(id string) error
+	installRefresh func(id string) (string, error)
 	metrics        MetricsCollector
 	mu             sync.Mutex
 	listeners      []net.Listener

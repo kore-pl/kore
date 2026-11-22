@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
@@ -19,6 +21,16 @@ import (
 // restoreTimeout 是启动期恢复已启用插件的单插件上限（覆盖 hello 2s + 进程创建）。
 const restoreTimeout = 5 * time.Second
 
+// reloadStopTimeout 是热重载前等待旧进程退出的上限（Stop 内 5s 宽限 + 2s SIGKILL 兜底）。
+const reloadStopTimeout = 5 * time.Second
+
+// reloadOne 的结果分类，随 POST /store/install 的 reload 字段返回。
+const (
+	reloadFailed     = "failed"
+	reloadRegistered = "reloaded"
+	reloadRestarted  = "restarted"
+)
+
 // service 是 serve 进程持有的内核运行件；关闭顺序由 shutdownAll 控制。
 type service struct {
 	catalog       *registry.Catalog
@@ -28,7 +40,10 @@ type service struct {
 	backend       *daemon
 	auth          *auth.Manager
 	db            *store.Store
-	pluginRootDir string // 插件落盘根目录，供 reloadOne 增量登记复用
+	pluginRootDir string // 插件落盘根目录，供 reloadOne 重载登记复用
+	// reloadMu 串行化同一进程内的安装后重载：Stop→Forget→Replace→Start 不能交错，
+	// 否则两次并发安装会互相覆盖 catalog/instance，最终跑错版本。
+	reloadMu sync.Mutex
 }
 
 // buildService 装配 registry/supervisor/bus/httpapi 后端。
@@ -103,36 +118,143 @@ func (s *service) restoreEnabled() {
 	}
 }
 
-// reloadOne 增量登记单个新装插件到内存 catalog（缺口2：运行时安装立即可见）。
+// reloadOne 真正重载单个插件（运行时安装/升级/强制重装后调用）。
 //
-// 只处理指定 id：从 store 的 plugins bucket 读该 id 的已装记录（真源），
-// 装载其 info.json 后登记。已登记则幂等跳过，不触碰其余插件、不重启进程。
-// 失败返回原始错误，由 HTTP 层映射；落盘由 installer 负责，本方法只读 store。
-func (s *service) reloadOne(id string) error {
-	if id == "" {
-		return fmt.Errorf("插件 id 为空，无法刷新登记")
+// 旧实现对已登记 id 直接幂等返回，只覆盖「首次增量登记」；同 id 装新版本时
+// id 早已登记，于是新版本只落盘、catalog 与 supervisor 仍停在旧版本——表现为
+// /store/install 返回 succeeded，但 /plugins 报旧版本、新方法 404（P0 根因）。
+//
+// 固定顺序（缺一不可）：
+//  1. 运行中的旧版本先 Stop 并等待退出（≤5s），避免新旧进程共用 socket；
+//  2. Forget 旧 instance（它绑定旧 manifest/旧版本目录，复用会 exec 旧二进制）；
+//  3. 从状态库（已装真源）取该 id 的**新版本**，从磁盘重新装载 info.json；
+//  4. Add（首次）或 Replace（已有同 id）登记，替换旧版本视图；
+//  5. 按持久化 desired_state 决定是否重新拉起，返回 reloaded / restarted；
+//     任一步失败返回 failed + 原始错误（HTTP 层显式 500，不假装成功）。
+//
+// 该函数是 store/install 的唯一重载入口；其他调用方（未来的 upgrade/repair）
+// 走同一实现，不存在「只有安装端点生效」的第二条路径。
+func (s *service) reloadOne(id string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return reloadFailed, fmt.Errorf("插件 id 为空，无法重载登记")
 	}
-	if _, ok := s.catalog.Manifest(id); ok {
-		return nil // 已登记，幂等
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
+	// 1) 旧版本进程先退出：Stop 幂等，已 stopped/failed 的实例不重复发 shutdown。
+	if view, ok := s.manager.Snapshot(id); ok &&
+		view.State != supervisor.StateStopped && view.State != supervisor.StateFailed {
+		ctx, cancel := context.WithTimeout(context.Background(), reloadStopTimeout)
+		stopErr := s.manager.Stop(ctx, id)
+		cancel()
+		if stopErr != nil {
+			return reloadFailed, fmt.Errorf("停止旧版本插件 %s 失败: %w", id, stopErr)
+		}
 	}
+	// 2) 丢弃旧运行态：instance.manifest 指向旧版本目录，必须由新清单重建。
+	s.manager.Forget(id)
+
+	// 3) 状态库是「已装版本」真源；磁盘目录是清单真源，两处都以新版本为准。
 	refs, err := s.states.installed()
 	if err != nil {
-		return fmt.Errorf("读取已装插件记录失败: %w", err)
+		return reloadFailed, fmt.Errorf("读取已装插件记录失败: %w", err)
 	}
-	for _, ref := range refs {
-		if ref.ID != id {
-			continue
+	var ref *pluginRef
+	for i := range refs {
+		if refs[i].ID == id {
+			ref = &refs[i]
+			break
 		}
-		manifest, loadErr := registry.Load(registry.PluginDir(s.pluginRootDir, id, ref.Version))
-		if loadErr != nil {
-			return fmt.Errorf("装载插件 %s 清单失败: %w", id, loadErr)
-		}
-		if addErr := s.catalog.Add(manifest); addErr != nil {
-			return fmt.Errorf("登记插件 %s 失败: %w", id, addErr)
-		}
-		return nil
 	}
-	return fmt.Errorf("插件 %s 未在状态库中登记", id)
+	if ref == nil {
+		return reloadFailed, fmt.Errorf("插件 %s 未在状态库中登记", id)
+	}
+	manifest, err := registry.Load(registry.PluginDir(s.pluginRootDir, id, ref.Version))
+	if err != nil {
+		return reloadFailed, fmt.Errorf("装载插件 %s@%s 清单失败: %w", id, ref.Version, err)
+	}
+
+	// 4) 首次安装走 Add，同 id 升级/重装走 Replace（覆盖旧 manifest）。
+	if _, exists := s.catalog.Manifest(id); exists {
+		err = s.catalog.Replace(manifest)
+	} else {
+		err = s.catalog.Add(manifest)
+	}
+	if err != nil {
+		return reloadFailed, fmt.Errorf("登记插件 %s@%s 失败: %w", id, ref.Version, err)
+	}
+
+	// 5) desired_state 决定是否拉起；重装/升级不再无条件把插件打回 disabled。
+	state, found, err := s.states.load(id)
+	if err != nil {
+		return reloadFailed, fmt.Errorf("读取插件 %s 期望状态失败: %w", id, err)
+	}
+	if !found || state.Desired != desiredEnabled {
+		if disableErr := s.catalog.Disable(id); disableErr != nil {
+			return reloadFailed, disableErr
+		}
+		slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRegistered)
+		return reloadRegistered, nil
+	}
+	if err := s.catalog.Enable(id); err != nil {
+		return reloadFailed, fmt.Errorf("重载后启用插件 %s 失败: %w", id, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), restoreTimeout)
+	defer cancel()
+	if err := s.backend.Enable(ctx, id); err != nil {
+		return reloadFailed, fmt.Errorf("重载后按 desired=enabled 启动 %s 失败: %w", id, err)
+	}
+	slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRestarted)
+	return reloadRestarted, nil
+}
+
+// disableForInstall 在强制重装前停用插件，返回安装前是否为 enabled。
+//
+// 未安装（首次带 force 安装）时不做任何事；已安装则停进程并把 desired 置为
+// disabled，保证旧版本二进制与 socket 在目录被替换前退出。
+func (s *service) disableForInstall(id string) (bool, error) {
+	if _, ok := s.catalog.Manifest(id); !ok {
+		return false, nil
+	}
+	state, _, err := s.states.load(id)
+	if err != nil {
+		return false, fmt.Errorf("读取插件 %s 期望状态失败: %w", id, err)
+	}
+	wasEnabled := state.Desired == desiredEnabled
+	if err := s.backend.Disable(context.Background(), id); err != nil {
+		return wasEnabled, fmt.Errorf("强制重装前停用插件 %s 失败: %w", id, err)
+	}
+	return wasEnabled, nil
+}
+
+// restoreForInstall 恢复强制重装前的期望态。
+//
+// 安装成功时只写 desired（enabled 由随后的 reloadOne 统一拉起，避免旧二进制
+// 先起一次再被杀）；安装失败时 reenable=true，把 installer 已回滚的旧版本拉回来。
+func (s *service) restoreForInstall(id string, wasEnabled, reenable bool) {
+	desired := desiredDisabled
+	if wasEnabled {
+		desired = desiredEnabled
+	}
+	if err := s.setDesired(id, desired); err != nil {
+		slog.Warn("恢复插件期望状态失败", "plugin_id", id, "desired", desired, "err", err)
+	}
+	if !reenable || !wasEnabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), restoreTimeout)
+	defer cancel()
+	if err := s.backend.Enable(ctx, id); err != nil {
+		slog.Warn("强制重装失败后恢复旧插件失败", "plugin_id", id, "err", err)
+	}
+}
+
+// setDesired 只写 plugin_state.desired，不触发进程动作。
+func (s *service) setDesired(id, desired string) error {
+	_, _, _, err := s.backend.update(id, func(state *persistedState, _ supervisor.View, _ bool) {
+		state.Desired = desired
+	})
+	return err
 }
 
 // StopAll 停止全部有运行态的插件；进程退出由 supervisor 的 Wait 驱动，不轮询。

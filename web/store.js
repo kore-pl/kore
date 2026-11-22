@@ -20,7 +20,8 @@
     { id: 'sec', label: '安全', tags: ['sec'] }];
   var CN = { web: '站点', app: '运行时', data: '数据库', ops: '运维', sec: '安全' };
   var S = { plugins: [], presets: [], installed: Object.create(null), status: Object.create(null),
-    cat: 'all', q: '', grid: null, empty: null, stats: null, notice: null };
+    cat: 'all', q: '', grid: null, empty: null, stats: null, notice: null,
+    restart: null, restartCode: null };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -54,8 +55,30 @@
   function errText(res) {
     var b = (res && res.data) || {}, msg = b.message ? String(b.message) : '请求未完成';
     if (/package_path/i.test(msg)) msg = '需要填写本地包路径';
-    if (b.detail) msg += '（' + b.detail + '）';
+    if (typeof b.detail === 'string' && b.detail) msg += '（' + b.detail + '）';
     return msg;
+  }
+  // 验签失败的结构化提示：后端在错误体里给 requires_restart:true（顶层或 detail 内）。
+  // 命中时不显示普通错误条，改显示「需重启 kored」醒目提示条。
+  function restartRequired(res) {
+    var b = (res && res.data) || {};
+    if (b.requires_restart === true) return true;
+    if (b.detail && typeof b.detail === 'object' && b.detail.requires_restart === true) return true;
+    return b.code === 'E_UNAUTHORIZED' && /索引签名/.test(String(b.message || ''));
+  }
+  function errCode(res) {
+    var b = (res && res.data) || {}, parts = [];
+    if (b.code) parts.push(String(b.code));
+    if (b.message) parts.push(String(b.message));
+    return parts.join(' · ');
+  }
+  // 醒目提示条：索引重签/换公钥后旧进程仍持旧公钥，唯一恢复动作是重启 kored。
+  function showRestartNotice(res) {
+    if (!S.restart) return;
+    S.restart.hidden = false;
+    S.restart.style.display = 'block';
+    if (S.restartCode) S.restartCode.textContent = errCode(res) || 'E_UNAUTHORIZED';
+    if (S.notice) S.notice.hidden = true;
   }
   function postJson(url, body) {
     var token = readCookie('kore_csrf');
@@ -138,6 +161,9 @@
     if (ins) {
       var unsupported = add(ops, el('span', 'tag tag-muted', '待支持'));
       unsupported.title = '当前版本暂不支持卸载，可先停用插件';
+      var reinstall = add(ops, el('button', 'btn btn-ghost store-btn-reinstall', '重装'));
+      reinstall.title = '覆盖当前安装目录重装（配置保留）';
+      on(reinstall, function () { showReinstallConfirm(card, p); });
       var off = add(ops, el('button', 'btn store-btn-danger', '停用'));
       off.title = unsupported.title;
       on(off, function () { doDisable(p.id); });
@@ -201,6 +227,50 @@
     pkgInput.focus();
   }
 
+  // 重装二次确认：覆盖安装目录但保留配置，不静默执行。
+  function showReinstallConfirm(card, p) {
+    if (S.grid) {
+      var live = S.grid.querySelector('.store-card[data-plugin-id="' + p.id + '"]');
+      if (live) card = live;
+    }
+    if (card.querySelector('.store-confirm')) return;
+    var box = el('div', 'store-pkg-inline store-confirm');
+    add(box, el('p', 'store-pkg-inline-label', '重装会覆盖当前安装目录，配置保留。'));
+    var actions = add(box, el('div', 'store-pkg-inline-actions'));
+    var ok = add(actions, el('button', 'btn btn-primary', '确认重装'));
+    ok.type = 'button';
+    var cancel = add(actions, el('button', 'btn btn-ghost', '取消'));
+    cancel.type = 'button';
+    function close() { if (box.parentNode) box.parentNode.removeChild(box); }
+    on(ok, function () { close(); doReinstall(p, card); });
+    on(cancel, function () { close(); });
+    var status = card.querySelector('.store-card-status');
+    card.insertBefore(box, status);
+  }
+
+  // 重装：download=true + force=true，允许覆盖已装同版本；仍走索引摘要与包校验。
+  function doReinstall(p, card) {
+    var stop = beginProgress(p.id);
+    setStatus(p.id, 'busy', '重装中…');
+    var body = { id: p.id, version: p.version, download: true, force: true };
+    postJson(U.install, body).then(function (res) {
+      stop();
+      if (restartRequired(res)) {
+        setStatus(p.id, 'fail', '索引已更新，需重启 kored');
+        showRestartNotice(res);
+        return;
+      }
+      if (res.status === 401) return setStatus(p.id, 'fail', '登录已过期，请重新登录');
+      if (!res.ok) return setStatus(p.id, 'fail', '重装失败：' + errText(res));
+      var reload = (res.data && res.data.reload) ? '（' + res.data.reload + '）' : '';
+      setStatus(p.id, 'ok', '重装成功 ✅' + reload);
+      loadInstalled();
+    }).catch(function (err) {
+      stop();
+      setStatus(p.id, 'fail', '重装失败：' + (err && err.message ? err.message : '网络错误'));
+    });
+  }
+
   // 安装默认走索引自动下载（download:true）；后端未就绪时降级为本地包路径。
   // 进度按请求耗时给出阶段提示（后端当前无分阶段事件），结束后立刻收敛为成功/失败。
   function beginProgress(id) {
@@ -227,6 +297,11 @@
     else body.download = true;
     postJson(U.install, body).then(function (res) {
       stop();
+      if (restartRequired(res)) {
+        setStatus(p.id, 'fail', '索引已更新，需重启 kored');
+        showRestartNotice(res);
+        return;
+      }
       if (res.status === 401) return setStatus(p.id, 'fail', '登录已过期，请重新登录');
       if (!res.ok) {
         if (!path && needsPackagePath(res)) {
@@ -268,6 +343,18 @@
     S.stats.setAttribute('aria-live', 'polite');
     S.notice = add(root, el('div', 'notice store-notice'));
     S.notice.hidden = true;
+    // 验签失败专用提示条：醒目、常驻，错误码折叠在 details 内（不淹没结论）。
+    S.restart = add(root, el('div', 'notice store-restart'));
+    S.restart.hidden = true;
+    S.restart.style.cssText = 'display:none;border-left:4px solid #d97706;background:#fff7e6;color:#7a4b00;padding:10px 14px;margin:12px 0;';
+    var restartTitle = add(S.restart, el('strong', 'store-restart-title',
+      '索引已更新，需重启 kored 才能载入新公钥'));
+    restartTitle.style.display = 'block';
+    add(S.restart, el('div', 'store-restart-hint',
+      '重启 kored 后刷新本页即可恢复商店；旧进程仍持有旧公钥，重试安装不会自动恢复。'));
+    var detail = add(S.restart, el('details', 'store-restart-detail'));
+    add(detail, el('summary', '', '错误码'));
+    S.restartCode = add(detail, el('code', 'store-restart-code', ''));
     root.appendChild(renderPresets());
     var bar = add(root, el('div', 'store-bar'));
     var search = add(bar, input('store-search', '按 id / 名称搜索插件', '搜索插件', 'search'));
@@ -299,11 +386,20 @@
     renderGrid();
     return Promise.all([request(U.plugins), request(U.presets), request(U.installed)]).then(function (out) {
       // 列表错误不白屏：提示条如实显示 code+message（索引缺失时 502 是真实状态）。
-      var bad = null;
+      var bad = null, needsRestart = null;
       if (out[0].ok && out[0].data && out[0].data.plugins) S.plugins = out[0].data.plugins;
-      else { S.plugins = []; bad = '商店索引读取失败：' + errText(out[0]); }
+      else {
+        S.plugins = [];
+        if (restartRequired(out[0])) needsRestart = out[0];
+        else bad = '商店索引读取失败：' + errText(out[0]);
+      }
       if (out[1].ok && out[1].data && out[1].data.presets) S.presets = out[1].data.presets;
-      else { S.presets = []; bad = bad || '预设读取失败：' + errText(out[1]); }
+      else {
+        S.presets = [];
+        if (restartRequired(out[1])) needsRestart = needsRestart || out[1];
+        else bad = bad || '预设读取失败：' + errText(out[1]);
+      }
+      if (needsRestart) showRestartNotice(needsRestart);
       if (bad) { S.notice.hidden = false; S.notice.textContent = bad; }
       S.installed = Object.create(null);
       if (out[2].ok && out[2].data && out[2].data.plugins) {

@@ -27,6 +27,41 @@ func TestCatalogAddDuplicate(t *testing.T) {
 	}
 }
 
+// TestCatalogReplaceSameID 热升级：同 id Replace 覆盖版本并保留 enabled 状态。
+func TestCatalogReplaceSameID(t *testing.T) {
+	catalog := newCatalogWith(t, parse(t, baseManifest()))
+	if err := catalog.Enable("site"); err != nil {
+		t.Fatalf("enable 失败: %v", err)
+	}
+	next := baseManifest()
+	next["version"] = "0.2.0"
+	if err := catalog.Replace(parse(t, next)); err != nil {
+		t.Fatalf("Replace 同 id 应成功: %v", err)
+	}
+	manifest, ok := catalog.Manifest("site")
+	if !ok || manifest.Version != "0.2.0" {
+		t.Fatalf("Replace 后版本 = %+v，期望 0.2.0", manifest)
+	}
+	if !catalog.Enabled("site") {
+		t.Fatal("Replace 应保留 enabled 状态")
+	}
+	// Add 仍拒绝重复 id，热升级必须显式走 Replace。
+	if err := catalog.Add(parse(t, baseManifest())); codeOf(t, err) != pluginapi.E_CONFLICT {
+		t.Fatalf("Add 重复登记应仍返回 E_CONFLICT，实际 %v", err)
+	}
+}
+
+// TestCatalogReplaceNewID 未登记 id 的 Replace 等价于新增（增量安装路径）。
+func TestCatalogReplaceNewID(t *testing.T) {
+	catalog := registry.NewCatalog()
+	if err := catalog.Replace(parse(t, baseManifest())); err != nil {
+		t.Fatalf("Replace 未登记 id 应成功: %v", err)
+	}
+	if _, ok := catalog.Manifest("site"); !ok {
+		t.Fatal("Replace 未登记 id 后应可见")
+	}
+}
+
 // TestCatalogEnableResident 验证 resident 插件 enable 后状态与 Enabled 同时翻转。
 func TestCatalogEnableResident(t *testing.T) {
 	catalog := newCatalogWith(t, parse(t, baseManifest()))

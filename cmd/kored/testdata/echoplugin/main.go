@@ -13,11 +13,16 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// 与测试清单固定的协议字段。
+// 与测试清单固定的协议字段；version 与 extraMethod 用 -ldflags -X 覆盖，
+// 让热升级测试能构造「v1 无新方法 / v2 有新方法」的两个真实二进制。
 const (
+	requiresKore = ">=0.1.0 <0.2.0"
+	helloRequest = "00000000000000000000000000000002"
+)
+
+var (
 	pluginVersion = "0.1.0"
-	requiresKore  = ">=0.1.0 <0.2.0"
-	helloRequest  = "00000000000000000000000000000002"
+	extraMethod   = ""
 )
 
 // helloParams 是 kore.hello 请求参数（PLUGIN-PROTOCOL §5）。
@@ -126,6 +131,10 @@ func serve(conn net.Conn) error {
 		case "ping", "echo.ping":
 			response.Result = json.RawMessage(`{"pong":true}`)
 		default:
+			if extraMethod != "" && request.Method == extraMethod {
+				response.Result = json.RawMessage(`{"pong":true,"method":"` + extraMethod + `"}`)
+				break
+			}
 			response.Error = &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知方法：" + request.Method}
 		}
 		if err := pluginapi.WriteJSON(conn, response); err != nil {

@@ -24,6 +24,18 @@ var (
 	ErrSchema = errors.New("market: 索引结构非法")
 )
 
+// restartHintDetail 是验签失败的结构化提示：索引刚重签/换公钥时，旧 kored 进程
+// 仍持有旧公钥，唯一恢复动作是重启内核重新载入公钥。前端据此显示醒目提示条。
+const restartHintDetail = `{"requires_restart":true,"hint":"索引签名校验失败：若刚更新过索引，需重启 kored 重新载入公钥"}`
+
+// signatureError 构造带 requires_restart 提示的 E_UNAUTHORIZED（不改变验签判定）。
+func signatureError(message string) *pluginapi.Error {
+	return &pluginapi.Error{
+		Code: pluginapi.E_UNAUTHORIZED, Message: message,
+		Detail: []byte(restartHintDetail),
+	}
+}
+
 // verifySignature 用内置公钥验 .sig 对 data 的 raw ed25519 签名。
 // 信任根固定在二进制常量，不接受外部指定（密钥轮换须改常量并留兼容窗口）。
 func verifySignature(data, sig []byte) error {
@@ -41,10 +53,10 @@ func verifyWithKey(pub, data, sig []byte) error {
 		return protocolError(pluginapi.E_INTERNAL, "索引公钥长度非法")
 	}
 	if len(sig) != ed25519.SignatureSize {
-		return protocolError(pluginapi.E_UNAUTHORIZED, "索引签名缺失或格式错误", "")
+		return signatureError("索引签名缺失或格式错误：若刚更新过索引，需重启 kored 重新载入公钥")
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pub), data, sig) {
-		return protocolError(pluginapi.E_UNAUTHORIZED, "索引签名验证失败", "")
+		return signatureError("索引签名校验失败：若刚更新过索引，需重启 kored 重新载入公钥")
 	}
 	return nil
 }

@@ -19,12 +19,29 @@ type URLInstaller interface {
 	InstallFromURL(ctx context.Context, id, version, url, wantSHA256 string) error
 }
 
+// ForceURLInstaller 是按索引下载的强制重装能力（同 id 同版本覆盖安装）。
+// 与 ForceInstaller 同源：装配层先停用插件、备份旧目录、恢复期望态。
+type ForceURLInstaller interface {
+	// InstallFromURLForce 下载并强制覆盖安装，语义同 InstallFromURL。
+	InstallFromURLForce(ctx context.Context, id, version, url, wantSHA256 string) error
+}
+
 // InstallDownload 按 id@version 从索引 download_url 下载安装。
 //
 // 安全边界（docs/SECURITY.md §12.1，防 SSRF）：URL 只从 readTrusted 返回的索引条目里取，
 // 请求体没有任何字段能把地址传进来。没有摘要就没有信任链：缺 sha256 的条目在加载期就被
 // validateIndex 拒掉，installer 还会再校验摘要形态与内容一致性；协议只允许 https，也由 installer 判定。
 func (s *Service) InstallDownload(ctx context.Context, id, version string) (*InstallJob, error) {
+	return s.installDownload(ctx, id, version, false)
+}
+
+// InstallDownloadForce 按索引下载并强制覆盖安装（修复/重装）。
+func (s *Service) InstallDownloadForce(ctx context.Context, id, version string) (*InstallJob, error) {
+	return s.installDownload(ctx, id, version, true)
+}
+
+// installDownload 是下载安装的唯一实现；force 只切换安装器能力，不跳过任何校验。
+func (s *Service) installDownload(ctx context.Context, id, version string, force bool) (*InstallJob, error) {
 	index, err := s.readTrusted()
 	if err != nil {
 		return nil, err
@@ -38,13 +55,25 @@ func (s *Service) InstallDownload(ctx context.Context, id, version string) (*Ins
 	if strings.TrimSpace(found.DownloadURL) == "" {
 		return nil, protocolError(pluginapi.E_INVALID, "索引未声明 download_url", id)
 	}
-	downloader, ok := s.installer.(URLInstaller)
-	if !ok {
-		return nil, protocolError(pluginapi.E_UNSUPPORTED, "安装后端不支持下载安装", id)
-	}
-	if err := downloader.InstallFromURL(ctx, found.ID, found.Version,
-		found.DownloadURL, strings.ToLower(found.SHA256)); err != nil {
-		return nil, installError(err)
+	sha := strings.ToLower(found.SHA256)
+	if force {
+		downloader, ok := s.installer.(ForceURLInstaller)
+		if !ok {
+			return nil, protocolError(pluginapi.E_UNSUPPORTED, "安装后端不支持强制重装", id)
+		}
+		if err := downloader.InstallFromURLForce(ctx, found.ID, found.Version,
+			found.DownloadURL, sha); err != nil {
+			return nil, installError(err)
+		}
+	} else {
+		downloader, ok := s.installer.(URLInstaller)
+		if !ok {
+			return nil, protocolError(pluginapi.E_UNSUPPORTED, "安装后端不支持下载安装", id)
+		}
+		if err := downloader.InstallFromURL(ctx, found.ID, found.Version,
+			found.DownloadURL, sha); err != nil {
+			return nil, installError(err)
+		}
 	}
 	return &InstallJob{
 		ID: id + "-" + version, PluginID: id, Version: version,
@@ -54,11 +83,14 @@ func (s *Service) InstallDownload(ctx context.Context, id, version string) (*Ins
 
 // installError 把 installer 的错误分类映射成对外错误码：
 // 上游下载失败或摘要与索引声明不符 → E_UPSTREAM（502，可重试或换源）；
+// 已装同版本 → E_CONFLICT（409，提示用 force=true 重装）；
 // 其余校验失败 → E_INVALID（400，请求或包本身不合法）。
 func installError(err error) *pluginapi.Error {
 	switch {
 	case errors.Is(err, installer.ErrUpstream):
 		return protocolError(pluginapi.E_UPSTREAM, "包下载或摘要校验失败", err.Error())
+	case errors.Is(err, installer.ErrConflict):
+		return protocolError(pluginapi.E_CONFLICT, "该版本已安装；重装请带 force=true", err.Error())
 	case errors.Is(err, installer.ErrChecksum):
 		return protocolError(pluginapi.E_INVALID, "包 sha256 校验失败", err.Error())
 	default:

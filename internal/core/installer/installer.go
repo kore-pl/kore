@@ -38,6 +38,9 @@ type Options struct {
 	Logger *slog.Logger
 	// Store 是状态库句柄；安装成功后据此写 plugins / plugin_state。
 	Store Persister
+	// Force 为 true 时允许覆盖已存在的同 id 同版本目录（修复/重装）：
+	// 先把旧目录原子备份，安装失败回滚，成功才删除备份。
+	Force bool
 	// HTTPClient 覆盖 InstallFromURL 的下载客户端；nil 用内置客户端。
 	// 内置客户端固定 60 s 总超时并禁用 keep-alive（G-19：安装后不残留空闲连接）。
 	// 注入面只给"自定义代理 / 私有 CA 信任 / 测试 TLS 服务器"，超时仍受 ctx 60 s 约束。
@@ -54,6 +57,7 @@ type Installer struct {
 	logger      *slog.Logger
 	store       Persister
 	client      *http.Client
+	force       bool
 }
 
 // Result 是一次成功安装的结果。
@@ -97,6 +101,7 @@ func New(opts Options) (*Installer, error) {
 		logger:      logger,
 		store:       opts.Store,
 		client:      client,
+		force:       opts.Force,
 	}, nil
 }
 

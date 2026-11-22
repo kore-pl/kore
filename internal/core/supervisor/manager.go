@@ -168,6 +168,18 @@ func (m *Manager) lookup(id string) (*instance, bool) {
 	return inst, ok
 }
 
+// Forget 丢弃插件的运行态登记，供热升级在 Stop 之后重建 instance。
+//
+// instance 在创建时绑定 manifest（含版本目录）；catalog 替换清单后若继续复用旧
+// instance，Start/Ensure 仍会 exec 旧版本二进制。调用方必须确保进程已退出
+// （Stop 返回）再丢弃，否则会留下无主进程与 socket。
+func (m *Manager) Forget(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.plugins, id)
+	delete(m.gates, id)
+}
+
 // gate 返回（必要时创建）该插件的冷启动闸门。
 func (m *Manager) gate(id string) *gate {
 	m.mu.Lock()

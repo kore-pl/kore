@@ -52,6 +52,69 @@ func TestInstallSuccess(t *testing.T) {
 	assertEmptyDir(t, filepath.Join(f.pluginRoot(), ".staging"))
 }
 
+// TestInstallForceReplacesSameVersion 覆盖 P1「同版本重装」：
+// 不带 Force → ErrConflict；带 Force → 覆盖目录与记录，且不留备份目录。
+func TestInstallForceReplacesSameVersion(t *testing.T) {
+	f := newFixture(t, installer.Limits{})
+	pkg := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", validEntries(t, nil))
+	if _, err := f.inst.Install(pkg); err != nil {
+		t.Fatalf("首次安装应成功: %v", err)
+	}
+	infoPath := filepath.Join(f.pluginRoot(), "site", "0.1.0", "info.json")
+	before, err := os.Stat(infoPath)
+	if err != nil {
+		t.Fatalf("读取首次安装 info.json 失败: %v", err)
+	}
+
+	replacement := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz",
+		validEntries(t, map[string]any{"name": "重装后名字"}))
+	if _, err := f.inst.Install(replacement); !errors.Is(err, installer.ErrConflict) {
+		t.Fatalf("同版本且未 force 应返回 ErrConflict，实际: %v", err)
+	}
+
+	forced := f.withForce(t)
+	result, err := forced.Install(replacement)
+	if err != nil {
+		t.Fatalf("force 重装应成功: %v", err)
+	}
+	if result.ID != "site" || result.Version != "0.1.0" {
+		t.Fatalf("force 重装结果不符: %+v", result)
+	}
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatalf("读取重装后 info.json 失败: %v", err)
+	}
+	if !strings.Contains(string(data), "重装后名字") {
+		t.Fatalf("force 重装后 payload 未替换: %s", data)
+	}
+	after, err := os.Stat(infoPath)
+	if err != nil {
+		t.Fatalf("stat 重装后 info.json 失败: %v", err)
+	}
+	if after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("force 重装后 info.json mtime 未变化: %v", after.ModTime())
+	}
+	entries, err := os.ReadDir(filepath.Join(f.pluginRoot(), "site"))
+	if err != nil {
+		t.Fatalf("读取插件目录失败: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "0.1.0" {
+		t.Fatalf("force 成功后不应残留备份目录，实际: %v", entries)
+	}
+}
+
+// withForce 用同一状态库构造 Force=true 的安装器（模拟 store/install force 路径）。
+func (f *fixture) withForce(t *testing.T) *installer.Installer {
+	t.Helper()
+	inst, err := installer.New(installer.Options{
+		StateDir: f.stateDir, KoreVersion: "0.1.0", Logger: discardLogger(), Store: f.store, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("构造 force 安装器失败: %v", err)
+	}
+	return inst
+}
+
 // TestInstallChecksumMismatch 覆盖验收用例 2：sha256 不符返回 ErrChecksum 且无残留。
 func TestInstallChecksumMismatch(t *testing.T) {
 	f := newFixture(t, installer.Limits{})

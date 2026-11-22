@@ -25,6 +25,10 @@ type pluginSpec struct {
 	ID string
 	// Lifecycle resident / lazy / oneshot。
 	Lifecycle string
+	// Version 清单/hello 版本；空取 testVersion（热升级测试用它构造 0.1.0/0.2.0）。
+	Version string
+	// ExtraMethod 仅该版本支持的额外方法（空表示无），用于断言"新版本新方法可调"。
+	ExtraMethod string
 	// Web 为真时给测试包的 info.json 声明 web 段并落 web/ 资产（桥字段端到端断言用）。
 	Web bool
 }

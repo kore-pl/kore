@@ -72,11 +72,15 @@ type stateRecord struct {
 }
 
 // record 写入 plugins 与 plugin_state 两条记录；失败返回 ErrStore 供上层回滚目录。
+//
+// 升级/重装（同 id 已有记录）保留原有 desired 状态：热升级后 reloadOne 依据
+// desired=enabled 自动拉起新版本；actual 统一先记 stopped，待重载后回写真实状态。
+// 首次安装仍写 desired=disabled。
 func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	if in.store == nil {
 		return wrap(ErrStore, "状态库句柄为空")
 	}
-	previous, err := in.previousVersion(manifest.ID)
+	previous, previousDesired, err := in.previous(manifest.ID)
 	if err != nil {
 		return err
 	}
@@ -103,8 +107,12 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	if err != nil {
 		return wrap(ErrStore, "序列化插件记录失败：%v", err)
 	}
+	desired := stateDesired
+	if previousDesired == "enabled" {
+		desired = previousDesired
+	}
 	stateRaw, err := json.Marshal(stateRecord{
-		Desired: stateDesired, Actual: stateActual, UpdatedAt: now,
+		Desired: desired, Actual: stateActual, UpdatedAt: now,
 	})
 	if err != nil {
 		return wrap(ErrStore, "序列化插件状态失败：%v", err)
@@ -121,26 +129,36 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	return nil
 }
 
-// previousVersion 读已装版本；不存在返回空串（首次安装）。
-func (in *Installer) previousVersion(id string) (string, error) {
-	var version string
-	err := in.store.View(func(tx *store.Tx) error {
-		raw, err := tx.Get(bucketPlugins, id)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
+// previous 读已装版本与期望状态；不存在返回空串（首次安装）。
+func (in *Installer) previous(id string) (version, desired string, err error) {
+	err = in.store.View(func(tx *store.Tx) error {
+		raw, getErr := tx.Get(bucketPlugins, id)
+		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
 		}
-		if err != nil {
-			return err
+		if getErr == nil {
+			var existing pluginRecord
+			if unmarshalErr := json.Unmarshal(raw, &existing); unmarshalErr != nil {
+				return unmarshalErr
+			}
+			version = existing.Version
 		}
-		var existing pluginRecord
-		if err := json.Unmarshal(raw, &existing); err != nil {
-			return err
+		stateRaw, getStateErr := tx.Get(bucketPluginState, id)
+		if getStateErr != nil {
+			if errors.Is(getStateErr, store.ErrNotFound) {
+				return nil
+			}
+			return getStateErr
 		}
-		version = existing.Version
+		var state stateRecord
+		if unmarshalErr := json.Unmarshal(stateRaw, &state); unmarshalErr != nil {
+			return unmarshalErr
+		}
+		desired = state.Desired
 		return nil
 	})
 	if err != nil {
-		return "", wrap(ErrStore, "读取已装记录失败：%v", err)
+		return "", "", wrap(ErrStore, "读取已装记录失败：%v", err)
 	}
-	return version, nil
+	return version, desired, nil
 }

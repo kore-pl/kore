@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -212,6 +213,7 @@ func statusFor(code string) int {
 }
 
 // writeFailure 把内核错误统一写成 {code,message,detail}；非协议错误按 E_INTERNAL 处理。
+// 协议错误 detail 里的 requires_restart 会提升为响应顶层字段，供前端显示重启提示条。
 func writeFailure(w http.ResponseWriter, err error) {
 	var protocolErr *pluginapi.Error
 	if !errors.As(err, &protocolErr) {
@@ -219,5 +221,23 @@ func writeFailure(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "内核内部错误", err.Error())
 		return
 	}
-	writeError(w, statusFor(protocolErr.Code), protocolErr.Code, protocolErr.Message, string(protocolErr.Detail))
+	writeJSON(w, statusFor(protocolErr.Code), errorBody{
+		Code: protocolErr.Code, Message: protocolErr.Message,
+		Detail: string(protocolErr.Detail), RequiresRestart: restartRequired(protocolErr),
+	})
+}
+
+// requiresRestartHint 是协议错误 detail 中允许携带的可选提示（与 market 同形）。
+type requiresRestartHint struct {
+	// RequiresRestart 为 true 表示需要重启内核才能恢复。
+	RequiresRestart bool `json:"requires_restart"`
+}
+
+// restartRequired 读取 detail 中的 requires_restart；detail 为空或非 JSON 视为 false。
+func restartRequired(err *pluginapi.Error) bool {
+	if len(err.Detail) == 0 {
+		return false
+	}
+	var hint requiresRestartHint
+	return json.Unmarshal(err.Detail, &hint) == nil && hint.RequiresRestart
 }

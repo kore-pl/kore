@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,21 +13,28 @@ import (
 )
 
 // buildPackage 把 testdata/echoplugin 打成一个可被 installer 接受的最小插件包。
+// spec.Version/ExtraMethod 经 -ldflags 注入测试二进制，保证 hello 版本与清单一致。
 // spec.Web 为真时额外声明 web 段并落 web/ 资产（供桥字段端到端断言）。
 func buildPackage(t *testing.T, spec pluginSpec) string {
 	t.Helper()
+	version := spec.Version
+	if version == "" {
+		version = testVersion
+	}
 	stage := t.TempDir()
 	binDir := filepath.Join(stage, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("创建 bin 目录失败: %v", err)
 	}
-	build := exec.Command("go", "build", "-o", filepath.Join(binDir, spec.ID), "./cmd/kored/testdata/echoplugin")
+	ldflags := fmt.Sprintf("-X main.pluginVersion=%s -X main.extraMethod=%s", version, spec.ExtraMethod)
+	build := exec.Command("go", "build", "-ldflags", ldflags,
+		"-o", filepath.Join(binDir, spec.ID), "./cmd/kored/testdata/echoplugin")
 	build.Dir = repoRoot(t)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("构建测试插件失败: %v\n%s", err, output)
 	}
 	info := map[string]any{
-		"id": spec.ID, "name": "测试插件 " + spec.ID, "version": testVersion,
+		"id": spec.ID, "name": "测试插件 " + spec.ID, "version": version,
 		"protocol": "kore.plugin.v1", "lifecycle": spec.Lifecycle, "depth_level": "basic",
 		"entry": "bin/" + spec.ID, "capabilities": []string{"system:read"},
 		"resources":     map[string]any{"memory_mb": 6, "cpu_quota": "20%", "pids_max": 32},
@@ -56,7 +64,7 @@ func buildPackage(t *testing.T, spec pluginSpec) string {
 	if err := os.WriteFile(filepath.Join(stage, "info.json"), data, 0o644); err != nil {
 		t.Fatalf("写 info.json 失败: %v", err)
 	}
-	pkg := filepath.Join(t.TempDir(), spec.ID+"-"+testVersion+".tar.gz")
+	pkg := filepath.Join(t.TempDir(), spec.ID+"-"+version+".tar.gz")
 	writePackage(t, pkg, stage)
 	return pkg
 }

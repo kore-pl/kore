@@ -18,6 +18,13 @@ type Installer interface {
 	Install(path, expectedSHA string) error
 }
 
+// ForceInstaller 是本地包的强制重装能力（同 id 同版本已安装时允许覆盖）。
+// 由装配层实现：先停用插件 → 备份旧目录 → 安装 → 恢复期望态；market 只透传语义。
+type ForceInstaller interface {
+	// InstallForce 强制重装本地包；id 用于停用/恢复对应插件。
+	InstallForce(id, path, expectedSHA string) error
+}
+
 // Options 是 Service 构造参数。
 type Options struct {
 	// IndexDir 是本地索引目录。
@@ -193,7 +200,7 @@ func (s *Service) Update(id, version, packagePath string) (*UpdateResult, error)
 	if err != nil {
 		return nil, err
 	}
-	job, err := installFrom(index, s.installer, id, version, packagePath)
+	job, err := installFrom(index, s.installer, id, version, packagePath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -220,11 +227,23 @@ func (s *Service) Install(id, version, packagePath string) (*InstallJob, error) 
 	if err != nil {
 		return nil, err
 	}
-	return installFrom(index, s.installer, id, version, packagePath)
+	return installFrom(index, s.installer, id, version, packagePath, false)
 }
 
-// installFrom 从给定的已验签索引取条目并交给 installer；供 Install/Update 共用。
-func installFrom(index Index, installer Installer, id, version, packagePath string) (*InstallJob, error) {
+// InstallForce 以强制模式安装本地包：允许覆盖已装同版本（修复/重装）。
+//
+// force 不是跳过校验：索引 sha256、包内 SHA256SUMS、info.json 校验全部照旧执行，
+// 只是允许目标版本目录已存在（装配层负责先停用插件并备份旧目录）。
+func (s *Service) InstallForce(id, version, packagePath string) (*InstallJob, error) {
+	index, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	return installFrom(index, s.installer, id, version, packagePath, true)
+}
+
+// installFrom 从给定的已验签索引取条目并交给 installer；供 Install/InstallForce 共用。
+func installFrom(index Index, installer Installer, id, version, packagePath string, force bool) (*InstallJob, error) {
 	found, err := findEntry(index, id, version)
 	if err != nil {
 		return nil, err
@@ -232,8 +251,17 @@ func installFrom(index Index, installer Installer, id, version, packagePath stri
 	if installer == nil {
 		return nil, protocolError("E_UNSUPPORTED", "安装后端未装配")
 	}
-	if err := installer.Install(packagePath, strings.ToLower(found.SHA256)); err != nil {
-		return nil, protocolError("E_INVALID", "安装失败", err.Error())
+	expected := strings.ToLower(found.SHA256)
+	if force {
+		forced, ok := installer.(ForceInstaller)
+		if !ok {
+			return nil, protocolError("E_UNSUPPORTED", "安装后端不支持强制重装")
+		}
+		if err := forced.InstallForce(id, packagePath, expected); err != nil {
+			return nil, installError(err)
+		}
+	} else if err := installer.Install(packagePath, expected); err != nil {
+		return nil, installError(err)
 	}
 	return &InstallJob{ID: id + "-" + version, PluginID: id, Version: version, State: "succeeded", Message: "安装完成"}, nil
 }

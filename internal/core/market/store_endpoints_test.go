@@ -2,10 +2,15 @@ package market
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pengtang1024/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // recordingInstaller 记录 Install 调用次数；验签失败路径必须为 0（无落盘）。
@@ -174,4 +179,84 @@ func TestStoreAllowUnsignedStillGuarded(t *testing.T) {
 	}
 	// 三端点仍拒：allow_unsigned 不能成为绕过签名门的抓手。
 	assertDenied(t, svc, inst, "allow_unsigned=true")
+}
+
+// forceRecorder 同时满足 Installer 与 ForceInstaller，用于区分两条安装路径。
+type forceRecorder struct {
+	normalCalls int
+	forceCalls  int
+	forceID     string
+	forcePath   string
+	forceSHA    string
+	err         error
+}
+
+func (f *forceRecorder) Install(_, _ string) error {
+	f.normalCalls++
+	return f.err
+}
+
+func (f *forceRecorder) InstallForce(id, path, expectedSHA string) error {
+	f.forceCalls++
+	f.forceID, f.forcePath, f.forceSHA = id, path, expectedSHA
+	return f.err
+}
+
+// TestInstallForceDispatches force=true 走 ForceInstaller，且 sha 归一化为小写。
+func TestInstallForceDispatches(t *testing.T) {
+	svc, _, _ := signedFixture(t, testIndexJSON)
+	fake := &forceRecorder{}
+	svc.installer = fake
+	job, err := svc.InstallForce("echo", "0.1.1", "/tmp/echo.tar.gz")
+	if err != nil || job == nil || job.State != "succeeded" {
+		t.Fatalf("force 安装应成功: job=%+v err=%v", job, err)
+	}
+	if fake.forceCalls != 1 || fake.normalCalls != 0 {
+		t.Fatalf("force 应只走 ForceInstaller: %+v", fake)
+	}
+	if fake.forceID != "echo" || fake.forcePath != "/tmp/echo.tar.gz" {
+		t.Fatalf("ForceInstaller 入参不符: %+v", fake)
+	}
+	if fake.forceSHA != strings.ToLower("eaa34f251e18b9c3f4a186c420d62bec9f31a37c61963514c4b856160ef4219c") {
+		t.Fatalf("force sha 未归一化: %s", fake.forceSHA)
+	}
+}
+
+// TestInstallForceUnsupported 安装后端不实现 ForceInstaller 时明确 E_UNSUPPORTED。
+func TestInstallForceUnsupported(t *testing.T) {
+	svc, _, _ := signedFixture(t, testIndexJSON)
+	_, err := svc.InstallForce("echo", "0.1.1", "/tmp/echo.tar.gz")
+	if err == nil || !strings.Contains(err.Error(), "E_UNSUPPORTED") {
+		t.Fatalf("无 ForceInstaller 应 E_UNSUPPORTED，实际 %v", err)
+	}
+}
+
+// TestInstallConflictMapsTo409 同版本未 force 必须映射 E_CONFLICT（HTTP 409），不是 E_INVALID。
+func TestInstallConflictMapsTo409(t *testing.T) {
+	svc, _, _ := signedFixture(t, testIndexJSON)
+	svc.installer = &forceRecorder{err: installer.ErrConflict}
+	_, err := svc.Install("echo", "0.1.1", "/tmp/echo.tar.gz")
+	var protocolErr *pluginapi.Error
+	if !errors.As(err, &protocolErr) || protocolErr.Code != pluginapi.E_CONFLICT {
+		t.Fatalf("同版本冲突应 E_CONFLICT，实际 %v", err)
+	}
+}
+
+// TestSignatureErrorCarriesRestartHint 验签失败的错误 detail 必须带 requires_restart。
+func TestSignatureErrorCarriesRestartHint(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plugins.json"), []byte(testIndexJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(Options{IndexDir: dir}).Load()
+	var protocolErr *pluginapi.Error
+	if !errors.As(err, &protocolErr) {
+		t.Fatalf("验签失败应为协议错误，实际 %v", err)
+	}
+	var hint struct {
+		RequiresRestart bool `json:"requires_restart"`
+	}
+	if err := json.Unmarshal(protocolErr.Detail, &hint); err != nil || !hint.RequiresRestart {
+		t.Fatalf("detail 缺 requires_restart: %s err=%v", protocolErr.Detail, err)
+	}
 }

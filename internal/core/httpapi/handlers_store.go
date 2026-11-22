@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -14,6 +15,14 @@ import (
 type storeList struct {
 	// Plugins 按 id 升序排列的索引条目。
 	Plugins []market.Plugin `json:"plugins"`
+}
+
+// storeInstallResponse 是 POST /api/v1/store/install 的成功响应：
+// 安装任务字段 + 安装后重载结果（reloaded 仅登记 / restarted 已按期望态拉起）。
+type storeInstallResponse struct {
+	*market.InstallJob
+	// Reload 是安装后登记重载结果；未装配回调时为空。
+	Reload string `json:"reload,omitempty"`
 }
 
 // storeInstallRequest 是 POST /api/v1/store/install 的请求体（显式字段，禁 any，G-24）。
@@ -31,6 +40,8 @@ type storeInstallRequest struct {
 	PackagePath string `json:"package_path"`
 	// Download 为 true 时按索引 download_url 下载安装（请求体不携带 URL，防 SSRF）。
 	Download bool `json:"download"`
+	// Force 为 true 时允许覆盖已装同版本（修复/重装）；仍走索引摘要与包校验。
+	Force bool `json:"force"`
 }
 
 // validate 判定安装来源：id/version 恒定必填，package_path 与 download 恰好二选一。
@@ -58,6 +69,14 @@ type storeUpdateRequest struct {
 	Version string `json:"version"`
 	// PackagePath 本地 tar.gz 路径。
 	PackagePath string `json:"package_path"`
+}
+
+// storeUpdateResponse 是 POST /api/v1/store/update 的成功响应：
+// 更新结果 + 安装后重载结果（与 store/install 共用同一重载路径）。
+type storeUpdateResponse struct {
+	*market.UpdateResult
+	// Reload 是安装后登记重载结果；未装配回调时为空。
+	Reload string `json:"reload,omitempty"`
 }
 
 // storePresets 是 GET /api/v1/store/presets 的成功响应体。
@@ -156,7 +175,18 @@ func (s *Server) handleStoreUpdate(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	// 更新同样落盘了新版本：与 store/install 共用 reloadOne，否则 /plugins 仍报旧版本。
+	var reload string
+	if s.installRefresh != nil {
+		result, err := s.installRefresh(req.ID)
+		if err != nil {
+			slog.Error("更新后重载插件失败", "plugin_id", req.ID, "result", result, "err", err)
+			writeFailure(w, err)
+			return
+		}
+		reload = result
+	}
+	writeJSON(w, http.StatusOK, storeUpdateResponse{UpdateResult: res, Reload: reload})
 }
 
 // handleStoreInstall 触发安装：本地包（package_path）或索引下载（download=true）。
@@ -180,24 +210,33 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	var job *market.InstallJob
 	var installErr error
-	if req.Download {
+	switch {
+	case req.Download && req.Force:
+		job, installErr = svc.InstallDownloadForce(r.Context(), req.ID, req.Version)
+	case req.Download:
 		job, installErr = svc.InstallDownload(r.Context(), req.ID, req.Version)
-	} else {
+	case req.Force:
+		job, installErr = svc.InstallForce(req.ID, req.Version, req.PackagePath)
+	default:
 		job, installErr = svc.Install(req.ID, req.Version, req.PackagePath)
 	}
 	if installErr != nil {
 		writeFailure(w, installErr)
 		return
 	}
-	// 安装已落盘，但 registry 是内存登记表：不刷新则后续 enable/invoke 404。
-	// 回调失败不吞——返回 500 显式暴露"登记未完成"，避免假装成功埋雷。
+	// 安装已落盘，但 registry/supervisor 是内存态：不刷新则 /plugins 仍报旧版本、
+	// 新方法 404。回调失败不吞——返回 500 显式暴露"重载未完成"，避免假装成功埋雷。
+	var reload string
 	if s.installRefresh != nil {
-		if err := s.installRefresh(req.ID); err != nil {
+		result, err := s.installRefresh(req.ID)
+		if err != nil {
+			slog.Error("安装后重载插件失败", "plugin_id", req.ID, "result", result, "err", err)
 			writeFailure(w, err)
 			return
 		}
+		reload = result
 	}
-	writeJSON(w, http.StatusOK, job)
+	writeJSON(w, http.StatusOK, storeInstallResponse{InstallJob: job, Reload: reload})
 }
 
 // handleStoreJob 返回安装任务进度。

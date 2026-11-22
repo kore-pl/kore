@@ -74,6 +74,31 @@ func (c *Catalog) Add(m *Manifest) error {
 	return nil
 }
 
+// Replace 替换同 id 的已登记清单（热升级/重装用）：校验规则与 Add 一致，
+// 保留原登记的 enabled 状态；未登记时等价于 Add（增量安装）。
+//
+// 必须替换而不是「已存在就跳过」：运行期装了新版本后，catalog 里若还挂着旧
+// manifest，/plugins 会继续报旧版本，supervisor 也会按旧目录拉起旧二进制。
+func (c *Catalog) Replace(m *Manifest) error {
+	if m == nil {
+		return errf(pluginapi.E_INVALID, "清单为空")
+	}
+	if err := m.validate(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := StateInstalled
+	if old, ok := c.items[m.ID]; ok {
+		state = old.state
+	}
+	if cycle := DetectCycle(c.graphLocked(m)); len(cycle) > 0 {
+		return errf(pluginapi.E_INVALID, "depends_on 存在循环依赖：%s", strings.Join(cycle, " → "))
+	}
+	c.items[m.ID] = &entry{manifest: m, state: state}
+	return nil
+}
+
 // graphLocked 构建「全部已登记 + 候选清单」的依赖图；调用方须持有读锁。
 func (c *Catalog) graphLocked(extra *Manifest) map[string][]string {
 	graph := make(map[string][]string, len(c.items)+1)

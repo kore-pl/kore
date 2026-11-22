@@ -28,7 +28,8 @@ type systemInfo struct {
 // pluginsPath 是插件管理端点前缀。
 const pluginsPath = "/api/v1/plugins"
 
-// errorBody 是统一错误体，字段固定为 {code,message,detail}。
+// errorBody 是统一错误体，字段固定为 {code,message,detail}；
+// requires_restart 是可选结构化提示（仅验签失败等需要重启内核的场景出现）。
 type errorBody struct {
 	// Code 是内核错误码（E_NOTFOUND 等）。
 	Code string `json:"code"`
@@ -36,6 +37,8 @@ type errorBody struct {
 	Message string `json:"message"`
 	// Detail 面向排查（路径、错误原文）。
 	Detail string `json:"detail"`
+	// RequiresRestart 提示前端"需重启 kored 才能恢复"，仅在确有该语义时出现。
+	RequiresRestart bool `json:"requires_restart,omitempty"`
 }
 
 // routes 注册 M1 端点与统一兜底。
