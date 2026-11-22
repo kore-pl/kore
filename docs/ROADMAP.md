@@ -175,6 +175,14 @@ kore 仓库内部：cmd/kored → internal/core/* → internal/platform/*；core
 - **明确不做**：在线市场后端、审核流程、账号体系、多租户 SaaS。
 - **风险与缓解**：密钥管理 → 公钥进配置、私钥不入库不入镜像；SDK 与协议漂移 → 版本与 `kore.plugin.v1` 联动校验。
 
+### 7.7 插件成熟度基线（Round 2 依据）
+
+M5 之后的工作不再按"仓库是否存在"推进，改按"能力域处于哪一级"推进。**唯一依据是 [PLUGIN-MATURITY.md](./PLUGIN-MATURITY.md)**：22 个能力域逐行的现级别（L0 骨架 / L1 能干活 / L2 可用 / L3 完整）、竞品同类能力项、逐条缺口与 Round 2 五批任务及其依赖。
+
+- **当前分布**：L0 10 个 / L1 10 个 / L2 2 个 / L3 0 个——"插件与壳子都是半成品"的判断有代码级证据（10 个插件仓执行器是 `noopExecutor`、插件侧 `web/` 全空）。
+- **使用纪律**：能力域升一级必须在 PLUGIN-MATURITY 的对应行更新级别并给 `file:line` 证据；级别只升不降（降级需 ADR）。新增能力域先在本表加行，再进 backlog。
+- **与对标矩阵的分工**：本文件管"做到哪一步"，[FEATURE-PARITY.md](./FEATURE-PARITY.md) 管"归谁做、做不做"，[PARITY-GAP.md](./PARITY-GAP.md) 管"差距账"。
+
 ## 8. 质量随里程碑升级表
 
 | 门禁维度 | M0 | M1 | M2 | M3 | M4 | M5 |

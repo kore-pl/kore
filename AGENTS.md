@@ -123,5 +123,6 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件。
 - [docs/CORE.md](docs/CORE.md) — **九个内核模块**（config / store / auth / httpapi / registry / supervisor / bus / installer / market）+ 4 个支撑小节（logger / static / sse / envprobe），合计 §2 共 13 小节；HTTP API **21 个端点**：14 业务 + 7 store，前缀 `/api/v1`；另有 `/-/healthz` 与 3 条静态前缀。
 - [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准。
+- [docs/PLUGIN-MATURITY.md](docs/PLUGIN-MATURITY.md) — **补全工作的唯一依据**：22 能力域成熟度分级（L0–L3）+ 竞品能力对照 + 逐条缺口 + Round 2 五批任务与依赖；动插件前先读对应行。
 
 **里程碑同步规则（判据不得滞后于阶段）**：每新增里程碑，`scripts/docs-check.sh` 的里程碑允许集（元信息校验正则及配套注释/标题/错误文案）必须**同轮放宽**——阶段已进入新里程碑而判据仍停在旧号，等同于门禁失守，该检查点不予合入。
