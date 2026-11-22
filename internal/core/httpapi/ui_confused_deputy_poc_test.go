@@ -122,11 +122,22 @@ func TestUIConfusedDeputy(t *testing.T) {
 
 	mgr := auth.NewManager(db, pocMakeHash(t), 0, false)
 	backend := &pocBackend{enabled: make(map[string]bool)}
+	// M4：注入"持有效 session 但能力仅 site:read"的低权插件身份。
+	// 原 PoC 的 site:read 只是日志叙事标签、请求实际带 admin cookie；服务端无从
+	// 读取低权凭证。这里把低权身份显式注入 CapabilityResolver，才真正复现
+	// confused deputy：借用户 session + CSRF 越权调用 system:admin 管理端点。
+	lowPrivResolver := func(r *http.Request) (string, []string) {
+		if _, err := r.Cookie(auth.CookieName); err != nil {
+			return "", nil
+		}
+		return "plugin-site", []string{"site:read"}
+	}
 	srv := New(Options{
-		Version:  "0.1.0-poc",
-		Report:   envprobe.Report{OS: "linux", Arch: "amd64", Kernel: "6.8.0", CgroupMode: "v2", FSType: "ext4"},
-		Backend:  backend,
-		Auth:     mgr,
+		Version:            "0.1.0-poc",
+		Report:             envprobe.Report{OS: "linux", Arch: "amd64", Kernel: "6.8.0", CgroupMode: "v2", FSType: "ext4"},
+		Backend:            backend,
+		Auth:               mgr,
+		CapabilityResolver: lowPrivResolver,
 	}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

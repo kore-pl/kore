@@ -90,24 +90,35 @@ func writeCSRFDenied(w http.ResponseWriter) {
 	writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "CSRF 校验失败", "")
 }
 
-// authorizeTargetAction 是"按目标操作做 capability 校验"的挂点。
-//
-// 调用方（session subject）必须对目标插件的该动作持有能力：
-//
-//	TODO(M4, 裁决40): 从 session 取 subject，查 plugins.granted_capabilities，
-//	校验 "<target>:<action>"（或 6 个特权能力之一）命中；未命中写审计
-//	capability.denied 并返回 401 E_UNAUTHORIZED。管理端点永不对插件桥开放。
-//	当前 M1 最小实现只确认 session 有效（subject 视为 admin），不伪造细粒度校验。
+// authorizeTargetAction 按目标操作做 capability 校验（裁决40/42，M4 落地）。
+// 管理端点（enable/disable）要求 system:admin；invoke 保持"方法合法"现状。
+// 无有效 session → 401；能力不足 → 401 E_UNAUTHORIZED + 审计 capability.denied。
+// subject 与 granted 由注入的 CapabilityResolver 提供，默认按单管理员全权语义。
 func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) bool {
 	if s.auth == nil {
-		// M0 探活骨架未装配鉴权，无 subject 可校验。
-		return true
+		return true // M0 探活骨架未装配鉴权
 	}
-	if _, err := s.sessionFrom(r); err != nil {
+	subject, granted := s.capResolver(r)
+	if subject == "" {
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 		return false
 	}
+	if isManagementPath(r.URL.Path) && !hasCapability(granted, "system:admin") {
+		plugin := managementPluginID(r.URL.Path)
+		s.auditDenied(subject, plugin, "缺少 system:admin 特权能力")
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
+		return false
+	}
 	return true
+}
+
+// auditDenied 走注入的审计出口；未注入时只记 WARN（挂点见 server.go）。
+func (s *Server) auditDenied(subject, plugin, reason string) {
+	if s.capAuditor != nil {
+		s.capAuditor(subject, plugin, reason)
+		return
+	}
+	slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "reason", reason)
 }
 
 // sessionFrom 从 cookie 取 token 并校验，返回会话视图。
