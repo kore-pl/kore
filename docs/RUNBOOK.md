@@ -89,13 +89,16 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 
 旧二进制或旧进程仍是旧公钥 → 新签名验不过 → `E_UNAUTHORIZED` → 商店**全部请求 401**（列表、详情、预设、安装/更新/下载共用同一道门）。表象是"登录正常、商店整页空且 401"，且**不会自愈**：索引每请求重读，公钥只在进程启动时载入。
 
-## 2. 插件升级发布流程（dist → release → 索引 sha → 重签 → 重启 → 端到端安装）
+## 2. 插件升级发布流程（bump → dist → release → 索引 → 重签 → 重启 → 端到端安装）
 
-1. 插件仓 `make dist` 出 `dist/<id>-<version>.tar.gz`，记 `sha256sum`。
-2. 建 release（tag `v<version>`）挂包，`download_url` 指向它。
-3. 改 `kore-plugins/index/plugins.json` 对应条目的 `version` / `size_bytes` / `sha256` / `download_url`。
-4. 重签 + 校验（§1 步骤 2–3，判据 exit 0 且反例 FAILed）→ 重启 kored（§1 步骤 6）；只改正文不换密钥时进程本会重读，但仍按重启执行。
-5. 端到端：`POST /api/v1/store/install`（`download=true` + `id`/`version`）→ 判据 200、插件 `installed`、`GET /api/v1/store/plugins/{id}` 版本号等于新版本。
+规则细节见 [RELEASE.md](./RELEASE.md)，本节只列不可跳的动作。
+
+1. **先 bump 再打包**：`info.json` + `manifest.json` 版本同步 +1，`CHANGELOG.md` 顶部加条目；任何改变 dist sha 的改动都必须 bump，同 `id@version` 不允许两个 sha。
+2. 插件仓 `make dist` 出 `dist/<id>-<version>.tar.gz`，记 `sha256sum`；同树重打 + `git archive HEAD` 干净树重打，两次 sha 必须一致。
+3. 建 release（tag `v<version>`）挂包，`download_url` 指向它；禁止覆盖同版本 release 资产。
+4. 改 `kore-plugins/index/plugins.json` 的 `version` / `size_bytes` / `sha256` / `download_url`；把新版本追加到 `index/versions.lock.json`；同步 `presets/*.json` 固定版本。
+5. 重签 + 校验（§1 步骤 2–3，判据 exit 0 且反例 FAILed）→ 重启 kored（§1 步骤 6）；只改正文不换密钥时进程本会重读，但仍按重启执行。
+6. 端到端：`POST /api/v1/store/install`（`download=true` + `id`/`version`）→ 判据 200、插件 `installed`、`GET /api/v1/plugins` 版本号等于新版本。
 
 ## 3. 新增插件入索引流程（建 release → 加索引条目 → 重签 → 重启）
 

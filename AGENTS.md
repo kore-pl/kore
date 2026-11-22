@@ -67,6 +67,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 精确 add：`git add internal/core/bus.go`，禁止 `git add .` / `git add -A`。
 - 检查点即提交：一处自洽且过了对应层级门禁（G1/G2/G4）就提交，不攒到任务收尾。
 - 不提交未验证改动；门禁没跑或跑挂时，明确报告阻塞原因，不"先提交再说"。
+- **插件发版（G-17 延伸）**：`info.json` + `manifest.json` 版本同步 bump，`CHANGELOG.md` 记条目，dist 两打 + 干净树复现一致；索引同步 `versions.lock.json` 与 `presets/*.json`。**同 `id@version` 只允许一个 sha，任何改变 dist sha 的改动必须 bump**（见 [docs/RELEASE.md](docs/RELEASE.md)）。
 - **高频交付（裁决36）**：一处自洽且过了对应门禁即提交并 `git push`，不攒到任务收尾；插件仓每次改动后重建 `dist` 并核对 sha 与索引一致，打包产物及时生成用于验证。
 
 **隔离环境与 worktree**：**隔离验证优先用 `git archive`，需要真实编辑才用 worktree。**
