@@ -60,7 +60,7 @@
 
 ## 8. 清理与已知边界
 - 验收后已停止 18879 的 kored 与本轮 chromium，删除 `/tmp/kore-cfg-18879` 与临时脚本；8787（PID 3418127）与 18880 未触碰。
-- 已知边界：`restart_required=true` 分支无真机对象（两试点均可热更），仅由前端代码分支覆盖；`config.set` 不支持删除配置文件恢复 env（清空列表=不用来源，语义明确）。
+- 已知边界：`restart_required=true` 分支无真机对象（两试点均可热更），仅由前端代码分支覆盖；`config.set` 不支持删除配置文件恢复 env（清空列表=不用来源，语义明确）；本次只提交源码与本地包，`kore-plugins` 索引/Release 未重签发布，商店安装仍是旧包。
 - 跨轨改动披露：`Makefile` / `web/embed.go` / `docs/FRONTEND.md` / `QUICKSTART.md` 在本轨干净 HEAD 上只接线 config-panel（17 文件）；`ui-file-site-l2` 轨的 files-l2/site-edit 在该轨提交后变为 19 文件。未提交他轨的 `web/files.js` / `web/sites.js` / `web/style.css` / `web/files-l2.js` / `web/site-edit.js` / `handlers_invoke.go` / 根 `CHANGELOG.md`。
 
 ## 9. 提交
