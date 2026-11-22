@@ -1,6 +1,7 @@
 /* kore 主壳前端样式 —— 设计令牌唯一来源：FRONTEND.md §5
    约束：hex 值只允许出现在 :root；其余一律 var()；间距走 4/8/12/16/24；
-   字号走 12/13/14/16/20；圆角 4/6；阴影至多 1 级。 */
+   字号走 12/13/14/16/20；圆角 4/6；阴影至多 1 级。
+   触摸目标 ≥44px（裁决41）：按钮与表单控件在小屏一律撑到 44px。 */
 
 :root {
   --kore-bg-0: #0D1117;
@@ -33,6 +34,7 @@
   --kore-radius-container: 6px;
   --kore-topbar-h: 48px;
   --kore-row-h: 32px;
+  --kore-touch: 44px;
 }
 
 * { box-sizing: border-box; }
@@ -46,6 +48,7 @@ html, body {
   font-size: var(--kore-font-13);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
 }
 
 .boot {
@@ -56,11 +59,13 @@ html, body {
 .topbar {
   position: sticky;
   top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: var(--kore-topbar-h);
-  padding: 0 var(--kore-space-4);
+  gap: var(--kore-space-3);
+  min-height: var(--kore-topbar-h);
+  padding: var(--kore-space-2) var(--kore-space-4);
   background: var(--kore-bg-1);
   border-bottom: 1px solid var(--kore-border-1);
 }
@@ -85,10 +90,13 @@ html, body {
 .conn {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--kore-space-2);
   font-size: var(--kore-font-12);
   color: var(--kore-text-2);
 }
+
+.conn-label { color: var(--kore-text-3); }
 
 .dot {
   width: var(--kore-space-2);
@@ -108,22 +116,96 @@ html, body {
   padding: var(--kore-space-6) var(--kore-space-4);
 }
 
+/* ===== 登录视图 ===== */
+.login-wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--kore-space-6) var(--kore-space-4);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: var(--kore-space-6);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+  box-shadow: var(--kore-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-3);
+}
+
+.login-brand {
+  font-size: var(--kore-font-20);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.login-sub {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+  margin-top: calc(var(--kore-space-2) * -1);
+}
+
+.field { display: flex; flex-direction: column; gap: var(--kore-space-2); }
+
+.field-label {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-2);
+}
+
+.field-input {
+  width: 100%;
+  min-height: var(--kore-touch);
+  padding: 0 var(--kore-space-3);
+  color: var(--kore-text-1);
+  background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  font: inherit;
+}
+
+.field-input:focus { border-color: var(--kore-info); outline: none; }
+
+.login-error {
+  padding: var(--kore-space-3);
+  color: var(--kore-text-1);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-danger);
+  border-left-width: var(--kore-space-1);
+  border-radius: var(--kore-radius-control);
+  font-size: var(--kore-font-13);
+  word-break: break-word;
+}
+
+.login-note {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+}
+
+/* ===== 提示条 ===== */
 .notice {
   display: flex;
   align-items: flex-start;
   gap: var(--kore-space-3);
   padding: var(--kore-space-3) var(--kore-space-4);
   margin-bottom: var(--kore-space-4);
-  border: 1px solid var(--kore-warning);
+  border: 1px solid var(--kore-danger);
   border-left-width: var(--kore-space-1);
   border-radius: var(--kore-radius-container);
   background: var(--kore-bg-1);
 }
 
-.notice-dot { margin-top: var(--kore-space-2); }
+.notice-dot { margin-top: var(--kore-space-2); flex: 0 0 auto; }
+.notice-body { flex: 1 1 auto; min-width: 0; }
 .notice-title { font-weight: 600; }
-.notice-hint { color: var(--kore-text-2); font-size: var(--kore-font-12); }
+.notice-hint { color: var(--kore-text-2); font-size: var(--kore-font-12); word-break: break-word; }
+.notice-close { flex: 0 0 auto; }
 
+/* ===== 面板与表 ===== */
 .panel {
   margin-bottom: var(--kore-space-4);
   background: var(--kore-bg-1);
@@ -136,8 +218,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 36px;
-  padding: 0 var(--kore-space-4);
+  gap: var(--kore-space-2);
+  min-height: 40px;
+  padding: var(--kore-space-2) var(--kore-space-4);
   border-bottom: 1px solid var(--kore-border-2);
   background: var(--kore-bg-1);
 }
@@ -150,6 +233,17 @@ html, body {
 .panel-meta {
   font-size: var(--kore-font-12);
   color: var(--kore-text-3);
+  display: flex;
+  align-items: center;
+  gap: var(--kore-space-2);
+}
+
+.panel-meta.actions { justify-content: flex-end; padding: var(--kore-space-2) 0; }
+
+.panel-empty {
+  padding: var(--kore-space-4);
+  color: var(--kore-text-3);
+  font-size: var(--kore-font-12);
 }
 
 .rows { width: 100%; border-collapse: collapse; }
@@ -182,8 +276,55 @@ html, body {
 .muted { color: var(--kore-text-3); }
 .mono  { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-button {
-  min-height: 28px;
+/* ===== 插件表格 ===== */
+.plugin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--kore-font-13);
+}
+
+.plugin-table thead th {
+  text-align: left;
+  padding: var(--kore-space-2) var(--kore-space-3);
+  color: var(--kore-text-2);
+  font-size: var(--kore-font-12);
+  font-weight: 400;
+  border-bottom: 1px solid var(--kore-border-2);
+  white-space: nowrap;
+}
+
+.plugin-table tbody tr + tr { border-top: 1px solid var(--kore-border-2); }
+
+.plugin-table td {
+  padding: var(--kore-space-3);
+  vertical-align: middle;
+  word-break: break-word;
+}
+
+.plugin-id { display: flex; flex-direction: column; gap: 2px; }
+.plugin-id-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.plugin-id-alias { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+
+.cell-ops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--kore-space-2);
+}
+
+.row-note {
+  flex: 1 1 100%;
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+  word-break: break-word;
+}
+
+.row-note-ok { color: var(--kore-success); }
+.row-note-fail { color: var(--kore-danger); }
+
+/* ===== 按钮 ===== */
+button, .btn {
+  min-height: 32px;
   padding: 0 var(--kore-space-3);
   color: var(--kore-text-1);
   background: var(--kore-bg-2);
@@ -193,7 +334,17 @@ button {
   cursor: pointer;
 }
 
-button:hover { border-color: var(--kore-info); }
+button:hover, .btn:hover { border-color: var(--kore-info); }
+
+button:disabled, .btn:disabled {
+  color: var(--kore-text-3);
+  border-color: var(--kore-border-2);
+  cursor: not-allowed;
+}
+
+.btn-primary { border-color: var(--kore-info); }
+.btn-block { width: 100%; min-height: var(--kore-touch); font-size: var(--kore-font-14); }
+.btn-ghost { background: transparent; }
 
 /* ===== 插件 UI 沙箱容器（裁决40/41）：iframe 随断点伸缩，不注入子帧样式 =====
    .plugin-frame 只设外框；沙箱属性与 srcdoc 由 app.js 的 PluginBridge 提供。 */
@@ -228,14 +379,50 @@ button:hover { border-color: var(--kore-info); }
 }
 
 .plugin-ui-close {
-  min-height: 44px; /* 触摸命中区 ≥44px（裁决41） */
-  min-width: 44px;
+  min-height: var(--kore-touch); /* 触摸命中区 ≥44px（裁决41） */
+  min-width: var(--kore-touch);
   width: 100%;
+  border-radius: 0;
+  border-width: 1px 0 0;
 }
 
 :focus-visible {
   outline: 2px solid var(--kore-info);
   outline-offset: 2px;
+}
+
+/* ===== 小屏（< 640px）：触摸目标 ≥44px，插件表格转卡片式 ===== */
+@media (max-width: 639px) {
+  .content { padding: var(--kore-space-4) var(--kore-space-3); }
+  .topbar { flex-wrap: wrap; }
+  .conn { width: 100%; }
+
+  button, .btn { min-height: var(--kore-touch); }
+  .cell-ops button { flex: 1 1 auto; }
+
+  /* 表格在小屏逐行转块，用 data-label 复原列名，避免横向滚动 */
+  .plugin-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .plugin-table, .plugin-table tbody, .plugin-table tr, .plugin-table td { display: block; width: 100%; }
+  .plugin-table tr {
+    padding: var(--kore-space-2) 0 var(--kore-space-3);
+    border-top: 1px solid var(--kore-border-2);
+  }
+  .plugin-table td {
+    display: flex;
+    gap: var(--kore-space-3);
+    align-items: center;
+    padding: var(--kore-space-1) var(--kore-space-4);
+  }
+  .plugin-table td::before {
+    content: attr(data-label);
+    flex: 0 0 84px;
+    color: var(--kore-text-3);
+    font-size: var(--kore-font-12);
+  }
+  .plugin-table td.cell-ops { flex-wrap: wrap; }
+
+  .rows th, .rows td { display: block; width: auto; }
+  .rows th { padding-bottom: 0; }
 }
 
 /* ===== 响应式断点（裁决41）：640 / 1024，值集中定义，禁 JS 探测 ===== */

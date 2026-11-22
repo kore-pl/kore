@@ -1,6 +1,10 @@
 /* kore 主壳前端 —— 原生 JS，零依赖。
-   启动即拉 /-/healthz 与 /api/v1/system/info，任一失败走降级渲染，绝不白屏。
-   状态一律「点 + 文本」双通道（FRONTEND §6 红线 9）；禁止 console.log。
+   启动先探测 GET /api/v1/system/info，按三态分流（绝不把 401 误判成"后端未连接"）：
+     200 → 已登录，渲染控制台（系统信息 + 插件表格 + 启停/调用）
+     401 → 渲染登录表单（口令 → POST /api/v1/auth/login，错误逐类显示，不吞错）
+     网络错误 / 超时 → 才显示"后端未连接"降级横幅
+   写请求（POST）一律带 X-Kore-CSRF 双提交头；cookie 缺失时先 GET 一次探测触发重新下发，
+   仍缺失则明确提示刷新，不静默失败。状态一律「点 + 文本」双通道（FRONTEND §6 红线 9）。
    插件 UI 走独立 origin iframe + postMessage 桥（裁决40/41），不进主壳 realm。 */
 (function () {
   'use strict';
@@ -11,9 +15,23 @@
   var ENDPOINTS = {
     health: '/-/healthz',
     info: '/api/v1/system/info',
-    plugins: '/api/v1/plugins'
+    plugins: '/api/v1/plugins',
+    login: '/api/v1/auth/login',
+    logout: '/api/v1/auth/logout'
   };
   var REQUEST_TIMEOUT_MS = 5000;
+  var LOGIN_TIMEOUT_MS = 8000;
+  var WRITE_TIMEOUT_MS = 15000;
+
+  // 会话/视图状态：authed 由 system/info 的状态码决定，不靠猜测。
+  var state = {
+    authed: false,
+    health: null,
+    info: null,
+    plugins: [],
+    notice: '',
+    ping: Object.create(null)
+  };
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -22,38 +40,114 @@
     return node;
   }
 
-  function fetchJson(url) {
-    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, REQUEST_TIMEOUT_MS) : null;
-    var init = { headers: { Accept: 'application/json' }, cache: 'no-store' };
-    if (ctrl) init.signal = ctrl.signal;
+  function fmtInt(value) {
+    return typeof value === 'number' && isFinite(value) ? String(value) : '—';
+  }
 
-    return fetch(url, init).then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.text();
-    }).then(function (raw) {
-      if (!raw) return {};
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        // healthz 等端点可能返回纯文本（如 "ok"），按成功处理，避免误报降级
-        return { raw: raw };
-      }
-    }).then(function (data) {
-      if (timer !== null) clearTimeout(timer);
-      return data;
-    }).catch(function (err) {
+  // 读非 HttpOnly 的 kore_csrf（双提交要求前端可读；会话 cookie 仍 HttpOnly）。
+  function readCookie(name) {
+    var parts = document.cookie ? document.cookie.split(';') : [];
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].trim();
+      if (kv.indexOf(name + '=') === 0) return decodeURIComponent(kv.slice(name.length + 1));
+    }
+    return '';
+  }
+
+  function errText(err) {
+    if (!err) return '未知错误';
+    if (err.name === 'AbortError') return '请求超时';
+    return err.message ? String(err.message) : '网络请求失败';
+  }
+
+  // 统一请求：永不因 HTTP 状态码 reject（401/429 由调用方分流），只有网络/超时 reject。
+  function request(url, init, timeoutMs) {
+    var opts = init || {};
+    opts.credentials = 'same-origin';
+    opts.cache = 'no-store';
+    if (!opts.headers) opts.headers = {};
+    if (!opts.headers.Accept) opts.headers.Accept = 'application/json';
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || REQUEST_TIMEOUT_MS) : null;
+    if (ctrl) opts.signal = ctrl.signal;
+
+    return fetch(url, opts).then(function (res) {
+      return res.text().then(function (raw) {
+        if (timer !== null) clearTimeout(timer);
+        var data = {};
+        if (raw) {
+          try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; }
+        }
+        return { ok: res.ok, status: res.status, data: data };
+      });
+    }, function (err) {
       if (timer !== null) clearTimeout(timer);
       throw err;
     });
   }
 
-  function stateOf(res) {
-    if (res.status === 'rejected') return { cls: 'fail', text: '异常' };
-    if (res.value && res.value.ok === false) return { cls: 'fail', text: '异常' };
-    var body = res.value || {};
-    var status = body.status || body.state || body.data;
-    if (status === 'degraded') return { cls: 'warn', text: '降级' };
+  // 错误体统一口径：{code,message,detail}，前端只展示 code + message，不吞。
+  function describeError(res) {
+    var body = (res && res.data) || {};
+    var code = body.code ? String(body.code) : 'HTTP ' + res.status;
+    var message = body.message ? String(body.message) : '';
+    return message ? code + ' · ' + message : code;
+  }
+
+  // CSRF 双提交：cookie 缺失时先 GET 一次探测（服务端仅在登录成功时下发），仍无则明确报错。
+  function ensureCsrf() {
+    var token = readCookie('kore_csrf');
+    if (token) return Promise.resolve(token);
+    return request(ENDPOINTS.info).then(function () {
+      return readCookie('kore_csrf');
+    }, function () {
+      return readCookie('kore_csrf');
+    });
+  }
+
+  function writeJson(url, body, timeoutMs) {
+    return ensureCsrf().then(function (token) {
+      if (!token) throw new Error('缺少 CSRF 令牌（kore_csrf），请刷新页面或重新登录后重试');
+      return request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Kore-CSRF': token },
+        body: body === undefined ? '{}' : JSON.stringify(body)
+      }, timeoutMs || WRITE_TIMEOUT_MS);
+    });
+  }
+
+  function probeHealth() {
+    return request(ENDPOINTS.health).then(
+      function (res) { return { reached: true, res: res }; },
+      function (err) { return { reached: false, error: err }; }
+    );
+  }
+
+  function probeInfo() {
+    return request(ENDPOINTS.info).then(
+      function (res) { return { reached: true, res: res }; },
+      function (err) { return { reached: false, error: err }; }
+    );
+  }
+
+  function statusTag(state) {
+    var wrap = el('span', 'tag');
+    wrap.appendChild(el('span', 'dot ' + state.cls));
+    wrap.appendChild(el('span', null, state.text));
+    return wrap;
+  }
+
+  function healthState() {
+    var h = state.health;
+    if (!h) return { cls: 'warn', text: '检测中' };
+    if (!h.reached) return { cls: 'fail', text: '不可达' };
+    if (!h.res.ok) return { cls: 'fail', text: '异常' };
+    return { cls: 'ok', text: '正常' };
+  }
+
+  function infoState() {
+    if (!state.authed) return { cls: 'warn', text: '未登录' };
+    if (!state.info) return { cls: 'warn', text: '检测中' };
     return { cls: 'ok', text: '正常' };
   }
 
@@ -70,13 +164,6 @@
     return tr;
   }
 
-  function statusTag(state) {
-    var wrap = el('span', 'tag');
-    wrap.appendChild(el('span', 'dot ' + state.cls));
-    wrap.appendChild(el('span', null, state.text));
-    return wrap;
-  }
-
   function panel(title, meta, rows) {
     var box = el('section', 'panel');
     var head = el('div', 'panel-head');
@@ -89,56 +176,395 @@
     return box;
   }
 
+  function replaceNode(oldNode, newNode) {
+    if (oldNode && oldNode.parentNode) {
+      oldNode.parentNode.replaceChild(newNode, oldNode);
+    }
+  }
+
+  function noticeBar(message) {
+    var box = el('div', 'notice');
+    box.appendChild(el('span', 'dot fail notice-dot'));
+    var text = el('div');
+    text.className = 'notice-body';
+    text.appendChild(el('div', 'notice-title', '操作未完成'));
+    text.appendChild(el('div', 'notice-hint', message));
+    box.appendChild(text);
+    var close = el('button', 'btn btn-ghost notice-close', '关闭');
+    close.type = 'button';
+    close.addEventListener('click', function () {
+      if (box.parentNode) box.parentNode.removeChild(box);
+    });
+    box.appendChild(close);
+    return box;
+  }
+
+  // 仅用于「网络层不可达」：401 不再落到这里。
   function degraded(message) {
     var box = el('div', 'notice');
     box.appendChild(el('span', 'dot warn notice-dot'));
     var text = el('div');
+    text.className = 'notice-body';
     text.appendChild(el('div', 'notice-title', '后端未连接'));
     text.appendChild(el('div', 'notice-hint', message + '；页面以降级模式展示，不阻断静态访问。'));
     box.appendChild(text);
+    var retry = el('button', 'btn btn-ghost', '重新检测');
+    retry.type = 'button';
+    retry.addEventListener('click', start);
+    box.appendChild(retry);
     return box;
   }
 
-  function renderTopbar(health, info) {
+  /* ===================== 登录视图 ===================== */
+
+  function showLoginError(errBox, message) {
+    if (!errBox) return;
+    errBox.textContent = message;
+    errBox.hidden = false;
+  }
+
+  function renderLogin(message) {
+    var wrap = el('div', 'login-wrap');
+    var card = el('form', 'login-card');
+    card.setAttribute('method', 'post');
+    card.setAttribute('novalidate', 'novalidate');
+
+    card.appendChild(el('div', 'login-brand', 'kore'));
+    card.appendChild(el('div', 'login-sub', '控制台 · 单管理员登录'));
+
+    var label = el('label', 'field');
+    label.appendChild(el('span', 'field-label', '管理员口令'));
+    var input = document.createElement('input');
+    input.type = 'password';
+    input.id = 'kore-password';
+    input.name = 'password';
+    input.className = 'field-input';
+    input.autocomplete = 'current-password';
+    input.required = true;
+    input.setAttribute('placeholder', '请输入口令');
+    label.appendChild(input);
+    card.appendChild(label);
+
+    var submit = el('button', 'btn btn-primary btn-block', '登录');
+    submit.type = 'submit';
+    card.appendChild(submit);
+
+    var errBox = el('div', 'login-error', message || '');
+    errBox.id = 'kore-login-error';
+    errBox.setAttribute('role', 'alert');
+    if (!message) errBox.hidden = true;
+    card.appendChild(errBox);
+    card.appendChild(el('div', 'login-note', '登录失败 5 次/60 秒后锁定 5 分钟；口令仅在本机校验。'));
+
+    card.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      submitLogin(input, submit, errBox);
+    });
+
+    wrap.appendChild(card);
+    if (app.replaceChildren) app.replaceChildren(wrap);
+    else { app.innerHTML = ''; app.appendChild(wrap); }
+    input.focus();
+  }
+
+  function submitLogin(input, submit, errBox) {
+    var password = input.value || '';
+    if (!password) {
+      showLoginError(errBox, '请输入口令');
+      input.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = '登录中…';
+
+    request(ENDPOINTS.login, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: password })
+    }, LOGIN_TIMEOUT_MS).then(function (res) {
+      if (res.ok) {
+        // 登录成功：服务端已下发 kore_session(HttpOnly) + kore_csrf，回到探测流程重渲染面板。
+        start();
+        return;
+      }
+      input.value = '';
+      if (res.status === 401) showLoginError(errBox, '口令错误，请重试');
+      else if (res.status === 429) showLoginError(errBox, '尝试过于频繁，已被临时锁定，请稍后再试');
+      else showLoginError(errBox, '登录失败：' + describeError(res));
+      submit.disabled = false;
+      submit.textContent = '登录';
+      input.focus();
+    }, function (err) {
+      showLoginError(errBox, '后端未连接：' + errText(err));
+      submit.disabled = false;
+      submit.textContent = '登录';
+    });
+  }
+
+  /* ===================== 控制台视图 ===================== */
+
+  function renderTopbar() {
     var bar = el('header', 'topbar');
     var brand = el('div', 'brand');
     brand.appendChild(el('span', 'brand-name', 'kore'));
     brand.appendChild(el('span', 'brand-sub', '控制台 · 系统态势'));
+
     var conn = el('div', 'conn');
-    conn.appendChild(statusTag(health));
-    conn.appendChild(el('span', null, '健康检查'));
-    conn.appendChild(statusTag(info));
-    conn.appendChild(el('span', null, '系统信息'));
+    conn.appendChild(statusTag(healthState()));
+    conn.appendChild(el('span', 'conn-label', '健康检查'));
+    conn.appendChild(statusTag(infoState()));
+    conn.appendChild(el('span', 'conn-label', '系统信息'));
+
+    if (state.authed) {
+      var out = el('button', 'btn btn-ghost', '退出');
+      out.type = 'button';
+      out.addEventListener('click', logout);
+      conn.appendChild(out);
+    }
+
     bar.appendChild(brand);
     bar.appendChild(conn);
     return bar;
   }
 
-  function renderHealth(health) {
+  function renderInfoPanel() {
+    var data = state.info || {};
+    var sup = data.supervisor && typeof data.supervisor === 'object' ? data.supervisor : {};
     var rows = [];
-    rows.push(row('状态', statusTag(health)));
-    if (health.status === 'fulfilled') {
-      var body = health.value || {};
-      rows.push(row('详情', body.raw || (typeof body.status === 'string' ? body.status : (body.message || '—'))));
-    } else {
-      rows.push(row('详情', (health.reason && health.reason.message) || '请求失败'));
+    rows.push(row('版本', data.version || '—'));
+    rows.push(row('常驻插件', fmtInt(sup.resident)));
+    rows.push(row('重启计数', fmtInt(sup.restarts)));
+    rows.push(row('插件总数', fmtInt(state.plugins.length)));
+    var platform = [data.os, data.arch].filter(Boolean).join(' · ');
+    rows.push(row('平台', platform || '—'));
+    rows.push(row('cgroup', data.cgroup_mode || '—'));
+    if (Array.isArray(data.warnings) && data.warnings.length) {
+      rows.push(row('降级告警', data.warnings.join('；')));
     }
-    return panel('健康检查', ENDPOINTS.health, rows);
+    var box = panel('系统信息', ENDPOINTS.info, rows);
+    box.id = 'kore-info-panel';
+    return box;
   }
 
-  function renderInfo(info) {
-    var rows = [];
-    rows.push(row('状态', statusTag(info)));
-    if (info.status === 'fulfilled') {
-      var body = info.value || {};
-      var data = body.data && typeof body.data === 'object' ? body.data : body;
-      rows.push(row('版本', data.version || data.kore_version || '—'));
-      rows.push(row('运行态', data.mode || data.runtime || '—'));
-      rows.push(row('说明', data.message || (body.message || '—')));
-    } else {
-      rows.push(row('详情', (info.reason && info.reason.message) || '请求失败'));
+  function cell(label, value) {
+    var td = el('td');
+    td.setAttribute('data-label', label);
+    if (value && value.nodeType === 1) td.appendChild(value);
+    else td.textContent = value === undefined || value === null || value === '' ? '—' : String(value);
+    return td;
+  }
+
+  function pingState(id) {
+    if (!state.ping[id]) state.ping[id] = { supported: true, result: '', error: '' };
+    return state.ping[id];
+  }
+
+  function pluginRow(plugin) {
+    var id = plugin.id || '';
+    var tr = el('tr', 'plugin-row');
+    tr.id = 'kore-row-' + id;
+    tr.setAttribute('data-plugin-id', id);
+
+    var idCell = el('div', 'plugin-id');
+    idCell.appendChild(el('span', 'plugin-id-name', id));
+    if (plugin.name && plugin.name !== id) idCell.appendChild(el('span', 'plugin-id-alias', plugin.name));
+
+    tr.appendChild(cell('插件', idCell));
+    tr.appendChild(cell('版本', plugin.version));
+    tr.appendChild(cell('深度', plugin.depth_level));
+    tr.appendChild(cell('生命周期', plugin.lifecycle));
+    tr.appendChild(cell('状态', statusTag(pluginStateTag(plugin))));
+
+    var ops = el('td', 'cell-ops');
+    ops.setAttribute('data-label', '操作');
+
+    var enabled = plugin.enabled === true;
+    var action = enabled ? 'disable' : 'enable';
+    var actionBtn = el('button', 'btn', enabled ? '停用' : '启用');
+    actionBtn.type = 'button';
+    actionBtn.addEventListener('click', function () {
+      lifecycle(plugin, action, tr, actionBtn);
+    });
+    ops.appendChild(actionBtn);
+
+    var ping = pingState(id);
+    var pingBtn = el('button', 'btn', '调用 ping');
+    pingBtn.type = 'button';
+    if (!enabled || plugin.state !== 'ready' || !ping.supported) {
+      pingBtn.disabled = true;
+      pingBtn.title = !enabled ? '插件未启用，先点「启用」'
+        : (plugin.state !== 'ready' ? '插件当前状态 ' + (plugin.state || '未知') + '，未就绪'
+          : '该插件不支持 ping 方法');
     }
-    return panel('系统信息', ENDPOINTS.info, rows);
+    pingBtn.addEventListener('click', function () {
+      invokePing(plugin, pingBtn, note);
+    });
+    ops.appendChild(pingBtn);
+
+    var note = el('div', 'row-note');
+    if (!ping.supported) note.textContent = '该插件不支持 ping 方法';
+    else if (ping.error) { note.textContent = 'ping 失败：' + ping.error; note.className = 'row-note row-note-fail'; }
+    else if (ping.result) { note.textContent = 'ping → ' + ping.result; note.className = 'row-note row-note-ok'; }
+    else if (!enabled) note.textContent = '未启用';
+    else if (plugin.state !== 'ready') note.textContent = '状态 ' + (plugin.state || '未知');
+    ops.appendChild(note);
+
+    tr.appendChild(ops);
+    return tr;
+  }
+
+  function pluginStateTag(plugin) {
+    var text = plugin.state || (plugin.enabled ? 'enabled' : 'stopped');
+    if (text === 'ready') return { cls: 'ok', text: text };
+    if (text === 'failed') return { cls: 'fail', text: text };
+    if (text === 'starting' || text === 'draining') return { cls: 'warn', text: text };
+    return { cls: 'warn', text: text };
+  }
+
+  function replaceRow(plugin) {
+    for (var i = 0; i < state.plugins.length; i++) {
+      if (state.plugins[i] && state.plugins[i].id === plugin.id) {
+        state.plugins[i] = plugin;
+        break;
+      }
+    }
+    var oldRow = document.getElementById('kore-row-' + plugin.id);
+    if (oldRow) replaceNode(oldRow, pluginRow(plugin));
+  }
+
+  function lifecycle(plugin, action, tr, btn) {
+    var url = ENDPOINTS.plugins + '/' + encodeURIComponent(plugin.id) + '/' + action;
+    btn.disabled = true;
+    btn.textContent = action === 'enable' ? '启用中…' : '停用中…';
+
+    writeJson(url, {}).then(function (res) {
+      if (res.status === 401) {
+        state.authed = false;
+        renderLogin('会话已过期，请重新登录');
+        return;
+      }
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = action === 'enable' ? '启用' : '停用';
+        state.notice = '插件 ' + plugin.id + ' ' + (action === 'enable' ? '启用' : '停用') + '失败：' + describeError(res);
+        var panelNode = document.getElementById('kore-plugins-panel');
+        if (panelNode) {
+          var old = document.getElementById('kore-notice');
+          var bar = noticeBar(state.notice);
+          bar.id = 'kore-notice';
+          if (old) replaceNode(old, bar);
+          else if (panelNode.parentNode) panelNode.parentNode.insertBefore(bar, panelNode);
+        }
+        return;
+      }
+      // 服务端在启停响应里回读单插件视图 → 局部刷新该行，不重排整表。
+      var updated = res.data && res.data.id ? res.data : null;
+      if (updated) replaceRow(updated);
+      else loadDashboard();
+      refreshInfo();
+    }, function (err) {
+      btn.disabled = false;
+      btn.textContent = action === 'enable' ? '启用' : '停用';
+      state.notice = '插件 ' + plugin.id + ' ' + (action === 'enable' ? '启用' : '停用') + '请求失败：' + errText(err);
+      var host = document.getElementById('kore-plugins-panel');
+      var existing = document.getElementById('kore-notice');
+      var bar = noticeBar(state.notice);
+      bar.id = 'kore-notice';
+      if (existing) replaceNode(existing, bar);
+      else if (host && host.parentNode) host.parentNode.insertBefore(bar, host);
+    });
+  }
+
+  // 静默刷新系统信息（常驻数/重启计数），只替换信息面板，不动其它节点。
+  function refreshInfo() {
+    request(ENDPOINTS.info).then(function (res) {
+      if (!res.ok) return;
+      state.info = res.data || {};
+      var old = document.getElementById('kore-info-panel');
+      if (old) replaceNode(old, renderInfoPanel());
+    }, function () { /* 静默：失败不打断当前视图，下次操作或「重新检测」会重试 */ });
+  }
+
+  // ping：真实方法调用，成功显示服务端原样结果；方法不存在则把该行 ping 标记为不支持。
+  function invokePing(plugin, btn, note) {
+    var url = '/api/v1/invoke/' + encodeURIComponent(plugin.id) + '/ping';
+    var entry = pingState(plugin.id);
+    btn.disabled = true;
+    btn.textContent = '调用中…';
+
+    writeJson(url, {}).then(function (res) {
+      btn.textContent = '调用 ping';
+      if (res.status === 401) {
+        state.authed = false;
+        renderLogin('会话已过期，请重新登录');
+        return;
+      }
+      if (res.ok) {
+        entry.supported = true;
+        entry.error = '';
+        entry.result = JSON.stringify(res.data);
+        note.className = 'row-note row-note-ok';
+        note.textContent = 'ping → ' + entry.result;
+        btn.disabled = false;
+        return;
+      }
+      var code = res.data && res.data.code ? String(res.data.code) : '';
+      if (code === 'E_NOTFOUND') {
+        entry.supported = false;
+        entry.result = '';
+        entry.error = '';
+        note.className = 'row-note';
+        note.textContent = '该插件不支持 ping 方法';
+        btn.disabled = true;
+        btn.title = '该插件不支持 ping 方法';
+        return;
+      }
+      entry.error = describeError(res);
+      note.className = 'row-note row-note-fail';
+      note.textContent = 'ping 失败：' + entry.error;
+      btn.disabled = false;
+    }, function (err) {
+      btn.textContent = '调用 ping';
+      btn.disabled = false;
+      entry.error = errText(err);
+      note.className = 'row-note row-note-fail';
+      note.textContent = 'ping 失败：' + entry.error;
+    });
+  }
+
+  function renderPluginsPanel() {
+    var box = el('section', 'panel');
+    box.id = 'kore-plugins-panel';
+    var head = el('div', 'panel-head');
+    head.appendChild(el('span', 'panel-title', '插件'));
+    head.appendChild(el('span', 'panel-meta', ENDPOINTS.plugins));
+    var reload = el('button', 'btn btn-ghost', '刷新列表');
+    reload.type = 'button';
+    reload.addEventListener('click', loadDashboard);
+    head.appendChild(reload);
+    box.appendChild(head);
+
+    if (!state.plugins.length) {
+      box.appendChild(el('div', 'panel-empty', '当前没有已安装插件。可用 kored install --package <包> 安装后再刷新。'));
+      return box;
+    }
+
+    var table = el('table', 'plugin-table');
+    var thead = el('thead');
+    var headRow = el('tr');
+    var cols = ['插件', '版本', '深度', '生命周期', '状态', '操作'];
+    for (var c = 0; c < cols.length; c++) headRow.appendChild(el('th', null, cols[c]));
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    for (var i = 0; i < state.plugins.length; i++) {
+      var plugin = state.plugins[i];
+      if (!plugin || !plugin.id) continue;
+      tbody.appendChild(pluginRow(plugin));
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+    return box;
   }
 
   /* ===================== 插件 UI 桥（裁决40 / 41） =====================
@@ -432,48 +858,120 @@
     content.appendChild(box);
   }
 
-  function render(results) {
-    var health = stateOf(results[0]);
-    var info = stateOf(results[1]);
+  function logout() {
+    // logout 在 CSRF 豁免名单内（幂等会话终止）；失败也回登录页，别把用户困在面板里。
+    request(ENDPOINTS.logout, { method: 'POST' }).then(
+      function () { resetAndStart(); },
+      function () { resetAndStart(); }
+    );
+  }
+
+  function resetAndStart() {
+    state.authed = false;
+    state.info = null;
+    state.plugins = [];
+    state.ping = Object.create(null);
+    start();
+  }
+
+  function renderDashboard() {
     var root = el('div');
-    root.appendChild(renderTopbar(health, info));
+    root.appendChild(renderTopbar());
 
     var content = el('main', 'content');
-    if (results[0].status === 'rejected' || results[1].status === 'rejected') {
-      content.appendChild(degraded('健康检查或系统信息不可达'));
+    if (state.notice) {
+      var bar = noticeBar(state.notice);
+      bar.id = 'kore-notice';
+      content.appendChild(bar);
     }
-    content.appendChild(renderHealth(results[0]));
-    content.appendChild(renderInfo(results[1]));
-    renderPluginUis(content, results[2]);
-    root.appendChild(content);
+    content.appendChild(renderInfoPanel());
+    content.appendChild(renderPluginsPanel());
+    renderPluginUis(content, { status: 'fulfilled', value: { plugins: state.plugins } });
 
-    var retry = el('button', null, '重新检测');
+    var meta = el('div', 'panel-meta actions');
+    var retry = el('button', 'btn', '重新检测');
     retry.type = 'button';
-    var meta = el('div', 'panel-meta');
+    retry.addEventListener('click', start);
     meta.appendChild(retry);
     content.appendChild(meta);
-    retry.addEventListener('click', start);
 
-    app.replaceChildren ? app.replaceChildren(root) : (app.innerHTML = '', app.appendChild(root));
+    root.appendChild(content);
+    if (app.replaceChildren) app.replaceChildren(root);
+    else { app.innerHTML = ''; app.appendChild(root); }
+  }
+
+  // 仅网络层不可达（fetch reject）走这里：明确"后端未连接"，不是登录问题。
+  function renderOffline(err) {
+    var root = el('div');
+    root.appendChild(renderTopbar());
+    var content = el('main', 'content');
+    content.appendChild(degraded('无法连接内核接口：' + errText(err)));
+    root.appendChild(content);
+    if (app.replaceChildren) app.replaceChildren(root);
+    else { app.innerHTML = ''; app.appendChild(root); }
+  }
+
+  function loadDashboard() {
+    if (!state.authed) return;
+    return request(ENDPOINTS.plugins).then(function (res) {
+      if (res.status === 401) {
+        state.authed = false;
+        renderLogin('会话已过期，请重新登录');
+        return;
+      }
+      if (!res.ok) {
+        state.plugins = [];
+        state.notice = '插件列表读取失败：' + describeError(res);
+      } else {
+        var body = res.data || {};
+        state.plugins = Array.isArray(body.plugins) ? body.plugins : [];
+        state.notice = '';
+      }
+      renderDashboard();
+    }, function (err) {
+      state.plugins = [];
+      state.notice = '插件列表请求失败：' + errText(err);
+      renderDashboard();
+    });
   }
 
   function start() {
     app.textContent = '';
-    app.appendChild(el('div', 'boot', '正在检测后端…'));
-    Promise.all([
-      fetchJson(ENDPOINTS.health).then(
-        function (v) { return { status: 'fulfilled', value: v }; },
-        function (e) { return { status: 'rejected', reason: e }; }
-      ),
-      fetchJson(ENDPOINTS.info).then(
-        function (v) { return { status: 'fulfilled', value: v }; },
-        function (e) { return { status: 'rejected', reason: e }; }
-      ),
-      fetchJson(ENDPOINTS.plugins).then(
-        function (v) { return { status: 'fulfilled', value: v }; },
-        function (e) { return { status: 'rejected', reason: e }; }
-      )
-    ]).then(render);
+    app.appendChild(el('div', 'boot', '正在连接内核…'));
+
+    Promise.all([probeHealth(), probeInfo()]).then(function (out) {
+      state.health = out[0];
+      var info = out[1];
+
+      if (!info.reached) {
+        // 网络错误/超时：这才是"后端未连接"。
+        state.authed = false;
+        renderOffline(info.error);
+        return;
+      }
+      if (info.res.status === 401) {
+        // 未登录：渲染登录表单，绝不显示"后端未连接"。
+        state.authed = false;
+        state.info = null;
+        renderLogin('');
+        return;
+      }
+      if (!info.res.ok) {
+        state.authed = false;
+        var root = el('div');
+        root.appendChild(renderTopbar());
+        var content = el('main', 'content');
+        var box = noticeBar('系统信息读取失败：' + describeError(info.res));
+        content.appendChild(box);
+        root.appendChild(content);
+        if (app.replaceChildren) app.replaceChildren(root);
+        else { app.innerHTML = ''; app.appendChild(root); }
+        return;
+      }
+      state.authed = true;
+      state.info = info.res.data || {};
+      loadDashboard();
+    });
   }
 
   start();
