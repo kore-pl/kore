@@ -27,7 +27,7 @@ type Auth struct {
 	Initialized bool
 }
 
-// Paths 是四类运行期目录。
+// Paths 是运行期目录。
 type Paths struct {
 	// StateDir 是状态目录（单文件 bbolt 落点）。
 	StateDir string
@@ -37,6 +37,8 @@ type Paths struct {
 	RunDir string
 	// PluginDir 是插件解包目录；空表示由 state_dir 派生为 <state_dir>/plugins。
 	PluginDir string
+	// IndexDir 是本地插件索引目录（plugins.json + plugins.json.sig）。
+	IndexDir string
 }
 
 // Rotate 是日志轮转阈值。
@@ -75,10 +77,19 @@ type Resources struct {
 
 // Plugins 是插件安装与启动配置。
 type Plugins struct {
-	// AllowUnsigned 表示是否允许无签名包。
+	// AllowUnsigned 表示是否允许无签名包（插件包签名，M4）。
 	AllowUnsigned bool
 	// Autostart 是启动时按序拉起的插件 id。
 	Autostart []string
+}
+
+// Store 是软件商店（market）配置。
+//
+// 与 Plugins.AllowUnsigned 语义不同：本字段管索引级 ed25519 签名（M2），
+// 默认零值 false；禁止在 Default() 中显式放行，须显式配置并写 WARN 审计。
+type Store struct {
+	// AllowUnsigned 为 true 时允许未签名/验签失败的索引（仅显式配置）。
+	AllowUnsigned bool
 }
 
 // RateLimit 是登录限速参数。
@@ -121,6 +132,8 @@ type Snapshot struct {
 	Resources Resources
 	// Plugins 是插件配置。
 	Plugins Plugins
+	// Store 是软件商店配置。
+	Store Store
 	// Security 是安全配置。
 	Security Security
 	// CertRenew 是证书续期检查配置。
@@ -139,6 +152,7 @@ func Default() *Snapshot {
 			StateDir: "/var/lib/kore",
 			LogDir:   "/var/log/kore",
 			RunDir:   "/run/kore",
+			IndexDir: "/var/lib/kore/index",
 		},
 		Log:       Log{Level: "info", Rotate: Rotate{MaxSizeMB: 10, MaxBackups: 5}},
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true},

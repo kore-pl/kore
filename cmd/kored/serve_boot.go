@@ -2,11 +2,14 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/httpapi"
+	"github.com/pengtang1024/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -61,12 +64,62 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Addr:       cfg.Addr,
 		Backend:    svc.backend,
 		Auth:       svc.auth,
+		Market:     buildMarket(cfg, svc),
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)
 		return nil, exitListen
 	}
 	return server, exitOK
+}
+
+// buildMarket 装配商店：本地索引目录 + 内置公钥验签 + 安装触发器（走现有 installer）。
+//
+// 信任边界：AllowUnsigned 仅来自显式配置（coreconfig 零值 false），不在默认配置放行。
+func buildMarket(cfg config, svc *service) *market.Service {
+	if cfg.snapshot == nil {
+		return nil
+	}
+	dir := cfg.snapshot.Paths.IndexDir
+	if dir == "" {
+		dir = "/var/lib/kore/index"
+	}
+	opts := market.Options{
+		IndexDir:      dir,
+		AllowUnsigned: cfg.snapshot.Store.AllowUnsigned,
+		Installer:     installerAdapter(cfg, svc),
+	}
+	return market.New(opts)
+}
+
+// installerAdapter 把现有 installer 包装成 market.Installer：
+// 每次安装按索引声明的 expectedSHA 新建 installer（ExpectedSHA256 是构造参数）。
+func installerAdapter(cfg config, svc *service) marketInstaller {
+	return marketInstaller{cfg: cfg, svc: svc}
+}
+
+type marketInstaller struct {
+	cfg config
+	svc *service
+}
+
+func (m marketInstaller) Install(path, expectedSHA string) error {
+	if m.svc == nil || m.svc.db == nil {
+		return fmt.Errorf("状态库未装配，无法安装")
+	}
+	inst, err := installer.New(installer.Options{
+		StateDir:       m.cfg.StateDir,
+		PluginDir:      m.cfg.snapshot.Paths.PluginDir,
+		KoreVersion:    version,
+		ExpectedSHA256: expectedSHA,
+		Logger:         slog.Default(),
+		Store:          m.svc.db,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = inst.Install(path)
+	return err
 }
 
 // closeStore 关闭状态库；关闭失败只 WARN，不影响退出码。

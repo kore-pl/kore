@@ -17,6 +17,7 @@ import (
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
+	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -34,6 +35,8 @@ type Options struct {
 	Backend Backend
 	// Auth 是鉴权管理器；nil 表示不启用鉴权（测试与 M0 探活骨架用）。
 	Auth *auth.Manager
+	// Market 是软件商店后端；nil 表示 store/* 端点回 501 E_UNSUPPORTED。
+	Market *market.Service
 }
 
 // Server 持有监听器与 http.Server，生命周期由 cmd/kored 控制。
@@ -43,13 +46,14 @@ type Server struct {
 	mux        *http.ServeMux
 	httpServer *http.Server
 	auth       *auth.Manager
+	market     *market.Service
 	mu         sync.Mutex
 	listeners  []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
 func New(opts Options, transport platform.Transport) *Server {
-	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux(), auth: opts.Auth}
+	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux(), auth: opts.Auth, market: opts.Market}
 	server.routes()
 	handler := http.Handler(server.mux)
 	if server.auth != nil {

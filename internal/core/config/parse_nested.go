@@ -1,6 +1,10 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"log/slog"
+
+	"gopkg.in/yaml.v3"
+)
 
 // decodeLog 解析 log.* 与 log.rotate.*。
 func (p *parser) decodeLog(n *yaml.Node, out *Log) error {
@@ -95,6 +99,27 @@ func (p *parser) decodePlugins(n *yaml.Node, out *Plugins) error {
 	if v := m["autostart"]; v != nil {
 		if out.Autostart, err = p.strings(v, "plugins.autostart"); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// decodeStore 解析 store.*。
+//
+// store.allow_unsigned 是索引级签名的显式审计开关（M2，pre-mortem S-01）：
+// 仅当配置文件显式写 true 才生效，默认零值 false；每次启用写 WARN 审计。
+func (p *parser) decodeStore(n *yaml.Node, out *Store) error {
+	m, err := p.mapping(n, "store", storeKeys)
+	if err != nil {
+		return err
+	}
+	if v := m["allow_unsigned"]; v != nil {
+		if out.AllowUnsigned, err = p.boolean(v, "store.allow_unsigned"); err != nil {
+			return err
+		}
+		if out.AllowUnsigned {
+			slog.Warn("审计：索引签名校验被显式放行（信任空窗，仅允许显式审计配置）",
+				"source", p.source, "key", "store.allow_unsigned")
 		}
 	}
 	return nil

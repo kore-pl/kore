@@ -125,6 +125,7 @@
 - **输入输出**：`GET /store/plugins` 读本地缓存（零出站，可带 `stale=true`）；`POST /store/install|update` → `{job_id}`，`GET /store/jobs/{job_id}` 轮询进度；`DELETE /store/plugins/{id}` 卸载；`GET /store/presets` 返回 embed 快照的预设元数据。
 - **失败模式与处理**：索引缺失/过期 → 200 + `stale=true`（不阻塞首装，用 embed 快照兜底）；刷新失败 → **保留旧缓存**并返回 `E_UPSTREAM`（禁止清空）；job 不存在 → 404 `E_NOTFOUND`；包 sha256 不符 → job `failed` + `E_INVALID`；同一插件并发安装 → 409 `E_CONFLICT`。
 - **明确不做什么**：不做审核 / 账号 / 评分 / 评论；不做自动后台刷新（**零轮询**，G-19）；不代理第三方下载（按索引 URL 取包后**自算 sha256**，索引不是信任源）；不长期存包（安装完成即删临时文件）。
+- **端点实现状态（M2-B 快照；终态规格见上文"输入输出"）**：7 个 store 端点中，M2-B 已接通 4 个路由——`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/install`、`GET /store/jobs/{id}`；其余 `POST /store/refresh`、`GET /store/presets`、`POST /store/update`、`DELETE /store/plugins/{id}` 属后续里程碑。**路由接通 ≠ 功能完成**：`GET /store/jobs/{id}` 虽已注册，handler 当前返回 **501 `E_UNSUPPORTED`**（message 标注 M3 支持），任务进度查询到 M3 才落地；M2-B 阶段该端点仅占位，不返回真实 job 状态。
 
 ## 3. 中间件链
 

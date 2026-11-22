@@ -26,6 +26,7 @@ type service struct {
 	states  *stateRepo
 	backend *daemon
 	auth    *auth.Manager
+	db      *store.Store
 }
 
 // buildService 装配 registry/supervisor/bus/httpapi 后端。
@@ -70,7 +71,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	}
 	svc := &service{
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
-		backend: newDaemon(catalog, manager, frameBus, states),
+		db: db, backend: newDaemon(catalog, manager, frameBus, states),
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}

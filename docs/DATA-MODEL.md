@@ -48,6 +48,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `paths.log_dir` | string | `/var/log/kore` | 必须可写；含插件日志子目录 |
 | `paths.run_dir` | string | `/run/kore` | 0700；socket 落此处 |
 | `paths.plugin_dir` | string | `<state_dir>/plugins`（**未显式设置时派生**，默认即 `/var/lib/kore/plugins`） | 解包目标；`KORE_PLUGIN_DIR` 可覆盖 |
+| `paths.index_dir` | string | `/var/lib/kore/index` | 索引仓路径（`plugins.json` + `plugins.json.sig`）；必须可写，空值拒绝启动 |
 | `log.level` | string | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `log.rotate.max_size_mb` | int | `10` | 1–100；单文件轮转阈值 |
 | `log.rotate.max_backups` | int | `5` | 1–20；保留份数 |
@@ -57,11 +58,14 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `resources.enforce` | bool | `true` | false = 监控模式，不写 cgroup 限额 |
 | `plugins.allow_unsigned` | bool | `true` | MVP true；M4 起默认 false |
 | `plugins.autostart` | string[] | `[]` | 元素必须是已安装插件 id；启动时按序拉起。默认不硬编码任何插件：`site` 由 M2 安装流程显式写入 |
+| `store.allow_unsigned` | bool | `false`（零值，**不在 `Default()` 中设置**） | 仅显式配置；为 `true` 时允许未签名/验签失败的索引（M2 索引级 ed25519 签名）；与 `plugins.allow_unsigned`（插件包签名，M4）完全独立，勿混用 |
 | `security.login_rate_limit.attempts` | int | `5` | 1–20；窗口内失败次数 |
 | `security.login_rate_limit.window` | duration | `60s` | 10s–1h |
 | `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；触发后锁定 IP 时长 |
 | `cert_renew.enabled` | bool | `false` | 唯一允许的常驻定时器开关；关闭时内核不创建任何 ticker |
 | `cert_renew.interval` | duration | `"6h"` | 仅 `enabled=true` 时生效；范围 1h–24h；非法值 → 退出码 2 |
+
+`store.*` 与包签名的边界：`store.allow_unsigned` 管的是**索引仓签名**（`index/plugins.json.sig`，M2 的 ed25519 验签），零值 `false` 即默认拒绝未签名/验签失败的索引；它由 Go 结构体零值兜底，**刻意不在 `Default()` 中显式设置**，只允许显式配置并写 WARN 审计。它与 `plugins.allow_unsigned`（**插件包签名**，M4）是两个完全独立的开关，作用对象、里程碑与默认值都不同，不得互相替代或混写。
 
 `cert_renew.*` 的设计约束（唯一常驻定时器）：默认 `enabled: false`，严格守住「默认零后台定时器」资源锚点，关闭时内核不创建任何 ticker；内核**不做 ACME、不联网**，到点只发事件 `kore.event{type:"cert.renew_due"}`，实际续期由插件完成（内核只定规则不做业务）；该定时器是白名单里唯一一项，代码层门禁见 CORE 的 `grep time.NewTicker` 检查。
 
@@ -86,6 +90,7 @@ paths:
   log_dir: "/var/log/kore"            # kore.log / plugins/<id>.log
   run_dir: "/run/kore"                # kore.sock / plugins/<id>.sock
   plugin_dir: "/var/lib/kore/plugins"  # 省略时派生为 <state_dir>/plugins
+  index_dir: "/var/lib/kore/index"    # 索引仓路径：plugins.json + plugins.json.sig
 
 log:
   level: "info"                 # debug|info|warn|error
@@ -101,8 +106,11 @@ resources:
   enforce: true                 # false = 只监控不阻断（无 cgroup 时自动降级）
 
 plugins:
-  allow_unsigned: true          # MVP 允许无签名；M4 起默认 false
+  allow_unsigned: true          # 插件包签名（M4）：MVP 允许无签名；M4 起默认 false
   autostart: []                 # 启动即拉起的常驻插件 id 列表；默认空，由安装流程显式写入
+
+store:                          # 软件商店：索引仓签名（M2），与 plugins.allow_unsigned 完全独立
+  allow_unsigned: false         # 默认零值 false，不在 Default() 中设置；true = 允许未签名/验签失败的索引，需显式配置并写 WARN 审计
 
 security:
   login_rate_limit:

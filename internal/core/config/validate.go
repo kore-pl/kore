@@ -77,6 +77,7 @@ func validatePaths(s *Snapshot, add func(string, string)) {
 		{"paths.state_dir", s.Paths.StateDir},
 		{"paths.log_dir", s.Paths.LogDir},
 		{"paths.run_dir", s.Paths.RunDir},
+		{"paths.index_dir", s.Paths.IndexDir},
 	} {
 		if pair.value == "" {
 			add(pair.key, "不能为空")

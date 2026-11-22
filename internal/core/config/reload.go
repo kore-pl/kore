@@ -1,15 +1,13 @@
 package config
 
-import (
-	"log/slog"
-)
+import "log/slog"
 
 // Reload 重新解析配置并只应用白名单字段，返回合并后的新快照。
 //
 // 解析或校验失败时返回错误且不修改旧快照，调用方必须继续使用旧快照。
 // 白名单：log.*、resources.*、security.login_rate_limit.*、plugins.allow_unsigned、
-// cert_renew.*、auth.session_ttl、auth.admin_password_hash；server.addr、server.tls、
-// server.socket、paths.*、plugins.autostart 与 auth.cookie_secure/initialized 需重启内核。
+// cert_renew.*、auth.session_ttl、auth.admin_password_hash；其余（含 paths.*、
+// store.allow_unsigned 信任边界开关）需重启内核。
 func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 	next, warnings, err := load(opts)
 	if err != nil {
@@ -155,17 +153,9 @@ func coldChanged(dst, src *Snapshot) []string {
 	if dst.Server.TLS != src.Server.TLS {
 		keys = append(keys, "server.tls")
 	}
-	if dst.Paths.StateDir != src.Paths.StateDir {
-		keys = append(keys, "paths.state_dir")
-	}
-	if dst.Paths.LogDir != src.Paths.LogDir {
-		keys = append(keys, "paths.log_dir")
-	}
-	if dst.Paths.RunDir != src.Paths.RunDir {
-		keys = append(keys, "paths.run_dir")
-	}
-	if dst.Paths.PluginDir != src.Paths.PluginDir {
-		keys = append(keys, "paths.plugin_dir")
+	keys = append(keys, coldPathsChanged(dst, src)...)
+	if dst.Store.AllowUnsigned != src.Store.AllowUnsigned {
+		keys = append(keys, "store.allow_unsigned")
 	}
 	if dst.Auth.CookieSecure != src.Auth.CookieSecure {
 		keys = append(keys, "auth.cookie_secure")
@@ -175,6 +165,23 @@ func coldChanged(dst, src *Snapshot) []string {
 	}
 	if stringsDiffer(dst.Plugins.Autostart, src.Plugins.Autostart) {
 		keys = append(keys, "plugins.autostart")
+	}
+	return keys
+}
+
+// coldPathsChanged 列出需要重启的路径字段。
+func coldPathsChanged(dst, src *Snapshot) []string {
+	var keys []string
+	for key, pair := range map[string][2]string{
+		"paths.state_dir":  {dst.Paths.StateDir, src.Paths.StateDir},
+		"paths.log_dir":    {dst.Paths.LogDir, src.Paths.LogDir},
+		"paths.run_dir":    {dst.Paths.RunDir, src.Paths.RunDir},
+		"paths.plugin_dir": {dst.Paths.PluginDir, src.Paths.PluginDir},
+		"paths.index_dir":  {dst.Paths.IndexDir, src.Paths.IndexDir},
+	} {
+		if pair[0] != pair[1] {
+			keys = append(keys, key)
+		}
 	}
 	return keys
 }
