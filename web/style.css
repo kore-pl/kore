@@ -195,9 +195,59 @@ button {
 
 button:hover { border-color: var(--kore-info); }
 
+/* ===== 插件 UI 沙箱容器（裁决40/41）：iframe 随断点伸缩，不注入子帧样式 =====
+   .plugin-frame 只设外框；沙箱属性与 srcdoc 由 app.js 的 PluginBridge 提供。 */
+.plugin-panel { margin-top: var(--kore-space-4); }
+
+.plugin-ui-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--kore-space-4);
+  padding: var(--kore-space-4);
+}
+
+.plugin-ui-card {
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-container);
+  overflow: hidden;
+}
+
+.plugin-ui-title {
+  padding: var(--kore-space-2) var(--kore-space-3);
+  color: var(--kore-text-2);
+  font-size: var(--kore-font-12);
+  border-bottom: 1px solid var(--kore-border-2);
+}
+
+.plugin-frame {
+  display: block;
+  width: 100%;
+  height: 280px;
+  border: 0;
+  background: var(--kore-bg-0);
+}
+
+.plugin-ui-close {
+  min-height: 44px; /* 触摸命中区 ≥44px（裁决41） */
+  min-width: 44px;
+  width: 100%;
+}
+
 :focus-visible {
   outline: 2px solid var(--kore-info);
   outline-offset: 2px;
+}
+
+/* ===== 响应式断点（裁决41）：640 / 1024，值集中定义，禁 JS 探测 ===== */
+@media (min-width: 640px) {
+  .content { max-width: 960px; }
+  .plugin-frame { height: 380px; }
+}
+
+@media (min-width: 1024px) {
+  .content { max-width: 1120px; }
+  .plugin-ui-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plugin-frame { height: 460px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
