@@ -202,16 +202,90 @@
     window.location.assign('/');
   }
 
-  /* ===== 渲染与取数 ===== */
+  /* ===== 渲染与取数（常规设置 / 操作审计 两个 tab） ===== */
+  var tab = 'config';
+  var host = null;
+  var auditHandle = null;
+  var auditPromise = null;
+  var TAB_CSS = '.settings-tabs{display:flex;gap:4px;margin:0 0 12px;border-bottom:1px solid var(--kore-border-1);padding:0 4px}' +
+    '.settings-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--kore-text-3);' +
+    'padding:10px 14px;font-size:var(--kore-font-14);cursor:pointer}' +
+    '.settings-tab:hover{color:var(--kore-text-1)}.settings-tab.is-active{color:var(--kore-text-1);border-bottom-color:var(--kore-info)}' +
+    '.settings-page{display:block}@media (max-width:639px){.settings-tab{min-height:var(--kore-touch);flex:1 1 auto}}';
+  function ensureTabCss() {
+    if (document.getElementById('kore-settings-tabs-css')) return;
+    var s = el('style'); s.id = 'kore-settings-tabs-css'; s.textContent = TAB_CSS; document.head.appendChild(s);
+  }
+  function releaseAudit() {
+    if (auditHandle && typeof auditHandle.destroy === 'function') {
+      try { auditHandle.destroy(); } catch (err) { /* 视图清理失败不阻断切 tab */ }
+    }
+    auditHandle = null;
+  }
+  // audit.js 懒加载：与 shell/ensureModule 同口径，只注入一次；失败清缓存允许重试。
+  function mountAudit(box) {
+    box.appendChild(el('div', 'stub', '正在加载操作审计…'));
+    if (!auditPromise) {
+      auditPromise = new Promise(function (resolve, reject) {
+        var script = document.createElement('script');
+        script.src = '/assets/audit.js'; script.async = true;
+        script.onload = function () {
+          var mod = window.KoreAudit;
+          if (!mod || typeof mod.render !== 'function') { auditPromise = null; reject(new Error('audit.js 未导出 KoreAudit.render')); return; }
+          resolve(mod);
+        };
+        script.onerror = function () { auditPromise = null; reject(new Error('audit.js 加载失败')); };
+        document.head.appendChild(script);
+      });
+    }
+    auditPromise.then(function (mod) {
+      if (tab !== 'audit' || !box.parentNode) return;
+      box.textContent = '';
+      auditHandle = mod.render(box);
+    }, function (err) {
+      if (tab !== 'audit') return;
+      box.textContent = '';
+      box.appendChild(el('div', 'stub', '操作审计不可用：' + (err && err.message ? err.message : '模块加载失败')));
+    });
+  }
+  function buildTabs() {
+    var bar = el('div', 'settings-tabs');
+    bar.setAttribute('role', 'tablist'); bar.setAttribute('aria-label', '设置分区');
+    [['config', '常规设置'], ['audit', '操作审计']].forEach(function (item) {
+      var b = el('button', 'settings-tab' + (tab === item[0] ? ' is-active' : ''), item[1]);
+      b.type = 'button'; b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', tab === item[0] ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        if (tab === item[0]) return;
+        tab = item[0]; releaseAudit(); paint(host);
+      });
+      bar.appendChild(b);
+    });
+    return bar;
+  }
   function paint(container) {
-    var root = el('div', 'settings-root');
-    root.appendChild(buildAccount());
-    root.appendChild(buildSecurity());
-    root.appendChild(buildRuntime());
-    root.appendChild(buildAbout());
-    if (cache.error) root.insertBefore(el('div', 'settings-hint settings-hint-error', cache.error), root.firstChild);
-    if (container.replaceChildren) container.replaceChildren(root);
-    else { container.textContent = ''; container.appendChild(root); }
+    host = container || host;
+    if (!host) return;
+    ensureTabCss();
+    releaseAudit();
+    var page = el('div', 'settings-page');
+    page.appendChild(buildTabs());
+    var body = el('div', 'settings-tab-body');
+    page.appendChild(body);
+    if (tab === 'audit') {
+      body.className += ' audit-tab';
+      mountAudit(body);
+    } else {
+      var root = el('div', 'settings-root');
+      root.appendChild(buildAccount());
+      root.appendChild(buildSecurity());
+      root.appendChild(buildRuntime());
+      root.appendChild(buildAbout());
+      if (cache.error) root.insertBefore(el('div', 'settings-hint settings-hint-error', cache.error), root.firstChild);
+      body.appendChild(root);
+    }
+    if (host.replaceChildren) host.replaceChildren(page);
+    else { host.textContent = ''; host.appendChild(page); }
   }
   function load() {
     var p1 = request(EP.session).then(function (res) {
@@ -233,8 +307,13 @@
   function render(container) {
     if (!container || container.nodeType !== 1) return Promise.resolve(false);
     cache.error = '';
+    // 全局搜索的「查看操作审计」在跳转前放这个标记，到达设置页直接落到审计 tab。
+    if (window.__koreSettingsTab) {
+      tab = window.__koreSettingsTab === 'audit' ? 'audit' : 'config';
+      window.__koreSettingsTab = '';
+    }
     paint(container);
-    return load().then(function () { paint(container); return true; });
+    return load().then(function () { if (tab === 'config') paint(container); return true; });
   }
 
   window.KoreSettings = { render: render, endpoints: EP };

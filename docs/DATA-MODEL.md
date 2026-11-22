@@ -250,7 +250,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 时间与顺序由**键**承载（`%020d-%06d`：unix 纳秒 + 同纳秒序号，时钟回拨沿用末键纳秒继续编序，保证字典序严格递增 = 时间序），故不设独立 `at` 字段；`req_id`（请求关联）不在当前写入面——四类事件没有请求上下文，HTTP 侧审计（`login` / `invoke` 等）接入时再追加该字段（向后兼容：旧记录缺字段读为空）。查询遇单条损坏记录只 WARN 跳过，不中断整个查询。
 
-查询：`GET /api/v1/invoke/...` 不暴露审计；MVP 用 `kored audit --since 24h` 读 bbolt 输出，前端 M2 再加列表。保留 90 天，超期由清理流程删除。
+查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 24h` 读 bbolt 输出；前端列表见 `web/audit.js`。保留 90 天，超期由清理流程删除。
 
 ## 10. 备份与恢复
 

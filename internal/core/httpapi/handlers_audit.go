@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -24,7 +25,9 @@ type auditDetailEntry struct {
 }
 
 // auditRecordDTO 是单条审计记录的对外视图（全为显式字段，遵守 G-24 无动态类型逃逸）。
+// At 由存储键（unix 纳秒前缀）派生，只是响应字段，不落库（DATA-MODEL §9）。
 type auditRecordDTO struct {
+	At      string             `json:"at"`
 	Subject string             `json:"subject"`
 	Action  string             `json:"action"`
 	Plugin  string             `json:"plugin"`
@@ -46,6 +49,8 @@ type AuditQuery struct {
 	Since time.Time
 	// Action 动作过滤（可选；空表示不限）。
 	Action string
+	// Desc 为 true 时按时间倒序返回（前端「最新优先」；默认升序保持 CLI 口径）。
+	Desc bool
 	// Limit 最大返回条数，默认 auditDefaultLimit，上限 auditMaxLimit。
 	Limit int
 }
@@ -67,7 +72,7 @@ type AuditLister interface {
 	ListAudit(q AuditQuery) ([]AuditRecordView, error)
 }
 
-// parseAuditQuery 解析并校验参数：since 必填 + RFC3339、limit ≤1000、action 可选。
+// parseAuditQuery 解析并校验参数：since 必填 + RFC3339、limit ≤1000、action 可选、order=asc|desc。
 func parseAuditQuery(r *http.Request) (AuditQuery, string) {
 	values := r.URL.Query()
 	sinceStr := values.Get("since")
@@ -77,6 +82,14 @@ func parseAuditQuery(r *http.Request) (AuditQuery, string) {
 	since, err := time.Parse(time.RFC3339, sinceStr)
 	if err != nil {
 		return AuditQuery{}, "since 不是合法 RFC3339: " + sinceStr
+	}
+	desc := false
+	switch values.Get("order") {
+	case "", "asc":
+	case "desc":
+		desc = true
+	default:
+		return AuditQuery{}, "order 只接受 asc 或 desc"
 	}
 	limit := auditDefaultLimit
 	if values.Has("limit") {
@@ -89,7 +102,7 @@ func parseAuditQuery(r *http.Request) (AuditQuery, string) {
 		}
 		limit = parsed
 	}
-	return AuditQuery{Since: since, Action: values.Get("action"), Limit: limit}, ""
+	return AuditQuery{Since: since, Action: values.Get("action"), Desc: desc, Limit: limit}, ""
 }
 
 // handleAudit 处理 GET /api/v1/audit：先过目标操作鉴权（system:read），
@@ -119,6 +132,19 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, auditListBody{Records: records, Count: len(records), Limit: q.Limit})
 }
 
+// auditAt 从审计键 `%020d-%06d` 的纳秒段派生 RFC3339Nano；键非法返回空串，不猜时间。
+func auditAt(key string) string {
+	dash := strings.IndexByte(key, '-')
+	if dash <= 0 {
+		return ""
+	}
+	ns, err := strconv.ParseInt(key[:dash], 10, 64)
+	if err != nil || ns <= 0 {
+		return ""
+	}
+	return time.Unix(0, ns).UTC().Format(time.RFC3339Nano)
+}
+
 // toAuditDTO 把视图转成 DTO；Detail 的 map 转有序列并按 key 排序，输出稳定（G-24）。
 func toAuditDTO(row AuditRecordView) auditRecordDTO {
 	detail := make([]auditDetailEntry, 0, len(row.Detail))
@@ -127,7 +153,7 @@ func toAuditDTO(row AuditRecordView) auditRecordDTO {
 	}
 	sort.Slice(detail, func(i, j int) bool { return detail[i].Key < detail[j].Key })
 	return auditRecordDTO{
-		Subject: row.Subject, Action: row.Action, Plugin: row.Plugin,
+		At: auditAt(row.Key), Subject: row.Subject, Action: row.Action, Plugin: row.Plugin,
 		Target: row.Target, Result: row.Result, Detail: detail,
 	}
 }

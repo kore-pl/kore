@@ -37,9 +37,11 @@ func (auditTestBackend) Stats(context.Context) (SupervisorStats, error) {
 // auditTestLister 返回固定记录，支持 action 过滤与 limit 截断。
 type auditTestLister struct {
 	rows []AuditRecordView
+	last AuditQuery
 }
 
 func (l *auditTestLister) ListAudit(q AuditQuery) ([]AuditRecordView, error) {
+	l.last = q
 	out := make([]AuditRecordView, 0, len(l.rows))
 	for _, r := range l.rows {
 		if q.Action != "" && r.Action != q.Action {

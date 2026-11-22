@@ -313,6 +313,83 @@
     };
   }
 
+  /* ===== 全局搜索入口：首屏只放按钮 + Ctrl/Cmd+K，search.js 首次唤起才注入 =====
+     app.js 会整体替换 #kore-topbar 内容，故用 MutationObserver 把入口重新挂回 .conn 首位；
+     入口放在连接状态组内，手机端只显示 44px 图标，不额外占顶栏一行。 */
+  var searchTrigger = null;
+  var searchObserver = null;
+  var searchListening = false;
+  var SEARCH_CSS = '.kore-search-trigger{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px;' +
+    'border:1px solid var(--kore-border-1);border-radius:4px;background:var(--kore-bg-2);color:var(--kore-text-2);' +
+    'font-size:12px;cursor:pointer}' +
+    '.kore-search-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+    '.kore-search-trigger svg{width:16px;height:16px;flex:0 0 auto}' +
+    '.kore-search-trigger kbd{font-size:10px;color:var(--kore-text-3);border:1px solid var(--kore-border-1);' +
+    'border-radius:3px;padding:0 4px}' +
+    '@media (max-width:639px){.kore-search-trigger-label,.kore-search-trigger kbd{display:none}' +
+    '.kore-search-trigger{min-width:44px;min-height:44px;justify-content:center;padding:0}}';
+  function ensureSearchCss() {
+    if (document.getElementById('kore-search-trigger-css')) return;
+    var s = el('style'); s.id = 'kore-search-trigger-css'; s.textContent = SEARCH_CSS;
+    document.head.appendChild(s);
+  }
+  function openSearch() {
+    ensureLazy('/assets/search.js', 'KoreSearch', function (mod) { return mod && typeof mod.open === 'function'; })
+      .then(function (mod) { mod.open(); }, function (err) {
+        var t = document.getElementById('kore-search-trigger');
+        if (t) t.title = '全局搜索不可用：' + (err && err.message ? err.message : '模块加载失败');
+      });
+  }
+  function buildSearchTrigger() {
+    if (searchTrigger) return searchTrigger;
+    searchTrigger = el('button', 'kore-search-trigger');
+    searchTrigger.type = 'button';
+    searchTrigger.id = 'kore-search-trigger';
+    searchTrigger.setAttribute('aria-label', '全局搜索（Ctrl+K）');
+    searchTrigger.setAttribute('aria-haspopup', 'dialog');
+    searchTrigger.setAttribute('aria-expanded', 'false');
+    searchTrigger.title = '全局搜索（Ctrl+K）';
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20'); svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6');
+    var c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', '8.5'); c.setAttribute('cy', '8.5'); c.setAttribute('r', '5');
+    var p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', 'M12.5 12.5 17 17');
+    svg.appendChild(c); svg.appendChild(p);
+    searchTrigger.appendChild(svg);
+    searchTrigger.appendChild(el('span', 'kore-search-trigger-label', '搜索'));
+    searchTrigger.appendChild(el('kbd', null, 'Ctrl K'));
+    searchTrigger.addEventListener('click', openSearch);
+    return searchTrigger;
+  }
+  function placeSearchTrigger() {
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    var conn = top.querySelector('.conn');
+    if (!conn) { setTimeout(placeSearchTrigger, 60); return; }
+    var btn = buildSearchTrigger();
+    if (btn.parentNode !== conn) conn.insertBefore(btn, conn.firstChild);
+  }
+  function watchTopbar() {
+    ensureSearchCss();
+    placeSearchTrigger();
+    if (!window.MutationObserver) return;
+    if (searchObserver) searchObserver.disconnect();
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    searchObserver = new MutationObserver(placeSearchTrigger);
+    searchObserver.observe(top, { childList: true, subtree: true });
+  }
+  function onGlobalKey(ev) {
+    var key = ev.key ? String(ev.key).toLowerCase() : '';
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && key === 'k') {
+      if (!document.getElementById('kore-topbar')) return; // 登录页不响应
+      ev.preventDefault();
+      openSearch();
+    }
+  }
+
   function mount(list) {
     var items = [];
     for (var i = 0; list && i < list.length; i++) {
@@ -423,6 +500,11 @@
       window.addEventListener('hashchange', onHash);
       listening = true;
     }
+    if (!searchListening) {
+      document.addEventListener('keydown', onGlobalKey);
+      searchListening = true;
+    }
+    watchTopbar();
     if (!drawerListening) {
       document.addEventListener('keydown', onDrawerKey);
       drawerListening = true;

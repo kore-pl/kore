@@ -22,7 +22,7 @@ type auditListerFromStore struct {
 	db *store.Store
 }
 
-// ListAudit 按 since 下界（Key 前缀为 unix 纳秒）过滤，再按 limit 截断。
+// ListAudit 按 since 下界（Key 前缀为 unix 纳秒）过滤，按需倒序，再按 limit 截断。
 // store.ListAudit 按 key 升序列出；audit key 为 %020d-%06d（纳秒+序号）。
 func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) ([]httpapi.AuditRecordView, error) {
 	rows, err := l.db.ListAudit(store.AuditFilter{Action: q.Action})
@@ -39,9 +39,14 @@ func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) ([]httpapi.AuditR
 			Key: rec.Key, Subject: rec.Subject, Action: rec.Action, Plugin: rec.Plugin,
 			Target: rec.Target, Result: rec.Result, Detail: rec.Detail,
 		})
-		if len(out) >= q.Limit {
-			break
+	}
+	if q.Desc {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
 		}
+	}
+	if q.Limit > 0 && len(out) > q.Limit {
+		out = out[:q.Limit]
 	}
 	return out, nil
 }

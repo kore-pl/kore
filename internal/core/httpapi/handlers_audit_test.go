@@ -25,6 +25,26 @@ func TestAuditQueryNormal(t *testing.T) {
 	if got.Count != 1 || len(got.Records) != 1 || got.Records[0].Action != "plugins.enable" {
 		t.Fatalf("查询记录不符合预期: %+v", got)
 	}
+	if got.Records[0].At == "" {
+		t.Fatalf("响应应含由键派生的 at 时间字段: %+v", got.Records[0])
+	}
+}
+
+// TestAuditQueryOrder order=desc 透传给取数层；非法值 400，不静默忽略。
+func TestAuditQueryOrder(t *testing.T) {
+	lister := &auditTestLister{rows: []AuditRecordView{{Action: "plugins.enable"}}}
+	ts, cookie := auditSetup(t, adminResolver, lister)
+	status, body := auditRequest(t, ts, cookie, "?since=2020-01-01T00%3A00%3A00Z&order=desc")
+	if status != http.StatusOK {
+		t.Fatalf("order=desc 应 200，实际 %d body=%s", status, body)
+	}
+	if !lister.last.Desc {
+		t.Fatalf("order=desc 未透传到 ListAudit: %+v", lister.last)
+	}
+	status, body = auditRequest(t, ts, cookie, "?since=2020-01-01T00%3A00%3A00Z&order=sideways")
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "order") {
+		t.Fatalf("非法 order 应 400 且说明 order，实际 %d body=%s", status, body)
+	}
 }
 
 // TestAuditQueryUnauthorized 低权 site:read 访问审计端点 → 401（S-03 越权反例）。

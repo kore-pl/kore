@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/store"
 )
 
@@ -157,4 +158,27 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestAuditListerOrder 装配层：asc 保持键序，desc 最新优先，limit 在排序后截断。
+func TestAuditListerOrder(t *testing.T) {
+	db, err := store.Open(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("打开状态库失败: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, action := range []string{"audit.one", "audit.two", "audit.three"} {
+		if err := db.PutAudit(store.AuditRecord{Subject: "admin", Action: action, Result: store.AuditResultOK}); err != nil {
+			t.Fatalf("写审计失败: %v", err)
+		}
+	}
+	l := &auditListerFromStore{db: db}
+	asc, err := l.ListAudit(httpapi.AuditQuery{Since: time.Unix(0, 0), Limit: 2})
+	if err != nil || len(asc) != 2 || asc[0].Action != "audit.one" || asc[1].Action != "audit.two" {
+		t.Fatalf("升序前 2 条不符合预期: %+v err=%v", asc, err)
+	}
+	desc, err := l.ListAudit(httpapi.AuditQuery{Since: time.Unix(0, 0), Desc: true, Limit: 2})
+	if err != nil || len(desc) != 2 || desc[0].Action != "audit.three" || desc[1].Action != "audit.two" {
+		t.Fatalf("降序前 2 条不符合预期: %+v err=%v", desc, err)
+	}
 }
