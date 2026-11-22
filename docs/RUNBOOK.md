@@ -2,13 +2,14 @@
 
 # RUNBOOK — 发布与回滚操作手册
 
-## 0. 适用与三条铁律
+## 0. 适用与四条铁律
 
 只覆盖发布侧动作：索引重签、插件升级、新增插件、回滚。日常构建/启动见 [QUICKSTART.md](../QUICKSTART.md)，内核规格见 [CORE.md](./CORE.md)。
 
 1. **公钥有两份副本，必须逐字相同**：`kore-plugins/scripts/validate-index.sh` 的 `PUB_HEX` 与 `internal/core/market/verify.go` 的 `IndexPublicKeyHex`。只改一处 = 校验器与内核各说各话。
 2. **公钥是编译期常量**：换公钥必须 `make build` + 重启 kored。索引正文每请求重读磁盘（`readTrusted`），公钥只在进程启动时进内存——旧进程永远用旧公钥。
 3. **验签失败一律 401，不降级**：`readTrusted` 是列表/详情/预设/安装的唯一信任门，失败返回 `E_UNAUTHORIZED`（401），无旁路。
+4. **`paths.index_dir` 必须直接指向 `kore-plugins/index`**：不要把它复制到 `.kore-local-state/` 等 state 目录做"快照"——索引每请求重读（`market.Load` → `readTrusted`），副本只会让商店版本停在复制那一刻（2026-11-23 曾因指向 `signed-index` 快照，把 discover 0.2.0 显示成 0.1.0）。
 
 ## 1. 索引重签后的发布流程（换密钥 / 重签后必须全走）
 
