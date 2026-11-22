@@ -1,10 +1,10 @@
 # .agents · 质量门禁
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M0
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G10）
+## 1. 门禁表（G1–G19 + G-28）
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -27,6 +27,7 @@
 | G17 | 无 any / object 逃逸 | `grep -rn "map[string]any" --include='*.go' internal/ cmd/`（排除 `_test.go` 与 `testdata/`）；`grep -rn "类型：object" docs/`；`grep -rn "json.RawMessage" --include='*.go' internal/ cmd/` | 对外 schema / 对外结构体零 `object` / `any` / `map[string]any`；docs 无「类型：object」；`json.RawMessage` 仅出现在插件方法参数与结果载荷处且写明原因 | 评审退回：字段改成显式结构体，或改用带类型前缀的标量；解析期临时 `any` 必须在一处收口转具体类型 | verifier | 合并前（判定型部分由评审回答） |
 | G18 | worktree 卫生 | `make wt-check`（F 落地）；等价手工：`git worktree list` + `git branch --list 'wt-*' 'tmp-*'` | `git worktree list` 仅 1 行（主工作树）；临时分支清单为空；残留的 `/tmp/*` 检出目录已删除 | 先 `git worktree remove`，再 `git branch -d`，最后 `git worktree prune`；有改动未合并则先合并或写明放弃原因 | verifier | 里程碑收口 |
 | G19 | 开源资产完整 | `make oss-check`（第 8 段，阻断级）；等价手工：逐个检查根 `LICENSE` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` / `SECURITY.md` / `CHANGELOG.md` / `.github/workflows/ci.yml`，并 `grep -n "MIT License" LICENSE` 与 `grep -n "Permission is hereby granted" LICENSE` | 六件资产齐备；`LICENSE` 含上述两个特征串；无 GPL / Apache / AGPL 等非 MIT 协议头混入 | 缺件即补；协议头冲突则统一为 MIT 并在 PR 中说明；不得以「以后再补」放行 | verifier | 里程碑收口 / 发布前 |
+| G-28 | UI 交付双端证据 | 触发：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，在声明"完成"前；取证：`.agents/verify/screenshots/` 下同时存在 `<场景>-desktop-*.png`（1440×900 或 1280×800，full-page）与 `<场景>-mobile-*.png`（390×844），并用 `file <png>` / `identify -format '%wx%h'` 读实际宽高；另附一段产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前是"可用"还是"占位"） | 三件套齐备，分辨率与命名匹配；自评三段齐全、不出现"应该是 / 大概"式措辞 | 缺任一项即不得声明完成：补截图（不得缩放糊弄分辨率、不得拿桌面图裁成手机图）或补自评；证据缺失时任务记 BLOCKED，不记 PASS | implementer 取证 + verifier 核对 | 检查点（UI 交付） |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
 
@@ -61,6 +62,21 @@
 1. 命令必须是**原文**，包括环境变量与参数；不许写"跑了构建"。
 2. 退出码必须是真实值，不许省略。
 3. 证据贴在任务 evidence 或验收报告；文档类任务贴文件清单 + `wc -l`。
+
+### 3.1 G-28 UI 交付证据格式
+
+```text
+命令: file .agents/verify/screenshots/store-home-desktop-1220.png .agents/verify/screenshots/store-home-mobile-1220.png
+退出码: 0
+输出: store-home-desktop-1220.png: PNG image data, 1440 x 900 ... / store-home-mobile-1220.png: PNG image data, 390 x 844 ...
+产品定位自评: 本页解决"不装插件也能看懂商店有什么"；相对宝塔软件商店缺分类筛选与评分；当前"可用"，筛选列入占位清单。
+```
+
+1. **场景名**：kebab-case，PC 与手机同名同序号（如 `store-home` / `monitor-overview` / `settings-general`）。
+2. **PC**：1440×900 或 1280×800，**full-page**（整页含滚动区，不只首屏视口）。**手机**：390×844（iPhone 14 逻辑分辨率）。
+3. **不得替代**：接口 200 / DOM 断言 / 静态代码检查都不能代替截图；不得同一张图缩放冒充双端，不得用设计稿或拼接图。
+4. **自评三问必答**：① 这页替用户解决什么问题；② 与宝塔 / 1Panel 同类功能的**具体**差距（缺哪个能力，不写"待完善"）；③ 当前是"可用"还是"占位"（占位必须写清缺什么、下一步补什么）。
+5. **判定**：`make docs-check` 不校验 PNG（图像不属文档门禁），由 verifier 按本节逐项核对并写进验收报告；缺证据 = 未完成。
 
 ## 4. M0 阶段的合法跳过规则
 

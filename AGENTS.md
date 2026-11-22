@@ -23,7 +23,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 组件图、进程模型、插件状态机、故障域。
 3. 本领域文档：内核 [docs/CORE.md](docs/CORE.md)｜协议 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md)｜资源 [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md)｜数据 [docs/DATA-MODEL.md](docs/DATA-MODEL.md)｜前端 [docs/FRONTEND.md](docs/FRONTEND.md)｜安全 [docs/SECURITY.md](docs/SECURITY.md)｜决策 [docs/DECISIONS/](docs/DECISIONS/)。
 4. [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段门禁、讨论协议、任务板状态机、上下文交接。
-5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 门禁命令、执行者、分层与证据格式。
+5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28 门禁命令、执行者、分层与证据格式。
 6. **贡献与治理**：[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — 开源化政策（MIT）、PR / Issue 流程与评审要求。
 7. **安全披露**：[SECURITY.md](SECURITY.md)（根，披露政策）vs [docs/SECURITY.md](docs/SECURITY.md)（设计）——**两者不要混**。
 
@@ -58,6 +58,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-25 | worktree 卫生：不得遗留临时 worktree 与临时分支；里程碑收口时 `git worktree list` 仅主工作树、`git branch --list 'wt-*' 'tmp-*'` 为空 | 该里程碑不得收口（残留会干扰后续检出与 CI） | `make wt-check`（F 落地）或手工 `git worktree list` + `git branch --list` |
 | G-26 | 开源资产完整：根必须有 `LICENSE`（MIT）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`；`LICENSE` 必须含 `MIT License` 与 `Permission is hereby granted`；不得混入非 MIT 协议头 | 不得发布（GitHub 上缺 `LICENSE` = 默认保留所有权利，与项目声明矛盾） | `make oss-check`（第 8 段，阻断级） |
 | G-27 | 大小写一致性：module 路径全小写且无 `!` 转义；同一目录内不得存在仅大小写不同的文件 / 目录（Windows / macOS 会静默覆盖）；插件 `info.json` 的 `id` 匹配 `^[a-z][a-z0-9-]*$`；文档中 GitHub URL 的 owner 段全小写 | 阻塞级 FAIL（冲突文件在 Windows / macOS clone 时丢失）；**历史组织名指称（见 ADR-0017）**与 URL owner 大小写为 **WARN 级** | `make case-check`（第 9 段） |
+| G-28 | UI 交付双端证据：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，声明"完成"时必须同时给 ① PC 截图（1440×900 或 1280×800，full-page）② 手机截图（390×844）③ 产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前"可用"还是"占位"）；截图存 `.agents/verify/screenshots/`，命名 `<场景>-desktop-*.png` / `<场景>-mobile-*.png` | 缺任一项不得声明完成（任务记 BLOCKED，不记 PASS）；拿接口 200 / DOM 断言 / 设计稿替代截图同判 | 验收报告逐项核对：`file` / `identify` 读 PNG 实际宽高 + 自评三问原文；禁止同图缩放冒充双端 |
 
 ## 3. 提交规范
 
@@ -111,7 +112,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [.agents/ROLES.md](.agents/ROLES.md) — 6 张角色卡（输入/输出/可做/禁止/交接物/完成判据）、冲突仲裁、不可兼任。
 - [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段逐条门禁、讨论协议、状态机、防漂移审计。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
-- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28 门禁命令、三层组合、证据格式、M0 跳过规则。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md) — 复盘模板、里程碑记录、反模式沉淀。
 - [.agents/LOG/](.agents/LOG/) — 判断留痕：裁决台账（选项 / 依据 / 影响）、派发台账、会话摘要；与 BOARD（状态）、JOURNAL（教训）互补。
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献流程与行为准则（PR / Issue / 评审要求）。
