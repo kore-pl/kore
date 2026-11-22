@@ -17,15 +17,25 @@
     dashboard: ['M3 3h6v6H3z', 'M11 3h6v6h-6z', 'M3 11h6v6H3z', 'M11 11h6v6h-6z'],
     store: ['M3 7h14', 'M4 7l1.4-3.4h9.2L16 7', 'M5 7v9h10V7', 'M8.5 16v-4.5h3V16'],
     plugins: ['M4 8l6-4 6 4v7l-6 3.5L4 15z', 'M4 8l6 3.5L16 8', 'M10 11.5V18.5'],
+    files: ['M3 6a2 2 0 0 1 2-2h3l1.5 1.5H15a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M3 8h14'],
+    sites: ['M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14', 'M3 10h14',
+      'M10 3c2 2.2 3 4.5 3 7s-1 4.8-3 7c-2-2.2-3-4.5-3-7s1-4.8 3-7'],
+    tasks: ['M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14', 'M10 6v4.2l2.6 1.5'],
+    more: ['M4 10h.01', 'M10 10h.01', 'M16 10h.01'],
     monitor: ['M3 16V4', 'M3 16h14', 'M6 12.5l3-4 3 2 4-6'],
     settings: ['M3 6h14', 'M3 10h14', 'M3 14h14', 'M7 4v4', 'M13 8v4', 'M9 12v4']
   };
   var byId = Object.create(null);
   var currentId = '';
   var viewBox = null;
-  var activeBtn = null;
+  var navButtons = Object.create(null);
+  var moreBtn = null;
+  var drawer = null;
+  var backdrop = null;
+  var drawerOpen = false;
   var handle = null;
   var listening = false;
+  var drawerListening = false;
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -63,6 +73,28 @@
     return normalize(window.location.hash);
   }
 
+  // 手机底部 tab bar 的「更多」抽屉：前 5 项常驻，其余路由收进抽屉。
+  // 只在 <640px 由 CSS 显示；桌面侧栏始终展示全部导航项（断点归 CSS，不做视口探测）。
+  function setDrawer(open, focusBack) {
+    drawerOpen = !!open;
+    if (!drawer || !backdrop) return;
+    drawer.hidden = !drawerOpen;
+    backdrop.hidden = !drawerOpen;
+    drawer.classList.toggle('is-open', drawerOpen);
+    backdrop.classList.toggle('is-open', drawerOpen);
+    if (moreBtn) moreBtn.setAttribute('aria-expanded', drawerOpen ? 'true' : 'false');
+    if (drawerOpen) {
+      var first = drawer.querySelector('button');
+      if (first) first.focus();
+    } else if (focusBack && moreBtn) {
+      moreBtn.focus();
+    }
+  }
+
+  function onDrawerKey(ev) {
+    if (ev.key === 'Escape' && drawerOpen) setDrawer(false, true);
+  }
+
   // 模块渲染可返回 handle；handle.destroy() 是清理钩子（定时器 / 监听器）。
   function releaseHandle() {
     if (handle && typeof handle.destroy === 'function') {
@@ -75,15 +107,24 @@
     var route = byId[id] || byId[DEFAULT_ID];
     if (!route || !viewBox) return null;
     releaseHandle();
-    if (activeBtn && activeBtn !== route.btn) {
-      activeBtn.classList.remove('is-active');
-      activeBtn.removeAttribute('aria-current');
+    for (var key in navButtons) {
+      var nodes = navButtons[key];
+      for (var i = 0; i < nodes.length; i++) {
+        nodes[i].classList.remove('is-active');
+        nodes[i].removeAttribute('aria-current');
+      }
     }
-    activeBtn = route.btn || null;
-    if (activeBtn) {
-      activeBtn.classList.add('is-active');
-      activeBtn.setAttribute('aria-current', 'page');
+    var active = navButtons[route.id] || [];
+    for (var j = 0; j < active.length; j++) {
+      active[j].classList.add('is-active');
+      active[j].setAttribute('aria-current', 'page');
     }
+    if (moreBtn) {
+      moreBtn.classList.toggle('is-active', !!route.extra);
+      if (route.extra) moreBtn.setAttribute('aria-current', 'page');
+      else moreBtn.removeAttribute('aria-current');
+    }
+    setDrawer(false, false);
     currentId = route.id;
     viewBox.setAttribute('data-view', route.id);
     // 视图模块会给容器加自己的类（如 monitor 加 .kore-monitor）；切走时必须还原，
@@ -102,6 +143,7 @@
   // hashchange 再进来时 compare currentId 已相等 → 不重复 paint，避免双份请求。
   function navigate(id) {
     if (isRoot(id)) { rootIntent(); return ''; }
+    setDrawer(false, false);
     var next = normalize(id);
     if (!byId[next]) next = byId[DEFAULT_ID] ? DEFAULT_ID : '';
     if (!next) return '';
@@ -113,6 +155,7 @@
 
   function onHash() {
     var raw = window.location.hash;
+    setDrawer(false, false);
     if (isRoot(raw)) { rootIntent(); return; }
     var id = normalize(raw);
     if (id === currentId) return;
@@ -141,13 +184,18 @@
     return span;
   }
 
-  function navItem(route) {
-    var btn = el('button', 'kore-nav-item');
+  function navItem(route, isDrawerItem) {
+    var btn = el('button', 'kore-nav-item' + (route.extra && !isDrawerItem ? ' kore-nav-extra' : '') +
+      (isDrawerItem ? ' kore-nav-drawer-item' : ''));
     btn.type = 'button';
     btn.setAttribute('data-view', route.id);
     btn.appendChild(navIcon(route.id));
     btn.appendChild(el('span', 'kore-nav-label', route.label));
-    btn.addEventListener('click', function () { navigate(route.id); });
+    if (isDrawerItem) btn.setAttribute('role', 'menuitem');
+    btn.addEventListener('click', function () {
+      if (drawerOpen) setDrawer(false, false);
+      navigate(route.id);
+    });
     return btn;
   }
 
@@ -162,8 +210,9 @@
     if (!items.length || !host) return null;
 
     byId = Object.create(null);
+    navButtons = Object.create(null);
     releaseHandle();
-    activeBtn = null;
+    moreBtn = null; drawer = null; backdrop = null; drawerOpen = false;
     currentId = '';
 
     var shell = el('div', 'kore-shell');
@@ -179,11 +228,24 @@
         id: items[j].id,
         label: items[j].label || items[j].id,
         render: items[j].render,
-        btn: null
+        extra: j >= 5
       };
       byId[route.id] = route;
-      route.btn = navItem(route);
-      nav.appendChild(route.btn);
+      var btn = navItem(route, false);
+      navButtons[route.id] = [btn];
+      nav.appendChild(btn);
+    }
+    var extras = items.slice(5);
+    if (extras.length) {
+      moreBtn = el('button', 'kore-nav-item kore-nav-more');
+      moreBtn.type = 'button';
+      moreBtn.setAttribute('aria-haspopup', 'true');
+      moreBtn.setAttribute('aria-expanded', 'false');
+      moreBtn.setAttribute('aria-controls', 'kore-more-drawer');
+      moreBtn.appendChild(navIcon('more'));
+      moreBtn.appendChild(el('span', 'kore-nav-label', '更多'));
+      moreBtn.addEventListener('click', function () { setDrawer(!drawerOpen, false); });
+      nav.appendChild(moreBtn);
     }
 
     var col = el('div', 'kore-col');
@@ -196,12 +258,34 @@
 
     shell.appendChild(nav);
     shell.appendChild(col);
+    if (extras.length) {
+      backdrop = el('div', 'kore-nav-backdrop');
+      backdrop.hidden = true;
+      backdrop.addEventListener('click', function () { setDrawer(false, true); });
+      drawer = el('div', 'kore-nav-drawer');
+      drawer.id = 'kore-more-drawer';
+      drawer.hidden = true;
+      drawer.setAttribute('role', 'menu');
+      drawer.setAttribute('aria-label', '更多导航');
+      for (var k = 0; k < extras.length; k++) {
+        var extraRoute = byId[extras[k].id];
+        var extraBtn = navItem(extraRoute, true);
+        navButtons[extraRoute.id].push(extraBtn);
+        drawer.appendChild(extraBtn);
+      }
+      shell.appendChild(backdrop);
+      shell.appendChild(drawer);
+    }
     if (host.replaceChildren) host.replaceChildren(shell);
     else { host.textContent = ''; host.appendChild(shell); }
 
     if (!listening) {
       window.addEventListener('hashchange', onHash);
       listening = true;
+    }
+    if (!drawerListening) {
+      document.addEventListener('keydown', onDrawerKey);
+      drawerListening = true;
     }
     paint(hashView()); // 深链接：登录后打开 #/store 直接落到该视图
     return shell;

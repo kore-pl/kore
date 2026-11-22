@@ -12,7 +12,7 @@
   </div>
   <!-- 静态资源统一走 /assets/ 前缀：内核只认前缀 + 后缀白名单，不枚举前端文件名。
        defer 保序：shell.js（布局壳/视图路由）先于 app.js 就绪，app.js 只在登录成功后 mount。
-       store.js / monitor.js / settings.js 三个视图模块**不在此加载**：由 app.js 的
+       store.js / files.js / sites.js / tasks.js / monitor.js / settings.js 六个视图模块**不在此加载**：由 app.js 的
        ensureModule 在切到对应视图时动态注入，首屏请求数与视图数无关（FRONTEND §7）。 -->
   <script src="/assets/shell.js" defer></script>
   <script src="/assets/app.js" defer></script>

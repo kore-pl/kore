@@ -1047,6 +1047,9 @@
     { id: 'dashboard', label: '概览', render: renderDashboardView },
     { id: 'store', label: '软件商店', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
     { id: 'plugins', label: '已装插件', render: renderPluginsView },
+    { id: 'files', label: '文件管理', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
+    { id: 'sites', label: '网站', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
+    { id: 'tasks', label: '计划任务', render: moduleView('KoreTasks', '/assets/tasks.js', '计划任务') },
     { id: 'monitor', label: '监控', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
     { id: 'settings', label: '设置', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
   ];

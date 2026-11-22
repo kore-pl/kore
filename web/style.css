@@ -17,6 +17,7 @@
   --kore-border-1: #30363D;
   --kore-border-2: #21262D;
   --kore-shadow: 0 4px 12px rgba(0, 0, 0, .4);
+  --kore-overlay: rgba(13, 17, 23, .62);
 
   --kore-space-1: 4px;
   --kore-space-2: 8px;
@@ -1335,4 +1336,212 @@ button:disabled, .btn:disabled {
 @media (max-width: 639px) {
   .kore-topbar .brand { display: none; }
   .kore-topbar .conn { flex-wrap: nowrap; overflow-x: auto; width: 100%; }
+}
+
+
+/* ===== 文件管理 / 网站 / 计划任务（web/files.js · sites.js · tasks.js） =====
+   约束与既有视图一致：色值只走 :root 令牌，间距 4/8/12/16/24，字号 12/13/14/16/20，
+   表格在 <640px 逐行转卡片（data-label 复原列名），触摸目标 ≥44px（裁决41）。 */
+.view-head { margin-bottom: var(--kore-space-4); }
+.view-title { margin: 0; font-size: var(--kore-font-20); font-weight: 600; }
+.view-sub { margin: var(--kore-space-1) 0 0; color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+
+/* 路径面包屑 + 工具栏 */
+.files-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--kore-space-2); margin-bottom: var(--kore-space-2);
+}
+.files-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
+.files-crumb {
+  min-height: 32px; padding: 0 var(--kore-space-2); color: var(--kore-info);
+  background: transparent; border: 1px solid transparent;
+}
+.files-crumb:hover { background: var(--kore-bg-2); border-color: var(--kore-border-2); }
+.files-crumb[aria-current="page"] {
+  color: var(--kore-text-1); font-weight: 600;
+  background: var(--kore-bg-2); border-color: var(--kore-border-2);
+}
+.files-sep { color: var(--kore-text-3); }
+.files-actions { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.files-status, .site-status, .task-status {
+  min-height: 20px; margin-bottom: var(--kore-space-3);
+  font-size: var(--kore-font-12); color: var(--kore-text-3);
+}
+
+/* 文件列表与预览 */
+.files-layout { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-4); }
+.files-list-panel, .files-preview-panel { min-width: 0; margin-bottom: 0; }
+.files-list-host { overflow-x: auto; }
+.files-table, .sites-table, .tasks-table { width: 100%; border-collapse: collapse; font-size: var(--kore-font-13); }
+.files-table thead th, .sites-table thead th, .tasks-table thead th {
+  text-align: left; padding: var(--kore-space-2) var(--kore-space-3);
+  color: var(--kore-text-2); font-size: var(--kore-font-12); font-weight: 400;
+  border-bottom: 1px solid var(--kore-border-2); white-space: nowrap;
+}
+.files-table tbody tr + tr, .sites-table tbody tr + tr, .tasks-table tbody tr + tr {
+  border-top: 1px solid var(--kore-border-2);
+}
+.files-table td, .sites-table td, .tasks-table td {
+  padding: var(--kore-space-3); vertical-align: middle; word-break: break-word;
+}
+.files-row { cursor: pointer; }
+.files-row:hover { background: var(--kore-bg-2); }
+.files-row:focus-visible { outline: 2px solid var(--kore-info); outline-offset: -2px; }
+.files-name { display: flex; align-items: center; gap: var(--kore-space-2); }
+.files-kind {
+  flex: 0 0 auto; padding: 0 4px; color: var(--kore-text-3);
+  background: var(--kore-bg-2); border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control); font-size: 11px;
+}
+.files-del, .sites-del, .tasks-del { color: var(--kore-danger); border-color: var(--kore-danger); }
+.files-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2);
+  padding: var(--kore-space-3) var(--kore-space-4) 0;
+}
+.files-preview-body {
+  display: flex; flex-direction: column; gap: var(--kore-space-2);
+  padding: var(--kore-space-3) var(--kore-space-4) var(--kore-space-4);
+}
+.files-editor {
+  width: 100%; min-height: 280px; resize: vertical; padding: var(--kore-space-3);
+  color: var(--kore-text-1); background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-1); border-radius: var(--kore-radius-control);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--kore-font-13); line-height: 1.6; tab-size: 2;
+}
+.files-editor:focus { border-color: var(--kore-info); outline: none; }
+.files-save-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--kore-space-2);
+}
+
+/* 站点表单 / 状态 / 结果 */
+.site-form { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-3); padding: var(--kore-space-4); }
+.site-submit { justify-self: start; min-width: 120px; }
+.sites-list-host, .tasks-list-host { overflow-x: auto; }
+.site-domain { min-width: 180px; }
+.site-state { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.site-result-host:empty, .site-detail-host:empty { display: none; }
+.site-result { margin-bottom: var(--kore-space-4); }
+.site-result-error {
+  padding: var(--kore-space-3) var(--kore-space-4); margin: 0;
+  color: var(--kore-text-1); background: var(--kore-bg-2);
+  border-left: var(--kore-space-1) solid var(--kore-danger);
+  white-space: pre-wrap; word-break: break-word; font-size: var(--kore-font-12);
+}
+.site-test-output {
+  margin: 0; max-height: 180px; overflow: auto; padding: var(--kore-space-2);
+  color: var(--kore-text-2); background: var(--kore-bg-0);
+  border: 1px solid var(--kore-border-2); border-radius: var(--kore-radius-control);
+  white-space: pre-wrap; word-break: break-word; font-size: var(--kore-font-12);
+}
+.site-detail { margin-bottom: var(--kore-space-4); }
+
+/* 计划任务 */
+.task-form { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-3); padding: var(--kore-space-4); }
+.task-presets, .task-form-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
+.task-hint { margin: 0; }
+.task-command { max-width: 380px; word-break: break-all; }
+.task-backup {
+  margin: calc(var(--kore-space-2) * -1) 0 var(--kore-space-3);
+  color: var(--kore-text-3); font-size: var(--kore-font-12); word-break: break-all;
+}
+.task-backup[hidden] { display: none; }
+.task-form-panel.scroll-margin, .task-form-panel { scroll-margin-top: var(--kore-space-6); }
+
+/* 轻量模态：文件新建 / 删除确认共用（无第三方组件） */
+.kore-modal {
+  position: fixed; inset: 0; z-index: 10; display: flex;
+  align-items: center; justify-content: center; padding: var(--kore-space-4);
+  background: var(--kore-overlay);
+}
+.kore-modal-box {
+  width: 100%; max-width: 420px; display: flex; flex-direction: column;
+  gap: var(--kore-space-3); padding: var(--kore-space-4);
+  background: var(--kore-bg-1); border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container); box-shadow: var(--kore-shadow);
+}
+.kore-modal-title { font-size: var(--kore-font-14); font-weight: 600; }
+.kore-modal-text { margin: 0; color: var(--kore-text-2); font-size: var(--kore-font-13); word-break: break-word; }
+.kore-modal-msg { min-height: 18px; color: var(--kore-danger); font-size: var(--kore-font-12); word-break: break-word; }
+.kore-modal-actions { display: flex; justify-content: flex-end; gap: var(--kore-space-2); }
+
+/* 表格单元格上的 flex 会让 <td> 脱离表格布局：桌面端还原为 table-cell，
+   让「操作」「状态」「名称」留在各自列内；<640px 仍走卡片式 flex。 */
+@media (min-width: 640px) {
+  .files-table td.files-name, .files-table td.cell-ops,
+  .sites-table td.site-state, .sites-table td.cell-ops,
+  .tasks-table td.cell-ops { display: table-cell; white-space: nowrap; }
+  .files-table td.files-name > * + *, .sites-table td.site-state > * + *,
+  .files-table td.cell-ops > * + *, .sites-table td.cell-ops > * + *,
+  .tasks-table td.cell-ops > * + * { margin-left: var(--kore-space-2); }
+}
+
+@media (min-width: 1024px) {
+  .files-layout { grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); align-items: start; }
+  .site-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; }
+  .task-form { grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); }
+  .task-cmd { grid-column: 1 / -1; }
+  .task-form-ops, .task-hint { grid-column: 1 / -1; }
+}
+
+/* <640px：三张表转卡片；抽屉补足「更多」入口，触摸目标 ≥44px */
+@media (max-width: 639px) {
+  .files-crumb { min-height: var(--kore-touch); }
+  .files-actions .btn, .task-presets .btn, .task-form-ops .btn, .site-submit,
+  .sites-table .cell-ops .btn, .tasks-table .cell-ops .btn, .files-del { min-height: var(--kore-touch); }
+  .files-table thead, .sites-table thead, .tasks-table thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+  }
+  .files-table, .files-table tbody, .files-table tr, .files-table td,
+  .sites-table, .sites-table tbody, .sites-table tr, .sites-table td,
+  .tasks-table, .tasks-table tbody, .tasks-table tr, .tasks-table td { display: block; width: 100%; }
+  .files-table tr, .sites-table tr, .tasks-table tr {
+    padding: var(--kore-space-2) 0 var(--kore-space-3);
+    border-top: 1px solid var(--kore-border-2);
+  }
+  .files-table td, .sites-table td, .tasks-table td {
+    display: flex; align-items: center; gap: var(--kore-space-3);
+    padding: var(--kore-space-1) var(--kore-space-4);
+  }
+  .files-table td::before, .sites-table td::before, .tasks-table td::before {
+    content: attr(data-label); flex: 0 0 84px;
+    color: var(--kore-text-3); font-size: var(--kore-font-12);
+  }
+  .site-state { flex: 1 1 auto; }
+  .files-editor { min-height: 240px; }
+  .kore-modal-actions .btn { min-height: var(--kore-touch); }
+}
+
+/* ===== 手机底部 tab bar 扩展：前 5 项常驻 + 「更多」抽屉 =====
+   8 项在 360px 屏上每项仅 45px，文字会挤成不可读；抽屉把后 3 项收进一次点击内，
+   比横向滚动更易发现（没有隐藏的滚动条提示），且主 tab 每项保持 ≥56px 触摸区。 */
+.kore-nav-more, .kore-nav-drawer, .kore-nav-backdrop { display: none; }
+@media (max-width: 639px) {
+  .kore-nav-extra { display: none !important; }
+  .kore-nav-more { display: flex; }
+  .kore-nav-backdrop {
+    display: block; position: fixed; inset: 0 0 calc(56px + env(safe-area-inset-bottom, 0px)) 0;
+    z-index: 4; background: var(--kore-overlay);
+  }
+  .kore-nav-backdrop[hidden] { display: none; }
+  .kore-nav-drawer {
+    display: none; position: fixed; left: var(--kore-space-2); right: var(--kore-space-2);
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + var(--kore-space-2)); z-index: 5;
+    flex-direction: column; gap: var(--kore-space-1); padding: var(--kore-space-2);
+    background: var(--kore-bg-1); border: 1px solid var(--kore-border-1);
+    border-radius: var(--kore-radius-container); box-shadow: var(--kore-shadow);
+  }
+  .kore-nav-drawer.is-open { display: flex; }
+  .kore-nav-drawer[hidden] { display: none; }
+  .kore-nav-drawer .kore-nav-item {
+    flex: 0 0 auto; width: 100%; min-height: 48px; padding: 0 var(--kore-space-3);
+    flex-direction: row; justify-content: flex-start; gap: var(--kore-space-3);
+    border: 1px solid transparent; border-radius: var(--kore-radius-control);
+  }
+  .kore-nav-drawer .kore-nav-item.is-active {
+    box-shadow: inset 3px 0 0 var(--kore-info);
+  }
+  .kore-nav-drawer .kore-nav-label { font-size: var(--kore-font-14); }
 }
