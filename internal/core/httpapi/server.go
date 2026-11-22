@@ -58,6 +58,8 @@ type Options struct {
 	Version string
 	// Report 是启动期环境探测结果，原样返回。
 	Report envprobe.Report
+	// Paths 是配置加载后归一化的绝对路径，随 /api/v1/system/info 返回。
+	Paths PathsInfo
 	// SocketPath 是 UDS 监听路径（/run/kore/kore.sock）。
 	SocketPath string
 	// Addr 是可选的 TCP 监听地址（默认空 = 不监听 TCP）。

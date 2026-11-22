@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/store"
 )
 
@@ -86,4 +87,16 @@ func openStore(cfg config, stderr io.Writer) (*store.Store, int) {
 		return nil, exitState
 	}
 	return nil, exitStore
+}
+
+// pathsInfo 把配置加载后归一化的绝对路径映射为 /api/v1/system/info 视图。
+func pathsInfo(cfg config) httpapi.PathsInfo {
+	if cfg.snapshot == nil {
+		return httpapi.PathsInfo{}
+	}
+	p := cfg.snapshot.Paths
+	return httpapi.PathsInfo{
+		StateDir: p.StateDir, RunDir: p.RunDir, LogDir: p.LogDir,
+		IndexDir: p.IndexDir, PluginDir: p.PluginDir,
+	}
 }

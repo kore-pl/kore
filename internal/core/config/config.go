@@ -104,6 +104,12 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 		return nil, nil, fmt.Errorf("%s: 读取配置失败: %w", path, err)
 	}
 	warnings = append(warnings, applyOverrides(snap, opts.StateDir)...)
+	// 覆盖来源（含环境变量 / 命令行）也可能带相对路径，归一化必须放在最后一步。
+	pathWarnings, err := normalizePaths(snap)
+	if err != nil {
+		return nil, warnings, err
+	}
+	warnings = append(warnings, pathWarnings...)
 	return snap, warnings, nil
 }
 

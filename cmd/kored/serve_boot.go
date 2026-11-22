@@ -64,6 +64,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 	server := httpapi.New(httpapi.Options{
 		Version:        version,
 		Report:         report,
+		Paths:          pathsInfo(cfg),
 		SocketPath:     socketPath(app),
 		Addr:           cfg.Addr,
 		Backend:        svc.backend,

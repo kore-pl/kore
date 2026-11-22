@@ -95,3 +95,20 @@ type Backend interface {
 	// Stats 返回 supervisor 统计。
 	Stats(ctx context.Context) (SupervisorStats, error)
 }
+
+// PathsInfo 是 /api/v1/system/info 暴露的运行期目录视图。
+//
+// 全部为配置加载阶段归一化后的绝对路径：排查"插件二进制找不到"这类问题时，
+// 调用方不必再猜进程当前工作目录。
+type PathsInfo struct {
+	// StateDir 状态目录。
+	StateDir string `json:"state_dir"`
+	// RunDir 运行目录（socket 与锁）。
+	RunDir string `json:"run_dir"`
+	// LogDir 日志目录。
+	LogDir string `json:"log_dir"`
+	// IndexDir 本地插件索引目录。
+	IndexDir string `json:"index_dir"`
+	// PluginDir 插件解包目录。
+	PluginDir string `json:"plugin_dir"`
+}

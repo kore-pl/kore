@@ -21,6 +21,8 @@ type systemInfo struct {
 	Version string `json:"version"`
 	// Supervisor 是常驻插件数与总重启数。
 	Supervisor SupervisorStats `json:"supervisor"`
+	// Paths 是已归一化为绝对路径的运行期目录（排障用）。
+	Paths PathsInfo `json:"paths"`
 }
 
 // pluginsPath 是插件管理端点前缀。
@@ -89,7 +91,7 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, systemInfo{
-		Report: s.opts.Report, Version: s.opts.Version, Supervisor: stats,
+		Report: s.opts.Report, Version: s.opts.Version, Supervisor: stats, Paths: s.opts.Paths,
 	})
 }
 
