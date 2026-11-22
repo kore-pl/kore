@@ -62,11 +62,11 @@ help: ## 显示本帮助（默认目标）
 
 # web-dist 保证 embed 需要的 web/dist 主壳产物存在：web/dist 被 .gitignore 忽略，
 # 干净检出直接 make build / vet / test 会因 //go:embed 找不到文件而失败（实测 exit 2）。
-# 二十一个文件 = 首屏三件套 + 布局壳 shell.js + 十四个视图模块
+# 二十二个文件 = 首屏三件套 + 布局壳 shell.js + 十四个视图模块
 # （store/files/sites/tasks/monitor/settings/terminal/db/logs/process/ssl/backups/redis/firewall）
-# + 三个由视图模块懒加载的子模块（files-l2 / site-edit / config-panel）。
+# + 四个由视图模块懒加载的子模块（files-l2 / site-edit / config-panel / monitor-cards）。
 # 只在缺失或源更新时拷贝，不删目录、不跑体积门禁，开销为几次 stat。
-WEB_SRC_FILES := index.html app.js style.css shell.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js settings.js terminal.js db.js logs.js process.js ssl.js backups.js redis.js firewall.js
+WEB_SRC_FILES := index.html app.js style.css shell.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js terminal.js db.js logs.js process.js ssl.js backups.js redis.js firewall.js
 
 web-dist:
 	@mkdir -p web/dist; \
@@ -127,7 +127,7 @@ frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖
 	rm -rf web/dist; \
 	mkdir -p web/dist; \
 	cp $(addprefix web/,$(WEB_SRC_FILES)) web/dist/; \
-	echo "[OK] 前端静态产物已打包: web/dist（21 文件，零依赖；首屏 4 件套 + 14 视图模块 + 3 懒加载子模块）"; \
+	echo "[OK] 前端静态产物已打包: web/dist（22 文件，零依赖；首屏 4 件套 + 14 视图模块 + 4 懒加载子模块）"; \
 	bash scripts/frontend-check.sh
 
 mem: ## 采样 VmRSS：日常 5 点 ≈10s（默认）/ 收口 MEM_POINTS=60 ≈65s；含 RssAnon/RssFile 诊断（目标 8192 / 红线 16384 KiB）
