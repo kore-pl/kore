@@ -260,7 +260,7 @@ web/index.html|app.js|style.css ──make frontend──► web/dist ──go:e
 
 **状态：已落地**（M2-D 零依赖静态壳）。当前主壳前端是三文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
 
-- 构建顺序固定：`make frontend`（从 `web/` 复制三件套到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。缺 `web/dist` 时 `go build` 直接失败（embed 报错即门禁）。
+- 构建顺序固定：`make frontend`（从 `web/` 复制三件套到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐三件套（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
 - embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；只精确嵌三个文件，不用 `all:dist`：
 
 ```go
