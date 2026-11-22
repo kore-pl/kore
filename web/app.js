@@ -936,10 +936,10 @@
 
   var SHELL_ROUTES = [
     { id: 'dashboard', label: '概览', icon: '📊', render: renderDashboardView },
-    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', '软件商店（store.js 提供）') },
+    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', './store.js', '软件商店') },
     { id: 'plugins', label: '已装插件', icon: '📦', render: renderPluginsView },
-    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', '监控（monitor.js 提供）') },
-    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', '设置（settings.js 提供）') }
+    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', './monitor.js', '监控') },
+    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', './settings.js', '设置') }
   ];
 
   function renderDashboard() {
