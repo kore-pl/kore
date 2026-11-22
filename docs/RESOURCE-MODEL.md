@@ -26,7 +26,7 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 | resident 插件（单个） | 常驻 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid，60s 中位数 | 定位泄漏或缓存；仍超则拒绝该版本上架 |
 | 常驻插件合计（含活跃 lazy） | 常驻 | 硬红线 ≤48 MiB | 目标 24 MiB | — | 各插件 RSS 求和 | 停用或降级；内核不代偿 |
 | lazy 插件（活跃时） | 按需 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid | 同 resident |
-| lazy 空闲退出 | 进程不存在 | `idle_timeout_s` 默认 300s（60–1800） | 300s | — | 日志 `lazy_stopped` + `pgrep` 无输出 | 查内部 ticker/长连接未释放 |
+| lazy 空闲退出 | 进程不存在 | `idle_timeout_s` 默认 60s（60–1800） | 60s | — | 日志 `lazy_stopped` + `pgrep` 无输出 | 查内部 ticker/长连接未释放（默认 60s 口径见 PLUGIN-PROTOCOL.md §3.1 字段表后说明，需 300s 语义显式配置） |
 | 插件冷启动 | — | 拉起→hello→ready p95 ≤ 300ms | 80–200ms | — | 日志 `started_at`→`ready` 差值取 p95 | 查 init 阶段网络/DB/目录扫描 |
 | oneshot 插件 | 空闲不存在 | 空闲 RSS = 0 | 0 | — | `pgrep -f '/plugins/<id>/'` 必须无输出 | 有空闲进程即判失败，查回收路径 |
 | 单二进制 `kored` | 静态文件 | 硬红线 ≤25 MiB（26,214,400 B） | 目标 15 MiB | **6,209,698 B（5.92 MiB）** | `stat -c%s bin/kored` | 砍依赖、去除未用 embed |
@@ -86,7 +86,7 @@ M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **768
 | lifecycle | 语义 | 空闲时 | 单插件上限 | 冷启动 |
 | --- | --- | --- | --- | --- |
 | resident | 随 kore 启停的常驻进程，用于事件订阅/长连接 | 进程存在 | 硬红线 24 / 目标 12 MiB | 首次 hello ≤ 300ms |
-| lazy（默认） | 按需拉起，空闲 `idle_timeout_s`（默认 300s）退出 | 进程不存在，RSS=0 | 活跃时 硬红线 24 / 目标 12 MiB | p95 ≤ 300ms |
+| lazy（默认） | 按需拉起，空闲 `idle_timeout_s`（默认 60s，见 PLUGIN-PROTOCOL.md §3.1 口径说明）退出 | 进程不存在，RSS=0 | 活跃时 硬红线 24 / 目标 12 MiB | p95 ≤ 300ms |
 | oneshot | 每次调用拉起、执行完退出 | 进程不存在 | 活跃时 硬红线 24 / 目标 12 MiB | p95 ≤ 300ms |
 
 `lazy` 是默认：18–22 个插件里大多数不应常驻；`resident` 只在确需持续订阅/长连接时声明；`oneshot` 用于批处理。
@@ -281,7 +281,7 @@ for i in $(seq 1 "$points"); do ps -o rss= -p "$pid"; sleep 1; done \
 | 空载出站连接 | 0 | — | ≥ 1 |
 | resident 单插件 | ≤ 12288 KiB | 12288–24576 KiB | > 24576 KiB |
 | 常驻合计（含活跃 lazy） | ≤ 24576 KiB | 24576–49152 KiB | > 49152 KiB |
-| lazy 空闲退出 | 空闲 300s 后无进程 | — | 300s 后进程仍存活 |
+| lazy 空闲退出 | 默认 60s 后无进程（显式配置按配置值） | — | 默认 60s 后进程仍存活 |
 | 插件冷启动 p95 | ≤ 300ms | 200–300ms | > 300ms |
 | oneshot 空闲进程 | 无 | — | 有任一进程存活 |
 | 插件包 `tar.gz` | ≤ 15,728,640 B | 12–15 MiB | > 15 MiB |

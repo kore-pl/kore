@@ -55,7 +55,7 @@
 | protocol | string | 是 | — | MVP 只接受 `kore.plugin.v1` |
 | requires_kore | string | 是 | — | 语义化区间，如 `">=0.1.0 <0.2.0"`（R3）；kore 加载时对照自身版本，不满足 → 拒绝加载并回 `E_UNSUPPORTED` |
 | lifecycle | string | 否 | `lazy` | `resident` \| `lazy`（默认，G-14）\| `oneshot`（原 `type` 字段名废弃）；缺省即 lazy，显式 resident 才常驻 |
-| idle_timeout_s | int | 否 | `300` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
+| idle_timeout_s | int | 否 | `60` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
 | entry | string | 是 | — | 相对包根的可执行路径，固定 `bin/<id>` |
 | capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；**非空：至少 1 项、上限 16 项** |
 | resources.memory_mb | int | 是 | — | 4–12（常驻与活跃 lazy 上限 12，见 RESOURCE-MODEL） |
@@ -69,6 +69,8 @@
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
 | protocol_minor | int | 否 | 0 | 见 §13 |
 | web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
+
+> 口径说明：`idle_timeout_s` 默认 60s 为 M2 实现口径（更早释放空闲 lazy 进程，贴合资源零侵占锚点）；配置可设 60–1800，需 300s 语义时显式配置。
 
 - `requires_kore` 区间语义（R3）：MVP 只支持 `">=X.Y.Z <A.B.C"` 与 `">=X.Y.Z"` 两种写法；不支持 `^`/`~`/`||`；解析器用标准库自实现，不引第三方库（G-02）。
 - 匹配规则：按 semver 比较 kore 版本；kore 版本含预发布号（如 `0.2.0-rc.1`）时拒绝匹配（MVP 不认 pre-release）。
