@@ -250,31 +250,31 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - **mock 策略**：`web/mock/` 下按 URL 命名存放 JSON（如 `plugins.get.json`），vite 插件按 `import.meta.env.DEV` 分支挂中间件；生产构建时该分支被 tree-shake，mock 不进产物。
 - **类型来源**：API 与帧类型以 `pkg/pluginapi` 的 Go 类型为唯一真源。M1 起用 `tygo` 生成 `web/src/types/pluginapi.d.ts`，生成物入库，禁止手改；前端不从后端复制类型。
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
-- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **八个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js`），`make frontend` 打包十二个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
-- **视图清单**：概览（`app.js`）、软件商店（`store.js`）、已装插件（`app.js`）、文件管理（`files.js`）、网站（`sites.js`）、计划任务（`tasks.js`）、监控（`monitor.js`）、设置（`settings.js`）、终端（`terminal.js`）、**数据库（`db.js`）**。数据库页提供 MySQL/MariaDB 实例卡（可达性 + 版本）、实例状态条、库列表与只读 SQL 控制台（`mysql.instances` / `databases` / `query` / `status`）。
+- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **十个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js`），`make frontend` 打包十四个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
+- **视图清单**：概览（`app.js`）、软件商店（`store.js`）、已装插件（`app.js`）、文件管理（`files.js`）、网站（`sites.js`）、计划任务（`tasks.js`）、监控（`monitor.js`）、设置（`settings.js`）、终端（`terminal.js`）、**数据库（`db.js`）**、**日志（`logs.js`）**、**进程（`process.js`）**。数据库页提供 MySQL/MariaDB 实例卡（可达性 + 版本）、实例状态条、库列表与只读 SQL 控制台（`mysql.instances` / `databases` / `query` / `status`）；日志页提供来源卡、tail/关键字过滤/全文件搜索与统计条；进程页提供可排序表格、详情抽屉、进程树与二次确认的信号投递。
 
 ## 9. 构建与 embed（已落地）
 
 ```text
-web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|settings.js|terminal.js|db.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
+web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|settings.js|terminal.js|db.js|logs.js|process.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
 ```
 
-**状态：已落地**（M2-D 零依赖静态壳，M5 扩到十二文件）。当前主壳前端是十二文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
+**状态：已落地**（M2-D 零依赖静态壳，M5 扩到十四文件）。当前主壳前端是十四文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
 
-- 构建顺序固定：`make frontend`（从 `web/` 复制十二个产物到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐十二个产物（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
-- **首屏口径（四件套）**：`index.html` + `style.css` + `app.js` + `shell.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这四个）。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入；`terminal.js` / `db.js` 是 `shell.js` 内置的第 9、10 个导航项（终端、数据库），同样按需注入 `/assets/terminal.js` 与 `/assets/db.js`。八个模块**都不进首屏**，首屏请求数与视图数无关。
-- embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；**逐个精确列十二个文件**，不用 `all:dist`（embed 必须显式列名是 Go 限制，不构成业务词表）：
+- 构建顺序固定：`make frontend`（从 `web/` 复制十四个产物到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐十四个产物（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
+- **首屏口径（四件套）**：`index.html` + `style.css` + `app.js` + `shell.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这四个）。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入；`terminal.js` / `db.js` / `logs.js` / `process.js` 是 `shell.js` 内置的第 9–12 个导航项（终端、数据库、日志、进程），同样按需注入对应 `/assets/<模块>.js`。十个模块**都不进首屏**，首屏请求数与视图数无关。
+- embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；**逐个精确列十四个文件**，不用 `all:dist`（embed 必须显式列名是 Go 限制，不构成业务词表）：
 
 ```go
 package web
 
 import "embed"
 
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/sites.js dist/tasks.js dist/monitor.js dist/settings.js dist/terminal.js dist/db.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/sites.js dist/tasks.js dist/monitor.js dist/settings.js dist/terminal.js dist/db.js dist/logs.js dist/process.js
 var Dist embed.FS
 ```
 
-- 该 `//go:embed` 只覆盖主壳十产物；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
+- 该 `//go:embed` 只覆盖主壳十四个产物；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
 - **静态路由（已落地，前缀化）**：`httpapi`（`internal/core/httpapi/server.go` 的 `staticRoutes()`）只注册**两条**路由，从 `web.Dist` 按精确路径读文件，不遍历、不回落：
 
 | 路由 | 资源 | Content-Type |

@@ -28,7 +28,11 @@
     terminal: ['M3 4h14v12H3z', 'M6 8.5l2.5 1.75L6 12', 'M11 12h3'],
     // 数据库：圆柱顶盖 + 两侧母线 + 中间一道盘面（20×20、currentColor、stroke-width 1.5）
     db: ['M4 5.5c0-1.4 2.7-2.5 6-2.5s6 1.1 6 2.5-2.7 2.5-6 2.5-6-1.1-6-2.5z',
-      'M4 5.5v9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-9', 'M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5']
+      'M4 5.5v9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-9', 'M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5'],
+    // 日志：文档外框 + 折角 + 三条横线（20×20、currentColor、stroke-width 1.5）
+    logs: ['M5 3h6l4 4v10H5z', 'M11 3v4h4', 'M7 10h6', 'M7 13h6'],
+    // 进程：方框内两条横条 + 左侧状态点（20×20、currentColor、stroke-width 1.5）
+    process: ['M3 4h14v12H3z', 'M6 8h8', 'M6 12h5', 'M6 16h3']
   };
   var byId = Object.create(null);
   var currentId = '';
@@ -204,8 +208,8 @@
     return btn;
   }
 
-  // 终端 / 数据库是壳内置的第 9、10 项：index.html 不引脚本，首次切到该视图才注入
-  // /assets/<模块>.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
+  // 终端 / 数据库 / 日志 / 进程是壳内置的第 9–12 项：index.html 不引脚本，首次切到
+  // 该视图才注入 /assets/<模块>.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
   var lazyModules = Object.create(null);
   function ensureLazy(url, globalName) {
     if (window[globalName] && typeof window[globalName].render === 'function') {
@@ -273,13 +277,17 @@
       if (!r || typeof r.id !== 'string' || !r.id || typeof r.render !== 'function') continue;
       items.push(r);
     }
-    var hasTerminal = false, hasDb = false;
+    var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false;
     for (var t = 0; t < items.length; t++) {
       if (items[t].id === 'terminal') hasTerminal = true;
       if (items[t].id === 'db') hasDb = true;
+      if (items[t].id === 'logs') hasLogs = true;
+      if (items[t].id === 'process') hasProcess = true;
     }
     if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', '终端') });
     if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', '数据库') });
+    if (!hasLogs) items.push({ id: 'logs', label: '日志', render: lazyView('KoreLogs', '/assets/logs.js', '日志') });
+    if (!hasProcess) items.push({ id: 'process', label: '进程', render: lazyView('KoreProcess', '/assets/process.js', '进程') });
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
 
