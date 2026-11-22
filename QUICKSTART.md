@@ -12,6 +12,8 @@ make build          # 产出 bin/kored（CGO_ENABLED=0 单二进制，已内嵌 
 
 `make build` 使用仓库内已就绪的 `web/dist`（`index.html` / `app.js` / `style.css`）。若要重新生成前端产物，先跑 `make frontend`（会卡首屏 gzip ≤ 300 KiB）再 `make build`。缺 `web/dist` 时 `go build` 直接失败——这是门禁，不是 bug。
 
+> **换了索引验签公钥就必须重启 kored**：公钥编在二进制里，旧进程仍用旧公钥验新签名 → 商店全部 401。完整七步发布流程见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1。
+
 ## 2. 准备配置（设置管理员口令 + 打开 TCP 监听）
 
 kored 默认**只开 UDS**（`server.addr` 为空），浏览器无法直连。要让浏览器访问，必须在配置文件里显式写回环地址；MVP 只允许 `127.0.0.1:<port>`，写 `0.0.0.0` 会被配置校验拒绝。

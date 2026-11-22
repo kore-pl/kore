@@ -94,7 +94,8 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
 | `make check` | 聚合门禁：docs-check + 依赖白名单 + 薄壳边界 + 跨仓库边界 | 可用：1/4、4/4 真跑；2/4、3/4 打印 N/A（无 `go.mod`）|
-| `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | SKIP：`cmd/kored` 未就绪，退出码 0，M1 转真构建 |
+| `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
+| `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
 | `make vet` | `go vet ./...` | SKIP：无 `go.mod`，M1 起生效 |
 | `make test` | `go test -timeout 200s ./...` | SKIP：无 `go.mod`，M1 起生效 |
 | `make mem` | 采样 RSS + `smaps_rollup`/`status` 拆分，按新证据口径出中位数（G6 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时出实数 |
