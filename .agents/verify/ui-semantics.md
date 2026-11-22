@@ -3,10 +3,10 @@
 # 三个 UI 语义问题修复与真机验证
 
 ## 0. 环境与口径（先说边界）
-- **真数据来自 8787（当前进程 PID 845380）**：页面里所有 `/api/*` 与 `/-/*` 由 `127.0.0.1:18900` 反代到 `127.0.0.1:8787`（cookie 复用已登录会话），插件状态、db-mysql 实例、cron/ufw 权限错误全部是该进程实时返回。该进程 05:30:40 由兄弟 agent 重启，二进制仍是 05:07 构建的旧产物（`/assets/app.js` sha `fce10c05` ≠ 本轮 `web/dist` `6ff2dea2`），即**修复尚未在 8787 生效**。
-- **为什么不是直接打 8787**：8787 静态资源由 `bin/kored` 编译期内嵌（`web/embed.go`），改 `web/*.js` 必须重建二进制 + 重启才可见。此刻同一工作区 `fix-capability-enforce` 正改 `internal/core/httpapi/*.go` 与 `cmd/kored/*`（`git status` 可见未提交），**现在 `make build` 会把它未完成的改动编进共享二进制并重启主实例**——这是不可接受的风险，所以本轮不重建、不重启，前端用 `make frontend` 的 `web/dist` 由回环代理托管、后端仍打真实例。
-- **本轮未改运行态资产**：`.kore-local.yaml` / `.kore-local-state/` / `bin/kored` 均未改动；8787 的 05:30:40 重启由兄弟 agent 完成，非本 agent。
-- **待办（交给 lead）**：兄弟 agent 落定后重建 `bin/kored` 并重启一次即可生效——`make build` 依赖 `web-dist`，会自动把本批 `web/*.js` 打进二进制；`web/dist` 已是最新产物。
+- **真机实例**：`127.0.0.1:8787`（`./bin/kored serve --config .kore-local.yaml`）。本轮 `make build`（exit 0）后重启一次，新进程 **PID 907070**（05:36:17 `kore ready`），`/assets/app.js` sha `6ff2dea2cf52` == `web/dist/app.js`，即**本批前端修复已在 8787 生效**，全部截图直接来自 8787。
+- **重启口径（G-29）**：只 stop → start 同一个 `bin/kored`，用 `/proc/845380/environ` 原样继承 **101 个环境变量**（其中 `KORE_BACKUP_ALLOW_ROOTS / KORE_BACKUP_DIR / KORE_LOGS_SOURCES / KORE_SSL_CERT_DIR` 4 个 KORE_* 插件配置，值不落盘不打印），**未改** `.kore-local.yaml` / `.kore-local-state/` / 插件目录；重启前 `git status` 确认无未提交的 Go 改动（兄弟 agent 的 `bc15e66` capability 修复已在 HEAD 内）。
+- **为什么先做回环代理、最后才部署**：8787 静态资源编译期内嵌（`web/embed.go`），改 `web/*.js` 必须重建+重启才可见；而兄弟 agent 改 `internal/core/httpapi/*.go` 期间构建会把半成品编进共享二进制。等其提交后才 `make build`，并用回环代理（18900，静态用 `web/dist` + 反代真实 8787 API）先完成功能断言，最后一次性部署到 8787 复拍。
+- **旧进程**：本轮开始时 8787 为 PID 845380（05:30:40 由兄弟 agent 重启、跑的是 05:07 旧二进制，`/assets/app.js` 仍是旧 sha `fce10c05`），本轮重启已取代。
 
 ## 1. 问题 1：横幅与实例卡自相矛盾（P1）
 | 项 | 内容 |
@@ -47,14 +47,14 @@
 ## 5. 双端截图（8 张，sha256 两两去重：0 重复）
 | 文件 | 尺寸 | 字节 | sha12 | 关键内容 |
 | --- | --- | --- | --- | --- |
-| [sem-db-banner-desktop.png](screenshots/sem-db-banner-desktop.png) | 1440x912 | 120611 | 7b8a3705dc32 | 已连接 MySQL 9.7.1（127.0.0.1:3306）+ 可达 9.7.1 |
-| [sem-db-banner-mobile.png](screenshots/sem-db-banner-mobile.png) | 390x844 | 65473 | 7e0e90209878 | 同上，无横向溢出（docW=390） |
-| [sem-plugins-state-desktop.png](screenshots/sem-plugins-state-desktop.png) | 1440x1480 | 196262 | 4e4126c21027 | 14 行全量 + 汇总条 13/3/10/1 |
+| [sem-db-banner-desktop.png](screenshots/sem-db-banner-desktop.png) | 1440x912 | 121166 | 20db128ef023 | 已连接 MySQL 9.7.1（127.0.0.1:3306）+ 可达 9.7.1 |
+| [sem-db-banner-mobile.png](screenshots/sem-db-banner-mobile.png) | 390x844 | 65387 | 7a1ce5b0d093 | 同上，无横向溢出（docW=390） |
+| [sem-plugins-state-desktop.png](screenshots/sem-plugins-state-desktop.png) | 1440x1480 | 196287 | aab2b98323df | 14 行全量 + 汇总条 13/3/10/1 |
 | [sem-plugins-state-mobile.png](screenshots/sem-plugins-state-mobile.png) | 390x844 | 47183 | 03251655a847 | 汇总条 + 蓝点「空闲」 |
 | [sem-tasks-disabled-desktop.png](screenshots/sem-tasks-disabled-desktop.png) | 1440x900 | 100922 | 601a9efe5414 | 黄底说明 + 禁用表单 + 提权链接 |
 | [sem-tasks-disabled-mobile.png](screenshots/sem-tasks-disabled-mobile.png) | 390x844 | 71089 | 906a28210b6c | 同上 |
 | [sem-firewall-disabled-desktop.png](screenshots/sem-firewall-disabled-desktop.png) | 1440x927 | 139498 | c94f7e896fce | 提权指引 + 禁用字段 + 禁用「预览命令」 |
-| [sem-firewall-disabled-mobile.png](screenshots/sem-firewall-disabled-mobile.png) | 390x844 | 82443 | 6da1cca9cf9d | 同上 |
+| [sem-firewall-disabled-mobile.png](screenshots/sem-firewall-disabled-mobile.png) | 390x844 | 82442 | 0da6548fcc2f | 同上 |
 
 ## 6. G-28 产品定位自评
 | 页面 | 解决什么用户问题 | 与宝塔/1Panel 差距 | 状态 |
