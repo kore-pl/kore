@@ -1,5 +1,7 @@
 /* kore 主壳 · 备份管理（web/backups.js）——零框架 / 零 CDN / 无外链。
-   window.KoreBackup.render(container) 调 backup 插件：create / list / verify / restore / delete。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/backup/backup.list）；
+   方法段一律写完整限定名 backup.*，裸动词只是插件侧兼容，不得依赖。
+   window.KoreBackup.render(container) 调 backup 插件：backup.create / .list / .verify / .restore / .delete。
    恢复与删除一律走页面内二次确认面板（不用 window.confirm）：先展示完整参数，再允许提交。 */
 (function () {
   'use strict';
@@ -196,7 +198,7 @@
     if (!target) { if (S.confirmMsg) S.confirmMsg.textContent = '请填写恢复目标目录'; return; }
     btn.disabled = true; if (S.confirmMsg) S.confirmMsg.textContent = '';
     setStatus('正在恢复 ' + c.backup.id + ' 到 ' + target + '…');
-    invoke('restore', { id: c.backup.id, target_dir: target }).then(function (data) {
+    invoke('backup.restore', { id: c.backup.id, target_dir: target }).then(function (data) {
       S.result = { kind: 'restore', id: c.backup.id, data: data };
       S.confirm = null; paintConfirm(); paintResult();
       var failed = (data.failed || []).length;
@@ -211,7 +213,7 @@
   }
   function doDelete(c, btn) {
     btn.disabled = true; if (S.confirmMsg) S.confirmMsg.textContent = '';
-    invoke('delete', { id: c.backup.id }).then(function (data) {
+    invoke('backup.delete', { id: c.backup.id }).then(function (data) {
       S.result = { kind: 'delete', id: c.backup.id, data: data };
       S.confirm = null; paintConfirm(); paintResult();
       setStatus('已删除备份 ' + data.id + '（deleted=' + data.deleted + '，' + data.duration_ms + 'ms）', 'ok');
@@ -224,7 +226,7 @@
   }
   function verify(b) {
     setStatus('正在校验 ' + b.id + '…');
-    invoke('verify', { id: b.id }).then(function (data) {
+    invoke('backup.verify', { id: b.id }).then(function (data) {
       S.result = { kind: 'verify', id: b.id, data: data }; paintResult();
       setStatus('校验完成：sha_match=' + data.sha_match + ' · entries=' + data.entries +
         ' · uncompressed=' + fmtSize(data.uncompressed_bytes), data.sha_match ? 'ok' : 'fail');
@@ -235,7 +237,7 @@
   }
   function loadList(quiet) {
     if (!quiet) setStatus('正在读取备份列表…');
-    invoke('list', {}).then(function (data) {
+    invoke('backup.list', {}).then(function (data) {
       if (S.destroyed) return;
       S.backups = data.backups || []; paintList();
       if (!quiet) setStatus('共 ' + S.backups.length + ' 个备份', 'ok');
@@ -254,7 +256,7 @@
     if (!paths.length) { setStatus('请至少填写一个备份路径（每行一个）', 'fail'); return; }
     S.busy = true; S.submit.disabled = true;
     setStatus('正在打包 ' + name + '（' + paths.length + ' 个路径，' + S.compression.value + '）…');
-    invoke('create', { name: name, paths: paths, exclude: exclude, compression: S.compression.value })
+    invoke('backup.create', { name: name, paths: paths, exclude: exclude, compression: S.compression.value })
       .then(function (data) {
         S.busy = false; S.submit.disabled = false;
         S.result = { kind: 'create', id: data.id, data: data }; paintResult();

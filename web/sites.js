@@ -1,5 +1,6 @@
 /* kore 主壳 · 网站管理（web/sites.js）
    入口 window.KoreSites.render(container)，零框架 / 零 CDN / 无外链。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/site/site.list）；方法段写完整限定名。
    调 site 插件：site.create / site.delete / site.list / site.status，写请求带 X-Kore-CSRF。
    结果只展示插件真实字段（test_passed / reloaded / applied / backup_path / test_output），
    不把"配置写过了"说成"站点已生效"。 */

@@ -1,5 +1,6 @@
 /* kore 主壳 · 计划任务（web/tasks.js）
    入口 window.KoreTasks.render(container)，零框架 / 零 CDN / 无外链。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/cron/cron.list）；方法段写完整限定名。
    调 cron 插件：cron.list / cron.add / cron.replace / cron.remove，写请求带 X-Kore-CSRF。
    编辑只替换 schedule+command（cron.replace 不接收 comment，原备注由插件保留），
    所有写操作展示插件返回的 backup_path，让"已备份"可核对。 */

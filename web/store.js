@@ -1,6 +1,8 @@
 // web/store.js — kore 软件商店：卡片网格 + 内联图标 + 分类筛选 + 搜索 + 安装/停用。
 // 零框架 / 零 CDN / 无外链，图标全部内联 emoji，对外只暴露 window.KoreStore.render(container)。
 // 数据：商店索引 / 预设 / 已安装列表；写：安装、停用（X-Kore-CSRF 双提交）。
+// 调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
+// 一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。
 // 安装需要 package_path 时才在该卡片内展开路径输入，不在页面顶部常驻技术字段；
 // 卸载端点未实现时只提供「停用」，并用「待支持」轻量标签说明，不假装卸载成功。
 (function () {

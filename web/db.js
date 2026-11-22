@@ -1,5 +1,8 @@
 /* kore 主壳 · 数据库管理（web/db.js）——零框架 / 零 CDN / 无外链。
-   window.KoreDb.render(container) 调 db-mysql 的 instances / databases / query / status；
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>，本例 /api/v1/invoke/db-mysql/db-mysql.instances。
+   window.KoreDb.render(container) 调 db-mysql 的 db-mysql.instances / .databases / .query / .status；
+   插件 businessVerb 只剥 "db-mysql." 前缀，裸动词（如 instances）会 E_NOTFOUND「未知方法」——
+   方法段必须写完整限定名，不得退化为裸动词。
    写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。 */
 (function () {
   'use strict';
@@ -228,7 +231,7 @@
     var instance = S.selected;
     S.busy = true; S.queryError = ''; S.result = null;
     paintQueryNotice(); paintRunState(); paintResult();
-    invoke('query', { instance: instance, sql: sql }).then(function (data) {
+    invoke('db-mysql.query', { instance: instance, sql: sql }).then(function (data) {
       if (S.destroyed || S.selected !== instance) return;
       S.busy = false; S.result = data;
       paintRunState(); paintResult();
@@ -241,7 +244,7 @@
   function loadStatus() {
     var name = S.selected;
     if (!name) return;
-    invoke('status', { instance: name }).then(function (data) {
+    invoke('db-mysql.status', { instance: name }).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.status = data; paintStatus();
     }, function (err) {
@@ -253,7 +256,7 @@
     var name = S.selected;
     if (!name) return;
     S.dbLoaded = false; paintDbs();
-    invoke('databases', { instance: name }).then(function (data) {
+    invoke('db-mysql.databases', { instance: name }).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.dbs = data.databases || []; S.dbLoaded = true; paintDbs();
     }, function (err) {
@@ -264,7 +267,7 @@
   function loadInstances() {
     S.loadError = '';
     paintInstances();
-    invoke('instances', {}).then(function (data) {
+    invoke('db-mysql.instances', {}).then(function (data) {
       if (S.destroyed) return;
       S.instances = data.instances || [];
       paintInstances();

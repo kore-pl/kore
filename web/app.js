@@ -537,8 +537,11 @@
   }
 
   // ping：真实方法调用，成功显示服务端原样结果；方法不存在则把该行 ping 标记为不支持。
+  // 调用形态：POST /api/v1/invoke/<id>/<id>.<action>——方法段写完整限定名（echo → echo.ping），
+  // 裸动词 ping 只有插件的兼容层才认，协议 §7.2 要求 <plugin>.<verb>。
   function invokePing(plugin, btn, note) {
-    var url = '/api/v1/invoke/' + encodeURIComponent(plugin.id) + '/ping';
+    var url = '/api/v1/invoke/' + encodeURIComponent(plugin.id) + '/' +
+      encodeURIComponent(plugin.id + '.ping');
     var entry = pingState(plugin.id);
     btn.disabled = true;
     btn.textContent = '调用中…';

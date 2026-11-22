@@ -1,4 +1,6 @@
 /* kore 主壳 · 进程管理（web/process.js）——零框架 / 零 CDN / 无外链。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/process/process.list）；
+   方法段一律写完整限定名 process.*，裸动词只是插件侧兼容，不得依赖。
    window.KoreProcess.render：列表/详情/树/结束走 process.*；行点击开详情抽屉，
    kill 需二次确认（pid + 名称 + 命令行）并可选信号，服务端错误体原样展示。 */
 (function () {
@@ -230,7 +232,7 @@
     S.detailPid = pid; S.detail = null; S.detailError = ''; S.confirm = false; S.killResult = null;
     S.killError = ''; S.killBusy = false; S.tree = null; S.treeError = ''; S.treeOpen = false;
     setDrawer(true); paintDrawer();
-    invoke('detail', { pid: pid }).then(function (d) {
+    invoke('process.detail', { pid: pid }).then(function (d) {
       if (S.destroyed || S.detailPid !== pid) return;
       S.detail = d; paintDrawer();
     }, function (err) {
@@ -240,7 +242,7 @@
   }
   function showTree(pid) {
     S.treeOpen = true; S.tree = null; S.treeError = ''; paintDrawer();
-    invoke('tree', { pid: pid }).then(function (t) {
+    invoke('process.tree', { pid: pid }).then(function (t) {
       if (S.destroyed || S.detailPid !== pid) return;
       S.tree = t; paintDrawer();
     }, function (err) {
@@ -251,7 +253,7 @@
   function doKill(pid) {
     if (S.killBusy) return;
     S.killBusy = true; S.killError = ''; S.killResult = null; paintDrawer();
-    invoke('kill', { pid: pid, signal: S.signal }).then(function (r) {
+    invoke('process.kill', { pid: pid, signal: S.signal }).then(function (r) {
       if (S.destroyed) return;
       S.killBusy = false; S.confirm = false; S.killResult = r; paintDrawer();
       if (!r.still_alive) setTimeout(function () { if (!S.destroyed) load(); }, 500);
@@ -262,7 +264,7 @@
   }
   function load() {
     S.loading = true; S.loadError = ''; paintTable();
-    invoke('list', { sort: S.sort, limit: 100 }).then(function (d) {
+    invoke('process.list', { sort: S.sort, limit: 100 }).then(function (d) {
       if (S.destroyed) return;
       S.items = d.items || []; S.total = d.total || 0; S.firstSample = !!d.first_sample; S.rawNote = d.cpu_note || '';
 

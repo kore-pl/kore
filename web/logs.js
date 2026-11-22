@@ -1,4 +1,6 @@
 /* kore 主壳 · 日志查看（web/logs.js）——零框架 / 零 CDN / 无外链。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/logs/logs.tail）；
+   方法段一律写完整限定名 logs.*，裸动词 stats/tail/search/sources 只是插件侧兼容，不得依赖。
    window.KoreLogs.render(container)：来源只认 logs.sources 白名单；日志正文全部写
    <pre>.textContent，不拼 HTML；界面只显示来源名与文件名，绝不渲染宿主绝对路径。 */
 (function () {
@@ -159,7 +161,7 @@
   function loadStats() {
     var name = S.selected;
     if (!name) return;
-    invoke('stats', { source: name }).then(function (d) {
+    invoke('logs.stats', { source: name }).then(function (d) {
       if (S.destroyed || S.selected !== name) return;
       S.stats = d; paintStats();
     }, function (err) {
@@ -175,7 +177,7 @@
     if (S.keyword) params.keyword = S.keyword;
     if (S.since) params.since = S.since;
     S.busy = true; paintFoot();
-    invoke('tail', params).then(function (d) {
+    invoke('logs.tail', params).then(function (d) {
       if (S.destroyed || S.selected !== name) return;
       S.mode = 'tail'; S.entries = d.entries || []; S.count = d.count || 0;
       S.scanned = d.scanned_bytes || 0; S.truncated = !!d.truncated; S.lineTruncated = !!d.line_truncated;
@@ -194,7 +196,7 @@
     if (!keyword) { S.notice = '请输入关键字后再搜索'; paintFoot(); S.kw.focus(); return; }
     S.keyword = keyword; S.error = ''; S.notice = ''; paintNotices();
     S.busy = true; paintFoot();
-    invoke('search', { source: name, keyword: keyword, limit: S.lines }).then(function (d) {
+    invoke('logs.search', { source: name, keyword: keyword, limit: S.lines }).then(function (d) {
       if (S.destroyed || S.selected !== name) return;
       S.mode = 'search'; S.matches = d.matches || []; S.count = d.count || 0;
       S.scanned = d.scanned_bytes || 0; S.truncated = !!d.truncated;
@@ -208,7 +210,7 @@
     });
   }
   function loadSources() {
-    invoke('sources', {}).then(function (d) {
+    invoke('logs.sources', {}).then(function (d) {
       if (S.destroyed) return;
       S.sources = d.sources || [];
       paintSources();

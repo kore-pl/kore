@@ -1,7 +1,9 @@
 /* kore 设置视图 —— 零框架、零 CDN、零外部资源；对外只暴露 window.KoreSettings.render(container)。
    数据只来自已存在端点（会话、系统信息、退出）；没端点的能力一律标「待支持」，不伪造；
    写请求统一带 X-Kore-CSRF 双提交头。界面不展示接口路径与文档章节，只给用户能读懂的一句话。
-   本文件不自行挂载、不改 index.html：壳在「设置」被激活时调 render(container)。 */
+   本文件不自行挂载、不改 index.html：壳在「设置」被激活时调 render(container)。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
+   一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。 */
 (function () {
   'use strict';
 

@@ -1,5 +1,6 @@
 /* kore 主壳 · 文件管理（web/files.js）
    入口 window.KoreFiles.render(container)，零框架 / 零 CDN / 无外链。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/file/file.list）；方法段写完整限定名。
    路径契约：file 插件只接受配置根目录内的相对路径，根目录用 "."；界面始终显示
    "/docs" 形式，绝不渲染宿主绝对路径。所有 invoke 走 POST + X-Kore-CSRF 双提交。 */
 (function () {

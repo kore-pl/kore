@@ -1,7 +1,9 @@
 /* kore 主壳 · Web 终端（web/terminal.js）· window.KoreTerminal.render(container) → {destroy}
    契约（kore-plugin-terminal README）：write/read 的 data 是标准 base64；read 增量读（空串=暂无输出，
    eof=shell 已退出）；POST /api/v1/invoke/terminal/<m> + X-Kore-CSRF。ANSI 最小集：过滤 CSI/OSC、
-   \r 覆盖、\b 删除、常见 SGR；零框架零依赖不引 xterm.js；光标绝对定位/鼠标/滚动区域明确不做。 */
+   \r 覆盖、\b 删除、常见 SGR；零框架零依赖不引 xterm.js；光标绝对定位/鼠标/滚动区域明确不做。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/terminal/terminal.read）；
+   方法段写完整限定名 terminal.*。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/terminal/';

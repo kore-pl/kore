@@ -1,6 +1,8 @@
 /* kore 主壳 · 监控视图（零框架 / 零图表库 / 零 CDN / 零外链）
    入口 window.KoreMonitor.render(container)，不改 app.js / shell.js。数据纪律：不伪造监控数据。
    已支持：系统信息（版本 / 常驻 / 重启 / 平台 / cgroup / 告警）与插件列表。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
+   一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。
    资源指标：轮询系统指标接口，字段就绪即自动展示；未就绪时卡片显示「未采集 / 等待采样…」。
    技术原因只在本页底部一个可折叠「技术说明」里讲一次，不再逐卡重复接口契约。
    轮询：页面内 setInterval 5s，非内核轮询；pagehide / beforeunload / 容器失联 / 401 均 clearInterval。 */

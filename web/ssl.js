@@ -1,5 +1,7 @@
 /* kore 主壳 · TLS 证书管理（web/ssl.js）——零框架 / 零 CDN / 无外链。
-   window.KoreSsl.render(container) 调 ssl 插件：list / selfsign / import / renew / verify。
+   调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/ssl/ssl.list）；
+   方法段一律写完整限定名 ssl.*，裸动词只是插件侧兼容，不得依赖。
+   window.KoreSsl.render(container) 调 ssl 插件：ssl.list / ssl.selfsign / ssl.import / ssl.renew / ssl.verify。
    私钥只经 password 输入框粘贴，内容留在内存变量、提交后清空；不回显、不写日志、不落 localStorage。 */
 (function () {
   'use strict';
@@ -142,7 +144,7 @@
   }
   function load(quiet) {
     if (!quiet) setStatus('正在读取证书列表…');
-    invoke('list', {}).then(function (data) {
+    invoke('ssl.list', {}).then(function (data) {
       if (S.destroyed) return;
       S.certs = data.certs || []; paintCerts();
       if (!quiet) setStatus('共 ' + S.certs.length + ' 张证书；验证只做真实 TLS 握手，不改任何文件', 'ok');
@@ -155,7 +157,7 @@
     var host = S.verifyHost ? S.verifyHost.value.trim() : '';
     if (!host) { setStatus('请输入 host 或 host:port 再验证', 'fail'); return; }
     S.verifyOut = null; paintVerify(); setStatus('正在对 ' + host + ' 做 TLS 握手…');
-    invoke('verify', { domain: host }).then(function (r) {
+    invoke('ssl.verify', { domain: host }).then(function (r) {
       if (S.destroyed) return;
       S.verifyOut = r; paintVerify();
       setStatus(r.reachable ? (r.matched ? '握手可达，证书匹配 ' + host : '握手可达，但证书不匹配 ' + host)
@@ -167,7 +169,7 @@
   function renew(domain) {
     if (!domain) return;
     setStatus('正在续期 ' + domain + '…');
-    invoke('renew', { domain: domain }).then(function (info) {
+    invoke('ssl.renew', { domain: domain }).then(function (info) {
       if (S.destroyed) return;
       setStatus('已续期 ' + domain + '，新指纹 ' + (info.fingerprint_sha256 || '—') +
         '（有效期至 ' + fmtTime(info.not_after) + '）', 'ok');
@@ -182,7 +184,7 @@
     if (!domain) { setStatus('请填写域名', 'fail'); return; }
     if (!isFinite(days) || days < 1) { setStatus('天数必须是正整数', 'fail'); return; }
     S.busy = true; setStatus('正在签发 ' + domain + ' 自签证书（' + days + ' 天）…');
-    invoke('selfsign', { domain: domain, days: days, key_type: S.createKey.value }).then(function (info) {
+    invoke('ssl.selfsign', { domain: domain, days: days, key_type: S.createKey.value }).then(function (info) {
       S.busy = false; if (S.destroyed) return;
       setStatus('已创建 ' + domain + '（' + (info.key_type || '') + ' ' + (info.key_bits || '') +
         '），指纹 ' + (info.fingerprint_sha256 || '—') + '，有效期至 ' + fmtTime(info.not_after), 'ok');
@@ -199,7 +201,7 @@
     if (!certPEM) { setStatus('请粘贴证书 PEM', 'fail'); return; }
     if (!keyPEM) { setStatus('请粘贴私钥 PEM（输入框不会回显）', 'fail'); return; }
     S.busy = true; setStatus('正在校验并导入 ' + domain + '…');
-    invoke('import', { domain: domain, cert_pem: certPEM, key_pem: keyPEM,
+    invoke('ssl.import', { domain: domain, cert_pem: certPEM, key_pem: keyPEM,
       chain_pem: S.importChain.value.trim() }).then(function (info) {
       S.busy = false; S.keyPEM = ''; S.importKey.value = '';
       S.keyNote.textContent = '私钥已提交并从输入区清空，不会回显、不会记录';
