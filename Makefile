@@ -51,7 +51,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross compat-info vet test frontend mem idle budget-check docs-check repo-check canonical-check log-check wt-check oss-check case-check check clean fmt
+.PHONY: help build cross compat-info vet test web-dist frontend mem idle budget-check docs-check repo-check canonical-check log-check wt-check oss-check case-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -60,13 +60,23 @@ help: ## 显示本帮助（默认目标）
 	@echo ""
 	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z_-]+:.*##/ { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-build: ## 构建主壳二进制（本机 GOOS/GOARCH；cmd/kored 未就绪时 SKIP）
+# web-dist 保证 embed 需要的 web/dist 三件套存在：web/dist 被 .gitignore 忽略，
+# 干净检出直接 make build / vet / test 会因 //go:embed 找不到文件而失败（实测 exit 2）。
+# 只在缺失或源更新时拷贝，不删目录、不跑体积门禁，开销为几次 stat。
+web-dist:
+	@mkdir -p web/dist; \
+	for f in index.html app.js style.css; do \
+	  if [ ! -f "web/$$f" ]; then continue; fi; \
+	  if [ ! -f "web/dist/$$f" ] || [ "web/$$f" -nt "web/dist/$$f" ]; then cp "web/$$f" "web/dist/$$f"; fi; \
+	done
+
+build: web-dist ## 构建主壳二进制（本机 GOOS/GOARCH；cmd/kored 未就绪时 SKIP）
 	@if [ ! -d "$(CMD)" ]; then echo "[SKIP] cmd/kored 未就绪（M0 阶段正常），M1 实现"; exit 0; fi; \
 	mkdir -p $(dir $(BIN)); \
 	CGO_ENABLED=0 GOAMD64=$(GOAMD64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BIN) $(CMD); \
 	echo "[OK] 构建完成: $(BIN)"
 
-cross: ## 交叉编译五目标：linux/amd64·linux/arm64·windows/amd64·darwin/arm64·darwin/amd64
+cross: web-dist ## 交叉编译五目标：linux/amd64·linux/arm64·windows/amd64·darwin/arm64·darwin/amd64
 	@if [ ! -d "$(CMD)" ]; then echo "[SKIP] cmd/kored 未就绪（M0 阶段正常），M1 实现"; exit 0; fi; \
 	mkdir -p $(dir $(BIN)); \
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=$(GOAMD64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o ./bin/kored-linux-amd64 $(CMD); \
@@ -94,17 +104,17 @@ compat-info: ## 打印构建参数与产物兼容信息（G-16 核对入口）
 	fi; \
 	if [ -d "$(CMD)" ]; then echo "[INFO] 交叉编译冒烟（五目标）:"; $(MAKE) --no-print-directory cross; else echo "[N/A] cmd/kored 未就绪（M0 阶段正常），交叉编译冒烟跳过，M1 起生效"; fi
 
-vet: ## go vet 静态检查（源码未就绪时 SKIP）
+vet: web-dist ## go vet 静态检查（源码未就绪时 SKIP）
 	@if [ ! -f go.mod ] || { [ ! -d ./cmd ] && [ ! -d ./internal ]; }; then echo "[SKIP] 源码未就绪（无 go.mod 或 cmd/internal 缺失），M1 实现"; exit 0; fi; \
 	$(GO) vet ./...; \
 	echo "[OK] go vet 通过"
 
-test: ## 运行单元测试（源码未就绪时 SKIP）
+test: web-dist ## 运行单元测试（源码未就绪时 SKIP）
 	@if [ ! -f go.mod ] || { [ ! -d ./cmd ] && [ ! -d ./internal ]; }; then echo "[SKIP] 源码未就绪（无 go.mod 或 cmd/internal 缺失），M1 实现"; exit 0; fi; \
 	$(GO) test -timeout 200s ./...; \
 	echo "[OK] go test 通过"
 
-frontend: ## 构建前端产物并核对首屏体积（M2-D：零依赖静态拷贝 + gzip ≤300 KiB）
+frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖静态拷贝 + gzip ≤300 KiB）
 	@if [ ! -f web/index.html ] || [ ! -f web/app.js ] || [ ! -f web/style.css ]; then echo "[SKIP] web/ 壳未就绪，M2 实现"; exit 0; fi; \
 	rm -rf web/dist; \
 	mkdir -p web/dist; \
