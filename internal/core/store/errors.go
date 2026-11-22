@@ -23,6 +23,8 @@ var (
 	ErrBucket = errors.New("store: bucket 不存在")
 	// ErrValueTooLarge 表示单值超过 1 MiB。
 	ErrValueTooLarge = errors.New("store: 值超过 1 MiB 上限")
+	// ErrAuditInvalid 表示审计记录不满足 DATA-MODEL §9 约束（result/detail 非法）。
+	ErrAuditInvalid = errors.New("store: 审计记录非法")
 )
 
 // LockedError 携带锁持有者 pid，便于二次启动直接回显。

@@ -9,12 +9,36 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // start 执行一次冷启动：bind socket → exec 插件 → 2s 内完成 hello 握手。
+//
+// M3-C：从 failed 状态恢复的启动在发生时直接落审计（plugin.retry）；
+// 正常首次启动的 plugin.enable 由 Start 层记录，两处不重复。
 func (m *Manager) start(ctx context.Context, inst *instance) error {
+	recovering := inst.currentState() == StateFailed
+	err := m.startOnce(ctx, inst)
+	if !recovering {
+		return err
+	}
+	event := AuditEvent{
+		Subject: AuditSubjectSystem, Action: AuditRestart, Plugin: inst.manifest.ID,
+		Result: AuditResultOK,
+		Detail: restartDetail(string(StateFailed), inst.snapshot().Restarts),
+	}
+	if err != nil {
+		event.Result = AuditResultError
+		event.Detail = detail("err", err.Error())
+	}
+	m.record(ctx, event)
+	return err
+}
+
+// startOnce 是冷启动主体：bind → exec → hello 握手，失败走 failStart 收尾。
+func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 	inst.beginStart()
 	listener, err := m.listen(inst)
 	if err != nil {
@@ -110,6 +134,16 @@ func (m *Manager) reap(inst *instance, cmd *exec.Cmd, exited chan struct{}) {
 	if crashed {
 		m.removeSocket(inst.socket)
 		m.logger.Warn("插件进程意外退出", "plugin_id", inst.manifest.ID, "err", waitErr)
+		// M3-C：crash 在发生时直接落审计（plugin.crash），不等下次请求对账。
+		pid := 0
+		if cmd.Process != nil {
+			pid = cmd.Process.Pid
+		}
+		m.record(context.Background(), AuditEvent{
+			Subject: AuditSubjectSystem, Action: AuditCrash, Plugin: inst.manifest.ID,
+			Result: AuditResultError,
+			Detail: detail("err", errorText(waitErr), "pid", strconv.Itoa(pid)),
+		})
 	}
 	close(exited)
 }

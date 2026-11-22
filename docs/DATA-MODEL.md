@@ -153,7 +153,7 @@ cert_renew:                     # 唯一允许的常驻定时器，默认关
 | `plugin_state` | 插件 id | `{desired:"enabled"\|"disabled",actual:"ready"\|"degraded"\|"failed"\|"stopped"\|"idle",restarts,restart_window_start,last_error,last_active_at,last_upgrade_at,updated_at}` | 卸载即删 |
 | `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 保留 30 天（启动时 + 惰性触发） |
 | `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次） | `{subject:"admin",created_at,last_seen_at,expires_at}`；`expires_at` = 最近一次鉴权 + `session_ttl`（12h 滑动） | 过期即删（读时判断 + 惰性清理） |
-| `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{who,action,plugin_id,method,result:"ok"\|"denied"\|"error",req_id,at,detail{}}` | 保留 90 天 |
+| `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | 保留 90 天 |
 
 **`triggers`（`info.json` 与 `plugins` bucket 同名字段）**：**`[]string`**，每项格式 **`<type>:<name>`**（**前缀即类型**；不是对象数组，也不是无前缀裸名）：
 
@@ -189,7 +189,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 1. **单写者**：所有写操作投递到 `chan writeOp`，由唯一 writer goroutine 串行执行 `db.Update`；禁止其它 goroutine 直接调 `Update`。
 2. **读用 View**：读路径一律 `db.View`，只读事务内不调用任何会写库的函数。
-3. **批量写用 Batch**：审计与任务状态的高频小写入走 `db.Batch`，合并提交；单批 ≤ 200 条或 100ms 触发一次 flush。
+3. **小写入走单写者 `Update`，禁用 `Batch`**：审计与任务状态的小写入在事件/请求路径上走 `db.Update` 同步提交（写时落盘，M3-C）；**不使用 `db.Batch`**——bbolt Batch 内部会起 `time.AfterFunc` 定时器与 goroutine（bbolt `db.go:953/958`），与 G-19 及「audit 写入不起 goroutine/ticker」的硬约束冲突，原「≤200 条 / 100ms 合批 flush」口径作废（恢复须先解掉该约束并留 ADR）。
 4. **长事务禁 IPC**：`Update`/`View` 事务内禁止 IPC、HTTP、文件 IO、等待插件响应；事务内只做内存计算与 tx 读写字。单个写事务耗时 > 200ms 记 WARN 并附 op 名。
 5. **锁顺序**：registry 内存锁 → bbolt 事务；不允许反向嵌套（bbolt 回调里再取 registry 锁）。
 6. **崩溃一致性**：`NoSync:false` 保留 fsync 语义；bbolt 单文件事务原子，无需 WAL 之外的补偿。
@@ -235,18 +235,18 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 ## 9. 审计日志
 
-审计是 bbolt `audit` bucket，独立于运行日志，记录不可由普通操作删除。字段：
+审计是 bbolt `audit` bucket，独立于运行日志，记录不可由普通操作删除。**M3-C 起写入事件化**：`plugin.enable` / `plugin.disable` / `plugin.crash` / `plugin.retry` 四类 supervisor 生命周期事件在**发生时直接写入**（经装配层注入的 `Auditor` 单方法接口 → `store.PutAudit`），不依赖下一次请求对账。字段：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `who` | string | `admin`（登录用户）或 `system`（自动任务，如证书续期） |
-| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `invoke` `config.reload` `backup` |
-| `plugin_id` | string | 涉及插件时填写，否则空 |
-| `method` | string | `invoke` 时的 `<plugin>.<verb>`，否则空 |
+| `subject` | string | `admin`（管理动作，如 enable / disable）或 `system`（自动事件，如 crash / restart、证书续期） |
+| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
+| `plugin` | string | 涉及插件时填写，否则空 |
+| `target` | string | 动作目标（如 `invoke` 时的 `<plugin>.<verb>`、状态值），否则空 |
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |
-| `req_id` | string | 与日志串联 |
-| `at` | string | RFC 3339 毫秒 |
-| `detail` | `map[string]string`（**受控例外**：仅允许标量字符串值，禁止嵌套） | 附加信息（如 `{"from":"0.1.0","to":"0.2.0"}`），≤ 1 KiB；**校验方：内核 audit 写入路径**（写入前校验键 ≤32 字符、值 ≤256 字符、键数 ≤16；非法即拒绝写入并记 WARN，不落库） |
+| `detail` | `map[string]string`（**受控例外**：仅允许标量字符串值，禁止嵌套） | 附加信息（如 `{"from":"failed","restarts":"2"}`），≤ 1 KiB；**校验方：`store.PutAudit`**（写入前校验键 ≤32 字符、值 ≤256 字符、键数 ≤16、序列化 ≤1 KiB，长度按字符计；非法即记 WARN 并拒绝写入，不落库） |
+
+时间与顺序由**键**承载（`%020d-%06d`：unix 纳秒 + 同纳秒序号，时钟回拨沿用末键纳秒继续编序，保证字典序严格递增 = 时间序），故不设独立 `at` 字段；`req_id`（请求关联）不在当前写入面——四类事件没有请求上下文，HTTP 侧审计（`login` / `invoke` 等）接入时再追加该字段（向后兼容：旧记录缺字段读为空）。查询遇单条损坏记录只 WARN 跳过，不中断整个查询。
 
 查询：`GET /api/v1/invoke/...` 不暴露审计；MVP 用 `kored audit --since 24h` 读 bbolt 输出，前端 M2 再加列表。保留 90 天，超期由清理流程删除。
 

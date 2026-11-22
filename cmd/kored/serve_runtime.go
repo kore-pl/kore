@@ -59,6 +59,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	manager, err := supervisor.New(supervisor.Options{
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
+		Auditor: &storeAuditor{db: db},
 	})
 	if err != nil {
 		slog.Error("supervisor 装配失败", "err", err)
@@ -100,9 +101,11 @@ func (s *service) restoreEnabled() {
 }
 
 // StopAll 停止全部有运行态的插件；进程退出由 supervisor 的 Wait 驱动，不轮询。
+// 已 stopped 的实例直接跳过：停机不是 disable 动作，避免污染 plugin.disable 审计（M3-C）。
 func (s *service) StopAll() {
 	for _, view := range s.catalog.List() {
-		if _, ok := s.manager.Snapshot(view.ID); !ok {
+		inst, ok := s.manager.Snapshot(view.ID)
+		if !ok || inst.State == supervisor.StateStopped {
 			continue
 		}
 		if err := s.manager.Stop(context.Background(), view.ID); err != nil {

@@ -38,6 +38,9 @@ type Options struct {
 	MaxSlots int
 	// IdleTimeout 是 lazy 空闲退出时长，默认 60s；清单 idle_timeout_s 优先。
 	IdleTimeout time.Duration
+	// Auditor 是审计出口（M3-C）；nil 表示不审计。由装配层注入 store 实现，
+	// supervisor 只依赖该单方法接口，不 import config/store（G-01）。
+	Auditor Auditor
 	// Logger 可空，默认 slog.Default()。
 	Logger *slog.Logger
 }

@@ -10,6 +10,23 @@ import (
 	"github.com/pengtang1024/kore/internal/core/registry"
 )
 
+// State 是插件运行状态（M1 覆盖 resident 的四态 + 失败态）。
+type State string
+
+// 运行状态取值；与 ARCHITECTURE §7 同名，演进为 draining 以对齐 M1 任务口径。
+const (
+	// StateStopped 未运行：进程与 socket 均已清理。
+	StateStopped State = "stopped"
+	// StateStarting 冷启动中：已 exec，等 hello（≤2s）。
+	StateStarting State = "starting"
+	// StateReady 就绪：hello 校验通过，可转发请求。
+	StateReady State = "ready"
+	// StateDraining 停止中：已发 kore.shutdown，等在途退出（≤5s）。
+	StateDraining State = "draining"
+	// StateFailed 启动失败：进程已 SIGKILL，需人工 enable 才重试。
+	StateFailed State = "failed"
+)
+
 // instance 是单个插件的运行态；所有字段读写都在 mu 下，避免与 reaper 竞争。
 type instance struct {
 	manifest *registry.Manifest

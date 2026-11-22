@@ -21,10 +21,10 @@ const crashPrefix = "插件进程意外退出"
 // daemon 是 httpapi.Backend 的实现：把 HTTP 动作翻译成 registry/supervisor/bus 调用。
 //
 // 持久化边界：本类型是装配层唯一把运行期状态写回 plugin_state 的地方。
-// supervisor 的 reaper 不直接写库（其实现文件不属于本任务写域），因此崩溃计数
-// 采用"请求驱动对账"：任意状态读取/调用后对比快照并回写。reaper 侧事件化持久化
-// 与 audit（plugin.enable/disable 审计）归 M1-09——store 未暴露 audit 专用接口，
-// 本阶段不伪造审计记录。
+// plugin_state.restarts 仍走"请求驱动对账"（状态字段由本层回写，见 countCrashLocked）；
+// 四类生命周期事件（enable/disable/crash/restart）的审计已改为事件发生时直接落
+// audit bucket（M3-C：supervisor 经注入的 Auditor → store.PutAudit，见 serve_audit.go），
+// 不依赖本层对账，本层不再承担审计职责。
 type daemon struct {
 	catalog *registry.Catalog
 	manager *supervisor.Manager

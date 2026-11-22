@@ -26,6 +26,16 @@ type shutdownParams struct {
 // 处理（M1 不跟踪在途计数，drain 的「等在途结束」归 M1-09 的 pending map）。
 func (m *Manager) Stop(ctx context.Context, id string) error {
 	inst, ok := m.lookup(id)
+	state := StateStopped
+	if ok {
+		state = inst.currentState()
+	}
+	// M3-C：disable 动作在发生时直接落审计（plugin.disable），不等下次请求对账；
+	// 重复 Stop 各记一条——审计的是动作，不是状态迁移。
+	m.record(ctx, AuditEvent{
+		Subject: AuditSubjectAdmin, Action: AuditDisable, Plugin: id,
+		Result: AuditResultOK, Detail: detail("state", string(state)),
+	})
 	if !ok {
 		return nil
 	}

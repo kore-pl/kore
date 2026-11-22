@@ -20,23 +20,7 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// State 是插件运行状态（M1 覆盖 resident 的四态 + 失败态）。
-type State string
-
-// 运行状态取值；与 ARCHITECTURE §7 同名，演进为 draining 以对齐 M1 任务口径。
-const (
-	// StateStopped 未运行：进程与 socket 均已清理。
-	StateStopped State = "stopped"
-	// StateStarting 冷启动中：已 exec，等 hello（≤2s）。
-	StateStarting State = "starting"
-	// StateReady 就绪：hello 校验通过，可转发请求。
-	StateReady State = "ready"
-	// StateDraining 停止中：已发 kore.shutdown，等在途退出（≤5s）。
-	StateDraining State = "draining"
-	// StateFailed 启动失败：进程已 SIGKILL，需人工 enable 才重试。
-	StateFailed State = "failed"
-)
-
+// State 是插件运行状态（M1 覆盖 resident 的四态 + 失败态）；定义与取值见 instance.go。
 // 默认值与协议常量；HelloTimeout 是「exec→hello 完成」的硬超时，不是冷启动 p95 SLO。
 const (
 	defaultHelloTimeout  = 2 * time.Second
@@ -78,17 +62,41 @@ func New(opts Options) (*Manager, error) {
 
 // Start 确保插件就绪。resident 走冷启动；lazy 在 enable 阶段是 no-op
 // （只标记 desired=enabled，进程由首次 Ensure/invoke 按需拉起）。
+//
+// M3-C：enable 动作在发生时直接落审计（plugin.enable），不等下次请求对账；
+// 从 failed 状态恢复的启动由 start() 记 plugin.retry，这里不重复记 enable。
 func (m *Manager) Start(ctx context.Context, id string) error {
 	inst, err := m.instance(id)
 	if err != nil {
+		m.record(ctx, AuditEvent{
+			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
+			Result: AuditResultError, Detail: detail("err", err.Error()),
+		})
 		return err
 	}
 	if inst.isLazy() {
+		m.record(ctx, AuditEvent{
+			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
+			Result: AuditResultOK, Detail: detail("lifecycle", "lazy"),
+		})
 		return nil // lazy：enable 不拉起进程，首次 invoke 才冷启
 	}
-	return m.gate(id).do(ctx, func(ctx context.Context) error {
+	recovering := inst.currentState() == StateFailed
+	err = m.gate(id).do(ctx, func(ctx context.Context) error {
 		return m.startIfNeeded(ctx, inst)
 	})
+	if !recovering {
+		event := AuditEvent{
+			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
+			Result: AuditResultOK, Detail: detail("state", string(inst.currentState())),
+		}
+		if err != nil {
+			event.Result = AuditResultError
+			event.Detail = detail("err", err.Error())
+		}
+		m.record(ctx, event)
+	}
+	return err
 }
 
 // Ensure 确保插件就绪并返回主壳持有的 UDS 连接（bus 的转发入口 = invoke 冷启点）。
