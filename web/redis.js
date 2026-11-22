@@ -99,6 +99,14 @@
     var running = candidates.filter(function (s) { return s.found && s.running; });
     return running.length ? running[0] : null;
   }
+  // 已连通的实例：instances 的 reachable=true 表示"用配置里的凭据真实连上服务端"，
+  // 它的 version 就是服务端版本：优先级 已连通实例 > discover.server_version > discover.client_version。
+  function connectedInstance() {
+    for (var i = 0; i < S.instances.length; i++) {
+      if (S.instances[i] && S.instances[i].reachable) return S.instances[i];
+    }
+    return null;
+  }
   // hintFor 把后端 error 原文翻译成「怎么办」；NOAUTH 直接给出 requirepass 位置。
   function hintFor(text) {
     var msg = String(text || '');
@@ -127,6 +135,23 @@
     function title(text) { add(main, el('p', 'db-auto-title', text)); }
     function text(value) { add(main, el('p', 'db-auto-text', value)); }
     function act(cls, label, fn) { add(actions, btn(cls, label, fn)); }
+
+    // 优先级①：实例已连通时以实例的服务端版本为准，避免"横幅说没连上、实例卡说可达"。
+    var conn = connectedInstance();
+    if (conn) {
+      var connVersion = shortVersion(conn.version);
+      badge('已连接');
+      title('已连接 Redis' + (connVersion ? ' ' + connVersion : '') +
+        '（' + (conn.host || '127.0.0.1') + ':' + (conn.port || 6379) + '）');
+      text('服务端版本来自已连通的实例（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
+        '自动检测只探到客户端版本时以这里为准。连接信息可在右上角「设置」里修改。');
+      if (S.autoNotice) {
+        add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+      }
+      act('btn-primary', '修改连接', function () { openSettings(false); });
+      act('btn-ghost', '重新检测', detect);
+      return;
+    }
 
     if (S.discoveryState === 'loading') {
       badge('自动检测');
@@ -391,6 +416,8 @@
         autoBanner();
       }
       paintInstances();
+      // 实例结果可能晚于 discover 到达：重绘横幅，让"已连通的服务端版本"按优先级立刻接管。
+      autoBanner();
       if (!S.selected && S.instances.length) {
         var first = S.instances[0];
         for (var i = 0; i < S.instances.length; i++) if (S.instances[i].reachable) { first = S.instances[i]; break; }

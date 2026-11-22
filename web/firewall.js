@@ -7,9 +7,11 @@
 (function () {
   'use strict';
   var API = '/api/v1/invoke/firewall/', TIMEOUT_MS = 15000;
+  // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
+  var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   function fresh() {
     return { root: null, status: null, statusError: '', rules: [], rulesError: '', rulesLoaded: false,
-      canWrite: false, previewable: false, preview: null, pending: null, previewError: '', busy: false,
+      canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
       deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false };
   }
   var S = fresh();
@@ -65,6 +67,21 @@
     if (!S.noticeHost) return;
     S.noticeHost.textContent = ''; if (S.notice) S.noticeHost.appendChild(notice(S.notice, true));
   }
+  // 表单权限门控：没有 root（available=false）或后端不是 ufw 时，输入控件也必须禁用，
+  // 只保留只读展示 + 提权指引——不允许"能填、点提交才报错"。
+  function setFormLocked(locked) {
+    S.formLocked = !!locked;
+    [S.actionSel, S.portInput, S.protoSel, S.fromInput, S.commentInput].forEach(function (n) {
+      if (n) n.disabled = S.formLocked;
+    });
+    if (S.previewBtn) S.previewBtn.disabled = S.formLocked || !S.previewable;
+    if (S.previewNote) {
+      S.previewNote.textContent = S.formLocked
+        ? (S.canWrite ? '当前没有 ufw 后端：表单已禁用，仅保留只读展示。'
+          : '没有 root 权限：表单已禁用，仅保留只读展示；提权后刷新本页即可编辑。')
+        : '预览只构造命令，确认后才真正执行。';
+    }
+  }
   function paintStatus() {
     if (!S.statusHost) return;
     S.statusHost.textContent = '';
@@ -85,18 +102,23 @@
     if (!st.available) {
       var call = add(box, el('div', 'fw-callout-warn'));
       add(call, el('div', 'fw-callout-title', '当前环境无法读取防火墙状态'));
-      add(call, el('p', 'fw-callout-text', '当前环境无法读取防火墙状态：' + (st.error || '原因未知') +
-        '。防火墙管理需要 root 权限（kored 需以 root 运行或配置 systemd 权限）。'));
+      var p = add(call, el('p', 'fw-callout-text', '当前环境无法读取防火墙状态：' + (st.error || '原因未知') +
+        '。防火墙管理需要 root 权限（kored 需以 root 运行或配置 systemd 权限）。表单已禁用，仅保留只读展示；提权后刷新本页。 '));
+      var guide = add(p, el('a', 'fw-perm-link', '查看提权说明'));
+      guide.href = RUNBOOK_PRIV; guide.target = '_blank'; guide.rel = 'noopener noreferrer';
       var details = add(call, el('details', 'fw-details'));
       add(details, el('summary', null, '查看原始错误'));
       add(details, el('pre', null, st.error || '（无更多信息）'));
     }
     var can = S.canWrite;
+    // 状态说了算：能写才解锁表单，否则一律禁用（非 root 时不再让用户白填一遍）。
+    setFormLocked(!can);
     if (S.previewBtn) {
-      S.previewBtn.disabled = !S.previewable;
-      S.previewNote.textContent = S.previewable
-        ? (can ? '预览只构造命令，确认后才真正执行。' : '没有 root 权限：可以预览命令，但无法真正执行。')
-        : '当前没有 ufw 后端，无法预览或执行端口规则。';
+      S.previewBtn.disabled = !S.previewable || !can;
+      S.previewNote.textContent = S.formLocked
+        ? (can ? '当前没有 ufw 后端：表单已禁用，仅保留只读展示。'
+          : '没有 root 权限：表单已禁用，仅保留只读展示；提权后刷新本页即可编辑。')
+        : (can ? '预览只构造命令，确认后才真正执行。' : '没有 root 权限：可以预览命令，但无法真正执行。');
     }
   }
   function paintRules() {
@@ -198,6 +220,7 @@
     on(ok, function () { execPreview(ok); });
   }
   function previewRule() {
+    if (S.formLocked) return;
     var port = Math.trunc(Number(S.portInput.value));
     if (!isFinite(port) || port < 1 || port > 65535) { S.previewError = '端口必须是 1–65535 的整数'; S.preview = null; paintPreview(); return; }
     var req = formParams(true);
@@ -283,6 +306,8 @@
     on(S.previewBtn, previewRule);
     S.previewNote = add(ops, el('span', 'fw-preview-hint', '预览只构造命令，确认后才真正执行。'));
     S.previewHost = add(formP.panel, el('div', 'fw-preview-host'));
+    // fail-closed：状态回来前先禁用表单，避免"打开就能填、点提交才知道没权限"。
+    setFormLocked(true);
     paintStatus(); paintRules(); paintPreview(); loadStatus(); loadRules();
     return { destroy: function () { S.destroyed = true; } };
   }

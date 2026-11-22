@@ -120,6 +120,21 @@
     for (var i = 0; i < running.length; i++) if (running[i].id === 'mysql') return running[i];
     return running.length ? running[0] : null;
   }
+  // 已连通的实例：instances 的 reachable=true 表示"用配置里的凭据真实连上了服务端"，
+  // 它的 version 就是服务端版本，可信度高于 discover（旧版 discover 只探得到客户端版本）。
+  // 横幅真相优先级：已连通实例的服务端版本 > discover.server_version > discover.client_version。
+  function connectedInstance() {
+    for (var i = 0; i < S.instances.length; i++) {
+      if (S.instances[i] && S.instances[i].reachable) return S.instances[i];
+    }
+    return null;
+  }
+  // 版本串自带 MariaDB 标记时以版本为准，否则沿用 discover 命中的实现名。
+  function connectedLabel(inst, svc) {
+    if (/mariadb/i.test(String((inst && inst.version) || ''))) return 'MariaDB';
+    if (svc && isDbService(svc)) return dbLabel(svc);
+    return 'MySQL';
+  }
   // hintFor 把后端 error 原文翻译成「怎么办」；没有命中时给通用排查顺序。
   function hintFor(text) {
     var msg = String(text || '');
@@ -150,6 +165,24 @@
     function title(text) { add(main, el('p', 'db-auto-title', text)); }
     function text(value) { add(main, el('p', 'db-auto-text', value)); }
     function act(cls, label, fn) { add(actions, btn({ parent: actions, cls: cls }, label, fn)); }
+
+    // 优先级①：只要有一个实例真的连通，横幅就以实例卡的服务端版本为准——
+    // 即使 discover 是旧版、只探到客户端版本，也不再出现"横幅说没连上、实例卡说可达"的自相矛盾。
+    var conn = connectedInstance();
+    if (conn) {
+      var connVersion = shortVersion(conn.version);
+      badge('已连接');
+      title('已连接 ' + connectedLabel(conn, S.discovery) + (connVersion ? ' ' + connVersion : '') +
+        '（' + (conn.host || '127.0.0.1') + ':' + (conn.port || 3306) + '）');
+      text('服务端版本来自已连通的实例（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
+        '自动检测只探到客户端版本时以这里为准。连接信息可在右上角「设置」里修改。');
+      if (S.autoNotice) {
+        add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+      }
+      act('btn-primary', '修改连接', function () { openSettings(false); });
+      act('btn-ghost', '重新检测', detect);
+      return;
+    }
 
     if (S.discoveryState === 'loading') {
       badge('自动检测');
@@ -475,6 +508,8 @@
         autoBanner();
       }
       paintInstances();
+      // 实例结果可能晚于 discover 到达：重绘横幅，让"已连通的服务端版本"按优先级立刻接管。
+      autoBanner();
       if (!S.selected && S.instances.length) {
         // 默认选第一个可达实例，省一次点击；不可达实例仍可手动点开核对完整错误。
         var first = S.instances[0];

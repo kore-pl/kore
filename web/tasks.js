@@ -11,7 +11,10 @@
     ['每分钟', '* * * * *'], ['每小时', '0 * * * *'],
     ['每天 3 点', '0 3 * * *'], ['每周一 3 点', '0 3 * * 1']
   ];
-  var S = { entries: [], editIndex: null, warning: '' };
+  // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
+  var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
+  // warning = 环境受限原因（供列表空态与只读判定），warnText = 灰底提示条的当前文案；两者不互相覆盖。
+  var S = { entries: [], editIndex: null, warning: '', warnText: '', locked: false, lockReason: '' };
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -77,6 +80,47 @@
     document.body.appendChild(mask);
   }
 
+  // 权限类失败识别：E_UNAUTHORIZED / E_NEED_ROOT / crontab 报权限错误都算，"填完才报错"必须前置。
+  function permissionProblem(text) {
+    var msg = String(text || '');
+    if (!msg) return '';
+    if (/E_UNAUTHORIZED|E_NEED_ROOT|E_PERM|权限|permission|not permitted|must be root|需要 root/i.test(msg)) return msg;
+    return '';
+  }
+
+  // 只读锁定：禁用表单与预设，页面顶部给黄底说明 + 提权说明链接（不再让人填完才失败）。
+  function setLocked(reason) {
+    S.locked = !!reason;
+    S.lockReason = reason || '';
+    if (S.form) {
+      [S.form.schedule, S.form.command, S.form.comment, S.form.submit, S.form.cancel].forEach(function (n) {
+        if (n) n.disabled = S.locked;
+      });
+      if (S.locked) {
+        S.form.cancel.hidden = true;
+        S.form.hint.textContent = '当前没有 root 权限：表单已禁用，仅保留只读展示。';
+      } else {
+        S.form.hint.textContent = '5 段 crontab 表达式；命令按原样写入当前用户的 crontab。';
+      }
+    }
+    if (S.presets) S.presets.forEach(function (b) { b.disabled = S.locked; });
+    paintPerm();
+  }
+
+  function paintPerm() {
+    if (!S.permHost) return;
+    S.permHost.textContent = '';
+    S.permHost.hidden = !S.locked;
+    if (!S.locked) return;
+    var box = add(S.permHost, el('div', 'fw-callout-warn task-perm-warn'));
+    box.setAttribute('role', 'status');
+    add(box, el('div', 'fw-callout-title', '当前无法读取系统计划任务'));
+    var p = add(box, el('p', 'fw-callout-text',
+      '当前无法读取系统计划任务：' + S.lockReason + '。需要 root 权限（kored 需以 root 运行）。 '));
+    var a = add(p, el('a', 'task-perm-link', '查看提权说明'));
+    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  }
+
   function cancelEdit() {
     S.editIndex = null;
     if (!S.form) return;
@@ -86,7 +130,9 @@
     S.form.comment.readOnly = false;
     S.form.submit.textContent = '新增任务';
     S.form.cancel.hidden = true;
-    S.form.hint.textContent = '5 段 crontab 表达式；命令按原样写入当前用户的 crontab。';
+    S.form.hint.textContent = S.locked
+      ? '当前没有 root 权限：表单已禁用，仅保留只读展示。'
+      : '5 段 crontab 表达式；命令按原样写入当前用户的 crontab。';
   }
 
   function beginEdit(entry) {
@@ -104,6 +150,10 @@
 
   function submitForm(ev) {
     ev.preventDefault();
+    if (S.locked) {
+      setStatus('当前为只读：需要 root 权限才能写入系统计划任务', 'fail');
+      return;
+    }
     var schedule = S.form.schedule.value.trim();
     var command = S.form.command.value.trim();
     if (schedule.split(/\s+/).length !== 5) {
@@ -152,10 +202,10 @@
 
   // showWarning 用灰底提示条表达"环境限制"，与红色错误态严格区分。
   function showWarning(text) {
-    S.warning = text || '';
+    S.warnText = text || '';
     if (!S.warn) return;
-    S.warn.textContent = S.warning;
-    S.warn.hidden = !S.warning;
+    S.warn.textContent = S.warnText;
+    S.warn.hidden = !S.warnText;
   }
   function paintList() {
     if (!S.listHost) return;
@@ -194,17 +244,34 @@
     setStatus('正在读取计划任务…');
     return invoke('cron.list', {}).then(function (data) {
       S.entries = Array.isArray(data.entries) ? data.entries : [];
-      showWarning(data.warning);
+      S.warning = data.warning || '';
+      // 打开页面即探测权限：cron.list 成功但带权限告警（crontab -l 失败）同样按只读处理。
+      var blocked = permissionProblem(S.warning);
+      setLocked(blocked);
+      showWarning(blocked ? '' : S.warning);
       paintList();
-      if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
+      if (S.locked) setStatus('当前为只读：需要 root 权限才能读取/写入系统计划任务，见上方说明', 'fail');
+      else if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
       else setStatus(S.entries.length ? '计划任务已刷新' : '还没有计划任务，用上方表单新增一条', 'ok');
-    }, function (err) { setStatus('计划任务读取失败：' + err.message, 'fail'); });
+    }, function (err) {
+      var blocked = permissionProblem(err && (err.message + ' ' + (err.code || '')));
+      if (blocked) {
+        // 权限错误不是"读取失败"，而是环境不满足前置条件：锁表单 + 黄底说明。
+        S.entries = []; S.warning = blocked; setLocked(blocked); showWarning(''); paintList();
+        setStatus('当前为只读：需要 root 权限才能读取/写入系统计划任务，见上方说明', 'fail');
+        return;
+      }
+      setStatus('计划任务读取失败：' + err.message, 'fail');
+    });
   }
 
   function build(root) {
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '计划任务'));
     add(head, el('p', 'view-sub', '管理当前用户的 crontab；每次写入前插件都会备份原内容。'));
+    // 权限只读说明条：黄底 + 提权指引，位于表单之前（先看到原因，再看到被禁用的表单）。
+    S.permHost = add(root, el('div', 'task-perm-host'));
+    S.permHost.hidden = true;
     var formPanel = add(root, el('section', 'panel task-form-panel'));
     var formHead = add(formPanel, el('div', 'panel-head'));
     add(formHead, el('span', 'panel-title', '任务表单'));
@@ -216,10 +283,12 @@
     schedule.type = 'text'; schedule.placeholder = '* * * * *'; schedule.autocomplete = 'off';
     var presets = add(form, el('div', 'task-presets'));
     presets.setAttribute('role', 'group'); presets.setAttribute('aria-label', '常用预设');
+    S.presets = [];
     PRESETS.forEach(function (preset) {
       var b = add(presets, el('button', 'btn btn-ghost task-preset', preset[0]));
       b.type = 'button';
       on(b, function () { schedule.value = preset[1]; schedule.focus(); });
+      S.presets.push(b);
     });
     var cmdField = add(form, el('label', 'field task-cmd'));
     add(cmdField, el('span', 'field-label', '命令'));
@@ -256,9 +325,10 @@
   function render(container) {
     if (!container) return null;
     container.textContent = '';
-    S.entries = []; S.editIndex = null; S.warning = '';
+    S.entries = []; S.editIndex = null; S.warning = ''; S.warnText = ''; S.locked = false; S.lockReason = '';
     var root = add(container, el('section', 'tasks'));
     build(root);
+    setLocked('');
     load();
   }
   window.KoreTasks = { render: render };

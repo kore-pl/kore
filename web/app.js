@@ -134,10 +134,14 @@
     );
   }
 
-  function statusTag(state) {
+  // 状态标签：cls 决定点色（ok/warn/fail），info=true 用信息蓝（lazy 空闲态，不是故障）。
+  function statusTag(st) {
     var wrap = el('span', 'tag');
-    wrap.appendChild(el('span', 'dot ' + state.cls));
-    wrap.appendChild(el('span', null, state.text));
+    var dot = el('span', 'dot ' + (st.cls || ''));
+    if (st.info) dot.style.background = 'var(--kore-info)';
+    if (st.title) { wrap.title = st.title; dot.title = st.title; }
+    wrap.appendChild(dot);
+    wrap.appendChild(el('span', null, st.text));
     return wrap;
   }
 
@@ -512,7 +516,7 @@
     if (!enabled || plugin.state !== 'ready' || !ping.supported) {
       pingBtn.disabled = true;
       pingBtn.title = !enabled ? '插件未启用，先点「启用」'
-        : (plugin.state !== 'ready' ? '插件当前状态 ' + (plugin.state || '未知') + '，未就绪'
+        : (plugin.state !== 'ready' ? '插件当前空闲（lazy 按需启动，未驻留进程）'
           : '该插件不支持 ping 方法');
     }
     pingBtn.addEventListener('click', function () {
@@ -525,7 +529,11 @@
     else if (ping.error) { note.textContent = 'ping 失败：' + ping.error; note.className = 'row-note row-note-fail'; }
     else if (ping.result) { note.textContent = 'ping → ' + ping.result; note.className = 'row-note row-note-ok'; }
     else if (!enabled) note.textContent = '未启用';
-    else if (plugin.state !== 'ready') note.textContent = '状态 ' + (plugin.state || '未知');
+    else if (plugin.state !== 'ready') {
+      note.textContent = String(plugin.lifecycle || '') === 'lazy' ? '空闲（按需启动）'
+        : '状态 ' + (plugin.state || '未知');
+      note.title = String(plugin.lifecycle || '') === 'lazy' ? LAZY_IDLE_TIP : '';
+    }
     ops.appendChild(note);
 
     tr.appendChild(ops);
@@ -578,12 +586,33 @@
     note.appendChild(cancel);
   }
 
+  // lazy 语义：lifecycle=lazy 的插件按需拉起、空闲退出以省资源，stopped 是正常空闲而非故障。
+  var LAZY_IDLE_TIP = '按需启动（lazy）：收到请求才拉起，空闲时退出以省资源；这是正常状态，不是故障。';
+
+  // 四态：运行中（绿）/ 空闲（蓝，lazy+已启用+未运行）/ 未启用（灰，期望停用）/ 异常（红）。
   function pluginStateTag(plugin) {
-    var text = plugin.state || (plugin.enabled ? 'enabled' : 'stopped');
-    if (text === 'ready') return { cls: 'ok', text: text };
-    if (text === 'failed') return { cls: 'fail', text: text };
-    if (text === 'starting' || text === 'draining') return { cls: 'warn', text: text };
-    return { cls: 'warn', text: text };
+    // 缺 state 时按"未运行"处理：宁可显示空闲/未启用，也不无证据地宣称运行中。
+    var st = String(plugin.state || 'stopped');
+    var desired = String(plugin.desired || (plugin.enabled === true ? 'enabled' : 'disabled'));
+    var lazy = String(plugin.lifecycle || '') === 'lazy';
+    if (st === 'ready' || st === 'running') {
+      return { cls: 'ok', text: '运行中', title: '进程已就绪，可处理请求。' };
+    }
+    if (st === 'stopped' && desired === 'disabled') {
+      return { cls: 'na', text: '未启用', title: '期望状态为停用：不会处理请求，点「启用」后生效。' };
+    }
+    if (st === 'stopped' && desired === 'enabled' && lazy) {
+      return { cls: 'na', info: true, text: '空闲', title: LAZY_IDLE_TIP };
+    }
+    if (st === 'starting' || st === 'draining') {
+      // 过渡态：既非空闲也非故障，用黄色提示，避免把 1–2 秒的启停瞬间误报成异常。
+      return { cls: 'warn', text: st === 'starting' ? '启动中' : '停止中',
+        title: '插件正在' + (st === 'starting' ? '启动' : '停止') + '，稍后刷新即可。' };
+    }
+    if (st === 'failed') {
+      return { cls: 'fail', text: '异常', title: '插件进程异常退出（failed），请查看日志或重启内核。' };
+    }
+    return { cls: 'fail', text: '异常', title: '非预期状态：state=' + st + '，期望 ' + desired + '；请查看日志。' };
   }
 
   function replaceRow(plugin) {
@@ -722,7 +751,15 @@
     var thead = el('thead');
     var headRow = el('tr');
     var cols = ['插件', '版本', '最新版本', '深度', '生命周期', '状态', '操作'];
-    for (var c = 0; c < cols.length; c++) headRow.appendChild(el('th', null, cols[c]));
+    for (var c = 0; c < cols.length; c++) {
+      var th = el('th', null, cols[c]);
+      // 状态列表头带 lazy 语义说明：绿=运行中 / 蓝=空闲（正常）/ 灰=未启用 / 红=异常。
+      if (cols[c] === '状态') {
+        th.title = '运行中=进程就绪；空闲=已启用的 lazy 插件按需启动、空闲退出以省资源（正常）；' +
+          '未启用=期望停用；异常=启动失败或非预期退出。';
+      }
+      headRow.appendChild(th);
+    }
     thead.appendChild(headRow);
     table.appendChild(thead);
     var tbody = el('tbody');
@@ -736,13 +773,36 @@
     return box;
   }
 
+  // 插件状态计数：四态口径与 pluginStateTag 一致，汇总条与行内标签永远同一本账。
+  function pluginCounts() {
+    var c = { total: state.plugins.length, enabled: 0, running: 0, idle: 0, disabled: 0, failed: 0 };
+    for (var i = 0; i < state.plugins.length; i++) {
+      var p = state.plugins[i] || {};
+      var st = String(p.state || '');
+      var desired = String(p.desired || (p.enabled === true ? 'enabled' : 'disabled'));
+      var lazy = String(p.lifecycle || '') === 'lazy';
+      if (desired === 'enabled') c.enabled++; else c.disabled++;
+      if (st === 'ready' || st === 'running') c.running++;
+      else if (st === 'failed') c.failed++;
+      else if (st === 'stopped' && desired === 'enabled' && lazy) c.idle++;
+    }
+    return c;
+  }
+
+  // 顶部汇总条：已启用 N · 运行中 M · 空闲 K · 未启用 J —— 蓝色"空闲"不再被读成故障。
+  function summaryBarText() {
+    var c = pluginCounts();
+    return '已启用 ' + fmtInt(c.enabled) + ' · 运行中 ' + fmtInt(c.running) +
+      ' · 空闲 ' + fmtInt(c.idle) + ' · 未启用 ' + fmtInt(c.disabled);
+  }
+
   // 顶部汇总条：N 个已安装 / M 个可升级 + 一键全部升级 + 批量进度。
   function upgradeSummaryPanel() {
     var up = upgradablePlugins();
     var box = el('div', 'store-upgrade-summary panel-upgrade-summary');
     box.id = 'kore-upgrade-summary';
     box.appendChild(el('span', 'store-upgrade-text',
-      state.plugins.length + ' 个已安装，' + up.length + ' 个可升级'));
+      summaryBarText() + ' · 共 ' + fmtInt(state.plugins.length) + ' 个已安装，' + up.length + ' 个可升级'));
     var btn = el('button', 'btn btn-primary', '一键全部升级');
     btn.type = 'button';
     btn.id = 'kore-upgrade-all';
@@ -1210,13 +1270,7 @@
   }
 
   function pluginSummaryPanel() {
-    var enabled = 0, ready = 0, failed = 0;
-    for (var i = 0; i < state.plugins.length; i++) {
-      var p = state.plugins[i] || {};
-      if (p.enabled === true) enabled++;
-      if (p.state === 'ready') ready++;
-      if (p.state === 'failed') failed++;
-    }
+    var c = pluginCounts();
     var box = el('section', 'panel');
     var head = el('div', 'panel-head');
     head.appendChild(el('span', 'panel-title', '插件概览'));
@@ -1227,11 +1281,16 @@
       return box;
     }
     var table = el('table', 'rows');
-    table.appendChild(row('已安装', fmtInt(state.plugins.length)));
-    table.appendChild(row('已启用', fmtInt(enabled)));
-    table.appendChild(row('运行中', fmtInt(ready)));
-    table.appendChild(row('异常', fmtInt(failed)));
+    table.appendChild(row('已安装', fmtInt(c.total)));
+    table.appendChild(row('已启用', fmtInt(c.enabled)));
+    table.appendChild(row('运行中', fmtInt(c.running)));
+    table.appendChild(row('空闲', fmtInt(c.idle)));
+    table.appendChild(row('未启用', fmtInt(c.disabled)));
+    table.appendChild(row('异常', fmtInt(c.failed)));
     box.appendChild(table);
+    var hint = el('p', 'panel-meta', '空闲 = 已启用的 lazy 插件按需启动、空闲时退出以省资源，属正常行为。');
+    hint.id = 'kore-plugin-state-hint';
+    box.appendChild(hint);
     var meta = el('div', 'panel-meta actions');
     var more = el('button', 'btn', '查看全部插件');
     more.type = 'button';
