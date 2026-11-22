@@ -47,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /-/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/v1/system/info", s.handleSystemInfo)
 	s.mux.HandleFunc("GET "+pluginsPath, s.handlePlugins)
+	s.mux.HandleFunc("GET "+pluginsPath+"/{id}", s.handlePluginDetail)
 	s.mux.HandleFunc("POST "+pluginsPath, s.handleUnsupported)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/enable", s.handleEnable)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/disable", s.handleDisable)

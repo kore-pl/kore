@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -41,7 +43,20 @@ func isPublicPath(path string) bool {
 const (
 	csrfCookieName = "kore_csrf"
 	csrfHeaderName = "X-Kore-CSRF"
+	// csrfTokenBytes 是 CSRF token 的随机字节数（32 B → base64url 43 字符）。
+	csrfTokenBytes = 32
 )
+
+// newCSRFToken 生成 32 B 随机 token（base64url，无 padding），供登录时下发
+// kore_csrf cookie。auth 模块不持有 CSRF 逻辑（写域边界），生成与校验同在
+// 本包，口径一致：登录下发的值就是后续双提交比对的值。
+func newCSRFToken() (string, error) {
+	buf := make([]byte, csrfTokenBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("生成 CSRF token 失败: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
 
 // isCSRFExempt 返回免于 CSRF 校验的路径：探针与认证入口本身。
 // login/setup 尚未持有会话，无法要求 CSRF token；logout 是幂等的会话终止，

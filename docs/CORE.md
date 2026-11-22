@@ -118,6 +118,7 @@
 - **输入输出**：输入 `Preset{id,plugins[{id,version_range,optional}],config_template}`（schema 见 [SCENARIOS.md](./SCENARIOS.md) §2）；输出安装计划 `{steps[],resident_quota,disk_bytes,runtime_gaps[]}` 或异步 `job_id`。HTTP `POST /api/v1/store/install|update` 与 CLI `kored install --scenario <id> [--offline-dir] [--yes]`、`kored install --package <tar.gz>` **共用同一实现**。
 - **失败模式与处理**：预设 id 未知 / 版本区间不可解析 → 400 `E_INVALID`；sha256 不符 → 400 `E_INVALID`（不落盘）；`requires_kore` 不满足 → 409 `E_UNSUPPORTED`；常驻配额超限（>3 个或 >24 MiB）→ **安装前** 409 `E_CONFLICT` 并给"需先停用 <id>"建议；包下载失败由 market 层返回 `E_UPSTREAM`；任一步失败即整预设回滚，回滚自身失败则写 `audit` 并保留现场（不删证据）。
 - **明确不做什么**：不实现包下载（网络在 market 层）；不安装运行时（运行时由插件调宿主包管理器，kore 不下载）；不做版本求解（只按索引区间取满足的最高版并 pin）；不做签名校验（M4 由 market 负责 ed25519）。
+- **运行期安装约束（state.db 独占锁）**：`serve` 常驻时以独占方式持有 `state.db`，CLI `kored install --package` 与 `--scenario` 同为独立进程、会争同一把锁并退出码 3（状态库被占用）——**这是设计使然，不是缺陷**。serve 运行时请走 `POST /api/v1/store/install`（经同一 installer 校验落盘，并由装配层增量刷新 registry，装完立即可 enable/invoke）；CLI install **仅离线使用**（serve 未启动）。该端点成功返回后，`registry` 已同步登记新插件，无需重启即可启用。
 
 ### 2.13 `internal/core/market`（软件商店，HTTP 前缀 `/store`）
 

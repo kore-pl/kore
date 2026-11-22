@@ -37,6 +37,18 @@ type Resources struct {
 	PidsMax int `json:"pids_max"`
 }
 
+// Web 是 info.json 的 web 段（FRONTEND §4.2）：插件前端入口与样式清单。
+//
+// G-24：显式字段，不用 any/object；无 web 段时 Manifest.Web 为 nil，
+// 对外经 httpapi.PluginStatus 转成 *PluginWeb（nil = 前端 fail-closed 不建帧）。
+// 这里只解析字段供 HTTP 层读取，不做路径/体积校验（安装期校验归 installer）。
+type Web struct {
+	// Entry 相对包根的 ES module 入口（.js 结尾、不含 ..）。
+	Entry string `json:"entry"`
+	// Styles iframe 文档自行加载的样式文件，≤5 项、合计 ≤200 KiB。
+	Styles []string `json:"styles,omitempty"`
+}
+
 // Manifest 是 info.json 的内存表示：9 个必填字段 + 3 个可选字段（见 requiredKeys）。
 type Manifest struct {
 	// ID 插件 id（同时决定 socket、目录与二进制名）。
@@ -72,6 +84,8 @@ type Manifest struct {
 	DepthLevel string `json:"depth_level,omitempty"`
 	// IdleTimeoutS 空闲退出秒数，仅 lifecycle=lazy 生效，范围 60–1800。
 	IdleTimeoutS int `json:"idle_timeout_s,omitempty"`
+	// Web 插件前端清单段（FRONTEND §4.2）；nil 表示插件无 UI。
+	Web *Web `json:"web,omitempty"`
 	// Dir 是插件版本的落盘目录（<root>/<id>/<version>），由 Load 填写；解析阶段为空。
 	Dir string `json:"-"`
 }

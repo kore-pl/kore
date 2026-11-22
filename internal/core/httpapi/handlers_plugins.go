@@ -26,6 +26,28 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pluginList{Plugins: plugins})
 }
 
+// handlePluginDetail 返回单个插件视图（GET /api/v1/plugins/{id}）。
+//
+// 与列表端点共用同一个 Backend.Plugin：新字段 web / granted_capabilities
+// 由装配层填入 PluginStatus，本层只做存在性判定与错误映射，不重复组装。
+func (s *Server) handlePluginDetail(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Backend == nil {
+		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "后端未装配", "")
+		return
+	}
+	id := r.PathValue("id")
+	status, ok, err := s.opts.Backend.Plugin(r.Context(), id)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, pluginapi.E_NOTFOUND, "插件不存在", id)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 // handleEnable 启用插件并返回当前视图；重复 enable 幂等，不重复拉起进程。
 func (s *Server) handleEnable(w http.ResponseWriter, r *http.Request) {
 	s.handleLifecycle(w, r, true)

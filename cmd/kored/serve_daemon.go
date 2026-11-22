@@ -81,12 +81,23 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 		return httpapi.PluginStatus{}, err
 	}
 	manifest, _ := d.catalog.Manifest(view.ID)
-	return httpapi.PluginStatus{
+	status := httpapi.PluginStatus{
 		ID: view.ID, Name: view.Name, Version: view.Version,
 		Lifecycle: string(view.Lifecycle), DepthLevel: manifest.DepthLevel,
 		State: state.Actual, Desired: state.Desired, Restarts: state.Restarts,
 		PID: runtimePID(runtimeView, hasRuntime), Enabled: view.State == registry.StateEnabled,
-	}, nil
+		// Web / GrantedCapabilities 供前端桥按 FRONTEND §4 建帧与限权；
+		// store plugins bucket 的 capabilities 与 manifest 同源（installer.record 落库），
+		// 这里取内存中已登记清单，避免每次列表请求都读 bbolt（G-13 薄壳边界）。
+		GrantedCapabilities: append([]string(nil), manifest.Capabilities...),
+	}
+	if manifest.Web != nil {
+		status.Web = &httpapi.PluginWeb{
+			Entry:  manifest.Web.Entry,
+			Styles: append([]string(nil), manifest.Web.Styles...),
+		}
+	}
+	return status, nil
 }
 
 // update 在锁内完成"读状态 → 合并运行态 → 崩溃对账 → 按需回写"。

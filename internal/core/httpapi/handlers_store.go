@@ -154,6 +154,14 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	// 安装已落盘，但 registry 是内存登记表：不刷新则后续 enable/invoke 404。
+	// 回调失败不吞——返回 500 显式暴露"登记未完成"，避免假装成功埋雷。
+	if s.installRefresh != nil {
+		if err := s.installRefresh(req.ID); err != nil {
+			writeFailure(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, job)
 }
 

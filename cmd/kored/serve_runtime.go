@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -20,13 +21,14 @@ const restoreTimeout = 5 * time.Second
 
 // service 是 serve 进程持有的内核运行件；关闭顺序由 shutdownAll 控制。
 type service struct {
-	catalog *registry.Catalog
-	manager *supervisor.Manager
-	bus     *bus.Bus
-	states  *stateRepo
-	backend *daemon
-	auth    *auth.Manager
-	db      *store.Store
+	catalog       *registry.Catalog
+	manager       *supervisor.Manager
+	bus           *bus.Bus
+	states        *stateRepo
+	backend       *daemon
+	auth          *auth.Manager
+	db            *store.Store
+	pluginRootDir string // 插件落盘根目录，供 reloadOne 增量登记复用
 }
 
 // buildService 装配 registry/supervisor/bus/httpapi 后端。
@@ -73,6 +75,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc := &service{
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
 		db: db, backend: newDaemon(catalog, manager, frameBus, states),
+		pluginRootDir: root,
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}
@@ -98,6 +101,38 @@ func (s *service) restoreEnabled() {
 			slog.Warn("恢复已启用插件失败", "plugin_id", view.ID, "err", err)
 		}
 	}
+}
+
+// reloadOne 增量登记单个新装插件到内存 catalog（缺口2：运行时安装立即可见）。
+//
+// 只处理指定 id：从 store 的 plugins bucket 读该 id 的已装记录（真源），
+// 装载其 info.json 后登记。已登记则幂等跳过，不触碰其余插件、不重启进程。
+// 失败返回原始错误，由 HTTP 层映射；落盘由 installer 负责，本方法只读 store。
+func (s *service) reloadOne(id string) error {
+	if id == "" {
+		return fmt.Errorf("插件 id 为空，无法刷新登记")
+	}
+	if _, ok := s.catalog.Manifest(id); ok {
+		return nil // 已登记，幂等
+	}
+	refs, err := s.states.installed()
+	if err != nil {
+		return fmt.Errorf("读取已装插件记录失败: %w", err)
+	}
+	for _, ref := range refs {
+		if ref.ID != id {
+			continue
+		}
+		manifest, loadErr := registry.Load(registry.PluginDir(s.pluginRootDir, id, ref.Version))
+		if loadErr != nil {
+			return fmt.Errorf("装载插件 %s 清单失败: %w", id, loadErr)
+		}
+		if addErr := s.catalog.Add(manifest); addErr != nil {
+			return fmt.Errorf("登记插件 %s 失败: %w", id, addErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("插件 %s 未在状态库中登记", id)
 }
 
 // StopAll 停止全部有运行态的插件；进程退出由 supervisor 的 Wait 驱动，不轮询。

@@ -12,6 +12,7 @@ import (
 )
 
 // buildPackage 把 testdata/echoplugin 打成一个可被 installer 接受的最小插件包。
+// spec.Web 为真时额外声明 web 段并落 web/ 资产（供桥字段端到端断言）。
 func buildPackage(t *testing.T, spec pluginSpec) string {
 	t.Helper()
 	stage := t.TempDir()
@@ -32,6 +33,21 @@ func buildPackage(t *testing.T, spec pluginSpec) string {
 		"requires_kore": testRequiresKore, "triggers": []string{},
 		"depends_on": []string{}, "conflicts": []string{},
 		"scenario_tags": []string{"ops"}, "size_bytes": 0,
+	}
+	if spec.Web {
+		info["web"] = map[string]any{
+			"entry": "web/index.js", "styles": []string{"web/index.css"},
+		}
+		webDir := filepath.Join(stage, "web")
+		if err := os.MkdirAll(webDir, 0o755); err != nil {
+			t.Fatalf("创建 web 目录失败: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(webDir, "index.js"), []byte("export {};\n"), 0o644); err != nil {
+			t.Fatalf("写 web/index.js 失败: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(webDir, "index.css"), []byte("/* test */\n"), 0o644); err != nil {
+			t.Fatalf("写 web/index.css 失败: %v", err)
+		}
 	}
 	data, err := json.Marshal(info)
 	if err != nil {

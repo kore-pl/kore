@@ -130,6 +130,8 @@ interface KoreBridgeResponse {
 }
 ```
 
+> 口径注记：桥实现兼容 `type`/`reqId`/`params` 旧字段，新代码统一用 `kind`/`req_id`/`params_json`（`kore.invoke` / `kore.result`）。
+
 ### 4.4 注册时序
 
 ```text

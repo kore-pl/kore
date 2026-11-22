@@ -5,6 +5,17 @@ import (
 	"encoding/json"
 )
 
+// PluginWeb 是 info.json 的 web 段对外 DTO（FRONTEND §4.2）。
+//
+// 只暴露桥建帧所需的最小字段；G-24：显式类型，不用 any/object。
+// 前端 fail-closed 依赖 entry 为字符串：无 web 段时 PluginStatus.Web 为 nil（JSON 省略）。
+type PluginWeb struct {
+	// Entry iframe 文档加载的 ES module 入口（相对包根、.js 结尾）。
+	Entry string `json:"entry"`
+	// Styles 由 iframe 文档自行加载的样式文件（相对包根），≤5 项。
+	Styles []string `json:"styles,omitempty"`
+}
+
 // PluginStatus 是插件列表/启停响应的单插件视图。
 //
 // state 是运行期实际状态（ready/starting/stopped/failed），desired 是持久化的
@@ -30,6 +41,10 @@ type PluginStatus struct {
 	PID int `json:"pid"`
 	// Enabled 是否已在 registry 置为 enabled。
 	Enabled bool `json:"enabled"`
+	// Web 插件前端清单段（info.json 的 web）；无 web 段时为 nil（JSON 省略，前端 fail-closed）。
+	Web *PluginWeb `json:"web,omitempty"`
+	// GrantedCapabilities 已授予能力集（来源 manifest capabilities / plugins bucket capabilities）。
+	GrantedCapabilities []string `json:"granted_capabilities,omitempty"`
 }
 
 // SupervisorStats 是 /api/v1/system/info 的 supervisor 统计。

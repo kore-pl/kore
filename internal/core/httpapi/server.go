@@ -48,6 +48,10 @@ type Options struct {
 	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
 	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
 	AuditLister AuditLister
+	// InstallRefresh 在 POST /store/install 成功后回调，增量刷新 registry 使新装
+	// 插件立即可 enable/invoke（缺口2）。由 cmd/kored 装配层注入（ReloadOne：
+	// 读 store 已装记录 → 装载清单 → 登记 catalog）；nil 时不刷新（测试/未装配）。
+	InstallRefresh func(id string) error
 }
 
 // CapabilityResolver 由请求解析出调用方 subject 与已授予能力集。
@@ -98,17 +102,18 @@ func managementPluginID(path string) string {
 
 // Server 持有监听器与 http.Server，生命周期由 cmd/kored 控制。
 type Server struct {
-	opts        Options
-	transport   platform.Transport
-	mux         *http.ServeMux
-	httpServer  *http.Server
-	auth        *auth.Manager
-	market      *market.Service
-	capResolver CapabilityResolver
-	capAuditor  CapabilityAuditor
-	auditLister AuditLister
-	mu          sync.Mutex
-	listeners   []net.Listener
+	opts           Options
+	transport      platform.Transport
+	mux            *http.ServeMux
+	httpServer     *http.Server
+	auth           *auth.Manager
+	market         *market.Service
+	capResolver    CapabilityResolver
+	capAuditor     CapabilityAuditor
+	auditLister    AuditLister
+	installRefresh func(id string) error
+	mu             sync.Mutex
+	listeners      []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
@@ -117,7 +122,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		opts: opts, transport: transport, mux: http.NewServeMux(),
 		auth: opts.Auth, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
-		auditLister: opts.AuditLister,
+		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 	}
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver

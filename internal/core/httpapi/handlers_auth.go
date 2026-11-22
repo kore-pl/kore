@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
@@ -42,7 +44,53 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.SetCookie(w, token)
+	// 双提交要求前端能读到与 X-Kore-CSRF 头同名比对的值，故 kore_csrf
+	// 非 HttpOnly（裁决40 的 HttpOnly 指主壳内部持有；此处以 withCSRF 的
+	// cookie==header 实际校验口径为准）。其余安全属性与会话 cookie 对齐。
+	if err := s.setCSRFCookie(w); err != nil {
+		writeFailure(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, sessionBody{Authenticated: true, ExpiresAt: formatExpiry(session.ExpiresAt)})
+}
+
+// setCSRFCookie 下发 kore_csrf：非 HttpOnly（双提交要求前端可读），
+// 其余属性（Path=/、SameSite=Strict、Secure、MaxAge）与刚写出的会话 cookie 对齐。
+// Secure 与 MaxAge 从响应里已有的会话 Set-Cookie 解析，避免在本包重复持有
+// auth.Manager 的 secure/ttl 配置（保持单一事实源）。
+func (s *Server) setCSRFCookie(w http.ResponseWriter) error {
+	token, err := newCSRFToken()
+	if err != nil {
+		return err
+	}
+	secure, maxAge := sessionCookieAttrs(w)
+	http.SetCookie(w, &http.Cookie{
+		Name: csrfCookieName, Value: token, Path: "/",
+		HttpOnly: false, Secure: secure, SameSite: http.SameSiteStrictMode,
+		MaxAge: maxAge,
+	})
+	return nil
+}
+
+// sessionCookieAttrs 从响应中已写出的 kore_session Set-Cookie 解析 Secure 与
+// Max-Age；解析不到时退回安全侧（secure=false, maxAge=0 = 会话 cookie）。
+func sessionCookieAttrs(w http.ResponseWriter) (secure bool, maxAge int) {
+	for _, raw := range w.Header().Values("Set-Cookie") {
+		if !strings.HasPrefix(raw, auth.CookieName+"=") {
+			continue
+		}
+		parts := strings.Split(raw, ";")
+		for _, part := range parts[1:] {
+			part = strings.TrimSpace(part)
+			switch {
+			case part == "Secure":
+				secure = true
+			case strings.HasPrefix(part, "Max-Age="):
+				maxAge, _ = strconv.Atoi(strings.TrimPrefix(part, "Max-Age="))
+			}
+		}
+	}
+	return secure, maxAge
 }
 
 // handleLogout 吊销会话并清 cookie；无有效 cookie 也幂等返回 200。

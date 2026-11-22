@@ -25,6 +25,8 @@ type pluginSpec struct {
 	ID string
 	// Lifecycle resident / lazy / oneshot。
 	Lifecycle string
+	// Web 为真时给测试包的 info.json 声明 web 段并落 web/ 资产（桥字段端到端断言用）。
+	Web bool
 }
 
 // harness 是进程内装配的端到端测试环境。
