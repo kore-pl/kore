@@ -470,3 +470,86 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 **事实**：0004 M4 提案经 REVISE→APPROVE（50→82 行，21 端点矩阵 gate）；0005 验尸报告复验段 74 行、三条建议逐条 file:line PASS。
 
 **判断**：红队复验只核自己的判据、不新增要求（避免"验证成永动机"），这是 PUA 契约"闭环一次做实"的落地。
+
+#### M4 里程碑复盘（2026-11-22）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目标 | M4 本机加固四轨道：M4-A 服务端 capability 目标操作校验、M4-B site 生产化真写 vhost、M4-C audit 查询端点 / CLI、M4-D 包级签名判定；口径见 [proposals/0004-m4-core-hardening.md](proposals/0004-m4-core-hardening.md) §2 四轨与 §4 完成定义 |
+| 结果 | 四轨 commit + 合并顺序登记于 [BOARD.md](BOARD.md) §5 `CS-M4-01`：M4-A `99268d9` / M4-C `d7af021` / M4-D `f3b3371` / M4-B site `199942b`；第五次重签（`kore` `c0ab71a` / 索引 `9d09e56`，新公钥 `adb9998e4281118f297ecef2505b81e3b58637ce4e78c4ed1698fa5b61b442a4`，site 新 sha `ff9c2c16…d484`）；PoC ① `200 → 401` 红转绿；M4-C audit **15 测试全 PASS**（httpapi 9 + kored 6）；site S-02 真 nginx 容器 `nginx -T` 全量 server/listen/include diff 为空、curl 200、删站端口释放；包签名判**延 M5**；`make check` **10/10**，干净 clone 复验 `make docs-check && make check` 同为 10/10、`make wt-check` 无残留 |
+| 差距 | 四轨命令全跑通，但"全绿"口径有边界：M4-D 按提案 §4.4 走 `N/A（M5）` 路径（出包属实但在线分发链已被索引签名 + sha256 覆盖，包签名零增量）；审计 O(n) 全表扫描 + `authorizeAuditRead` 在 `s.auth==nil` 时放行的骨架兼容路径为记录级；capability 审计只到 slog WARN、`store.PutAudit` 持久化挂点未注入；真实宿主 `env_kind=real` 仍挂账，S-02 只到容器层 |
+| 根因 | M1–M3 依次解决"能构建 / 能重建同一个包 / 能安装"，M4 断在"证据本身是否成立"与"看起来更安全是否真有增量"——原 PoC 的 `site:read` 只是叙事标签（实际带 admin cookie），包级签名在复用同一公钥下零增量。两处都是"形式对了、底层逻辑没对" |
+| 沉淀 | ①**先验证证据构造、再判漏洞**：红转绿前必须先证明 RED 是真的；②**纵深防御要算增量**：复用同一公钥的包签名没有密钥分离收益，不能因为"看起来更安全"就做；③**探活说在写就等一回合**，单一时点文件状态不下"卡死"结论（本轮第三次踩到） |
+| 下次动作 | M5：19 插件仓铺开（逐仓 `make dist` + 装/卸/回滚五步）、全矩阵（8 基础级升生产级 + macOS/Windows 转 GA）、包签名落链（复用索引公钥 + 双验窗口 + `TestIndexVerifyCrossCheck`）。未证明项按 §5 挂账，不一开始复述为已证 |
+
+##### 1. 里程碑目标
+
+[proposals/0004-m4-core-hardening.md](proposals/0004-m4-core-hardening.md) §1 把 M4 压成"本机缺口坐实 + 第一批产品插件骨架"，不追多平台：把 M3 标为未证明 / 挂账的本机缺口逐条变成命令 + 退出码 + 关键输出（G-07），主线按裁决 35「本机优先」。§1 先决定义钉死 M4-A 地基——subject 只能取服务端已验签 session（`sessions[sha256(token)].subject`），请求头 / body 自报一律忽略，能力由服务端绑定解析，fail-closed 三类为轨道级 gate。
+
+| 轨道 | 目标 | 出口判据（proposal §2 / §4） |
+| --- | --- | --- |
+| M4-A 服务端 capability 校验 | 全管理端点按目标操作校验 capability，修 `middleware.go:101-111 authorizeTargetAction` 的 confused deputy 根因 | `go test -run 'TestAuthorizeTargetAction\|TestForgedSubjectRejected' ./internal/core/httpapi/...` 退 0 + 21 端点矩阵（§4.0）正反例齐全 + PoC ① `200 → 401` |
+| M4-B site 生产化 | 从只做参数校验的骨架变为真写独立 conf.d vhost 片段 + include，`nginx -t` 过、e2e 前后 `nginx -T` 全量 diff 空、删站端口释放 | `bash tests/fixtures/site-vhost-e2e.sh` 退 0 + 全量 diff 空 + curl 200；`grep -rnE "nginx\|caddy\|httpd" internal/ cmd/` 零命中；`env_kind≠real` 只记 PARTIAL |
+| M4-C audit 查询 / CLI | 在 M3-C 只写基础上补查询端点与 `kored audit --since`，查询自身走 `authorizeTargetAction`、`--since` 必填设上限，按时间 / 动作过滤并导出 CSV | `go test -run TestAuditQuery ./internal/core/httpapi/...` 退 0 + CLI 含目标事件行 + 无 `--since` 被拒 + 越权 401/403 + `make idle` CPU ≤60 ms / 60 s、ticker 零命中 |
+| M4-D 包级签名判定 | 复用索引级同一 ed25519 公钥做交叉验签；若 M4-B 出包且 installer 需要则提前，否则维持 M5 并留不出包证据 | `go test -run 'TestPackageSignature\|TestIndexVerifyCrossCheck' ./internal/core/market/...` 退 0；或标 `N/A（M5）` 并附证据，两条路径二选一不留空 |
+
+边界沿用裁决 35（本机优先）、裁决 37（web server 不内置、跟随站点插件可选多实现）、裁决 40/42（UI 隔离不代替服务端根因、PoC 分层判定）。非目标：多平台实机（P2 后延，只留交叉编译）、包级签名可延 M5、不内置 web server。
+
+##### 2. 交付与证据
+
+四仓 commit 与合并顺序见 [BOARD.md](BOARD.md) §5 `CS-M4-01`：
+
+| 仓库 | commit | 主题 |
+| --- | --- | --- |
+| `kore` | `99268d9` | M4-A：管理端点按目标操作校验 capability（PoC 红转绿） |
+| `kore` | `d7af021` | M4-C：audit 查询端点与 `kored audit CLI`（since 必填 + 越权拦截） |
+| `kore` | `f3b3371` | M4-D：包级签名判定延 M5（索引 sha256 已覆盖在线投毒链） |
+| `kore` | `c0ab71a` | 第五次重签：同步索引新公钥到 `market/verify.go:16` |
+| `kore-plugins` | `9d09e56` | 第五次重签：同步 M4-B site 生产化 sha 与新签名 |
+| `kore-plugin-site` | `199942b` | M4-B：生产化 vhost 写入与原子回滚 |
+
+机械门禁与四轨实测（命令原文 + 退出码 + 关键输出）：
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 门禁 | `make check` | **10/10** 段全绿，EXIT 0；末行 `[OK] 门禁全部通过` |
+| 文档收口 | `make docs-check` / `make log-check` | docs 6 pass / 0 warn / 0 fail（相对链接全可达）；log 8 pass / 0 warn（DECISIONS 43 条、DISPATCH 台账齐） |
+| 干净 clone | `git archive HEAD \| tar -x -C /tmp/kore-m4-clean` 后 `make docs-check && make check` / `make wt-check` | 同为 10/10、无残留 worktree，EXIT 0（裁决 35 本机 amd64 可复现） |
+| M4-A PoC ① | `go test -run TestUIConfusedDeputy -v -count=1 ./internal/core/httpapi/` | ① session+csrf+site:read → **200 → 401** `E_UNAUTHORIZED 越权：管理端点需要 system:admin 能力`；②去 csrf 401、③去 session 401；`Enable 调用记录 []`（空）。`--- PASS`，EXIT 0 |
+| M4-A 全量 | `go test -timeout 200s ./...` / `go test -race -count=1 ./...` | 12/12 包 ok、EXIT 0；race 无 DATA RACE；`grep -rn "plugins/" internal/core` 零命中（G-01 未回退） |
+| M4-C audit | `go test -run 'TestAudit' -v ./internal/core/httpapi/ ./cmd/kored/` | **15 PASS**（httpapi 9 + kored 6）；越权 / 无 since / limit 上限 / CSV 表头四类反例全命中 |
+| M4-C 判据 | `grep -q 'authorizeTargetAction' ... && bin/kored audit --csv \| grep -qiE 'required\|limit\|上限' && echo OK \|\| echo AUDIT-OPEN` | 输出 `OK`（非 AUDIT-OPEN），EXIT 0；`make idle` CPU ≤60 ms / 60 s、audit 路径 ticker 零命中 |
+| M4-B site | `bash tests/fixtures/site-vhost-e2e.sh` + `nginx -t` + `nginx -T` 全量 diff | 真 nginx 容器 env_kind=real，`nginx -t` 退 0、curl 200、删站端口释放、conf.d 无残留；`nginx -T \| grep -E 'server_name\|listen\|include' \| sort` e2e 前后 `diff -q` 空（非 DIRTY-ROLLBACK）；`grep -rnE "nginx\|caddy\|httpd" internal/ cmd/` 零命中 |
+| M4-D 判定 | 只读研判 + 索引验签脚本实跑（[verify/m4-d-package-signing-decision.md](verify/m4-d-package-signing-decision.md)） | **DEFER-TO-M5**：索引 ed25519 + 索引声明 sha256 + installer 自算比对三段覆盖在线链；包签名复用同一公钥零增量，标 `N/A（M5）` 并附证据，不留空 |
+| 第五次重签一致性 | `grep IndexPublicKeyHex internal/core/market/verify.go` + `grep PUB_HEX kore-plugins/scripts/validate-index.sh` + `sha256sum dist/site-0.1.0.tar.gz` | 两端公钥逐字 `adb9998e…b442a4`；site 实包 sha `ff9c2c1698e2e63ecfa7e384f539483224297efff68d85dd9a6c73a0f539d484` 与索引声明逐字一致 |
+
+##### 3. 三次以上重复出现的问题（本条复盘的核心价值）
+
+1. **"零产出误判"第三次（xiaomi audit / csrf-verdict-fix / m4-c-verify）**：三次都在子 agent 单一时点文件状态下判"卡死 / 零产出"准备重派或抢写域，实际 xiaomi 在做 bbolt 源码核查、m4-c-verify 在做 15 测试深核。**教训：探活说"在写 / 在深度核查"就等一回合，别重派**——判活要组合进程状态 + 文件时间戳 + agent 自述，深度核查期间给足时间窗；重复误判会让写域冲突和返工比等待更贵。
+2. **证据构造缺陷（原 UI PoC 的 `site:read` 只是叙事标签）**：[verify/m4-cap-fix-verification.md](verify/m4-cap-fix-verification.md) 关键事实澄清——原 PoC 的 `site:read` 只在 `t.Logf` 里当叙事标签，请求实际带 admin cookie，服务端从请求里读不到任何低权凭证；真实插件身份走 UDS `KORE_PLUGIN_TOKEN` + `kore.hello`，不经 HTTP session；G-11 不做多用户 RBAC，session 只有 admin 一种主体。**教训：先验证证据本身构造是否成立，再判漏洞**——RED 若是测试构造产物，红转绿只证明"测试改对了"，不能外推成"真实越权已堵"；本次 cap 校验的价值是纵深防御 + 为未来 UI 桥预留正确挂点，文案必须如实写边界。
+3. **验证口径分层（CSRF GREEN / cap RED 按裁决 42 分层；M4-D 判包签名零增量延 M5）**：CSRF 层已修（去 csrf 200→401），cap 层按裁决 40 挂 M4 第一优先级，两者分层记录、绿灯不掩盖红灯；M4-D 虽有"出包"事实，但包签名复用同一公钥使纵深防御收益归零（一把私钥同时签索引与包，泄露即全链崩），在线分发链已被索引签名 + sha256 覆盖。**教训：不是所有"看起来更安全"的功能都该做**——纵深防御要算增量，无密钥分离的包签名只有离线来源认证一条真实增量，不足以驱动在收口窗口改动验签主链。
+
+##### 4. 有味道的交付（agent 可见 PUA 输出原文，逐字保留，不评分）
+
+> 底层逻辑没跑偏——site 只生成配置片段，web server 归宿主；抓手是原子写 + 清单约束 + 全量快照 diff；结果是门禁全绿、S-02 拿到真 nginx 证据。因为信任所以简单，但交付必须拿退出码说话。
+
+> 闭环了：新密钥三处同步零偏差、验签正反例都挡住、两包从 sha 到 tar 首条目到真实 install 全链验证——不是"改完就报完成"，是拿命令+退出码把每个承诺钉死。
+
+##### 5. 结论与 M5 前置
+
+**M4 = completed（2026-11-22 收口）**：四轨均有命令 + 退出码 + 关键输出证据（[verify/m4-cap-independent-verification.md](verify/m4-cap-independent-verification.md) / [verify/m4-c-independent-verification.md](verify/m4-c-independent-verification.md) / [verify/m4-d-package-signing-decision.md](verify/m4-d-package-signing-decision.md) + 本节 §2），独立复验 APPROVE、干净 clone 全绿、`CS-M4-01` 登记齐备（G-15 / G-07 / G-23 满足）。未证明项按裁决 43 挂账 M5，不用 N/A 冒充通过、不把 PARTIAL 说成全绿。
+
+**未证明项（挂账，不得复述为已证）**：
+
+- 真实宿主 `env_kind=real`：本机无真实既有站点，S-02 只到容器层，web server 共存的全量 diff 空是容器证据，不是宿主实机证据。
+- 包级 ed25519 签名：M4-D 判延 M5（`DEFER-TO-M5`），包签名链路未落地；不要说"签名链完整"。
+- audit O(n) 全表扫描：`store/audit.go:155 tx.ForEach` 全 bucket 遍历，未建 store 时间戳 / 动作索引，since 过滤在适配器层（记录级技术债，建议 M5 按数据量评估）。
+- CSRF 审计持久化挂点：`store.PutAudit` 注入 cmd/kored 装配层未落地，当前审计只到 slog WARN；挂点已在 `server.go` 注释标明，属已知边界而非能力校验缺陷。
+
+**M5 前置（开工前逐项立带验收命令的任务卡）**：
+
+1. **19 插件仓铺开**：按 [PARITY-GAP §2.1](../docs/PARITY-GAP.md) 建齐 20 产品插件余下 19 仓，逐仓 `make dist` 退 0 + 经商店装 / 卸 / 回滚五步齐全，索引 sha256 与发布物一致；M4 只交 site 骨架范式。
+2. **全矩阵**：8 个基础级插件升生产级（`tests/fault/` 四类 + G-20 复验），macOS / Windows 由 preview 转 GA 全链路（下载 → 校验 → 安装 → 启动），依裁决 35 多平台为降级目标排最后。
+3. **包签名落链**：M4-D 延 M5，此期落包级 ed25519（复用索引公钥 + 双验窗口 + `TestIndexVerifyCrossCheck` 交叉验签），使篡改包拒装、合法包验签通过。
+
+复盘四步法收口：目标是把 M3 挂账的本机缺口坐实成命令级证据（§1）；结果是四轨全跑通 + 干净 clone 全绿 + 包签名如实判延 M5（§2）；弯路根因不是能力不足，而是"证据构造没验就判漏洞"和"看起来更安全就以为有增量"（§3）；沉淀规律已固化成"先验证据构造 + 算纵深防御增量 + 多信号探活"三条，M5 开工按此立卡。
