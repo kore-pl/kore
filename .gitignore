@@ -45,3 +45,20 @@ Thumbs.db
 
 # ---- agent 临时产物 ----
 .agents/tmp/
+
+# ---- 运行态资产（G-29：禁止入库，用 git check-ignore 验证）----
+# 全系列兜底：yaml / state / run / log / index 一次覆盖，防止 git add . 把 123 MiB state.db 带进提交
+.kore-local*
+# 显式列出覆盖范围，便于 review 辨认（与上一行等价，不依赖通配符推断）
+.kore-local-state/
+.kore-local-run/
+.kore-local-log/
+.kore-local-index/
+# 配置示例是契约不是运行态，必须保留入库（与 .env.example 同理）
+!.kore-local.yaml.example
+
+# ---- 验收证据（G-28）：报告 *.md 与 screenshots/*.png 入库，原始采样与临时物不入库 ----
+.agents/verify/**/*-raw.json
+.agents/verify/tmp/
+.agents/verify/**/chrome-profile/
+.agents/verify/**/profile/
