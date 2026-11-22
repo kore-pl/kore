@@ -6,7 +6,7 @@ import (
 )
 
 // watchIdleOnce 是一次性空闲观察：单次 NewTimer + defer Stop，
-// 零 Ticker / AfterFunc（G-19）。每次 invoke 由 rearmIdleLocked 取消旧观察、起新观察。
+// 零周期定时器（G-19）。每次 invoke 由 rearmIdleLocked 取消旧观察、起新观察。
 func (m *Manager) watchIdleOnce(inst *instance, cancel <-chan struct{}, gen uint64,
 	exited <-chan struct{}, timeout time.Duration) {
 	timer := time.NewTimer(timeout)

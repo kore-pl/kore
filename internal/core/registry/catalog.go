@@ -129,8 +129,9 @@ func (c *Catalog) State(id string) (State, bool) {
 
 // Enable 把插件置为 enabled（desired=enabled），不负责拉起进程。
 //
-// M2 运行期支持 resident 与 lazy；oneshot 返回 E_UNSUPPORTED 且 message 写明 M3 支持，
-// 不做静默降级；未安装返回 E_NOTFOUND。
+// 运行期支持全部三种 lifecycle；lazy/oneshot 在 enable 阶段只标记期望态，
+// 进程由首次 invoke 按需拉起。非法 lifecycle 仍返回 E_INVALID，不静默降级；
+// 未安装返回 E_NOTFOUND。
 func (c *Catalog) Enable(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

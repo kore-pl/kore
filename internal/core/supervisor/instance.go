@@ -47,11 +47,19 @@ type instance struct {
 	lastUsed   atomic.Uint64
 	idleGen    uint64
 	idleCancel chan struct{}
+
+	// oneshotIdle 是调用串行令牌（容量 1、预填 1）：Ensure 取走、本次调用回收后归还。
+	oneshotIdle chan struct{}
 }
 
 // isLazy 报告该实例是否为惰性生命周期。
 func (i *instance) isLazy() bool {
 	return i.manifest.Lifecycle == registry.LifecycleLazy
+}
+
+// isOneshot 报告该实例是否为一次性生命周期（用完即走，空闲 0 进程）。
+func (i *instance) isOneshot() bool {
+	return i.manifest.Lifecycle == registry.LifecycleOneshot
 }
 
 // usedAt 记录一次 invoke 的使用序号（返回新序号，供 LRU 比较）。
@@ -62,7 +70,12 @@ func (i *instance) usedAt(seq uint64) uint64 {
 
 // newInstance 创建未启动的运行态。
 func newInstance(manifest *registry.Manifest, socket string) *instance {
-	return &instance{manifest: manifest, socket: socket, state: StateStopped}
+	inst := &instance{manifest: manifest, socket: socket, state: StateStopped}
+	if inst.isOneshot() {
+		inst.oneshotIdle = make(chan struct{}, 1)
+		inst.oneshotIdle <- struct{}{}
+	}
+	return inst
 }
 
 // currentState 读当前状态。

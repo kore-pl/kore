@@ -60,20 +60,16 @@ func TestCatalogEnableLazy(t *testing.T) {
 	}
 }
 
-// TestCatalogEnableOneshotUnsupported oneshot 在 M2 仍返回 E_UNSUPPORTED，message 写明 M3。
-func TestCatalogEnableOneshotUnsupported(t *testing.T) {
+// TestOneShotCatalogEnable oneshot 运行期受支持：enable 成功并置为期望态。
+func TestOneShotCatalogEnable(t *testing.T) {
 	manifest := baseManifest()
 	manifest["lifecycle"] = "oneshot"
 	catalog := newCatalogWith(t, parse(t, manifest))
-	err := catalog.Enable("site")
-	if codeOf(t, err) != pluginapi.E_UNSUPPORTED {
-		t.Fatalf("oneshot enable 应返回 E_UNSUPPORTED，实际 %v", err)
+	if err := catalog.Enable("site"); err != nil {
+		t.Fatalf("oneshot enable 应成功，实际 %v", err)
 	}
-	if !containsAll(err.Error(), "oneshot", "M3") {
-		t.Fatalf("message 应可读并写明 M3 支持，实际 %q", err.Error())
-	}
-	if catalog.Enabled("site") {
-		t.Fatalf("被拒绝的 enable 不得改变状态")
+	if !catalog.Enabled("site") {
+		t.Fatalf("oneshot enable 后 Enabled 应为 true")
 	}
 }
 

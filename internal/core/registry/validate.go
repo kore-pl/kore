@@ -226,15 +226,13 @@ func (m *Manifest) validateExtras() error {
 
 // RuntimeSupported 报告当前内核能否运行该 lifecycle。
 //
-// M2 运行期实现 resident 与 lazy（按需冷启 + 空闲退出）；oneshot 明确拒绝
-// （E_UNSUPPORTED，message 写明 M3 支持）而不是静默降级，便于原样回显给用户。
+// 三种取值全部运行期支持：resident 常驻、lazy 按需冷启+空闲退出、oneshot
+// 每次 invoke 拉起且执行完立即退出（空闲 0 进程）。未知取值仍 E_INVALID，
+// 不做静默降级——非法清单必须在 enable 阶段就被拦下并原样回显。
 func (m *Manifest) RuntimeSupported() error {
 	switch m.Lifecycle {
-	case LifecycleResident, LifecycleLazy:
+	case LifecycleResident, LifecycleLazy, LifecycleOneshot:
 		return nil
-	case LifecycleOneshot:
-		return errf(pluginapi.E_UNSUPPORTED,
-			"插件 %s 的 lifecycle=oneshot 在 M2 运行期不支持（M3 支持）", m.ID)
 	default:
 		return errf(pluginapi.E_INVALID, "插件 %s 的 lifecycle=%q 非法", m.ID, m.Lifecycle)
 	}

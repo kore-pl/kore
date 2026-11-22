@@ -154,24 +154,19 @@ func TestParseRejectsBrokenJSON(t *testing.T) {
 	}
 }
 
-// TestRuntimeSupported 验证 M2 运行期支持 resident/lazy，oneshot 仍不支持（M3）。
-func TestRuntimeSupported(t *testing.T) {
-	oneshot := baseManifest()
-	oneshot["lifecycle"] = "oneshot"
-	err := parse(t, oneshot).RuntimeSupported()
-	if codeOf(t, err) != pluginapi.E_UNSUPPORTED {
-		t.Fatalf("oneshot 应返回 E_UNSUPPORTED，实际 %v", err)
+// TestLifecycleRuntimeSupported 验证三值（resident/lazy/oneshot）运行期全部支持，非法值仍 E_INVALID。
+func TestLifecycleRuntimeSupported(t *testing.T) {
+	for _, lifecycle := range []string{"resident", "lazy", "oneshot"} {
+		m := baseManifest()
+		m["lifecycle"] = lifecycle
+		if err := parse(t, m).RuntimeSupported(); err != nil {
+			t.Fatalf("lifecycle=%s 应受支持，实际 %v", lifecycle, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "M3") {
-		t.Fatalf("oneshot 的 message 应写明 M3 支持，实际 %q", err.Error())
-	}
-	lazy := baseManifest()
-	lazy["lifecycle"] = "lazy"
-	if err := parse(t, lazy).RuntimeSupported(); err != nil {
-		t.Fatalf("lazy 在 M2 应受支持，实际 %v", err)
-	}
-	if err := parse(t, baseManifest()).RuntimeSupported(); err != nil {
-		t.Fatalf("resident 应受支持，实际 %v", err)
+	bad := baseManifest()
+	bad["lifecycle"] = "bogus"
+	if _, err := registry.Parse(encode(t, bad)); codeOf(t, err) != pluginapi.E_INVALID {
+		t.Fatalf("非法 lifecycle 应返回 E_INVALID，实际 %v", err)
 	}
 }
 

@@ -17,13 +17,13 @@ import (
 // Lifecycle 是插件生命周期取值（resident | lazy | oneshot）。
 type Lifecycle string
 
-// 三种生命周期；缺省为 lazy（G-14：三值都要解析并落盘，M2 实现 resident/lazy，oneshot 待 M3）。
+// 三种生命周期；缺省为 lazy（G-14：三值都解析落盘，运行期三值全支持）。
 const (
 	// LifecycleResident 常驻：随 enable 常驻，占用常驻槽位。
 	LifecycleResident Lifecycle = "resident"
-	// LifecycleLazy 惰性：enable 不起进程，首次 invoke 冷启、空闲退出（M2 已实现）。
+	// LifecycleLazy 惰性：enable 不起进程，首次 invoke 冷启、空闲 idle_timeout 后退出。
 	LifecycleLazy Lifecycle = "lazy"
-	// LifecycleOneshot 一次性：每次调用拉起、执行完退出（M3 再做，M2 仍 E_UNSUPPORTED）。
+	// LifecycleOneshot 一次性：enable 不起进程，每次 invoke 拉起、执行完立即退出（空闲 0 进程）。
 	LifecycleOneshot Lifecycle = "oneshot"
 )
 

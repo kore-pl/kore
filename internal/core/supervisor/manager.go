@@ -4,9 +4,9 @@
 // 隔离模型（G-04）：socket 由主壳以 server 身份 bind（插件无权自建），插件进程以
 // client 身份 connect；2s 硬超时内未完成 kore.hello 即 SIGKILL 并置 failed。
 //
-// M2 实现 resident + lazy；oneshot 由 registry 在 enable 阶段拒绝（E_UNSUPPORTED，M3）。
-// 退避重启、心跳探测、热升级、run.json 孤儿进程核对按任务拆分归 M1-12/13，本包不含
-// 任何 ticker/轮询（G-19）：状态变化全部由调用事件驱动。
+// 三种 lifecycle 全部支持：resident 常驻、lazy 冷启+空闲退出、oneshot 单次调用
+// 用完即停（见 oneshot.go）。退避重启、心跳探测、热升级、run.json 孤儿进程核对
+// 按任务拆分归 M1-12/13，本包不含任何 ticker/轮询（G-19）：状态变化全部由事件驱动。
 package supervisor
 
 import (
@@ -60,7 +60,7 @@ func New(opts Options) (*Manager, error) {
 	}, nil
 }
 
-// Start 确保插件就绪。resident 走冷启动；lazy 在 enable 阶段是 no-op
+// Start 确保插件就绪。resident 走冷启动；lazy / oneshot 在 enable 阶段是 no-op
 // （只标记 desired=enabled，进程由首次 Ensure/invoke 按需拉起）。
 //
 // M3-C：enable 动作在发生时直接落审计（plugin.enable），不等下次请求对账；
@@ -74,12 +74,12 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		})
 		return err
 	}
-	if inst.isLazy() {
+	if inst.isLazy() || inst.isOneshot() {
 		m.record(ctx, AuditEvent{
 			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
-			Result: AuditResultOK, Detail: detail("lifecycle", "lazy"),
+			Result: AuditResultOK, Detail: detail("lifecycle", string(inst.manifest.Lifecycle)),
 		})
-		return nil // lazy：enable 不拉起进程，首次 invoke 才冷启
+		return nil // lazy/oneshot：enable 不拉起进程，首次 invoke 才冷启
 	}
 	recovering := inst.currentState() == StateFailed
 	err = m.gate(id).do(ctx, func(ctx context.Context) error {
@@ -100,11 +100,15 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 }
 
 // Ensure 确保插件就绪并返回主壳持有的 UDS 连接（bus 的转发入口 = invoke 冷启点）。
-// resident 直接取连接；lazy 先过槽位准入（必要时驱逐 LRU），再冷启并重置空闲计时。
+// resident 直接取连接；lazy 先过槽位准入（必要时驱逐 LRU），再冷启并重置空闲计时；
+// oneshot 每次 invoke 都走全新冷启，调用完成后 wrapped conn 自行 Stop（空闲 0 进程）。
 func (m *Manager) Ensure(ctx context.Context, id string) (net.Conn, error) {
 	inst, err := m.instance(id)
 	if err != nil {
 		return nil, err
+	}
+	if inst.isOneshot() {
+		return m.ensureOneshot(ctx, inst)
 	}
 	if inst.isLazy() {
 		if err := m.ensureLazy(ctx, inst); err != nil {
@@ -133,7 +137,7 @@ func (m *Manager) nextSeq() uint64 {
 	return m.useSeq.Add(1)
 }
 
-// instance 取（或创建）插件运行态；未安装、未 enable、oneshot 都在此拦截。
+// instance 取（或创建）插件运行态；未安装、未 enable、非法 lifecycle 都在此拦截。
 func (m *Manager) instance(id string) (*instance, error) {
 	if !m.opts.Manifests.Enabled(id) {
 		return nil, errf(pluginapi.E_NOTFOUND,
