@@ -1833,3 +1833,74 @@ button:disabled, .btn:disabled {
   .proc-table { min-width: 720px; }
   .proc-drawer { width: 100%; }
 }
+
+/* ===== SSL 证书视图（web/ssl.js）——仅追加，不改既有类 =====
+   证书表在容器内横向滚动（<640px 不整页溢出）；两列表单在 <640px 改单列。 */
+.ssl-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2); margin-bottom: var(--kore-space-2); }
+.ssl-verify-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2); flex: 1 1 320px; }
+.ssl-verify-input { flex: 1 1 240px; min-width: 0; }
+.ssl-status, .bak-status { min-height: 20px; margin-bottom: var(--kore-space-3); font-size: var(--kore-font-12); color: var(--kore-text-3); }
+.ssl-acme { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-3); margin-bottom: var(--kore-space-3); }
+.ssl-acme-note { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.ssl-verifyresult { margin-bottom: var(--kore-space-4); }
+.ssl-verifyresult:empty { display: none; }
+.ssl-verify-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2); padding: var(--kore-space-2) var(--kore-space-3); background: var(--kore-bg-1); border: 1px solid var(--kore-border-1); border-radius: var(--kore-radius-container); font-size: var(--kore-font-12); }
+.ssl-verify-host { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ssl-verify-days { font-variant-numeric: tabular-nums; }
+.ssl-verify-issuer { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssl-table-host, .bak-table-host { overflow-x: auto; }
+.ssl-table, .bak-table { width: 100%; border-collapse: collapse; font-size: var(--kore-font-13); }
+.ssl-table { min-width: 1000px; }
+.bak-table { min-width: 860px; }
+.ssl-table thead th, .bak-table thead th { text-align: left; padding: var(--kore-space-2) var(--kore-space-3); color: var(--kore-text-2); font-size: var(--kore-font-12); font-weight: 400; white-space: nowrap; border-bottom: 1px solid var(--kore-border-2); }
+.ssl-table tbody tr + tr, .bak-table tbody tr + tr { border-top: 1px solid var(--kore-border-2); }
+.ssl-table td, .bak-table td { padding: var(--kore-space-2) var(--kore-space-3); vertical-align: middle; }
+.ssl-domain { min-width: 180px; }
+.ssl-domain-name { font-weight: 600; word-break: break-all; }
+.ssl-cert-error { margin-top: var(--kore-space-1); color: var(--kore-danger); font-size: 11px; }
+.ssl-issuer { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.ssl-days { font-variant-numeric: tabular-nums; }
+.ssl-days.is-warn { color: var(--kore-warning); }
+.ssl-days.is-fail { color: var(--kore-danger); }
+.ssl-expired { margin-left: var(--kore-space-1); color: var(--kore-danger); font-size: 11px; }
+.ssl-fp, .bak-sha { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--kore-font-12); }
+.ssl-tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-1); }
+.ssl-source { color: var(--kore-text-3); font-size: 11px; }
+.ssl-ops .btn + .btn, .bak-ops .btn + .btn { margin-left: var(--kore-space-1); }
+.ssl-grid, .bak-form, .ssl-form, .bak-confirm-form { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-3); }
+.ssl-grid { gap: var(--kore-space-4); }
+.ssl-grid .panel { margin-bottom: 0; }
+.ssl-form, .bak-form { padding: var(--kore-space-4); }
+.ssl-textarea, .bak-textarea { width: 100%; min-height: 88px; padding: var(--kore-space-2) var(--kore-space-3); color: var(--kore-text-1); background: var(--kore-bg-0); border: 1px solid var(--kore-border-1); border-radius: var(--kore-radius-control); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--kore-font-12); line-height: 1.55; resize: vertical; }
+.ssl-textarea:focus, .bak-textarea:focus { border-color: var(--kore-info); outline: none; }
+.field-hint { margin: 0; color: var(--kore-text-3); font-size: var(--kore-font-12); line-height: 1.5; }
+.ssl-submit, .bak-submit { justify-self: start; min-width: 140px; }
+.bak-danger { color: var(--kore-danger); border-color: var(--kore-danger); }
+.bak-name { display: block; font-weight: 600; word-break: break-all; }
+.bak-id { display: block; margin-top: 2px; color: var(--kore-text-3); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.ssl-source, .bak-id { user-select: all; }
+.bak-result-host:empty, .bak-confirm-host:empty { display: none; }
+.bak-kv { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: var(--kore-space-1) var(--kore-space-3); margin: 0; padding: var(--kore-space-3) var(--kore-space-4); font-size: var(--kore-font-12); }
+.bak-kv dt { color: var(--kore-text-3); overflow-wrap: anywhere; }
+.bak-kv dd { margin: 0; word-break: break-all; font-variant-numeric: tabular-nums; }
+.bak-failed { margin: 0; padding: 0 var(--kore-space-4) var(--kore-space-3) var(--kore-space-6); color: var(--kore-danger); font-size: var(--kore-font-12); }
+.bak-confirm { border-color: var(--kore-warning); }
+.bak-warn { margin: 0; padding: var(--kore-space-2) var(--kore-space-4); color: var(--kore-text-1); background: var(--kore-warning-bg); border-top: 1px solid var(--kore-border-2); border-bottom: 1px solid var(--kore-border-2); font-size: var(--kore-font-12); }
+.bak-confirm-form { padding: 0 var(--kore-space-4) var(--kore-space-3); }
+.bak-confirm-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); padding: 0 var(--kore-space-4) var(--kore-space-3); }
+.bak-confirm-form .bak-confirm-ops { padding: 0; }
+.bak-confirm-msg { min-height: 18px; padding: 0 var(--kore-space-4) var(--kore-space-3); color: var(--kore-danger); font-size: var(--kore-font-12); word-break: break-word; }
+@media (min-width: 640px) {
+  .ssl-form, .bak-form, .bak-confirm-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ssl-form .span2, .bak-form .span2, .bak-confirm-form .span2 { grid-column: 1 / -1; }
+}
+@media (min-width: 1024px) {
+  .ssl-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+}
+@media (max-width: 639px) {
+  .ssl-verify-input, .ssl-verify-box, .ssl-verify-box .btn { flex: 1 1 100%; }
+  .ssl-table, .bak-table { font-size: var(--kore-font-12); }
+  .ssl-acme .btn, .bak-confirm-ops .btn, .bak-form .btn, .ssl-form .btn, .bak-ops .btn { min-height: var(--kore-touch); }
+  .ssl-acme-note { flex: 1 1 100%; }
+  .bak-kv { grid-template-columns: 96px minmax(0, 1fr); }
+}
