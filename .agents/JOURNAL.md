@@ -571,3 +571,10 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 - 交付事实：批1 八仓（file/ssl/integrity/cron/ssh-guard/monitor/logs/dns）全部落盘，sha 经 lead 独立核验、tar 首条目均为 info.json；第六次重签公钥 f271723a…、索引 10 插件、12 仓推送；logs/dns 两处 net.Pipe 死锁（漏读 shutdown 响应帧）自修闭合。
 - 教训：**共享模板的隐含契约必须显式化**——site 模板用 net.Pipe 测协议往返，但"每个请求必须配对读响应"没写进注释，logs/dns 照抄各漏一次、各死锁一次；写模板时把契约写进注释，比事后 RCA 两次省。
 - 门禁：`make docs-check` + `make log-check`，退出码见回报。
+
+#### 规则固化：net.Pipe 测试契约（2026-11-22，M5 批1 教训）
+
+- **事实**：M5 批1 的 logs 与 dns 两仓照抄 site 模板做协议往返测试，各踩一次 `net.Pipe` 无缓冲死锁（logs 漏读 `invoke` 应答、dns 漏读 `kore.shutdown` 应答），两次都靠 RCA 定位后补读响应帧解决；批2 派发已在任务卡预先写死"每个 shutdown 请求必须配对读响应帧"，避免第三次。
+- **规则**：**共享模板的隐含契约必须显式化**——凡用 `net.Pipe` 做协议往返测试的模板，必须在注释与 README 写明"每个写请求必须配对一次读响应，否则无缓冲管道死锁"；复制者照抄第一眼就能看到，而不是靠死锁后 RCA。
+- **关联**：这是"一个问题进来，一类问题出去"的落实（两仓同类死锁 → 一条模板规则），与 `size_bytes` 代理偏差、`go.work` 扰动同属"共享骨架的隐藏契约"家族。
+- 门禁：`make docs-check` + `make log-check`，退出码见回报。
