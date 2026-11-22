@@ -22,6 +22,8 @@
 | 能力覆盖对标专业版 | **20 个产品插件（12 生产级 + 8 基础级）+ 1 验证件 `echo`**；**8 个场景预设**；商店可装/升/卸；**覆盖 22 项能力域、6 项明确不做** | 21 个仓库可经商店安装与卸载；`FEATURE-PARITY` 每行有状态（做/延后/不做）且无空单元格 | M2 起 / M4 收口 |
 | 插件名单（唯一来源：[PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) §6.1） | **生产级 12**：`site` `ssl` `runtime-php` `db-mysql` `file` `backup` `cron` `logs` `monitor` `firewall` `redis` `app-deploy`；**基础级 8**：`runtime-node` `runtime-python` `db-postgres` `waf` `ssh-guard` `integrity` `dns` `container`；`echo` 为验证件、**不评级** | 与 CATALOG §1–§5 表格逐字一致（12 + 8 + 1 = 21 个仓库） | M2–M4 |
 
+> 口径澄清：索引中 echo 的 depth_level=basic 仅为 schema 两值约束下的占位，验证件不参与 12 生产级 / 8 基础级评级；12/8 统计只数 20 个产品插件。
+
 ### 1.2 质量
 
 | 目标 | 量化判据 | 验收命令或方式 | 责任里程碑 |

@@ -85,6 +85,8 @@
 | **生产级** | 12 | `site` `ssl` `runtime-php` `db-mysql` `file` `backup` `cron` `logs` `monitor` `firewall` `redis` `app-deploy` | 边界用例 + 故障注入 + 完整错误处理；`tests/fault/` 必须存在 | 商店标「生产级」 |
 | **基础级** | 8 | `runtime-node` `runtime-python` `db-postgres` `waf` `ssh-guard` `integrity` `dns` `container` | 核心路径可用；边界用例与高级配置延到 v1.1 | 商店标「基础级 · 边界能力 v1.1」 |
 
+> 口径澄清：索引中 echo 的 depth_level=basic 仅为 schema 两值约束下的占位，验证件不参与 12 生产级 / 8 基础级评级；12/8 统计只数 20 个产品插件。
+
 **升级判据**（基础级 → 生产级，两条都要满足）：① 边界用例覆盖（异常输入、并发、权限不足、资源耗尽各 ≥1 例并进 CI）；② 故障注入通过（`kill -9`、超时、磁盘满、cgroup 超限四类各 1 次，行为符合 `PLUGIN-CATALOG` §8 DoD）。等级不是永久标签，v1.1 目标是把 8 个基础级全部升到生产级。
 
 ## 7. 资源预算推导
