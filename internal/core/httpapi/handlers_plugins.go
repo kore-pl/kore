@@ -36,8 +36,13 @@ func (s *Server) handleDisable(w http.ResponseWriter, r *http.Request) {
 	s.handleLifecycle(w, r, false)
 }
 
-// handleLifecycle 是 enable/disable 的共同流程：动作 → 回读单插件视图。
+// handleLifecycle 是 enable/disable 的共同流程：目标操作校验 → 动作 → 回读单插件视图。
+//
+// 管理端点按目标操作做 capability 校验的挂点见 authorizeTargetAction（TODO 裁决40）。
 func (s *Server) handleLifecycle(w http.ResponseWriter, r *http.Request, enable bool) {
+	if !s.authorizeTargetAction(w, r) {
+		return
+	}
 	if s.opts.Backend == nil {
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "后端未装配", "")
 		return

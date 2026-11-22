@@ -25,8 +25,12 @@ var methodPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`
 
 // handleInvoke 把 HTTP body 当作插件方法参数转发给 bus，成功时直接返回业务 result。
 //
-// 能力细粒度校验（方法 → capability）归 M1-08；M1 只校验插件已 enable 且方法名合法。
+// 目标操作校验入口见 authorizeTargetAction（M1 只验 session，TODO 裁决40）；
+// 细粒度方法 → capability 映射仍归 M4，M1 只校验方法名合法。
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeTargetAction(w, r) {
+		return
+	}
 	if s.opts.Backend == nil {
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "后端未装配", "")
 		return
@@ -56,7 +60,7 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 
 // validateMethod 校验方法名语法与保留前缀；点分方法的域必须等于路径里的插件 id。
 //
-// M1-08 会在此处追加 capability 校验（方法所需能力 ⊆ 已授予能力），本阶段不做。
+// M4 会在此处追加 capability 校验（方法所需能力 ⊆ 已授予能力，裁决40），本阶段不做。
 func validateMethod(plugin, method string) error {
 	if plugin == "" || !methodPattern.MatchString(method) {
 		return errf(pluginapi.E_INVALID, "方法名 %q 不合法", method)

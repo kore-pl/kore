@@ -55,9 +55,13 @@ type Server struct {
 func New(opts Options, transport platform.Transport) *Server {
 	server := &Server{opts: opts, transport: transport, mux: http.NewServeMux(), auth: opts.Auth, market: opts.Market}
 	server.routes()
+	// 中间件链（外层先执行）：req_id → CSRF → auth → handler。
+	// CSRF 在 auth 之前：非法写请求一律先按 CSRF 失败收敛，不泄露会话状态。
+	// 仅装配鉴权时挂 CSRF/auth；M0 探活骨架（auth==nil）保持裸路由。
 	handler := http.Handler(server.mux)
 	if server.auth != nil {
 		handler = server.withAuth(handler)
+		handler = server.withCSRF(handler)
 	}
 	server.httpServer = &http.Server{
 		Handler:           server.withRequestID(handler),

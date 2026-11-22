@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -34,6 +35,79 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 // isPublicPath 返回无需鉴权的路径（健康检查与登录）。
 func isPublicPath(path string) bool {
 	return path == "/-/healthz" || path == "/api/v1/auth/login"
+}
+
+// CSRF 双提交 token 的载体：非 HttpOnly cookie + 同名请求头（SECURITY.md §4）。
+const (
+	csrfCookieName = "kore_csrf"
+	csrfHeaderName = "X-Kore-CSRF"
+)
+
+// isCSRFExempt 返回免于 CSRF 校验的路径：探针与认证入口本身。
+// login/setup 尚未持有会话，无法要求 CSRF token；logout 是幂等的会话终止，
+// 与 login 对称，CSRF 强制登出只造成一次重新登录、无越权面。管理端点不在豁免内。
+func isCSRFExempt(path string) bool {
+	return path == "/-/healthz" || path == "/api/v1/auth/login" ||
+		path == "/api/v1/auth/setup" || path == "/api/v1/auth/logout"
+}
+
+// withCSRF 对所有非幂等方法做双提交校验：header == cookie 且均非空。
+//
+// 只写不读（无 cookie 或 header → 401 E_UNAUTHORIZED），不泄露"缺哪一个"。
+// 用常量时间比较避免时序侧信道。仅在启用鉴权时由 New 挂载：auth==nil 的
+// M0 探活骨架没有会话/cookie 体系，不引入 CSRF 门禁。
+//
+// TODO(M4, 裁决40): 服务端应把 header/cookie 与 sessions.csrf 三方比对，
+// 并把 kore_csrf 改为 HttpOnly（客户端 UI 改走独立 origin iframe + postMessage 桥）。
+// 本阶段 auth.Session 无 csrf 字段且写域禁止改 auth 模块，故先做双提交两方比对。
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isCSRFExempt(r.URL.Path) || isSafeMethod(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cookie, err := r.Cookie(csrfCookieName)
+		if err != nil || cookie.Value == "" {
+			writeCSRFDenied(w)
+			return
+		}
+		header := r.Header.Get(csrfHeaderName)
+		if header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(cookie.Value)) != 1 {
+			writeCSRFDenied(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isSafeMethod 判断是否幂等（无需 CSRF）的请求方法。
+func isSafeMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+// writeCSRFDenied 统一返回 401，不区分"缺 cookie / 缺 header / 不匹配"。
+func writeCSRFDenied(w http.ResponseWriter) {
+	writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "CSRF 校验失败", "")
+}
+
+// authorizeTargetAction 是"按目标操作做 capability 校验"的挂点。
+//
+// 调用方（session subject）必须对目标插件的该动作持有能力：
+//
+//	TODO(M4, 裁决40): 从 session 取 subject，查 plugins.granted_capabilities，
+//	校验 "<target>:<action>"（或 6 个特权能力之一）命中；未命中写审计
+//	capability.denied 并返回 401 E_UNAUTHORIZED。管理端点永不对插件桥开放。
+//	当前 M1 最小实现只确认 session 有效（subject 视为 admin），不伪造细粒度校验。
+func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil {
+		// M0 探活骨架未装配鉴权，无 subject 可校验。
+		return true
+	}
+	if _, err := s.sessionFrom(r); err != nil {
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
+		return false
+	}
+	return true
 }
 
 // sessionFrom 从 cookie 取 token 并校验，返回会话视图。
