@@ -175,11 +175,12 @@ kore 仓库内部：cmd/kored → internal/core/* → internal/platform/*；core
 - **明确不做**：在线市场后端、审核流程、账号体系、多租户 SaaS。
 - **风险与缓解**：密钥管理 → 公钥进配置、私钥不入库不入镜像；SDK 与协议漂移 → 版本与 `kore.plugin.v1` 联动校验。
 
-### 7.7 插件成熟度基线（Round 2 依据）
+### 7.7 插件成熟度基线（Round 2 已收口，Round 3 依据）
 
-M5 之后的工作不再按"仓库是否存在"推进，改按"能力域处于哪一级"推进。**唯一依据是 [PLUGIN-MATURITY.md](./PLUGIN-MATURITY.md)**：22 个能力域逐行的现级别（L0 骨架 / L1 能干活 / L2 可用 / L3 完整）、竞品同类能力项、逐条缺口与 Round 2 五批任务及其依赖。
+M5 之后的工作不再按"仓库是否存在"推进，改按"能力域处于哪一级"推进。**唯一依据是 [PLUGIN-MATURITY.md](./PLUGIN-MATURITY.md)**：24 个插件仓（23 个可分级 + `echo` 验证件）逐行的现级别（L0 骨架 / L1 能干活 / L1.5 接线完成 / L2 可用 / L3 完整）、竞品同类能力项、逐条缺口与 Round 3 五批任务及依赖。
 
-- **当前分布**：L0 10 个 / L1 10 个 / L2 2 个 / L3 0 个——"插件与壳子都是半成品"的判断有代码级证据（10 个插件仓执行器是 `noopExecutor`、插件侧 `web/` 全空）。
+- **当前分布**：L0 9 个 / L1 1 个 / L1.5 10 个 / L2 3 个 / L3 0 个——"执行器全是 noop"的旧判断已不成立；Round 2 把 12 个仓推到真实后端或 L2，剩余 7 个 `noopExecutor` / `placeholderExecutor` 仓（`app-deploy` / `db-postgres` / `monitor` / `runtime-node` / `runtime-php` / `runtime-python` / `waf`）。
+- **本轮新缺口**：PLUGIN-MATURITY §3.5 的 7 条（`discover` 服务端版本、`db-mysql` 日常写动作、`backup` 定时/保留、`cron` 任务类型/日志、`ssl` ACME、站点容器目录、主壳搜索/告警/进度/审计），Round 3 按 §3.4 五批收口。
 - **使用纪律**：能力域升一级必须在 PLUGIN-MATURITY 的对应行更新级别并给 `file:line` 证据；级别只升不降（降级需 ADR）。新增能力域先在本表加行，再进 backlog。
 - **与对标矩阵的分工**：本文件管"做到哪一步"，[FEATURE-PARITY.md](./FEATURE-PARITY.md) 管"归谁做、做不做"，[PARITY-GAP.md](./PARITY-GAP.md) 管"差距账"。
 
