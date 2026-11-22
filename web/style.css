@@ -70,6 +70,9 @@ html, body {
   border-bottom: 1px solid var(--kore-border-1);
 }
 
+/* 壳内品牌只在侧栏出现一次：顶栏退化为纯状态条，靠右对齐。 */
+.topbar-solo { justify-content: flex-end; }
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -246,6 +249,16 @@ html, body {
   font-size: var(--kore-font-12);
 }
 
+/* 空状态：一句人话 + 一个明确去处，不留"暂无数据"式死胡同。 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--kore-space-3);
+  padding: var(--kore-space-4);
+}
+.empty-state-text { margin: 0; color: var(--kore-text-2); font-size: var(--kore-font-13); }
+
 .rows { width: 100%; border-collapse: collapse; }
 
 .rows tr { min-height: var(--kore-row-h); }
@@ -271,6 +284,18 @@ html, body {
   align-items: center;
   gap: var(--kore-space-2);
   font-size: var(--kore-font-12);
+}
+
+/* 轻量技术标识：只在确实需要解释"为什么这里不可用"时出现，灰底小标签。 */
+.tag-muted {
+  padding: 0 var(--kore-space-2);
+  min-height: 20px;
+  color: var(--kore-text-3);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control);
+  font-size: var(--kore-font-12);
+  cursor: help;
 }
 
 .muted { color: var(--kore-text-3); }
@@ -450,29 +475,6 @@ button:disabled, .btn:disabled {
   gap: var(--kore-space-4);
 }
 
-.monitor-banner {
-  padding: var(--kore-space-3) var(--kore-space-4);
-  background: var(--kore-bg-1);
-  border: 1px solid var(--kore-warning);
-  border-left-width: var(--kore-space-1);
-  border-radius: var(--kore-radius-container);
-}
-
-.monitor-banner-title {
-  font-size: var(--kore-font-14);
-  font-weight: 600;
-  margin-bottom: var(--kore-space-1);
-}
-
-.monitor-banner-text {
-  margin: 0;
-  color: var(--kore-text-2);
-  font-size: var(--kore-font-12);
-  word-break: break-word;
-}
-
-.monitor-banner-text + .monitor-banner-text { margin-top: var(--kore-space-1); }
-
 .monitor-status {
   display: flex;
   align-items: center;
@@ -553,6 +555,24 @@ button:disabled, .btn:disabled {
   color: var(--kore-text-3);
   word-break: break-word;
 }
+
+/* 无采样：卡片收紧一半高度，只留标题 + 值 + 一句等待提示，不画空折线占半屏。 */
+.monitor-card.is-idle {
+  gap: var(--kore-space-1);
+  padding: var(--kore-space-2) var(--kore-space-3);
+}
+.monitor-card.is-idle .monitor-num { font-size: var(--kore-font-16); }
+
+/* 每页最多一个技术说明：默认折叠，需要排障时才展开。 */
+.tech-note {
+  margin-top: var(--kore-space-1);
+  padding-top: var(--kore-space-2);
+  border-top: 1px solid var(--kore-border-2);
+  color: var(--kore-text-3);
+  font-size: var(--kore-font-12);
+}
+.tech-note-summary { cursor: pointer; color: var(--kore-text-2); }
+.tech-note-text { margin: var(--kore-space-2) 0 0; line-height: 1.6; }
 
 /* ===== sparkline 容器：SVG 撑满宽度，高度固定，不参与布局抖动 ===== */
 .spark-wrap {
@@ -883,10 +903,6 @@ button:disabled, .btn:disabled {
   color: var(--kore-text-2);
 }
 
-.store-pkg { display: flex; flex-direction: column; gap: var(--kore-space-2); flex: 1 1 320px; min-width: 0; }
-.store-pkg-label { font-size: var(--kore-font-12); color: var(--kore-text-3); }
-.store-pkg-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-
 .store-notice { margin: 0; word-break: break-word; }
 /* .notice 自带 display:flex 会覆盖 [hidden] 的 UA display:none，必须显式还原，
    否则未触发错误时也会渲染一个空的红框（实测截图发现）。 */
@@ -1052,9 +1068,24 @@ button:disabled, .btn:disabled {
 .store-card-status.is-fail { color: var(--kore-danger); }
 .store-card-status.is-note { color: var(--kore-warning); }
 
-.store-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
-.store-btn-install, .store-btn-danger { width: 100%; }
+.store-ops { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--kore-space-2); }
+.store-btn-install, .store-btn-danger { width: auto; min-width: 88px; }
 .store-btn-danger { color: var(--kore-danger); border-color: var(--kore-danger); }
+.store-btn-offline { color: var(--kore-text-2); }
+
+/* 离线安装：只有用户点「离线安装」或后端明确要求本地包路径时才在这一张卡片内展开。 */
+.store-pkg-inline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  padding: var(--kore-space-2) var(--kore-space-3);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-radius: var(--kore-radius-control);
+}
+.store-pkg-inline-label { display: flex; flex-direction: column; gap: var(--kore-space-1); font-size: var(--kore-font-12); color: var(--kore-text-3); }
+.store-pkg-inline-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.store-pkg-inline-actions { display: flex; justify-content: flex-end; gap: var(--kore-space-2); }
 
 .store-empty {
   margin: var(--kore-space-6) 0;
@@ -1078,12 +1109,12 @@ button:disabled, .btn:disabled {
 /* 小屏（<640px）：单列 + 触摸目标 ≥44px（裁决41） */
 @media (max-width: 639px) {
   .store-head { flex-direction: column; align-items: stretch; }
-  .store-pkg { flex: 1 1 auto; }
-  .store-search, .store-pkg-input { min-height: var(--kore-touch); }
+  .store-search, .store-pkg-inline-input { min-height: var(--kore-touch); }
   .store-cat { min-height: var(--kore-touch); padding: 0 var(--kore-space-4); }
   .store-preset-row { grid-template-columns: minmax(0, 1fr); }
   .store-preset-btn { min-height: var(--kore-touch); }
-  .store-btn-install, .store-btn-danger { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
+  .store-btn-install, .store-btn-danger, .store-btn-offline { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
+  .store-pkg-inline-actions .btn { min-height: var(--kore-touch); }
 }
 
 /* ===== 布局壳：左侧固定导航 + 视图区（web/shell.js）——仅追加，不改既有类 =====
@@ -1168,11 +1199,15 @@ button:disabled, .btn:disabled {
 
 .kore-nav-icon {
   flex: 0 0 auto;
-  width: 18px;
-  text-align: center;
-  font-size: var(--kore-font-14);
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  line-height: 0;
 }
+
+.kore-nav-icon svg { display: block; width: 20px; height: 20px; }
 
 .kore-nav-label {
   flex: 1 1 auto;
@@ -1229,45 +1264,58 @@ button:disabled, .btn:disabled {
   .view { padding: var(--kore-space-4) var(--kore-space-3); }
 }
 
-/* 手机（< 640px）：导航转顶部横向滚动条；触摸目标 ≥44px */
+/* 手机（< 640px）：导航改底部 tab bar（5 项均分、图标+文字、拇指可达），
+   内容区底部留出 tab bar 高度，避免最后一个卡片被遮住；触摸目标 ≥44px。 */
 @media (max-width: 639px) {
-  .kore-shell { flex-direction: column; }
+  .kore-shell {
+    flex-direction: column;
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
 
   .kore-nav {
-    position: sticky;
-    top: 0;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
     z-index: 3;
     flex: 0 0 auto;
     width: 100%;
     height: auto;
     flex-direction: row;
-    align-items: center;
-    gap: var(--kore-space-1);
-    padding: var(--kore-space-2) var(--kore-space-2);
-    overflow-x: auto;
-    overflow-y: hidden;
+    align-items: stretch;
+    gap: 0;
+    padding: 0 0 env(safe-area-inset-bottom, 0px);
+    background: var(--kore-bg-1);
     border-right: 0;
-    border-bottom: 1px solid var(--kore-border-1);
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    border-top: 1px solid var(--kore-border-1);
+    overflow: visible;
   }
 
-  .kore-nav::-webkit-scrollbar { display: none; }
-
-  /* 品牌块在小屏让位给导航项（竖向文字条会挤掉首屏） */
+  /* 品牌块在小屏让位给导航项 */
   .kore-nav-brand { display: none; }
 
   .kore-nav-item {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     width: auto;
-    min-height: var(--kore-touch);
-    padding: 0 var(--kore-space-3);
+    min-width: 0;
+    min-height: 56px;
+    padding: var(--kore-space-1) 2px;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2px;
+    border: 0;
+    border-radius: 0;
     white-space: nowrap;
   }
 
-  .kore-nav-item.is-active { box-shadow: inset 0 -3px 0 var(--kore-info); }
+  .kore-nav-item.is-active {
+    background: var(--kore-bg-2);
+    box-shadow: inset 0 3px 0 var(--kore-info);
+  }
 
-  .kore-nav-label { overflow: visible; text-overflow: clip; }
+  .kore-nav-label { overflow: visible; text-overflow: clip; font-size: var(--kore-font-12); }
 
   .kore-col { flex: 1 1 auto; min-height: 0; }
   .kore-topbar { position: static; }

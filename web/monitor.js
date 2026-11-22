@@ -1,20 +1,20 @@
 /* kore 主壳 · 监控视图（零框架 / 零图表库 / 零 CDN / 零外链）
    入口 window.KoreMonitor.render(container)，不改 app.js / shell.js。数据纪律：不伪造监控数据。
-   真实：GET /api/v1/system/info（version / supervisor.resident / restarts / os / arch /
-     cgroup_mode / delegation / warnings）+ GET /api/v1/plugins（id / lifecycle / state / 授权能力）。
-   待补：CPU / VmRSS / 磁盘 / load1 —— 内核无资源采样端点（/api/v1/events 仍 501），渲染「—」并标注缺什么。
-   轮询：页面内 setInterval 5s 画趋势，非内核轮询；pagehide / beforeunload / 容器失联 / 401 均 clearInterval。 */
+   已支持：系统信息（版本 / 常驻 / 重启 / 平台 / cgroup / 告警）与插件列表。
+   资源指标：轮询系统指标接口，字段就绪即自动展示；未就绪时卡片显示「未采集 / 等待采样…」。
+   技术原因只在本页底部一个可折叠「技术说明」里讲一次，不再逐卡重复接口契约。
+   轮询：页面内 setInterval 5s，非内核轮询；pagehide / beforeunload / 容器失联 / 401 均 clearInterval。 */
 (function () {
   'use strict';
 
   var POLL_MS = 5000, SERIES_MAX = 60;
   var API_INFO = '/api/v1/system/info', API_PLUGINS = '/api/v1/plugins';
   var API_METRICS = '/api/v1/system/metrics';
-  var RSS_RED_KIB = 16 * 1024, RSS_GOAL_KIB = 8 * 1024;  // RESOURCE-MODEL §2：红线 16 / 目标 8 MiB
+  var RSS_RED_KIB = 16 * 1024, RSS_GOAL_KIB = 8 * 1024;  // 红线 16 / 目标 8 MiB
   var RESIDENT_MAX = 3;                                   // 同时常驻硬上限（推荐 ≤2）
   var PRIV_CAPS = ['system:', 'net:', 'proc:'];
-  var CONTRACT = 'GET /api/v1/system/metrics（契约建议：{cpu_pct, rss_kib, disk_used_kib, load1, goroutines, fds}）';
-  var S = { timer: null, box: null, resident: [], plugins: [], list: null, sig: null, ts: '' };
+  var S = { timer: null, box: null, resident: [], plugins: [], cpu: [], rss: [], disk: [], load: [],
+    list: null, sig: null, ts: '' };
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -76,8 +76,9 @@
     c.appendChild(dot); c.appendChild(el('span', null, text)); return c;
   }
 
+  /* 卡片：idle 时只留标题 + 值 + 一句等待提示，不画空折线、不占半屏。 */
   function card(s) {
-    var box = el('article', 'monitor-card'), head = el('div', 'monitor-head');
+    var box = el('article', 'monitor-card' + (s.idle ? ' is-idle' : '')), head = el('div', 'monitor-head');
     var val = el('div', 'monitor-value'), sw = el('div', 'spark-wrap');
 
     head.appendChild(el('span', 'monitor-title', s.title)); head.appendChild(chip(s.tone, s.toneText));
@@ -85,14 +86,22 @@
     val.appendChild(el('span', 'monitor-num', s.value));
     if (s.unit) val.appendChild(el('span', 'monitor-unit', s.unit));
     box.appendChild(val);
-    sw.innerHTML = sparkline(s.series, 100, 32, s.color || 'var(--kore-info)', { min: s.min, max: s.max, threshold: s.threshold });
-    box.appendChild(sw);
-    if (s.extra) box.appendChild(s.extra);
+    if (!s.idle) {
+      sw.innerHTML = sparkline(s.series, 100, 32, s.color || 'var(--kore-info)', { min: s.min, max: s.max, threshold: s.threshold });
+      box.appendChild(sw);
+      if (s.extra) box.appendChild(s.extra);
+    }
     if (s.note) box.appendChild(el('p', 'monitor-note', s.note));
     return box;
   }
 
   function stateTone(st) { return st === 'ready' ? 'ok' : st === 'starting' ? 'warn' : st === 'failed' ? 'fail' : 'na'; }
+  function pctTone(v) { return v === null ? 'na' : v >= 90 ? 'fail' : v >= 80 ? 'warn' : 'ok'; }
+  function pctText(v) { return v === null ? '未采集' : v >= 90 ? '偏高' : v >= 80 ? '注意' : '实时'; }
+  function rssTone(v) { return v === null ? 'na' : v >= RSS_RED_KIB ? 'fail' : v >= RSS_GOAL_KIB ? 'warn' : 'ok'; }
+  function rssText(v) { return v === null ? '未采集' : v >= RSS_RED_KIB ? '超红线' : v >= RSS_GOAL_KIB ? '超目标' : '正常'; }
+  function loadTone(v) { return v === null ? 'na' : v >= 2 ? 'warn' : 'ok'; }
+  function loadText(v) { return v === null ? '未采集' : v >= 2 ? '偏高' : '实时'; }
 
   function getJSON(url) {
     var opt = { credentials: 'same-origin', headers: { Accept: 'application/json' } };
@@ -107,8 +116,8 @@
     var host = S.box && S.box.querySelector('.monitor-table-host');
     if (!host) return;
     host.textContent = '';
-    if (!list.length) { host.appendChild(el('p', 'panel-empty', '当前没有已安装插件（GET /api/v1/plugins 返回空列表）')); return; }
-    var t = el('table', 'monitor-table'), heads = ['插件 id', 'lifecycle', 'state', '授权能力'];
+    if (!list.length) { host.appendChild(el('p', 'panel-empty', '暂无已安装插件，去软件商店安装。')); return; }
+    var t = el('table', 'monitor-table'), heads = ['插件 id', '生命周期', '状态', '授权能力'];
     var thead = el('thead'), htr = el('tr'), tb = el('tbody'), i, h;
     for (h = 0; h < heads.length; h++) htr.appendChild(el('th', null, heads[h]));
     thead.appendChild(htr); t.appendChild(thead);
@@ -119,9 +128,9 @@
       td1.appendChild(el('div', 'monitor-plugin-meta muted',
         [p.version, p.pid ? 'pid ' + p.pid : 'pid —', '重启 ' + (num(p.restarts) || 0)].join(' · ')));
       tr.appendChild(td1);
-      td2.setAttribute('data-label', 'lifecycle');
+      td2.setAttribute('data-label', '生命周期');
       td2.appendChild(el('span', 'mono', p.lifecycle || '—')); tr.appendChild(td2);
-      td3.setAttribute('data-label', 'state');
+      td3.setAttribute('data-label', '状态');
       td3.appendChild(chip(stateTone(p.state), p.state || '—')); tr.appendChild(td3);
       td4.setAttribute('data-label', '授权能力');
       if (!caps.length) td4.appendChild(el('span', 'muted', '—（未授予）'));
@@ -141,13 +150,13 @@
     if (S.ts) host.appendChild(el('span', 'muted monitor-ts', '最后刷新 ' + S.ts));
   }
 
-  function paint(info, plugs) {
+  function paint(info, plugs, metrics) {
     if (info.status === 401) {
-      setStatus('fail', '会话已过期（401）：监控轮询已停止，重新登录后刷新页面');
+      setStatus('fail', '会话已过期，请重新登录后刷新页面');
       stopPolling(); return;
     }
     if (!info.ok || !info.data) {
-      setStatus('fail', '系统信息读取失败（HTTP ' + (info.status || 0) + '）：保留上次趋势'); return;
+      setStatus('fail', '系统信息读取失败，保留上次趋势'); return;
     }
     var d = info.data, sup = d.supervisor || {}, resident = num(sup.resident), i;
     var grid = S.box && S.box.querySelector('.monitor-grid'), mode = S.box && S.box.querySelector('.monitor-mode');
@@ -155,31 +164,52 @@
     if (plugs && plugs.ok && plugs.data && Array.isArray(plugs.data.plugins)) S.list = plugs.data.plugins;
     if (resident !== null) push(S.resident, resident);
     if (S.list) push(S.plugins, S.list.length);
-    S.ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    setStatus('ok', '轮询中 · 每 ' + POLL_MS / 1000 + 's（页面内轮询，非内核轮询）');
 
-    var na = '待补端点：' + CONTRACT;
+    // 指标端点由后端补齐；当前 404/501 时 md 为 null，卡片走「等待采样」而不是报错红屏。
+    var md = metrics && metrics.ok && metrics.data ? (metrics.data.metrics || metrics.data) : null;
+    var cpu = num(md && md.cpu_pct), rss = num(md && md.rss_kib);
+    var used = num(md && md.disk_used_kib), total = num(md && md.disk_total_kib);
+    var load = num(md && md.load1), gor = num(md && md.goroutines), fds = num(md && md.fds);
+    if (cpu !== null) push(S.cpu, cpu);
+    if (rss !== null) push(S.rss, rss);
+    if (used !== null) push(S.disk, used);
+    if (load !== null) push(S.load, load);
+
+    S.ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    setStatus(md ? 'ok' : 'warn', md ? '实时采样 · 每 5 秒自动刷新' : '等待采样 · 每 5 秒自动重试');
+
+    var wait = '等待采样…';
     var resTone = resident === null ? 'na' : resident > RESIDENT_MAX ? 'fail' : resident >= RESIDENT_MAX ? 'warn' : 'ok';
-    var resText = resident === null ? '未采样' : resident > RESIDENT_MAX ? '超配额' : resident >= RESIDENT_MAX ? '已用满' : '正常';
+    var resText = resident === null ? '未采集' : resident > RESIDENT_MAX ? '超配额' : resident >= RESIDENT_MAX ? '已用满' : '正常';
+    var diskNote = used === null ? wait : (total === null ? '' : '共 ' + (total / 1048576).toFixed(1) + ' GiB');
     var cards = [
-      card({ title: 'CPU 使用率', value: '—', unit: '%', tone: 'na', toneText: '未采样', series: [], min: 0, max: 100, threshold: 80, note: na }),
-      card({ title: '内存 VmRSS', value: '—', tone: 'na', toneText: '未采样', series: [], min: 0, max: RSS_RED_KIB,
-        threshold: RSS_RED_KIB, extra: budgetBar(null, RSS_RED_KIB, RSS_GOAL_KIB), note: na }),
-      card({ title: '磁盘占用', value: '—', tone: 'na', toneText: '未采样', series: [], note: na }),
-      card({ title: '负载 load1', value: '—', tone: 'na', toneText: '未采样', series: [], note: na }),
+      card({ title: 'CPU 使用率', value: cpu === null ? '—' : cpu.toFixed(1), unit: '%',
+        tone: pctTone(cpu), toneText: pctText(cpu), series: S.cpu, min: 0, max: 100, threshold: 80, idle: cpu === null,
+        note: cpu === null ? wait : '' }),
+      card({ title: '内存 VmRSS', value: rss === null ? '—' : (rss / 1024).toFixed(1), unit: 'MiB',
+        tone: rssTone(rss), toneText: rssText(rss), series: S.rss, min: 0, max: RSS_RED_KIB, threshold: RSS_RED_KIB,
+        extra: budgetBar(rss, RSS_RED_KIB, RSS_GOAL_KIB), idle: rss === null, note: rss === null ? wait : '' }),
+      card({ title: '磁盘占用', value: used === null ? '—' : (used / 1048576).toFixed(1), unit: 'GiB',
+        tone: used === null ? 'na' : 'ok', toneText: used === null ? '未采集' : '实时',
+        series: S.disk, min: 0, idle: used === null, note: diskNote }),
+      card({ title: '负载 load1', value: load === null ? '—' : load.toFixed(2),
+        tone: loadTone(load), toneText: loadText(load), series: S.load, min: 0, idle: load === null,
+        note: load === null ? wait : '' }),
       card({ title: '常驻插件数', value: resident === null ? '—' : String(resident), unit: '/' + RESIDENT_MAX,
         tone: resTone, toneText: resText, series: S.resident, min: 0, max: RESIDENT_MAX + 1, threshold: RESIDENT_MAX,
-        note: '来源 system/info 的 supervisor.resident · 硬上限 ' + RESIDENT_MAX + '（推荐 ≤2）' }),
+        note: '内核报告的常驻进程数 · 上限 ' + RESIDENT_MAX + '（推荐 ≤2）' }),
       card({ title: '插件总数', value: S.list ? String(S.list.length) : '—', unit: '个', tone: S.list ? 'ok' : 'na',
-        toneText: S.list ? '已采样' : '未采样', series: S.plugins, min: 0, note: '来源 GET /api/v1/plugins 列表长度' })
+        toneText: S.list ? '已采样' : '未采集', series: S.plugins, min: 0, note: '已安装插件数' })
     ];
     grid.textContent = '';
     for (i = 0; i < cards.length; i++) grid.appendChild(cards[i]);
 
     real.textContent = '';
-    ['内核版本 ' + (d.version || '—'), '平台 ' + ([d.os, d.arch].filter(Boolean).join(' · ') || '—'),
-      'cgroup ' + (d.cgroup_mode || '—'), '重启计数 ' + (num(sup.restarts) || 0)
-    ].forEach(function (t) { real.appendChild(el('span', null, t)); });
+    var facts = ['内核版本 ' + (d.version || '—'), '平台 ' + ([d.os, d.arch].filter(Boolean).join(' · ') || '—'),
+      'cgroup ' + (d.cgroup_mode || '—'), '重启计数 ' + (num(sup.restarts) || 0)];
+    if (gor !== null) facts.push('goroutine ' + gor);
+    if (fds !== null) facts.push('文件句柄 ' + fds);
+    for (i = 0; i < facts.length; i++) real.appendChild(el('span', null, facts[i]));
 
     mode.textContent = '';
     var warn = Array.isArray(d.warnings) ? d.warnings : [], seen = {}, delegDup = false;
@@ -203,8 +233,9 @@
     if (S.box.isConnected === false) { stopPolling(); return; }  // 容器被壳移除：不留定时器
     Promise.all([
       getJSON(API_INFO).then(null, function () { return { ok: false, status: 0, data: null }; }),
-      getJSON(API_PLUGINS).then(null, function () { return { ok: false, status: 0, data: null }; })
-    ]).then(function (out) { if (S.box) paint(out[0], out[1]); },
+      getJSON(API_PLUGINS).then(null, function () { return { ok: false, status: 0, data: null }; }),
+      getJSON(API_METRICS).then(null, function () { return { ok: false, status: 0, data: null }; })
+    ]).then(function (out) { if (S.box) paint(out[0], out[1], out[2]); },
       function () { setStatus('fail', '刷新失败：接口不可达'); });
   }
 
@@ -215,14 +246,8 @@
     if (!container || typeof container.appendChild !== 'function') return null;
     stopPolling();  // 重复挂载先清旧定时器，避免叠加
     S.box = container; container.classList.add('kore-monitor'); container.textContent = '';
+    S.sig = null;   // 新容器里的表格宿主是空的：强制下一次 paint 重画插件表
 
-    var banner = el('div', 'monitor-banner');
-    banner.appendChild(el('div', 'monitor-banner-title', '资源采样端点待补'));
-    banner.appendChild(el('p', 'monitor-banner-text',
-      'CPU / 内存 / 磁盘 / 负载 四项内核暂无采样端点，本视图一律显示「—」，不伪造数据。需后端补 ' + CONTRACT));
-    banner.appendChild(el('p', 'monitor-banner-text',
-      '本页每 ' + POLL_MS / 1000 + ' 秒轮询 ' + API_INFO + ' 画趋势：页面内轮询，非内核轮询，关闭页面即停。'));
-    container.appendChild(banner);
     container.appendChild(el('div', 'monitor-status'));
     container.appendChild(el('div', 'monitor-real muted'));
     container.appendChild(el('div', 'monitor-grid'));
@@ -230,10 +255,17 @@
 
     var panel = el('section', 'panel'), head = el('div', 'panel-head');
     head.appendChild(el('span', 'panel-title', '插件资源表'));
-    head.appendChild(el('span', 'panel-meta', 'GET ' + API_PLUGINS));
     panel.appendChild(head);
     panel.appendChild(el('div', 'monitor-table-host'));
     container.appendChild(panel);
+
+    // 整页只有这一处技术说明：讲清"为什么是「未采集」"以及数据会自己出现。
+    var details = el('details', 'tech-note');
+    details.appendChild(el('summary', 'tech-note-summary', '技术说明'));
+    details.appendChild(el('p', 'tech-note-text',
+      '资源指标（CPU、内存、磁盘、负载、goroutine、文件句柄）需要内核采集支持；接口未就绪时显示「未采集」，' +
+      '就绪后本页会自动展示，无需刷新。趋势每 5 秒在浏览器内刷新，关闭页面即停止。'));
+    container.appendChild(details);
 
     tick();
     S.timer = setInterval(tick, POLL_MS);
@@ -245,6 +277,6 @@
   }
   window.KoreMonitor = {
     render: render, destroy: stopPolling, sparkline: sparkline, pollMs: POLL_MS,
-    infoEndpoint: API_INFO, pluginsEndpoint: API_PLUGINS, metricsEndpoint: API_METRICS, metricsContract: CONTRACT
+    infoEndpoint: API_INFO, pluginsEndpoint: API_PLUGINS, metricsEndpoint: API_METRICS
   };
 })();

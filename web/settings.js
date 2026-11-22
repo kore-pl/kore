@@ -1,7 +1,6 @@
 /* kore 设置视图 —— 零框架、零 CDN、零外部资源；对外只暴露 window.KoreSettings.render(container)。
-   数据只来自已存在端点：GET /api/v1/auth/session（会话与过期时刻）、GET /api/v1/system/info
-   （版本与 supervisor 统计）、POST /api/v1/auth/logout（退出）。没端点的能力一律标「未提供」，
-   不伪造；写请求统一带 X-Kore-CSRF 双提交头（SECURITY §4 / httpapi/middleware.go withCSRF）。
+   数据只来自已存在端点（会话、系统信息、退出）；没端点的能力一律标「待支持」，不伪造；
+   写请求统一带 X-Kore-CSRF 双提交头。界面不展示接口路径与文档章节，只给用户能读懂的一句话。
    本文件不自行挂载、不改 index.html：壳在「设置」被激活时调 render(container)。 */
 (function () {
   'use strict';
@@ -72,7 +71,6 @@
     return d.toLocaleString('zh-CN', { hour12: false }) + ' ' + tail;
   }
   function flag(text, tone) { return el('span', 'settings-flag ' + (tone || 'off'), text); }
-  function mono(text) { return el('span', 'mono', text); }
   function ro(text) { return el('span', 'settings-ro', text); }
   function row(label, value) {
     var tr = el('tr');
@@ -102,9 +100,8 @@
     var s = cache.session, authed = !!(s && s.authenticated === true);
     var rows = [
       row('会话状态', flag(authed ? '会话有效' : (s ? '会话无效' : '会话状态未知（读取中或失败）'), authed ? 'ok' : 'warn')),
-      row('认证主体', 'admin · 单管理员内核（docs/CORE.md §2.3）'),
-      row('过期时刻', ro(fmtExpiry(s && s.expires_at))),
-      row('数据端点', mono('GET /api/v1/auth/session'))
+      row('认证主体', 'admin · 单管理员内核'),
+      row('过期时刻', ro(fmtExpiry(s && s.expires_at)))
     ];
     var actions = el('div', 'settings-actions');
     var out = el('button', 'btn btn-primary', '退出登录');
@@ -112,7 +109,7 @@
     out.setAttribute('data-kore-action', 'logout');
     out.addEventListener('click', function () { logout(out); });
     actions.appendChild(out);
-    actions.appendChild(el('span', 'settings-hint', 'POST /api/v1/auth/logout（带 X-Kore-CSRF）→ 清 kore_session 后回登录页'));
+    actions.appendChild(el('span', 'settings-hint', '退出后会清除本机会话并回到登录页'));
     return card('账户', '会话', rows, [actions]);
   }
 
@@ -120,10 +117,10 @@
   function buildSecurity() {
     var csrf = readCookie('kore_csrf');
     var rows = [
-      row('CSRF 机制', '双提交：kore_csrf cookie ↔ X-Kore-CSRF 请求头，常量时间比较，非幂等方法强制（SECURITY §4）'),
+      row('CSRF 机制', '写操作需要页面内令牌校验，防止跨站伪造请求'),
       row('kore_csrf cookie', flag(csrf ? '存在（只读展示，前端不可改写）' : '缺失（写请求会被 401 拒绝）', csrf ? 'ok' : 'warn')),
-      row('会话 cookie', 'kore_session · HttpOnly + Path=/ + SameSite=Strict（JS 不可读，本页也不尝试读取）'),
-      row('会话有效期', 'auth.session_ttl 滑动刷新（默认 12h，以配置文件为准；docs/DATA-MODEL.md §3）')
+      row('会话 cookie', '登录凭证保存在浏览器 Cookie 中，页面脚本不可读取'),
+      row('会话有效期', '随使用自动续期，默认 12 小时（以配置文件为准）')
     ];
     var actions = el('div', 'settings-actions');
     var pw = el('button', 'btn', '修改口令');
@@ -131,23 +128,17 @@
     pw.disabled = true;
     pw.setAttribute('aria-describedby', 'kore-pw-missing');
     actions.appendChild(pw);
-    actions.appendChild(flag('未提供端点', 'off'));
+    actions.appendChild(el('span', 'tag tag-muted', '待支持'));
     var note = el('div', 'settings-hint');
     note.id = 'kore-pw-missing';
-    note.appendChild(document.createTextNode('后端未提供该端点：需补 '));
-    note.appendChild(mono('POST /api/v1/auth/password'));
-    note.appendChild(document.createTextNode('（当前请求命中 /api/v1/auth/ 兜底，实测 501 E_UNSUPPORTED）。按钮保持禁用，不做本地假改。'));
+    note.textContent = '当前版本暂不支持在线修改口令；如需更换，请编辑配置文件后重启内核。';
     return card('安全', 'CSRF · 会话', rows, [actions, note]);
   }
 
-  /* ===== 运行参数：只读，硬编码预算表 + 当前生效值 ===== */
+  /* ===== 运行参数：只读预算表 + 当前生效值 ===== */
   function buildRuntime() {
     var info = cache.info || {};
     var sup = info.supervisor || {};
-    var rows = [
-      row('GOGC', ro('—')), row('GOMEMLIMIT', ro('—')), row('GOMAXPROCS', ro('—')),
-      row('数据目录', ro('—')), row('socket 路径', ro('—'))
-    ];
     var table = el('table', 'settings-table');
     var thead = el('thead'), htr = el('tr');
     htr.appendChild(el('th', null, '资源项'));
@@ -164,12 +155,11 @@
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
-    var box = card('运行参数', '只读 · 修改需改配置文件后重启', rows, [
-      el('div', 'settings-hint', '资源预算（AGENTS G-03 / ADR-0016）：'), table,
-      hint('GOGC / GOMEMLIMIT / GOMAXPROCS：/api/v1/system/info 不返回运行期环境变量，故显示「—」；真实档位见启动日志「资源锚点」行或 make mem（G-21 禁止用 SetGCPercent(-1) 读数）。'),
-      hint('数据目录 / socket：同样未由 API 暴露，值来自配置文件 paths.state_dir / paths.run_dir / server.socket（CORE §2.1）；任何改动都要改配置后重启 kored。'),
+    var box = card('运行参数', '只读 · 修改需改配置文件后重启', [], [
+      el('div', 'settings-hint', '当前版本未暴露运行参数（GOGC、内存上限、数据目录等）；如需调整，请编辑配置文件后重启内核。'),
+      el('div', 'settings-hint', '资源预算（硬红线 / 目标）：'), table,
       hint('当前主壳 ' + (info.version || '—') + ' · 常驻插件 ' + (sup.resident === undefined ? '—' : sup.resident) +
-        ' · 重启计数 ' + (sup.restarts === undefined ? '—' : sup.restarts) + '（GET /api/v1/system/info）')
+        ' · 重启计数 ' + (sup.restarts === undefined ? '—' : sup.restarts))
     ], true);
     return box;
   }
@@ -230,9 +220,9 @@
         cache.error = '会话已失效：请重新登录后再查看设置';
       } else {
         cache.session = null;
-        cache.error = '会话读取失败：HTTP ' + res.status;
+        cache.error = '设置读取失败，请稍后刷新重试';
       }
-    }, function () { cache.session = null; cache.error = '会话请求失败（网络或超时）'; });
+    }, function () { cache.session = null; cache.error = '网络不太顺畅，稍后再试一次'; });
     var p2 = request(EP.info).then(function (res) {
       cache.info = res.ok && res.data ? res.data : null;
     }, function () { cache.info = null; });

@@ -86,12 +86,13 @@
     });
   }
 
-  // 错误体统一口径：{code,message,detail}，前端只展示 code + message，不吞。
+  // 错误体统一口径：{code,message,detail}。界面只说人话，错误码留给调试（title / 控制台）。
   function describeError(res) {
     var body = (res && res.data) || {};
-    var code = body.code ? String(body.code) : 'HTTP ' + res.status;
     var message = body.message ? String(body.message) : '';
-    return message ? code + ' · ' + message : code;
+    if (message) return message;
+    if (res && res.status === 401) return '会话已失效，请重新登录';
+    return '操作未完成（HTTP ' + (res && res.status ? res.status : '?') + '）';
   }
 
   // CSRF 双提交：cookie 缺失时先 GET 一次探测（服务端仅在登录成功时下发），仍无则明确报错。
@@ -164,16 +165,34 @@
     return tr;
   }
 
-  function panel(title, meta, rows) {
+  function panel(title, rows) {
     var box = el('section', 'panel');
     var head = el('div', 'panel-head');
     head.appendChild(el('span', 'panel-title', title));
-    if (meta) head.appendChild(el('span', 'panel-meta', meta));
     box.appendChild(head);
     var table = el('table', 'rows');
     for (var i = 0; i < rows.length; i++) table.appendChild(rows[i]);
     box.appendChild(table);
     return box;
+  }
+
+  // 空状态统一给下一步动作，而不是只留一句冷冰冰的"暂无数据"。
+  function emptyState(text, routeId, label) {
+    var wrap = el('div', 'panel-empty empty-state');
+    wrap.appendChild(el('p', 'empty-state-text', text));
+    if (routeId) {
+      var btn = el('button', 'btn', label || '去软件商店');
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        if (window.KoreShell && typeof window.KoreShell.navigate === 'function') {
+          window.KoreShell.navigate(routeId);
+        } else {
+          window.location.hash = '#/' + routeId;
+        }
+      });
+      wrap.appendChild(btn);
+    }
+    return wrap;
   }
 
   function replaceNode(oldNode, newNode) {
@@ -303,11 +322,17 @@
 
   /* ===================== 控制台视图 ===================== */
 
-  function renderTopbar() {
+  // 品牌只在侧栏出现一次；顶栏在壳内只承担状态与退出（withBrand 仅给无壳的降级页用）。
+  function renderTopbar(withBrand) {
     var bar = el('header', 'topbar');
-    var brand = el('div', 'brand');
-    brand.appendChild(el('span', 'brand-name', 'kore'));
-    brand.appendChild(el('span', 'brand-sub', '控制台 · 系统态势'));
+    if (withBrand) {
+      var brand = el('div', 'brand');
+      brand.appendChild(el('span', 'brand-name', 'kore'));
+      brand.appendChild(el('span', 'brand-sub', '控制台'));
+      bar.appendChild(brand);
+    } else {
+      bar.classList.add('topbar-solo');
+    }
 
     var conn = el('div', 'conn');
     conn.appendChild(statusTag(healthState()));
@@ -322,7 +347,6 @@
       conn.appendChild(out);
     }
 
-    bar.appendChild(brand);
     bar.appendChild(conn);
     return bar;
   }
@@ -341,7 +365,7 @@
     if (Array.isArray(data.warnings) && data.warnings.length) {
       rows.push(row('降级告警', data.warnings.join('；')));
     }
-    var box = panel('系统信息', ENDPOINTS.info, rows);
+    var box = panel('系统信息', rows);
     box.id = 'kore-info-panel';
     return box;
   }
@@ -537,7 +561,6 @@
     box.id = 'kore-plugins-panel';
     var head = el('div', 'panel-head');
     head.appendChild(el('span', 'panel-title', '插件'));
-    head.appendChild(el('span', 'panel-meta', ENDPOINTS.plugins));
     var reload = el('button', 'btn btn-ghost', '刷新列表');
     reload.type = 'button';
     reload.addEventListener('click', loadDashboard);
@@ -545,7 +568,7 @@
     box.appendChild(head);
 
     if (!state.plugins.length) {
-      box.appendChild(el('div', 'panel-empty', '当前没有已安装插件。可用 kored install --package <包> 安装后再刷新。'));
+      box.appendChild(emptyState('暂无已安装插件，去软件商店安装。', 'store', '去软件商店'));
       return box;
     }
 
@@ -853,7 +876,7 @@
       list.appendChild(card);
     }
     if (mounted === 0) {
-      list.appendChild(el('div', 'notice-hint', '暂无声明 web 入口且已启用的插件；插件 UI 按需挂载，不进首屏。'));
+      list.appendChild(el('div', 'notice-hint', '暂无可展示的插件界面；插件界面会在需要时加载，不影响首屏速度。'));
     }
     content.appendChild(box);
   }
@@ -978,12 +1001,21 @@
       if (p.state === 'ready') ready++;
       if (p.state === 'failed') failed++;
     }
-    var box = panel('插件概览', 'GET ' + ENDPOINTS.plugins, [
-      row('已安装', fmtInt(state.plugins.length)),
-      row('已启用', fmtInt(enabled)),
-      row('运行中', fmtInt(ready)),
-      row('异常', fmtInt(failed))
-    ]);
+    var box = el('section', 'panel');
+    var head = el('div', 'panel-head');
+    head.appendChild(el('span', 'panel-title', '插件概览'));
+    box.appendChild(head);
+    if (!state.plugins.length) {
+      // 零插件时不再展示四行全 0 的表格：给一句人话 + 一个可点的下一步。
+      box.appendChild(emptyState('还没有安装插件', 'store', '去软件商店'));
+      return box;
+    }
+    var table = el('table', 'rows');
+    table.appendChild(row('已安装', fmtInt(state.plugins.length)));
+    table.appendChild(row('已启用', fmtInt(enabled)));
+    table.appendChild(row('运行中', fmtInt(ready)));
+    table.appendChild(row('异常', fmtInt(failed)));
+    box.appendChild(table);
     var meta = el('div', 'panel-meta actions');
     var more = el('button', 'btn', '查看全部插件');
     more.type = 'button';
@@ -1012,11 +1044,11 @@
   }
 
   var SHELL_ROUTES = [
-    { id: 'dashboard', label: '概览', icon: '📊', render: renderDashboardView },
-    { id: 'store', label: '软件商店', icon: '🏪', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
-    { id: 'plugins', label: '已装插件', icon: '📦', render: renderPluginsView },
-    { id: 'monitor', label: '监控', icon: '📈', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
-    { id: 'settings', label: '设置', icon: '⚙️', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
+    { id: 'dashboard', label: '概览', render: renderDashboardView },
+    { id: 'store', label: '软件商店', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
+    { id: 'plugins', label: '已装插件', render: renderPluginsView },
+    { id: 'monitor', label: '监控', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
+    { id: 'settings', label: '设置', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
   ];
 
   function renderDashboard() {
@@ -1032,7 +1064,7 @@
     var top = document.getElementById('kore-topbar');
     if (top) {
       top.textContent = '';
-      top.appendChild(renderTopbar());
+      top.appendChild(renderTopbar(false));
     }
   }
 
@@ -1044,7 +1076,7 @@
 
   function renderLegacyDashboard() {
     var root = el('div');
-    root.appendChild(renderTopbar());
+    root.appendChild(renderTopbar(true));
     var content = el('main', 'content');
     viewNotice(content);
     content.appendChild(renderInfoPanel());
@@ -1058,7 +1090,7 @@
   // 仅网络层不可达（fetch reject）走这里：明确"后端未连接"，不是登录问题。
   function renderOffline(err) {
     var root = el('div');
-    root.appendChild(renderTopbar());
+    root.appendChild(renderTopbar(true));
     var content = el('main', 'content');
     content.appendChild(degraded('无法连接内核接口：' + errText(err)));
     root.appendChild(content);
@@ -1114,7 +1146,7 @@
       if (!info.res.ok) {
         state.authed = false;
         var root = el('div');
-        root.appendChild(renderTopbar());
+        root.appendChild(renderTopbar(true));
         var content = el('main', 'content');
         var box = noticeBar('系统信息读取失败：' + describeError(info.res));
         content.appendChild(box);
