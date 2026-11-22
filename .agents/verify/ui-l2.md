@@ -22,6 +22,7 @@
 | 改权限 | 状态「权限改为 0600（变更 1 项）」，行内权限 0600 | 文件树实际 `-rw-------` |
 | 移动 | 状态「已移动 /l2-upload.txt → /renamed-l2.txt（rename）」 | 原路径消失、新路径出现，内容一致 |
 | 5 MiB 拦截 | 「未上传：too-big.bin 超过 5 MiB。单帧上限 8 MiB，大文件请先压缩或用终端上传」 | 未发起 upload 请求（前端拦截） |
+| 后端失败原文 | 解压恶意 zip（条目 `../evil.txt`）→ 弹层全文「E_INVALID：归档条目含 .. 段，整包拒绝」+ 提示「解压先整包校验路径安全」 | 目标目录 `evil-out` 未创建（整包拒绝、零残留） |
 | 补充批量 | 多选 2 文件上传 → 「已上传 2 个文件」；全选 2 项 → 一次汇总确认 → 「已删除 2 项」 | 两文件从列表消失 |
 | 补充 tar.gz | 选 `renamed-l2.txt` 压缩为 `l2-batch.tar.gz` → 解压回目录，状态含 `tar.gz` | tar.gz 真实归档 + 解压成功 |
 | 补充递归 chmod | 对目录勾选「递归」改 0750 → 「权限改为 0750（变更 2 项）」 | 目录及其内文件实际 0750 |
@@ -41,7 +42,7 @@
 | 启用 | 状态「已启用站点：enabled=true」 | 文件名改回 `.conf` |
 | 证书下拉 | 从 `ssl.list` 拉取 `l2ui.kore.test · l2ui.kore.test.crt（365 天）` | 证书目录 `/tmp/kore-l2ui-18880/ssl`（`ssl.list` 只给文件名，页面提供目录/手动路径兜底） |
 
-## 4. 双端截图（20 张，sha256 两两不同；每张前后均做 DOM 断言）
+## 4. 双端截图（21 张，sha256 两两不同；每张前后均做 DOM 断言）
 
 | 文件 | 尺寸 | sha256 前 12 |
 | --- | --- | --- |
@@ -54,6 +55,7 @@
 | [l2-files-desktop-07-move.png](screenshots/l2-files-desktop-07-move.png) | 1440×900 | ef06be3444a1 |
 | [l2-files-desktop-08-limit.png](screenshots/l2-files-desktop-08-limit.png) | 1440×900 | a25f02d4529a |
 | [l2-files-desktop-09-batch-targz.png](screenshots/l2-files-desktop-09-batch-targz.png) | 1440×900 | 5b25d1c4c85d |
+| [l2-files-desktop-10-error.png](screenshots/l2-files-desktop-10-error.png) | 1440×900 | 590ab2b7f850 |
 | [l2-sites-desktop-01-wizard.png](screenshots/l2-sites-desktop-01-wizard.png) | 1440×900 | 8422dcdc398a |
 | [l2-sites-desktop-02-wizard-result.png](screenshots/l2-sites-desktop-02-wizard-result.png) | 1440×2364 | 63bd5a450345 |
 | [l2-sites-desktop-03-proxy.png](screenshots/l2-sites-desktop-03-proxy.png) | 1440×2476 | 2d15f8a31857 |
@@ -67,7 +69,7 @@
 | [l2-sites-mobile-02-detail.png](screenshots/l2-sites-mobile-02-detail.png) | 390×844 | 34c6f602b1af |
 
 - 移动端四张 `scrollWidth == innerWidth == 390`；桌面端 `1440 == 1440`。移动端操作按钮换行、表格/表单单列，触摸目标走全局 `--kore-touch`（≥44px）。
-- 原始断言 JSON：`/tmp/kore-l2ui-18880/evidence.json`（19 步）与 `extra.json`（5 步）；每步均记录操作前后 `body.innerText`、modal 数、状态条与预期子串。
+- 原始断言 JSON：`/tmp/kore-l2ui-18880/evidence.json`（19 步）、`extra.json`（5 步）与 `error.json`（1 步）；每步均记录操作前后 `body.innerText`、modal 数、状态条与预期子串。
 
 ## 5. G-28 产品定位自评
 
