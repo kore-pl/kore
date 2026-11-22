@@ -149,7 +149,9 @@
 ```bash
 # 方法数：按各仓「动词白名单」逐仓计数（site 看 siteverbs.go 的 verbRegistry）
 for d in ../kore-plugin-*; do n=${d#../kore-plugin-}; c=$(awk '/^func .*([Vv]erb|normalizeMethod)\(/{f=1} f&&/^\tcase /{print} f&&/^}$/{f=0}' $d/methods.go $d/internal/*/call.go 2>/dev/null | grep -o '"[a-zA-Z][a-zA-Z0-9._]*"' | tr -d '"' | sed "s/^$n\.//" | sort -u | wc -l); printf '%-20s %s\n' "$n" "$c"; done
-# 期望：24 仓合计 106；site 以 verbRegistry 计 16（上方 awk 对 site 得 0，属正常）
+# 期望：除 site 外 23 仓合计 90（site 走 verbRegistry，上方 awk 得 0 属正常）
+grep -cE '^[[:space:]]+"[a-zA-Z]+":' ../kore-plugin-site/siteverbs.go   # 期望 16
+# 90 + 16 = 106 个业务方法；config.get/set 不计入，另有 5 仓（下方）
 # 配置契约：5 仓（site / logs / backup / db-mysql / redis）
 grep -rl '"config.get"' ../kore-plugin-*/ --include='*.go' | grep -v _test | cut -d/ -f2 | sort -u
 # noop/placeholder 执行器：7 仓（app-deploy / db-postgres / monitor / runtime-node / runtime-php / runtime-python / waf）
