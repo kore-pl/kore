@@ -37,8 +37,44 @@
     // SSL：锁梁 + 锁体 + 锁孔（20×20、currentColor、stroke-width 1.5）
     ssl: ['M6 9V7a4 4 0 0 1 8 0v2', 'M4.5 9h11v8.5h-11z', 'M10 12.5v2.5'],
     // 备份：向下箭头入方框（20×20、currentColor、stroke-width 1.5）
-    backup: ['M3 12.5V16h14v-3.5', 'M10 3v8', 'M6.8 8 10 11.2 13.2 8']
+    backup: ['M3 12.5V16h14v-3.5', 'M10 3v8', 'M6.8 8 10 11.2 13.2 8'],
+    // Redis：堆叠数据块（顶面菱形 + 两道层线，20×20、currentColor、stroke-width 1.5）
+    redis: ['M4 6.5 10 3l6 3.5-6 3.5z', 'M4 10l6 3.5L16 10', 'M4 13.5 10 17l6-3.5'],
+    // 防火墙：盾牌 + 对勾（20×20、currentColor、stroke-width 1.5）
+    firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4']
   };
+  // 导航按使用频率分四组（16 项）：运维是日常入口，常驻手机底部 5 个 tab；
+  // 其余 11 项进「更多」抽屉并按组展示，组标题不增加点击层级（仍 ≤2 次点击）。
+  var NAV_GROUPS = [
+    { title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
+    { title: '业务', ids: ['sites', 'db', 'redis', 'tasks'] },
+    { title: '资源', ids: ['files', 'backup', 'ssl'] },
+    { title: '平台', ids: ['store', 'plugins', 'firewall', 'settings'] }
+  ];
+  function groupTitle(id) {
+    for (var i = 0; i < NAV_GROUPS.length; i++) {
+      if (NAV_GROUPS[i].ids.indexOf(id) >= 0) return NAV_GROUPS[i].title;
+    }
+    return '其他';
+  }
+  // 按组顺序重排路由，未知 id 保序落到末尾「其他」；手机前 5 项因此固定为「运维」组。
+  function orderRoutes(list) {
+    var out = [], seen = Object.create(null);
+    for (var i = 0; i < NAV_GROUPS.length; i++) {
+      for (var j = 0; j < NAV_GROUPS[i].ids.length; j++) {
+        var id = NAV_GROUPS[i].ids[j];
+        for (var k = 0; k < list.length; k++) {
+          if (list[k].id === id && !seen[id]) { out.push(list[k]); seen[id] = true; break; }
+        }
+      }
+    }
+    for (var m = 0; m < list.length; m++) if (!seen[list[m].id]) { out.push(list[m]); seen[list[m].id] = true; }
+    return out;
+  }
+  function groupLabel(title, drawer) {
+    var n = el('div', drawer ? 'kore-nav-drawer-group' : 'kore-nav-group', title);
+    n.setAttribute('role', 'presentation'); return n;
+  }
   var byId = Object.create(null);
   var currentId = '';
   var viewBox = null;
@@ -213,8 +249,9 @@
     return btn;
   }
 
-  // 终端 / 数据库 / 日志 / 进程 / SSL / 备份是壳内置的第 9–14 项：index.html 不引脚本，
-  // 首次切到该视图才注入 /assets/<模块>.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
+  // 终端 / 数据库 / 日志 / 进程 / SSL / 备份 / Redis / 防火墙是壳内置的第 9–16 项：
+  // index.html 不引脚本，首次切到该视图才注入 /assets/<模块>.js。口径与 app.js 的 ensureModule
+  // 一致：只注入一次、失败可重试。
   var lazyModules = Object.create(null);
   function ensureLazy(url, globalName, ready) {
     var ok = ready || function (mod) { return mod && typeof mod.render === 'function'; };
@@ -283,7 +320,8 @@
       if (!r || typeof r.id !== 'string' || !r.id || typeof r.render !== 'function') continue;
       items.push(r);
     }
-    var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false;
+    var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false,
+      hasRedis = false, hasFirewall = false;
     for (var t = 0; t < items.length; t++) {
       if (items[t].id === 'terminal') hasTerminal = true;
       if (items[t].id === 'db') hasDb = true;
@@ -291,6 +329,8 @@
       if (items[t].id === 'process') hasProcess = true;
       if (items[t].id === 'ssl') hasSsl = true;
       if (items[t].id === 'backup') hasBackup = true;
+      if (items[t].id === 'redis') hasRedis = true;
+      if (items[t].id === 'firewall') hasFirewall = true;
     }
     if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', '终端') });
     if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', '数据库') });
@@ -298,6 +338,9 @@
     if (!hasProcess) items.push({ id: 'process', label: '进程', render: lazyView('KoreProcess', '/assets/process.js', '进程') });
     if (!hasSsl) items.push({ id: 'ssl', label: 'SSL', render: lazyView('KoreSsl', '/assets/ssl.js', 'SSL') });
     if (!hasBackup) items.push({ id: 'backup', label: '备份', render: lazyView('KoreBackup', '/assets/backups.js', '备份') });
+    if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'Redis') });
+    if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', '防火墙') });
+    items = orderRoutes(items);
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
 
@@ -315,6 +358,7 @@
     brand.appendChild(el('span', 'kore-nav-brand-sub', '控制台'));
     nav.appendChild(brand);
 
+    var lastGroup = '';
     for (var j = 0; j < items.length; j++) {
       var route = {
         id: items[j].id,
@@ -323,6 +367,8 @@
         extra: j >= 5
       };
       byId[route.id] = route;
+      var group = groupTitle(route.id);
+      if (group !== lastGroup) { nav.appendChild(groupLabel(group, false)); lastGroup = group; }
       var btn = navItem(route, false);
       navButtons[route.id] = [btn];
       nav.appendChild(btn);
@@ -359,8 +405,10 @@
       drawer.hidden = true;
       drawer.setAttribute('role', 'menu');
       drawer.setAttribute('aria-label', '更多导航');
+      var lastDrawerGroup = '';
       for (var k = 0; k < extras.length; k++) {
-        var extraRoute = byId[extras[k].id];
+        var extraRoute = byId[extras[k].id], drawerGroup = groupTitle(extraRoute.id);
+        if (drawerGroup !== lastDrawerGroup) { drawer.appendChild(groupLabel(drawerGroup, true)); lastDrawerGroup = drawerGroup; }
         var extraBtn = navItem(extraRoute, true);
         navButtons[extraRoute.id].push(extraBtn);
         drawer.appendChild(extraBtn);
