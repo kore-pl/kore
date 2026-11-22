@@ -35,6 +35,7 @@ type instance struct {
 	mu       sync.Mutex
 	state    State
 	cmd      *exec.Cmd
+	token    string // 本进程的 KORE_PLUGIN_TOKEN（root-action 通道鉴权用）
 	conn     net.Conn
 	listener net.Listener
 	restarts int
@@ -76,6 +77,27 @@ func newInstance(manifest *registry.Manifest, socket string) *instance {
 		inst.oneshotIdle <- struct{}{}
 	}
 	return inst
+}
+
+// setToken 记录本次进程的插件 token（spawn 成功后写入）。
+func (i *instance) setToken(token string) {
+	i.mu.Lock()
+	i.token = token
+	i.mu.Unlock()
+}
+
+// clearToken 在进程退出后清除 token，避免旧凭证残留。
+func (i *instance) clearToken() {
+	i.mu.Lock()
+	i.token = ""
+	i.mu.Unlock()
+}
+
+// tokenValue 读当前 token（未运行时为空）。
+func (i *instance) tokenValue() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.token
 }
 
 // currentState 读当前状态。

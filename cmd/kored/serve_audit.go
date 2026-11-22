@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
 )
@@ -24,5 +25,26 @@ func (a *storeAuditor) Record(_ context.Context, ev supervisor.AuditEvent) error
 		Target:  ev.Target,
 		Result:  ev.Result,
 		Detail:  ev.Detail,
+	})
+}
+
+// rootActionAuditor 把 privilege 的 root.action 事件写进 audit bucket（ADR-0018）。
+//
+// 字段映射：actor → subject、action_id → target、decision/argv/unit/deny_reason/
+// exit_code/dur_ms → detail；result 由 privilege.Event.Result() 统一成 ok/denied/error。
+// 该适配器是 fail-closed 的落点：PutAudit 返回错误时 privilege 拒绝执行动作。
+type rootActionAuditor struct {
+	db *store.Store
+}
+
+// Record 实现 privilege.Auditor。
+func (a *rootActionAuditor) Record(_ context.Context, ev privilege.Event) error {
+	return a.db.PutAudit(store.AuditRecord{
+		Subject: ev.Actor,
+		Action:  privilege.AuditAction,
+		Plugin:  ev.PluginID,
+		Target:  ev.ActionID,
+		Result:  ev.Result(),
+		Detail:  ev.Detail(),
 	})
 }

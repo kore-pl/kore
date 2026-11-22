@@ -20,6 +20,10 @@ import (
 
 // withAuth 对 /api/v1/* 强制会话校验；/-/healthz 与登录端点放行。
 // 无有效 cookie → 401 E_UNAUTHORIZED（不泄露是"无 cookie"还是"已过期"）。
+//
+// root-action 端点额外接受**插件 bearer 身份**（ADR-0018 提权通道）：插件用
+// KORE_PLUGIN_TOKEN 调内核代理自己声明的动作；带 Authorization 时不做会话回退，
+// 避免"无效 bearer + 有效 cookie"绕过 CSRF 语义。
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isPublicPath(r.URL.Path) {
@@ -27,6 +31,15 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		if len(r.URL.Path) >= 7 && r.URL.Path[:7] == "/api/v1" {
+			if isRootActionPath(r.URL.Path) && r.Header.Get(authorizationHeader) != "" {
+				actor, ok := s.pluginIdentity(r)
+				if !ok {
+					writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "插件凭证无效", "")
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), pluginActorKey{}, actor)))
+				return
+			}
 			if _, err := s.sessionFrom(r); err != nil {
 				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 				return
@@ -34,6 +47,46 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authorizationHeader / bearerPrefix 是插件 bearer 身份的载体。
+const (
+	authorizationHeader = "Authorization"
+	bearerPrefix        = "Bearer "
+)
+
+// pluginActor 是插件身份的请求上下文值。
+type pluginActor struct {
+	id     string
+	grants []string
+}
+
+// pluginActorKey 是插件身份在 context 中的私有键。
+type pluginActorKey struct{}
+
+// pluginIdentity 解析插件 bearer token；仅对 root-action 路径生效。
+func (s *Server) pluginIdentity(r *http.Request) (*pluginActor, bool) {
+	if s.pluginAuth == nil || !isRootActionPath(r.URL.Path) {
+		return nil, false
+	}
+	header := r.Header.Get(authorizationHeader)
+	if !strings.HasPrefix(header, bearerPrefix) {
+		return nil, false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(header, bearerPrefix))
+	if token == "" {
+		return nil, false
+	}
+	id, grants, ok := s.pluginAuth(token)
+	if !ok || id == "" {
+		return nil, false
+	}
+	return &pluginActor{id: id, grants: grants}, true
+}
+
+// isRootActionPath 判断是否为提权端点（POST root-action / GET confirm-token）。
+func isRootActionPath(path string) bool {
+	return strings.HasPrefix(path, pluginsPath+"/") && strings.Contains(path, "/root-action")
 }
 
 // isPublicPath 返回无需鉴权的路径（健康检查、登录与主壳静态壳资源）。
@@ -87,6 +140,11 @@ func isCSRFExempt(path string) bool {
 func (s *Server) withCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isCSRFExempt(r.URL.Path) || isSafeMethod(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// 插件 bearer 身份不走 cookie，天然无 CSRF 面（withAuth 会校验 token）。
+		if isRootActionPath(r.URL.Path) && r.Header.Get(authorizationHeader) != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -207,13 +265,18 @@ func statusFor(code string) int {
 		return http.StatusNotImplemented
 	case pluginapi.E_RATELIMIT:
 		return http.StatusTooManyRequests
+	case pluginapi.E_NEED_ROOT:
+		return http.StatusForbidden
+	case pluginapi.E_NO_SYSTEMD:
+		return http.StatusNotImplemented
 	default:
 		return http.StatusInternalServerError
 	}
 }
 
 // writeFailure 把内核错误统一写成 {code,message,detail}；非协议错误按 E_INTERNAL 处理。
-// 协议错误 detail 里的 requires_restart 会提升为响应顶层字段，供前端显示重启提示条。
+// 协议错误 detail 里的 requires_restart / hint 会提升为响应顶层字段，
+// 分别供前端显示重启提示条与"下一步怎么做"的可操作提示。
 func writeFailure(w http.ResponseWriter, err error) {
 	var protocolErr *pluginapi.Error
 	if !errors.As(err, &protocolErr) {
@@ -224,7 +287,26 @@ func writeFailure(w http.ResponseWriter, err error) {
 	writeJSON(w, statusFor(protocolErr.Code), errorBody{
 		Code: protocolErr.Code, Message: protocolErr.Message,
 		Detail: string(protocolErr.Detail), RequiresRestart: restartRequired(protocolErr),
+		Hint: errorHint(protocolErr),
 	})
+}
+
+// optionHint 是协议错误 detail 中允许携带的可操作提示。
+type optionHint struct {
+	// Hint 面向用户，给出可执行的下一步。
+	Hint string `json:"hint"`
+}
+
+// errorHint 读取 detail 中的 hint；detail 为空或非 JSON 视为空。
+func errorHint(err *pluginapi.Error) string {
+	if len(err.Detail) == 0 {
+		return ""
+	}
+	var hint optionHint
+	if json.Unmarshal(err.Detail, &hint) != nil {
+		return ""
+	}
+	return hint.Hint
 }
 
 // requiresRestartHint 是协议错误 detail 中允许携带的可选提示（与 market 同形）。

@@ -66,6 +66,8 @@
 | conflicts | string[] | 否 | `[]` | 冲突插件 id；与已装插件冲突时拒绝安装，回 `E_CONFLICT` |
 | scenario_tags | string[] | 否 | `[]` | 枚举固定 5 值 `web`/`data`/`ops`/`sec`/`app`（**能力族标签，不等于 preset 名**）；空数组合法（不进商店分类），非空时每值必须在枚举内；写成 `dev`/`minimal`/`full` 等 preset 名 → `E_INVALID` |
 | size_bytes | int | 否 | `0` | 由 `make dist` 打包时回填；仓库内可为 `0`；安装后为实际占用字节数（商店展示与磁盘预检），须 ≥ 0 |
+| requires_root | bool | 否 | `false` | ADR-0018：插件是否需要宿主 root 权限；只影响降级提示与 `root_actions` 合法性，内核不据此判断业务语义 |
+| root_actions | object[] | 否 | `[]` | 固定 argv 的提权动作清单（见 §3.1.3）；非空时必须同时 `requires_root:true`；上限 16 条 |
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
 | protocol_minor | int | 否 | 0 | 见 §13 |
 | web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
@@ -77,7 +79,7 @@
 - 失败行为：不匹配 → 拒绝安装/加载并回 `E_UNSUPPORTED`，`message` 同时带 kore 版本、`requires_kore`、`<id>@<version>`。
 - `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。
 - 与 `protocol` 的关系：`protocol` 是协议主版本、`requires_kore` 是内核版本区间，两者都要过；`protocol` 不变而 `requires_kore` 收窄是合法发布。REPOS 版本矩阵（0.2.x → `">=0.1.0 <0.3.0"`、1.0.x → `">=0.1.0 <2.0.0"`）符合上述规则。
-- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys`。
+- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；另有 ADR-0018 增补的 2 个可选字段 `requires_root`（缺省 `false`）与 `root_actions`（缺省 `[]`）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys` 与 `validateRootActions`。
 
 ### 3.1.1 依赖解析（安装时）
 
@@ -93,6 +95,34 @@
 **校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
 
 **设计理由**：内核不得维护业务域名词表——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治；新增插件永远不需要改内核。
+
+### 3.1.3 root_actions（提权动作清单，ADR-0018）
+
+需要宿主 root 的动作**不在插件进程里执行**：插件只声明固定 argv，由内核经 systemd transient unit 代理执行；插件自身永不获得 root，也不得自行 exec sudo / setuid / 直接写 `/etc`。
+
+| 字段 | 类型 | 必填 | 约束 |
+| --- | --- | --- | --- |
+| id | string | 是 | `^[a-z][a-z0-9-]*$`；同一插件内唯一；用户只能按 id 选动作 |
+| argv | string[] | 是 | **固定数组、不经 shell**：1–32 项；`argv[0]` 为规范化绝对路径（无 `..`、非 `/`）或命令白名单名；每项 ≤256 字符、总长 ≤4096；不得含 NUL/控制字符 |
+| timeout_s | int | 是 | 1–300；超时 kill transient unit |
+| description | string | 否 | ≤200 字符；启用/升级确认时展示 |
+| irreversible | bool | 否 | `true` 时必须携带一次性 `confirm` 令牌（见 §3.1.4） |
+
+**命令白名单**（协议常量，唯一实现在 `pkg/pluginapi/rootaction.go`）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker`。
+
+**执行口径**：内核 `POST /api/v1/plugins/<id>/root-action` → `systemd-run --uid=0 --collect --wait --pipe -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=kore-root-<plugin>-<action>-<rand> -- <argv...>`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`）；stdout/stderr 各截断 1 MiB。
+
+**G-01 边界**：内核只校验 schema（id/argv/timeout），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。
+
+**降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT`；无 systemd → `E_NO_SYSTEMD`；两者都必须带可操作 `hint`，禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
+
+### 3.1.4 不可回滚动作的 confirm 令牌
+
+`irreversible: true` 的动作执行前必须携带一次性 `confirm` 令牌：
+
+1. 管理会话调用 `GET /api/v1/plugins/<id>/root-action/<action_id>/confirm-token` 签发（5 分钟有效、绑定 `plugin_id + action_id`、单次有效、进程重启即失效）；
+2. `POST .../root-action` 的 body 带 `{"action_id":"...","confirm":"<token>"}`；
+3. 缺失 / 过期 / 绑定不匹配 / 已使用一律 `E_UNAUTHORIZED`，并写一条 `root.action` 的 `deny` 审计。
 
 ### 3.2 resident 示例（site）
 
@@ -269,6 +299,8 @@
 | E_INTERNAL | 500 | 内核自身错误（bbolt 写失败、序列化失败） | 不重试，上报并查内核日志 |
 | E_UNSUPPORTED | 501 | 协议主版本不符、能力未实现、平台不支持 cgroup | 升级内核或插件；不重试 |
 | E_RATELIMIT | 429 | 触发限流（登录、oneshot 并发队列满） | 按 `Retry-After` 退避后重试 |
+| E_NEED_ROOT | 403 | 动作需要宿主 root，但 kored 非 root 启动 | 按 `hint` 以 sudo/systemd 启动 kored；不重试同一请求 |
+| E_NO_SYSTEMD | 501 | 提权通道依赖 systemd-run，当前环境无 systemd | 换支持 systemd 的环境，或按 `hint` 配置 sudoers 降级；不重试 |
 
 路由层因插件 `degraded` 主动拒绝时返回 503 + `E_UPSTREAM`（`detail.retry_after_s`）：502 表示调用已发出后失败，503 表示未发出即拒绝，调用方按同一 code 处理。
 

@@ -89,6 +89,7 @@ func startServer(t *testing.T, sock string, svc *service, app *platform.Platform
 	server := httpapi.New(httpapi.Options{
 		Version: testVersion, Report: envprobe.Report{OS: "linux", Arch: "amd64"},
 		SocketPath: sock, Backend: svc.backend,
+		Privilege: svc.privilege, PluginAuth: svc.pluginTokenAuth,
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		t.Fatalf("启动 HTTP 失败: %v", err)

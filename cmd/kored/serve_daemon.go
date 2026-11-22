@@ -90,6 +90,8 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 		// store plugins bucket 的 capabilities 与 manifest 同源（installer.record 落库），
 		// 这里取内存中已登记清单，避免每次列表请求都读 bbolt（G-13 薄壳边界）。
 		GrantedCapabilities: append([]string(nil), manifest.Capabilities...),
+		RequiresRoot:        manifest.RequiresRoot,
+		RootActions:         append([]pluginapi.RootAction(nil), manifest.RootActions...),
 	}
 	if manifest.Web != nil {
 		status.Web = &httpapi.PluginWeb{
@@ -98,6 +100,23 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 		}
 	}
 	return status, nil
+}
+
+// RootAction 实现 httpapi.RootActionLookup：按 id 从已登记清单查 root 动作。
+//
+// 只查内存清单，不执行、不判断业务含义（G-01）；动作不存在返回 found=false，
+// 由 HTTP 层映射成 404 E_NOTFOUND。
+func (d *daemon) RootAction(_ context.Context, pluginID, actionID string) (pluginapi.RootAction, bool, error) {
+	manifest, ok := d.catalog.Manifest(pluginID)
+	if !ok {
+		return pluginapi.RootAction{}, false, nil
+	}
+	for _, action := range manifest.RootActions {
+		if action.ID == actionID {
+			return action, true, nil
+		}
+	}
+	return pluginapi.RootAction{}, false, nil
 }
 
 // update 在锁内完成"读状态 → 合并运行态 → 崩溃对账 → 按需回写"。

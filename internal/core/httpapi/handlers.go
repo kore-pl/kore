@@ -39,6 +39,8 @@ type errorBody struct {
 	Detail string `json:"detail"`
 	// RequiresRestart 提示前端"需重启 kored 才能恢复"，仅在确有该语义时出现。
 	RequiresRestart bool `json:"requires_restart,omitempty"`
+	// Hint 是可操作提示（如"请用 sudo/systemd 启动 kored"），源自 detail.hint。
+	Hint string `json:"hint,omitempty"`
 }
 
 // routes 注册 M1 端点与统一兜底。
@@ -57,6 +59,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+pluginsPath, s.handleUnsupported)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/enable", s.handleEnable)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/disable", s.handleDisable)
+	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/root-action", s.handleRootAction)
+	s.mux.HandleFunc("GET "+pluginsPath+"/{id}/root-action/{action_id}/confirm-token", s.handleConfirmToken)
 	s.mux.HandleFunc("POST /api/v1/invoke/{plugin}/{method}", s.handleInvoke)
 	s.mux.HandleFunc("GET /api/v1/store/plugins", s.handleStorePlugins)
 	s.mux.HandleFunc("GET /api/v1/store/plugins/{id}", s.handleStorePlugin)

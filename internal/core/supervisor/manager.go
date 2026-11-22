@@ -160,6 +160,17 @@ func (m *Manager) instance(id string) (*instance, error) {
 	return inst, nil
 }
 
+// PluginToken 返回插件当前进程的 KORE_PLUGIN_TOKEN（root-action 通道鉴权用）；
+// 未运行或未注入时 ok=false。token 只在进程生命周期内有效，停止/退出即清空。
+func (m *Manager) PluginToken(id string) (string, bool) {
+	inst, ok := m.lookup(id)
+	if !ok {
+		return "", false
+	}
+	token := inst.tokenValue()
+	return token, token != ""
+}
+
 // lookup 只查不建，供状态读取与停止路径使用。
 func (m *Manager) lookup(id string) (*instance, bool) {
 	m.mu.Lock()

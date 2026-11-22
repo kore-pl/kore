@@ -82,20 +82,28 @@ func (m *Manager) spawn(inst *instance) error {
 	if err := cmd.Start(); err != nil {
 		return errf(pluginapi.E_UPSTREAM, "拉起插件 %s 失败：%v", inst.manifest.ID, err)
 	}
+	inst.setToken(token)
 	inst.attachProcess(cmd)
 	go m.reap(inst, cmd, inst.exitedRef())
 	return nil
 }
 
-// pluginEnv 返回注入插件的 5 个环境变量（唯一名，不设协议/capabilities 变量）。
+// pluginEnv 返回注入插件的环境变量（唯一名，不设协议/capabilities 变量）。
+//
+// 5 个固定变量之外，仅在装配了内核 socket 时追加 KORE_KERNEL_SOCK
+// （root-action 通道入口；缺省不注入，插件据此判定内核是否支持提权）。
 func (m *Manager) pluginEnv(inst *instance, stateDir, token string) []string {
-	return []string{
+	env := []string{
 		"KORE_PLUGIN_ID=" + inst.manifest.ID,
 		"KORE_PLUGIN_SOCK=" + inst.socket,
 		"KORE_PLUGIN_TOKEN=" + token,
 		"KORE_STATE_DIR=" + stateDir,
 		"KORE_LOG_DIR=" + m.opts.LogDir,
 	}
+	if m.opts.KernelSocket != "" {
+		env = append(env, "KORE_KERNEL_SOCK="+m.opts.KernelSocket)
+	}
+	return env
 }
 
 // openLog 打开插件日志文件；LogDir 为空时丢弃输出（前台调试与单测）。
@@ -131,6 +139,7 @@ func (m *Manager) reap(inst *instance, cmd *exec.Cmd, exited chan struct{}) {
 		inst.lastErr = "插件进程意外退出：" + errorText(waitErr)
 	}
 	inst.mu.Unlock()
+	inst.clearToken()
 	if crashed {
 		m.removeSocket(inst.socket)
 		m.logger.Warn("插件进程意外退出", "plugin_id", inst.manifest.ID, "err", waitErr)
@@ -164,6 +173,7 @@ func (m *Manager) failStart(inst *instance, cause error) error {
 		_ = listener.Close()
 	}
 	m.removeSocket(inst.socket)
+	inst.clearToken()
 	inst.markFailed(cause)
 	return cause
 }

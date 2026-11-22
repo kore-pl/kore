@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -26,6 +27,8 @@ const (
 	maxIdleSec = 1800
 	// maxCapabilities 是单插件能力声明数量上限。
 	maxCapabilities = 16
+	// maxRootActions 是单个插件 root_actions 条目上限（协议常量）。
+	maxRootActions = 16
 )
 
 var (
@@ -65,6 +68,7 @@ func (m *Manifest) validate() error {
 		m.validateResources,
 		m.validateTriggers,
 		m.validateExtras,
+		m.validateRootActions,
 	} {
 		if err := check(); err != nil {
 			return err
@@ -197,6 +201,30 @@ func validateTrigger(trigger string) error {
 		}
 	default:
 		return fmt.Errorf("type=%q 不在 event|schedule|invoke 内", kind)
+	}
+	return nil
+}
+
+// validateRootActions 校验 ADR-0018 的 requires_root / root_actions。
+//
+// 内核只校验 schema（id 语法、argv 固定且非空、argv[0] 白名单、timeout 区间），
+// 不判断"这是防火墙动作"——业务语义留在插件自己的 id 与 description（G-01）。
+func (m *Manifest) validateRootActions() error {
+	if len(m.RootActions) > maxRootActions {
+		return errf(pluginapi.E_INVALID, "root_actions 最多 %d 条，当前 %d", maxRootActions, len(m.RootActions))
+	}
+	if len(m.RootActions) > 0 && !m.RequiresRoot {
+		return errf(pluginapi.E_INVALID, "声明了 root_actions 必须同时设置 requires_root:true")
+	}
+	seen := make(map[string]struct{}, len(m.RootActions))
+	for index, action := range m.RootActions {
+		if _, ok := seen[action.ID]; ok {
+			return errf(pluginapi.E_INVALID, "root_actions[%d].id=%q 重复", index, action.ID)
+		}
+		seen[action.ID] = struct{}{}
+		if err := privilege.ValidateAction(action); err != nil {
+			return errf(pluginapi.E_INVALID, "root_actions[%d]（id=%q）非法：%v", index, action.ID, err)
+		}
 	}
 	return nil
 }

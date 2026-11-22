@@ -19,7 +19,9 @@ import (
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/market"
+	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/platform"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 	"github.com/pengtang1024/kore/web"
 )
 
@@ -92,7 +94,23 @@ type Options struct {
 	// Metrics 是系统资源采样器；nil 时 GET /api/v1/system/metrics 回 501。
 	// 由 cmd/kored 注入（状态目录来自平台层），本包不持有目录解析逻辑。
 	Metrics MetricsCollector
+	// Privilege 是 ADR-0018 提权执行器；nil 时 root-action 端点回 501。
+	Privilege RootActionExecutor
+	// PluginAuth 校验插件 bearer token（root-action 通道）：返回插件 id 与已授予能力。
+	// nil 表示不接受插件身份（只有管理会话可调提权端点）。
+	PluginAuth PluginTokenAuth
 }
+
+// RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
+type RootActionExecutor interface {
+	// Execute 执行一次提权动作（含 schema 复核、审计 fail-closed、confirm 核销）。
+	Execute(ctx context.Context, req privilege.Request) (privilege.Result, error)
+	// Confirm 返回一次性确认令牌表（confirm-token 端点签发）。
+	Confirm() *privilege.ConfirmStore
+}
+
+// PluginTokenAuth 由 token 解析插件身份与已授予能力；token 无效时 ok=false。
+type PluginTokenAuth func(token string) (pluginID string, granted []string, ok bool)
 
 // CapabilityResolver 由请求解析出调用方 subject 与已授予能力集。
 // subject 为空表示无凭证；granted 为 6 特权能力或 <plugin-id>:<action> 语法。
@@ -130,14 +148,54 @@ func isManagementPath(path string) bool {
 	return strings.HasSuffix(path, "/enable") || strings.HasSuffix(path, "/disable")
 }
 
-// managementPluginID 从 /api/v1/plugins/{id}/enable|disable 取插件 id。
-func managementPluginID(path string) string {
-	rest, ok := strings.CutPrefix(path, "/api/v1/plugins/")
+// pluginIDFromPath 从 /api/v1/plugins/{id}/... 取插件 id。
+func pluginIDFromPath(path string) string {
+	rest, ok := strings.CutPrefix(path, pluginsPath+"/")
 	if !ok {
 		return ""
 	}
 	id, _, _ := strings.Cut(rest, "/")
 	return id
+}
+
+// managementPluginID 从 /api/v1/plugins/{id}/enable|disable 取插件 id。
+func managementPluginID(path string) string { return pluginIDFromPath(path) }
+
+// authorizeRootAction 校验提权端点的调用方：管理会话（system:admin）或目标插件自身
+// 的 bearer 身份（且该插件已获 system:admin）。失败时直接写 401 并返回 ok=false。
+func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, target string) (string, bool) {
+	if actor, ok := r.Context().Value(pluginActorKey{}).(*pluginActor); ok {
+		if actor.id != target {
+			writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "插件只能调用自己的 root-action", "")
+			return "", false
+		}
+		if !hasCapability(actor.grants, "system:admin") {
+			s.auditDenied(actor.id, target, "插件未获 system:admin 能力")
+			writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：插件需要 system:admin 能力", "system:admin")
+			return "", false
+		}
+		return actor.id, true
+	}
+	if s.auth == nil {
+		return "admin", true // 探活骨架（测试）未装配鉴权
+	}
+	subject, granted := s.capResolver(r)
+	if subject == "" {
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
+		return "", false
+	}
+	if !hasCapability(granted, "system:admin") {
+		s.auditDenied(subject, target, "缺少 system:admin 特权能力")
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
+		return "", false
+	}
+	return subject, true
+}
+
+// isPluginActor 报告请求是否已按插件 bearer 身份认证。
+func isPluginActor(r *http.Request) bool {
+	_, ok := r.Context().Value(pluginActorKey{}).(*pluginActor)
+	return ok
 }
 
 // Server 持有监听器与 http.Server，生命周期由 cmd/kored 控制。
@@ -154,6 +212,8 @@ type Server struct {
 	auditLister    AuditLister
 	installRefresh func(id string) (string, error)
 	metrics        MetricsCollector
+	privilege      RootActionExecutor
+	pluginAuth     PluginTokenAuth
 	mu             sync.Mutex
 	listeners      []net.Listener
 }
@@ -165,7 +225,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		auth: opts.Auth, loginLimiter: opts.LoginLimiter, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
-		metrics: opts.Metrics,
+		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
 	}
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver

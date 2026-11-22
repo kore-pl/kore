@@ -237,12 +237,12 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 ## 9. 审计日志
 
-审计是 bbolt `audit` bucket，独立于运行日志，记录不可由普通操作删除。**M3-C 起写入事件化**：`plugin.enable` / `plugin.disable` / `plugin.crash` / `plugin.retry` 四类 supervisor 生命周期事件在**发生时直接写入**（经装配层注入的 `Auditor` 单方法接口 → `store.PutAudit`），不依赖下一次请求对账。字段：
+审计是 bbolt `audit` bucket，独立于运行日志，记录不可由普通操作删除。**M3-C 起写入事件化**：`plugin.enable` / `plugin.disable` / `plugin.crash` / `plugin.retry` 四类 supervisor 生命周期事件与 `root.action` 提权事件在**发生时直接写入**（经装配层注入的 `Auditor` 单方法接口 → `store.PutAudit`），不依赖下一次请求对账。字段：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `subject` | string | `admin`（管理动作，如 enable / disable）或 `system`（自动事件，如 crash / restart、证书续期） |
-| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
+| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
 | `plugin` | string | 涉及插件时填写，否则空 |
 | `target` | string | 动作目标（如 `invoke` 时的 `<plugin>.<verb>`、状态值），否则空 |
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |

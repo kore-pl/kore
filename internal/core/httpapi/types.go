@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // PluginWeb 是 info.json 的 web 段对外 DTO（FRONTEND §4.2）。
@@ -45,6 +47,10 @@ type PluginStatus struct {
 	Web *PluginWeb `json:"web,omitempty"`
 	// GrantedCapabilities 已授予能力集（来源 manifest capabilities / plugins bucket capabilities）。
 	GrantedCapabilities []string `json:"granted_capabilities,omitempty"`
+	// RequiresRoot 声明插件是否需要宿主 root 权限（ADR-0018）。
+	RequiresRoot bool `json:"requires_root,omitempty"`
+	// RootActions 是插件声明的固定 argv 提权动作（启用确认与 UI 展示用）。
+	RootActions []pluginapi.RootAction `json:"root_actions,omitempty"`
 }
 
 // SupervisorStats 是 /api/v1/system/info 的 supervisor 统计。
@@ -75,6 +81,13 @@ type metricsBody struct {
 	FDs int `json:"fds"`
 	// UptimeSec 是主壳进程运行秒数。
 	UptimeSec uint64 `json:"uptime_sec"`
+}
+
+// RootActionLookup 是装配层可选实现的 root_actions 查询（ADR-0018）。
+// 未实现时 root-action 端点回 501，不假装成功。
+type RootActionLookup interface {
+	// RootAction 返回插件清单里指定 id 的动作；未声明时第二返回值为 false。
+	RootAction(ctx context.Context, pluginID, actionID string) (pluginapi.RootAction, bool, error)
 }
 
 // Backend 是 httpapi 对装配层（cmd/kored）的最小依赖。

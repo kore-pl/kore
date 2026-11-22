@@ -20,6 +20,10 @@ const (
 	E_UNSUPPORTED = "E_UNSUPPORTED"
 	// E_RATELIMIT 触发限流（登录、oneshot 并发队列满）：按 Retry-After 退避后重试。
 	E_RATELIMIT = "E_RATELIMIT"
+	// E_NEED_ROOT 需要宿主 root 权限但当前 kored 非 root 启动：按 hint 改以 root 启动。
+	E_NEED_ROOT = "E_NEED_ROOT"
+	// E_NO_SYSTEMD 提权通道依赖 systemd-run，当前环境没有 systemd：按 hint 换支持的环境。
+	E_NO_SYSTEMD = "E_NO_SYSTEMD"
 )
 
 // Error 是协议统一错误体 {code,message,detail}，同时实现 error 接口，

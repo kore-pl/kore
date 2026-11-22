@@ -31,6 +31,9 @@ type pluginSpec struct {
 	ExtraMethod string
 	// Web 为真时给测试包的 info.json 声明 web 段并落 web/ 资产（桥字段端到端断言用）。
 	Web bool
+	// RequiresRoot / RootActions 用于 root-action 通道的端到端断言（ADR-0018）。
+	RequiresRoot bool
+	RootActions  []map[string]any
 }
 
 // harness 是进程内装配的端到端测试环境。

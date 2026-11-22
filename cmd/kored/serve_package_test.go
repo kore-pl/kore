@@ -42,6 +42,12 @@ func buildPackage(t *testing.T, spec pluginSpec) string {
 		"depends_on": []string{}, "conflicts": []string{},
 		"scenario_tags": []string{"ops"}, "size_bytes": 0,
 	}
+	if spec.RequiresRoot {
+		info["requires_root"] = true
+	}
+	if len(spec.RootActions) > 0 {
+		info["root_actions"] = spec.RootActions
+	}
 	if spec.Web {
 		info["web"] = map[string]any{
 			"entry": "web/index.js", "styles": []string{"web/index.css"},

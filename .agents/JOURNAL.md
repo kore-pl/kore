@@ -197,7 +197,7 @@
 | M2-D web 壳 | 商店页 + 首装向导，UnoCSS 原子类裁剪、单二进制 embed | `make frontend` 绿、首屏 ≤300 KiB gzip、dist 无 `*.map` / `.vite` / 全量字体 |
 | M2-E lazy 生命周期 | resident 基础上支持 lazy / oneshot 运行期，空闲 300 s 真退出 | 进程真消失、无 ticker 续命；冷启动 p95 ≤300 ms 记 SLO 不判失败；峰值常驻 ≤3 |
 
-[proposals/0002-m2-sites-and-market.md](proposals/0002-m2-sites-and-market.md) §2 把 M2 拆成五轨，§5 用三条 E2E 定义完成：离线可复现首装、商店装/升/卸闭环 + 签名链可用、site + lazy 守住预算与宿主共存。核心口径沿用现役数字，不引入第二套：常驻合计红线 48 MiB（目标 24）、同时常驻 ≤3（含唤醒中的 lazy）、首屏 ≤300 KiB gzip、lazy 冷启动 p95 ≤300 ms（SLO 不判失败）。边界澄清：本提案的 `market` 指 [CORE.md](../docs/CORE.md) §2.13 软件商店（HTTP 前缀 `/store`），不是 G-11 禁止的"模板市场"；索引仓保持纯静态。
+[proposals/0002-m2-sites-and-market.md](proposals/0002-m2-sites-and-market.md) §2 把 M2 拆成五轨，§5 用三条 E2E 定义完成：离线可复现首装、商店装/升/卸闭环 + 签名链可用、site + lazy 守住预算与宿主共存。核心口径沿用现役数字，不引入第二套：常驻合计红线 48 MiB（目标 24）、同时常驻 ≤3（含唤醒中的 lazy）、首屏 ≤300 KiB gzip、lazy 冷启动 p95 ≤300 ms（SLO 不判失败）。边界澄清：本提案的 `market` 指 [CORE.md](../docs/CORE.md) §2.14 软件商店（HTTP 前缀 `/store`），不是 G-11 禁止的"模板市场"；索引仓保持纯静态。
 
 M2 不做（分期，非 G-11）：插件包 ed25519 签名（M4；索引级签名已前移到 M2）、cgroup 强制 / `kore-<id>` 系统用户（M3）、运行时下载（宿主包管理器代劳）、`--allow-partial`、Windows 运行时实现（仅交叉编译）。
 

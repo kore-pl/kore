@@ -63,6 +63,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		_ = listener.Close()
 	}
 	m.removeSocket(inst.socket)
+	inst.clearToken()
 	inst.markStopped()
 	m.logger.Info("插件已停止", "plugin_id", id)
 	return nil

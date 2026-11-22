@@ -118,3 +118,75 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 4. 重启 kored → 跑 §1 步骤 7，判据 200 且条数正确。
 
 只回滚索引不回滚二进制：旧二进制用**新**公钥验**旧**签名 → 401；只回滚二进制不回滚索引：旧公钥验**新**签名 → 401。两种错法表象相同，"一起回滚"是流程不是建议。
+
+## 5. 以 root 启动 kored 与提权通道（ADR-0018）
+
+需要宿主 root 的插件（firewall / site / waf / dns / runtime-* / 跨用户目录的 backup）**不以 root 运行**：`kored` 以 root 启动、插件由内核拉起；需要 root 的动作只能经内核 `root_actions` 代理执行。**kored 非 root 时通道整体返回 `E_NEED_ROOT`**（不会静默降级），无 systemd 的环境返回 `E_NO_SYSTEMD`。
+
+### 5.1 systemd unit 示例（`/etc/systemd/system/kore.service`）
+
+```ini
+[Unit]
+Description=kore 内核（kored）
+Documentation=https://github.com/pengtang1024/kore
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/kored serve
+Restart=on-failure
+RestartSec=2s
+# 状态 / 运行 / 日志目录（与 config 的 paths.* 对齐）
+RuntimeDirectory=kore
+StateDirectory=kore
+LogsDirectory=kore
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo install -m 0755 bin/kored /usr/local/bin/kored
+sudo systemctl daemon-reload
+sudo systemctl enable --now kore
+systemctl is-active kore                 # 判据：active
+ps -o user= -C kored                     # 判据：root
+```
+
+**为什么必须 root**：`systemd-run --uid=0` 由非 root 调用会走 polkit 交互认证；本机实测 `--no-ask-password` 被拒。以 root 启动 kored 后，transient unit 由已授权的 systemd 直接拉起，不需要交互。
+
+### 5.2 通道验证（root 环境）
+
+```bash
+J=/tmp/kore.jar; S=/run/kore/kore.sock
+curl -sS --unix-socket $S -c $J -H 'Content-Type: application/json' \
+  -d '{"password":"<管理员口令>"}' http://kore/api/v1/auth/login
+# 1) 看插件声明了哪些动作（requires_root / root_actions 随插件视图返回）
+curl -sS --unix-socket $S -b $J http://kore/api/v1/plugins/firewall | python3 -m json.tool
+# 2) 只读动作：直接执行
+curl -sS --unix-socket $S -b $J -H 'Content-Type: application/json' \
+  -d '{"action_id":"ufw-status"}' http://kore/api/v1/plugins/firewall/root-action
+# 3) 不可回滚动作：先签发一次性令牌（5 分钟、绑定 plugin+action），再带 confirm 执行
+TOKEN=$(curl -sS --unix-socket $S -b $J \
+  http://kore/api/v1/plugins/firewall/root-action/ufw-allow/confirm-token | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+curl -sS --unix-socket $S -b $J -H 'Content-Type: application/json' \
+  -d "{\"action_id\":\"ufw-allow\",\"args\":[\"22/tcp\"],\"confirm\":\"$TOKEN\"}" \
+  http://kore/api/v1/plugins/firewall/root-action
+# 4) 审计：每次提权（含拒绝）都有 root.action
+curl -sS --unix-socket $S -b $J 'http://kore/api/v1/audit?action=root.action&limit=10' | python3 -m json.tool
+```
+
+响应字段：`{executed, exit_code, stdout, stderr, dur_ms, unit}`；`exit_code` 取 `systemd-run --wait` 的退出码。
+
+### 5.3 非 root / 无 systemd 的表现与处置
+
+| 场景 | 返回 | 处置 |
+| --- | --- | --- |
+| kored 非 root | `403 E_NEED_ROOT` + `hint` | 按 §5.1 以 root 启动；不要用 sudo 包装单次请求 |
+| 无 systemd（Alpine / 精简容器） | `501 E_NO_SYSTEMD` + `hint` | 换支持 systemd 的环境；或由运维手写 sudoers 片段（kore 不自动改 sudoers，必须 `visudo -c` 校验） |
+| polkit / systemd 拒绝 | `502 E_UPSTREAM` + systemd-run 错误原文 | 查 `journalctl -u kore` 与 `systemctl status kore-root-*` |
+
+**不要**把 `E_NEED_ROOT` 当成参数错误重试；也不要绕过内核直接给插件 `sudo` / setuid / root —— 那会破坏 ADR-0018 的威胁模型。

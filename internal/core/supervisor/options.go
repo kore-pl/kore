@@ -28,6 +28,9 @@ type Options struct {
 	LogDir string
 	// Version 是内核版本，写进 hello 响应。
 	Version string
+	// KernelSocket 是内核 UDS 路径；非空时注入插件 KORE_KERNEL_SOCK，
+	// 供插件经 root-action 通道请求内核代理提权（ADR-0018）。
+	KernelSocket string
 	// HelloTimeout 是 exec→hello 完成的硬超时，默认 2s。
 	HelloTimeout time.Duration
 	// ShutdownGrace 是 kore.shutdown 后等进程退出的宽限，默认 5s。

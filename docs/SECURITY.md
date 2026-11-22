@@ -293,6 +293,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，插件自身永不获得 root。方案对比、分阶段路径与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)。
 
 - **降级必须显式**：非 root / 无 systemd / polkit 拒绝时，插件返回 `available=false` + `E_NEED_ROOT`（无 systemd 为 `E_NO_SYSTEMD`）+ 可操作 `hint`；禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
-- **审计 fail-closed**：每次提权（含被拒绝的）写 `root.action`（谁 / 何时 / 哪个插件与动作 / argv 脱敏 / 结果）；审计写入失败时动作不执行。
-- **不可回滚动作**（防火墙 / IP 与路由 / 服务重启 / 包卸载 / 删备份 / 容器删除）需一次性 `confirm` 令牌二次确认，一次一确认，不批量静默执行。
+- **审计 fail-closed**：每次提权（含被拒绝的）写 `root.action`；字段 `actor / plugin_id / action_id / argv（脱敏）/ unit / decision(allow|deny) / deny_reason / exit_code / dur_ms`（时间在 bbolt 键里，字典序即时间序）。实现顺序：**执行前**先写一条 `phase=begin` 的 allow 记录，写失败即返回 `E_INTERNAL` 且不拉起 unit；执行后补一条 `phase=end` 携带 `exit_code/dur_ms`。审计未装配按失败处理（不允许"没装配就不审计"）。
+- **不可回滚动作**（防火墙 / IP 与路由 / 服务重启 / 包卸载 / 删备份 / 容器删除）需一次性 `confirm` 令牌二次确认：`GET .../confirm-token` 只允许管理会话签发（插件 bearer 不得自签），令牌 5 分钟有效、绑定 `plugin_id + action_id`、单次核销、进程重启即失效。一次一确认，不批量静默执行。
+- **调用方边界**：管理会话需 `system:admin`；插件经 `KORE_PLUGIN_TOKEN` bearer 只能调用**自己**声明的动作，且该插件必须已获 `system:admin`；插件 token 只在进程存活期有效（spawn 注入、退出即清），比较用常量时间。插件永远不会拿到 root，也不会执行 sudo/setuid。
 - **当前漂移（不掩盖）**：本文 §2 / §6 描述的"主壳 root、插件 `kore-<id>`"尚未实现——实测 kored 与插件同为 uid 1000，`internal/core/supervisor/start.go:80` 继承启动用户身份；以 ADR-0018 的分阶段路径为准，落地时同步本节。

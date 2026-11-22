@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/bus"
+	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
@@ -40,7 +42,8 @@ type service struct {
 	backend       *daemon
 	auth          *auth.Manager
 	db            *store.Store
-	pluginRootDir string // 插件落盘根目录，供 reloadOne 重载登记复用
+	privilege     *privilege.Service // ADR-0018 提权通道执行器
+	pluginRootDir string             // 插件落盘根目录，供 reloadOne 重载登记复用
 	// reloadMu 串行化同一进程内的安装后重载：Stop→Forget→Replace→Start 不能交错，
 	// 否则两次并发安装会互相覆盖 catalog/instance，最终跑错版本。
 	reloadMu sync.Mutex
@@ -76,7 +79,8 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	manager, err := supervisor.New(supervisor.Options{
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
-		Auditor: &storeAuditor{db: db},
+		KernelSocket: socketPath(app),
+		Auditor:      &storeAuditor{db: db},
 	})
 	if err != nil {
 		slog.Error("supervisor 装配失败", "err", err)
@@ -90,12 +94,38 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc := &service{
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
 		db: db, backend: newDaemon(catalog, manager, frameBus, states),
+		privilege:     privilege.New(privilege.Options{Auditor: &rootActionAuditor{db: db}}),
 		pluginRootDir: root,
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}
 	svc.restoreEnabled()
 	return svc, exitOK
+}
+
+// pluginTokenAuth 是 httpapi.PluginAuth 的实现：按进程 token 反查插件与已授予能力。
+//
+// token 是 spawn 时注入插件的 KORE_PLUGIN_TOKEN，只在进程存活期有效；比较用
+// 常量时间，避免时序侧信道。插件身份只能走 root-action 通道，不映射成管理会话。
+func (s *service) pluginTokenAuth(token string) (string, []string, bool) {
+	if token == "" {
+		return "", nil, false
+	}
+	for _, view := range s.catalog.List() {
+		got, ok := s.manager.PluginToken(view.ID)
+		if !ok {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			continue
+		}
+		manifest, found := s.catalog.Manifest(view.ID)
+		if !found {
+			return "", nil, false
+		}
+		return view.ID, append([]string(nil), manifest.Capabilities...), true
+	}
+	return "", nil, false
 }
 
 // restoreEnabled 按 plugin_state.desired 恢复上次已启用的插件；单个失败只 WARN。

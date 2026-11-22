@@ -86,6 +86,12 @@ type Manifest struct {
 	IdleTimeoutS int `json:"idle_timeout_s,omitempty"`
 	// Web 插件前端清单段（FRONTEND §4.2）；nil 表示插件无 UI。
 	Web *Web `json:"web,omitempty"`
+	// RequiresRoot 声明插件需要宿主 root 权限（ADR-0018）；缺省 false。
+	// 内核只据此在启用/调用时给出可操作提示，不替插件做任何业务判断。
+	RequiresRoot bool `json:"requires_root,omitempty"`
+	// RootActions 是经内核代理执行的固定 argv 动作清单（ADR-0018）。
+	// 配置了动作即必须同时声明 requires_root:true；空数组合法。
+	RootActions []pluginapi.RootAction `json:"root_actions,omitempty"`
 	// Dir 是插件版本的落盘目录（<root>/<id>/<version>），由 Load 填写；解析阶段为空。
 	Dir string `json:"-"`
 }
