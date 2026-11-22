@@ -1,6 +1,6 @@
 # .agents · 任务板
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M2
+> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M3
 
 任务板是唯一事实源：谁在做什么、卡在哪、凭什么叫完成，都以本文件为准。对话里的口头约定不算。
 
@@ -49,6 +49,7 @@
 | M0 | 文档与骨架 | completed | 2026-11-21 | [verify/m0-consistency-r5.md](verify/m0-consistency-r5.md)（PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-21 两条 M0 复盘 |
 | M1 | 行走骨架 | completed | 2026-11-22 | [verify/m1-final-acceptance.md](verify/m1-final-acceptance.md)（运行时 VERDICT PASS）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M1 里程碑复盘」§4.5 / §5；[docs/MILESTONE-M1.md](../docs/MILESTONE-M1.md)。**收口补正（2026-11-22）**：收口时因发布链 P0（`pkg/pluginapi/v0.1.0` tag 内容声明旧 module 路径，`GOWORK=off` 干净 clone 报 `module declares its path as: github.com/kore-project/... but was required as: github.com/pengtang1024/...`）临时降为 blocked；处置为 `retract v0.1.0` + 发 `pkg/pluginapi/v0.1.1`，echo 升 v0.1.1 后干净 clone `build` / `dist` 通过，`CS-M1-01` 置 confirmed |
 | M2 | 站点插件 / 商店 / 8 预设 / Web 壳 / Lazy 生命周期 | completed | 2026-11-22 | [verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md)（VERDICT APPROVE，1 项阻断 B1 + 3 记录，阻断当日修复复验）；[JOURNAL.md](JOURNAL.md) 2026-11-22「M2 里程碑复盘」§2/§3；`make check` 10/10；首屏 4151 B；lazy 6 PASS；market 真服务 200/404/501/401；两对 sha 一致；变更集 `CS-M2-01`（见 §5） |
+| M3 | 本机加固 / 证据补齐 / audit 可观测 | completed | 2026-11-22 | [JOURNAL.md](JOURNAL.md) 2026-11-22「M3 里程碑复盘」§2/§3/§5；`make check` 10/10；lazy 两轮冷启 p95 2.87 / 3.68 ms（20/20 真冷启）；audit 5 PASS + 事件注入后 idle CPU 0 ms；store 三端点 21 测试全绿；web server 共存 `env_kind=container → PARTIAL`（不冒充 real）；四仓 commit 与新公钥、P0 修复登记于变更集 `CS-M3-01`（见 §5）；**未证明项挂账：真实宿主 / echo audit CLI / subject 语义局限** |
 
 ### 4.2 M0 轨道（7 条，已收口）
 
@@ -109,6 +110,7 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | — | M0 只交付 `kore` 单仓库，暂无变更集 | — | — | — | — | — |
 | CS-M1-01 | M1 首次公开发布：kore 内核与 echo 验证插件上线 GitHub public 仓库 | `kore` @ `90e9fdd`（tag `pkg/pluginapi/v0.1.1`；首版 `pkg/pluginapi/v0.1.0` → `3a59b98` 已 retract）；`kore-plugin-echo` @ `10cc6eb`（tag `v0.1.1`；首版 `v0.1.0` → `3422c10`） | 无协议变更（首次发布；module 路径统一为 `github.com/pengtang1024/*`） | `kore`（main + SDK tag）→ `kore-plugin-echo`（main + tag） | 本地 `make check` 9/9、`go build`/`go test` 通过；`git ls-remote` 双仓可达。**收口补正**：SDK v0.1.0 因 module 路径缺陷 retract，已发 v0.1.1；echo 升 v0.1.1 并干净 clone 验证通过。`GOWORK=off go get ...@v0.1.1` 退出码 0（`GOPROXY=direct` / `proxy.golang.org` 双路径）；`go list -m -versions` 仅列 v0.1.1；`/tmp` 干净 clone `GOWORK=off make build` / `make dist` 退出码 0 | confirmed |
 | CS-M2-01 | M2 五轨收口：site 插件 / 索引仓 market + 签名链 / 8 预设 / web 壳 / lazy 生命周期，含 B1 确定性打包修复与新公钥重签 | `kore` @ `7caa85a`（内核 + 新公钥 `verify.go` + 验收报告）；`kore-plugins` @ `e945aca`（索引 sha 重签 + 8 预设）；`kore-plugin-site` @ `d1690af`（确定性 `dist`）；`kore-plugin-echo` @ `9546a4f`（确定性 `dist`） | 无协议破坏性变更；**新公钥 `faf3a743…1439` 同步内核 `verify.go:16` 与索引 `validate-index.sh:10`，两端 `grep` 逐字相同**；索引 echo/site 两对 sha 与重建包一致 | `kore` 内核先行（新公钥 + market 端点 + verify.go）→ 四仓并行推送（`kore-plugins` 索引重签、`kore-plugin-site` / `kore-plugin-echo` 确定性打包）；新公钥与双 sha 同批发布，禁止新旧混用 | `make check` 10/10 段全绿、首屏 4151 B、lazy 6 PASS、market 真服务 200/404/501/401、验签正反例 3 PASS + 默认拒 2 PASS、8 预设 0 FAIL/0 WARN、两对 sha 一致；详见 [verify/m2-cross-repo-acceptance.md](verify/m2-cross-repo-acceptance.md) 与 [JOURNAL.md](JOURNAL.md) M2 复盘 §2 | completed |
+| CS-M3-01 | M3 四轨收口：本机加固 / 证据补齐（web server 共存 PARTIAL、lazy 冷启 p95、audit 写入、store 三端点），含打包第四层 `./` 根条目 P0 修复与索引双 sha 第四次重签 | `kore` @ `399ac9b`（M3-B p95 + M3-D store 三端点）→ `97d07c0`（索引双 sha 第四次重签 + 新公钥轮换）→ `ac82418`（M3-C audit 写入 + 事件持久化测试）；`kore-plugins` @ `0e7c2b9`（索引 sha 重签 + 新公钥同步）；`kore-plugin-echo` @ `2011ea8`、`kore-plugin-site` @ `2a7fa51`（`dist` 去 `./` 根条目 + 重建） | 无协议破坏性变更；**打包侧显式列条目去掉 `./` 根条目（不放宽 installer `safePath`）**；新公钥轮换后内核与索引校验脚本两端同步，索引 echo/site 双 sha 第四次重签 | `kore` 内核先行（B/D 轨道 → 重签 → audit）→ `kore-plugins` 索引重签 → `kore-plugin-echo` / `kore-plugin-site` 去 `./` 重建 dist；新公钥与双 sha 同批发布，禁止新旧混用 | `make check` 10/10、lazy 两轮 p95 2.87 / 3.68 ms（20/20 真冷启）、audit 5 PASS + 事件注入后 idle CPU 0 ms、store 21 测试全绿、web server 共存 `env_kind=container → PARTIAL`、安装复验 echo/site `exit 0` 且 `tar` 首条目 `info.json`；详见 [JOURNAL.md](JOURNAL.md) M3 复盘 §2/§5。**未证明项挂账：真实宿主 `env_kind=real`、echo audit CLI、subject 语义局限** | completed |
 
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 
@@ -159,3 +161,6 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 - `docs/DECISIONS/0001-go-stdlib-net-http.md:8` 背景句仍含 `GOGC=200`：ADR 为冻结决策记录，`canonical-check` 按设计排除 `docs/DECISIONS/`，不影响现役口径；下次修订该 ADR 时顺手改为"默认 GOGC=100 + GOMEMLIMIT=6MiB"。
 - `make idle` 的 SKIP 文案未写"约 65s"（实现为 `sleep 5 + 60` 采样）；M1 起有 `kored` 进程时输出实测，届时补文案。
 - C5 口径「22 项能力域：12 项生产级 / 8 项基础级」与 `FEATURE-PARITY:12`「14 项由生产级插件承载」是"插件数 vs 能力域数"两种说法；建议后续在 ROADMAP 该句加"（由 12 个生产级插件承载 14 个域）"限定语。
+- **§6.1 文档债已派 doc-61-fix**：6.1 文档口径遗留已派 `doc-61-fix` 单独修 `docs/DATA-MODEL.md`，本里程碑不碰该文件，避免与其写域冲突；完成后由 scribe 复核并回填。
+- **UI 方案待用户拍板**：插件 UI 集成四视角讨论（见 [JOURNAL.md](JOURNAL.md)「插件 UI 集成四视角讨论」）三处分歧——隔离强度 / `kore_csrf` 能否改 HttpOnly / asset 路径版本化——用户尚未拍板；未定前不实现同域挂载、不落 ADR，不触发实现。
+- **M4 前置三项**：①插件包级 ed25519 签名（索引级已在 M2 前移，公钥版本兼容窗口已留）；②Windows / macOS / arm64 全矩阵实机（依裁决 35 本机优先，M3 只做交叉编译）；③UI 方案（见上条，待用户拍板）。三项均需先立带验收命令的任务卡，不"顺手做了"。

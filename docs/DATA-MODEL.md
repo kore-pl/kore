@@ -9,7 +9,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 1. **无独立 DB**：状态只存 `/var/lib/kore/state.db`（bbolt），不引入 SQLite/Postgres/Redis，不为存储多起一个进程。
 2. **明文可审计**：配置是 YAML 文本，可 diff、可 grep、可手改；bbolt 里的 value 是 JSON 文本，`kored db dump <bucket>` 可直接打印。
 3. **单文件可备份**：`Tx.CopyFile` 边写边拷出一致快照；备份 = `state.db` + `config.yaml` + 插件包，三个路径即可重建。
-4. **写入有唯一入口**：所有写事务经内核单个 writer goroutine 串行化，禁止业务代码直接 `db.Update`。
+4. **写入有唯一入口**：写事务统一经 `Store.Update` 透传到 bbolt `db.Update` 单事务，由 bbolt 内置文件锁（`LOCK_EX|LOCK_NB` + `Timeout`）保证单写者与进程间互斥；无 writer goroutine、无 chan 队列（详见 §6.1）。
 
 ## 2. 分层表
 
@@ -187,9 +187,9 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 ## 6. 事务与并发规则
 
-1. **单写者**：所有写操作投递到 `chan writeOp`，由唯一 writer goroutine 串行执行 `db.Update`；禁止其它 goroutine 直接调 `Update`。
+1. **单写者**：写操作走 bbolt 的 `db.Update` 单事务，由 `Store.Update` 透传；单写者与进程间互斥由 bbolt 内置文件锁（`LOCK_EX|LOCK_NB` + `Timeout`，`bolt.Open` 设 `Timeout=1s`）保证，**无应用层 writer goroutine、无 `chan writeOp` 队列**，任何调用方都可经 `Store.Update` 发起写事务。本口径于 M3 收口按实现校正；旧 `chan writeOp` 口径为 M1 早期设计、未实现，不作为约束。
 2. **读用 View**：读路径一律 `db.View`，只读事务内不调用任何会写库的函数。
-3. **小写入走单写者 `Update`，禁用 `Batch`**：审计与任务状态的小写入在事件/请求路径上走 `db.Update` 同步提交（写时落盘，M3-C）；**不使用 `db.Batch`**——bbolt Batch 内部会起 `time.AfterFunc` 定时器与 goroutine（bbolt `db.go:953/958`），与 G-19 及「audit 写入不起 goroutine/ticker」的硬约束冲突，原「≤200 条 / 100ms 合批 flush」口径作废（恢复须先解掉该约束并留 ADR）。
+3. **小写入走 `Update`，禁用 `Batch`**：审计与任务状态的小写入在事件/请求路径上走 `db.Update` 同步提交（写时落盘，M3-C）；**不使用 `db.Batch`**——bbolt Batch 内部会起 `time.AfterFunc` 定时器与 goroutine（bbolt `db.go:953/958`），与 G-19 及「audit 写入不起 goroutine/ticker」的硬约束冲突，原「≤200 条 / 100ms 合批 flush」口径作废（恢复须先解掉该约束并留 ADR）。
 4. **长事务禁 IPC**：`Update`/`View` 事务内禁止 IPC、HTTP、文件 IO、等待插件响应；事务内只做内存计算与 tx 读写字。单个写事务耗时 > 200ms 记 WARN 并附 op 名。
 5. **锁顺序**：registry 内存锁 → bbolt 事务；不允许反向嵌套（bbolt 回调里再取 registry 锁）。
 6. **崩溃一致性**：`NoSync:false` 保留 fsync 语义；bbolt 单文件事务原子，无需 WAL 之外的补偿。

@@ -360,3 +360,85 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
   > 💼 [P8 自检] FAKE-PASS 反向验证我拆成了"假文件必须触发 FAKE-PASS"和"真实证据只有 PARTIAL"两层……颗粒度要到让别人一看就懂，不是自己觉得懂就行。
 - 交付事实：M3-A fixture 475 行；本机无 nginx，走 container 模式，`env_kind=container → verdict=PARTIAL`（不冒充 PASS），真实宿主挂 P2；site 仓 2 commit（`50c2e7f` / `3cb4de6`）；内核 `grep -rnE "nginx|caddy|httpd" internal/ cmd/` 零命中（裁决37）。
 - 教训：**容器 / 模拟 green ≠ 真实宿主验证**；`PARTIAL` 标注是证据纪律，不是降级偷懒——把 env_kind 如实写进判据，才不会让"本地能过"伪装成"宿主共存已证"。
+
+#### M3 里程碑复盘（2026-11-22）
+
+| 字段 | 内容 |
+| --- | --- |
+| 目标 | 把 M2 复盘 §5「M2 没有证明的事」逐条坐实成命令 + 退出码 + 关键输出（G-07），主线本机加固 + 证据补齐；四轨口径见 [proposals/0003-m3-local-proof-and-audit.md](proposals/0003-m3-local-proof-and-audit.md) §2 与 §4 |
+| 结果 | 四仓同批收口（四轨 commit 见 §2）；`make check` 10/10 段全绿；lazy 两轮冷启 p95 2.87 / 3.68 ms（漂移 0.81 ms ≤ 100 ms）；audit 5 PASS + 事件注入后 idle CPU 0 ms；store 三端点 21 测试全绿；web server 共存 `env_kind=container → PARTIAL`（不冒充 real） |
+| 差距 | M3-A 只到 container，真实宿主 `env_kind=real` 挂 P2，不计入"四轨全绿"；打包第四层 `./` 根条目导致安装器拒装（P0，当日修复）；红队 S-01～S-04 暴露四处验证口径错配 |
+| 根因 | 前三里程碑解决"能构建 / 能重建同一个包 / 能跑"，M3 断在"能安装"与"证据能挡假绿"——工作区状态与验证形式继续混进交付判据 |
+| 沉淀 | ①**"能打包" ≠ "能安装"**，验 sha 得到的是稳定的坏包；②判据要能挡假绿，不只是文本写风险；③单一信号不下结论，探活说在深度核查就给时间 |
+| 下次动作 | M4 前置三项（包签名 / 全矩阵 / UI 方案待用户拍板）先立带验收命令的任务卡；未证明项（真实宿主、echo audit CLI、subject 语义局限）挂账不复述为已证 |
+
+##### 1. 里程碑目标
+
+[proposals/0003-m3-local-proof-and-audit.md](proposals/0003-m3-local-proof-and-audit.md) §1 把 M3 压成"本机加固 + 证据补齐"，不追新能力：把 M2 记为未验证的宿主 web server 共存、lazy 冷启 p95、audit 写入、store 剩余端点四条逐条变成可复跑证据；§2 拆四轨，§4 给完成定义。
+
+| 轨道 | 目标 | 出口判据（proposal §2 / §4） |
+| --- | --- | --- |
+| M3-A | site 按需对接宿主多种 web server（nginx 只是可选之一） | `bash tests/fixtures/nginx-coexist.sh` 退 0，`nginx -t` 退 0、原 vhost sha 前后一致；`env_kind≠real` 只能 PARTIAL |
+| M3-B | lazy 冷启 p95 真冷启采样 | 20 轮每轮 idle 真退出后计时，两轮独立 p95、漂移 ≤100 ms、软 SLO 超阈值只 WARN |
+| M3-C | audit 四类事件落盘可查 | 四类事件各 1 PASS、无请求对账依赖；事件注入后 `make idle` CPU ≤60 ms、ticker 零命中 |
+| M3-D | 补齐 refresh / presets / update 三端点 | 正反例全绿：篡改索引 1 字节 / 未签名缓存三端点全拒无落盘；`store-check` 只验三件套、不作签名 gate |
+
+边界沿用裁决 35（当前机器优先、多平台为降级目标）与用户架构红线（web server 不内置、可选、多实现，见裁决 37）；包签名归 M4，本轮只消费已有索引级签名链，不把"索引验签通过"说成"包签名链路完整"。
+
+##### 2. 交付与证据
+
+四仓 commit 与合并顺序登记见 [BOARD.md](BOARD.md) §5 `CS-M3-01`：
+
+| 仓库 | commit | 主题 |
+| --- | --- | --- |
+| `kore` | `399ac9b` | M3-B 冷启 p95 脚本 + M3-D store 三端点（B/D 同批） |
+| `kore` | `97d07c0` | 索引双 sha 第四次重签（含新公钥轮换） |
+| `kore` | `ac82418` | M3-C audit 写入 + 事件持久化测试 |
+| `kore-plugins` | `0e7c2b9` | 索引 sha 重签 + 新公钥同步 |
+| `kore-plugin-echo` | `2011ea8` | 确定性打包去 `./` 根条目 + 重建 dist |
+| `kore-plugin-site` | `2a7fa51` | 确定性打包去 `./` 根条目 + 重建 dist |
+
+机械门禁与四轨实测（命令原文 + 退出码 + 关键输出）：
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 门禁 | `make check` | 10/10 段全绿，EXIT 0 |
+| 冷启 p95 | `bash tests/fixtures/lazy-coldstart-p95.sh` | 20/20 真冷启、两轮 p95 **2.87 ms / 3.68 ms**（漂移 0.81 ms ≤ 100 ms）；证据 `.agents/verify/m3-lazy-p95.md` |
+| audit | `go test -timeout 200s -run TestAuditEventPersistence ./internal/core/audit/...` | **5 PASS**；事件注入后 `make idle` CPU **0 ms/60s**、ticker 零命中 |
+| store | `go test -timeout 200s -run 'TestStore_(Refresh\|Presets\|Update)' ./internal/core/market/...` | **21 测试全绿**；篡改 / 未签名反例全拒无落盘 |
+| web server 共存 | `bash tests/fixtures/nginx-coexist.sh` | `env_kind=container` → `verdict=PARTIAL`；本机无真实宿主，不冒充 PASS |
+| 零原生 web server | `grep -rnE "nginx\|caddy\|httpd" internal/ cmd/` | 零命中（裁决 37 内核不内置 web server） |
+
+收口三道台账门禁自检：`make docs-check` → 6 pass / 0 warn / 0 fail（相对链接全可达，含本复盘对 proposal 的引用）；`make log-check` → 8 pass / 0 warn（DECISIONS 39 条、DISPATCH 台账齐）；`make check` → 10/10 段全绿、EXIT 0。三条命令的输出构成本节的门禁基线与 G-23 判断留痕核对点，变更集 `CS-M3-01` 的四仓 commit / 合并顺序 / 新公钥 / P0 修复在 [BOARD.md](BOARD.md) §5 逐列登记，缺列即不算收口。
+
+##### 3. 三次以上重复出现的问题（本条复盘的核心价值）
+
+1. **打包确定性四层坑（M1 → M2 → M3 三次叠加）**：M2 解决前两层——`tar mtime` 漂移 → 固定 `--mtime=@0 --sort=name`，`gzip` 头变化 → `gzip -9n`；M3 补第三层 `GOWORK=off`（工作区把 SDK 编成 `(devel)`）；第四层 `./` 根条目到 M3-C 才被 owner 偶然发现——dist 含 `./` 条目，安装器 `safePath` 拒装，echo/site 两插件在商店都装不上。**教训："能打包" ≠ "能安装"；只验 sha 得到的是一个稳定的坏包**——可复现性判据必须延伸到"安装器真能消费"，打包侧显式列条目去掉 `./`，不放宽 installer（放宽会开路径穿越口）。
+2. **验证口径错配（红队 S-01～S-04）**：S-01 模拟环境冒充真实宿主（把 container 写成 real PASS）；S-02 20 连打只有 1 次冷启、后 19 次热态冒充冷启 p95；S-03 拿 `make store-check` 冒充签名 gate（它只验三件套）；S-04 把 idle 降级为 WARN 放行。四处共同点：文本写了风险，判据却挡不住假绿。**教训：判据要能挡假绿，不只是文本写风险**——每个判据都要配一条反向命令（模拟+PASS 必须触发 FAKE-PASS、只有 1 冷启必须 UNRELIABLE、篡改索引必须全拒），反向命令跑不出预期 FAIL 就等于判据无效。
+3. **编排层误判两次**：一次用 `grep -c` 的命中数判"竞态"，把正常重复日志当并发冲突；一次见子 agent 零产出就判"卡死"准备重派，实际 xiaomi 在做 bbolt 源码核查。**教训：单一信号不下结论，探活说在深度核查就给时间**——计数信号只能当线索、不能当结论，判活要组合进程状态 + 文件时间戳 + agent 自述，深度核查期间给足时间窗再介入。
+
+##### 4. 有味道的交付（agent 可见 PUA 输出原文，逐字保留，不评分）
+
+> 💼 [P8 自检] 冰山下面还有冰山——脚本跑完了，我主动检查了 site 仓源码的 grep（看有没有偷偷 import nginx 库）、检查了 sed 注入逻辑的回滚精度……这些不在原始需求里，是 P8 该做的"多一步"。
+
+> 【复盘】弯路的根因：初版漏了轮次衔接的首样本退出断言，导致 0.00ms 热态样本差点被当冷启收口——pre-mortem S-02 的变体。抓手已固化进测试……同类问题不再发生。
+
+##### 5. 结论与 M4 前置
+
+**M3 = completed（2026-11-22 收口）**：四轨均有命令 + 退出码 + 关键输出证据，`make check` 10/10、`CS-M3-01` 登记齐备；M3-A 以 `env_kind=container → PARTIAL` 如实标注，按 proposal §4「`env_kind≠real` 不计四轨全绿」处理——四轨命令全跑通、但"全绿"口径只覆盖三轨 + 一轨 PARTIAL，不用降级偷换完成。
+
+**未证明项（挂账，不得复述为已证）**：
+
+- 真实宿主 `env_kind=real`：本机无 nginx 宿主，web server 共存只到 container/PARTIAL，P2 挂账。
+- echo audit CLI：M3-C 只验证内核 audit 测试与落盘，echo 插件侧 audit CLI 未端到端验证。
+- subject 语义局限：audit 事件的 subject 字段语义边界未覆盖，跨插件主体语义不做外推；四类事件的 subject 只保证本插件内可追溯，不承诺跨插件唯一或跨重启稳定。
+
+**M4 前置（开工前逐项立带验收命令的任务卡）**：
+
+1. 插件包级 ed25519 签名（索引级已在 M2 前移，公钥版本兼容窗口已留）。
+2. Windows / macOS / arm64 全矩阵实机（依裁决 35 本机优先，M3 只做交叉编译）。
+3. 插件 UI 集成方案待用户拍板——四视角讨论见上文「插件 UI 集成四视角讨论」，三处分歧（隔离强度 / `kore_csrf` 能否改 HttpOnly / asset 路径版本化）未定前不实现同域挂载、不落 ADR。
+
+复盘四步法收口：目标是把 M2 纸面口径坐实成可复跑证据（§1）；结果是四轨命令全跑通、三轨全绿 + 一轨 PARTIAL、门禁 10/10（§2）；弯路根因不是能力不足，而是"判据只写风险、不挡假绿"和"可复现性链条断在安装器"（§3）；沉淀规律已固化成"打包→安装全链验证 + 反向命令防伪绿 + 多信号探活"三条，M4 开工按此立卡，不再重复同一类坑。
+
+第四层坑的复验口径（P0 收口事实）：去掉 `./` 根条目后重装 echo/site 均 `exit 0`，`tar -tzf` 首条目为 `info.json` 而非 `./`，索引双 sha 第四次重签、新公钥两端同步——三项缺一不可，详见 BOARD `CS-M3-01`。
