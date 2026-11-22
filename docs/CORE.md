@@ -24,7 +24,7 @@
 | 6 | 事件总线扇出 + SSE 推送 | 消息持久化、可靠投递、跨重启重放 |
 | 7 | `//go:embed` 静态资源与插件前端资产托管 | 前端业务页面（登录页之外全在插件里） |
 | 8 | 配置解析、校验、SIGHUP 热重载 | 配置中心、远端下发、灰度、配置版本管理 |
-| 9 | `/-/healthz`、`/system/info`、结构化日志 | 监控采集、指标聚合、告警、APM |
+| 9 | `/-/healthz`、`/system/info`、`/system/metrics`、结构化日志 | 监控平台、指标聚合、告警、APM（仅提供请求路径上的资源快照） |
 | 10 | 日志写文件与 `req_id` 关联 | 日志聚合/检索；轮转在 M3 交付 |
 
 判据：表中任一行"不做"侧出现代码，即设计事故。评审用 [ARCHITECTURE.md](./ARCHITECTURE.md) §9.2 的扩展点清单拦截。
@@ -60,7 +60,7 @@
 ### 2.4 `internal/core/httpapi`
 
 - **职责**：路由表、固定顺序中间件链（§3）、JSON 编解码、错误码→HTTP 状态映射、静态与插件资产托管入口、SSE 入口。路由用 Go 1.22+ `net/http.ServeMux` 的方法+路径模式，不引入 Web 框架。
-- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：`POST /auth/login`、`POST /auth/logout`、`GET /self`、`GET /plugins`、`POST /plugins`、`DELETE /plugins/{id}`、`POST /plugins/{id}/enable|disable|upgrade`、`POST /invoke/{plugin}/{method}`、`GET /events`、`GET /system/info`、`GET /-/healthz`；商店：`GET /store/plugins`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`DELETE /store/plugins/{id}`、`GET /store/jobs/{job_id}`；静态 `GET /`、`GET /assets/*`、`GET /plugin-assets/<id>/*`。
+- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：`POST /auth/login`、`POST /auth/logout`、`GET /self`、`GET /plugins`、`POST /plugins`、`DELETE /plugins/{id}`、`POST /plugins/{id}/enable|disable|upgrade`、`POST /invoke/{plugin}/{method}`、`GET /events`、`GET /system/info`、`GET /system/metrics`、`GET /-/healthz`；商店：`GET /store/plugins`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`DELETE /store/plugins/{id}`、`GET /store/jobs/{job_id}`；静态 `GET /`、`GET /assets/*`、`GET /plugin-assets/<id>/*`。共 **21 个端点**（14 业务 + 7 store）；另有 `/-/healthz` 与 3 条静态前缀。
 - **失败模式与处理**：未知路由 → 404 `E_NOTFOUND`；方法不符 → 405 `E_INVALID`；body 超限 → 413 `E_INVALID`（同时断开连接，不读完剩余字节）；handler panic → recover 记堆栈，500 `E_INTERNAL`；`invoke` 目标插件不存在 → 404 `E_NOTFOUND`，未启用 → 409 `E_CONFLICT`，插件超时 → 504 `E_UPSTREAM`。
 - **明确不做什么**：不做业务参数校验（交插件）；不直连 bbolt；不直接 `exec` 进程（只调 supervisor）；不实现 WebSocket（SSE 是唯一推送通道）；不做 CORS（同源部署，跨源是设计外）。
 

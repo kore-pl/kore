@@ -46,6 +46,7 @@ type errorBody struct {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /-/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/v1/system/info", s.handleSystemInfo)
+	s.mux.HandleFunc("GET /api/v1/system/metrics", s.handleSystemMetrics)
 	s.mux.HandleFunc("GET "+pluginsPath, s.handlePlugins)
 	s.mux.HandleFunc("GET "+pluginsPath+"/{id}", s.handlePluginDetail)
 	s.mux.HandleFunc("POST "+pluginsPath, s.handleUnsupported)

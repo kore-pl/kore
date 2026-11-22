@@ -55,6 +55,28 @@ type SupervisorStats struct {
 	Restarts int `json:"restarts"`
 }
 
+// metricsBody 是 GET /api/v1/system/metrics 的成功响应体。
+//
+// 字段名即前端契约（web/monitor.js），全部为显式标量（G-24，无 any/object）。
+type metricsBody struct {
+	// CPUPercent 是自上次采样以来的整机 CPU 占用（0–100）。
+	CPUPercent float64 `json:"cpu_pct"`
+	// RSSKiB 是主壳常驻内存（KiB）。
+	RSSKiB uint64 `json:"rss_kib"`
+	// DiskUsedKiB 是状态目录所在文件系统已用容量（KiB）。
+	DiskUsedKiB uint64 `json:"disk_used_kib"`
+	// DiskTotalKiB 是状态目录所在文件系统总容量（KiB）。
+	DiskTotalKiB uint64 `json:"disk_total_kib"`
+	// Load1 是 1 分钟系统平均负载。
+	Load1 float64 `json:"load1"`
+	// Goroutines 是当前活跃 goroutine 数。
+	Goroutines int `json:"goroutines"`
+	// FDs 是当前打开的文件描述符数。
+	FDs int `json:"fds"`
+	// UptimeSec 是主壳进程运行秒数。
+	UptimeSec uint64 `json:"uptime_sec"`
+}
+
 // Backend 是 httpapi 对装配层（cmd/kored）的最小依赖。
 //
 // 薄壳边界：httpapi 不直接读 bbolt、不直接 exec 进程，只通过本接口驱动

@@ -332,18 +332,22 @@ CI 规则：`make mem` 与 `make idle` 仅在有 `kored` 时生效（M1 起）�
 
 ## 10. 最小观测集
 
-不引入 Prometheus、不引入 metrics 服务、不引 agent。观测数据只通过 `GET /api/v1/system/info` 返回 JSON：
+不引入 Prometheus、不引入 metrics 服务、不引 agent。观测数据只通过两个只读端点返回 JSON，均在请求路径上按需采样，零后台轮询（G-19）：
+
+- `GET /api/v1/system/info`：启动期能力报告（版本 / OS / 内核 / cgroup / warnings）与 supervisor 统计（`resident` / `restarts`）。
+- `GET /api/v1/system/metrics`：主壳资源快照（需 `system:read` 能力），字段如下。
 
 | 字段 | 类型 | 含义 | 来源 |
 | --- | --- | --- | --- |
-| `rss_kb` | int | 主壳当前 RSS（KiB） | `/proc/self/status` 的 `VmRSS` |
+| `cpu_pct` | float | 整机 CPU 占用（0–100；首次调用 0 并缓存基线，此后按两次调用差值计算） | `/proc/stat` 聚合行 |
+| `rss_kib` | int | 主壳当前 RSS（KiB） | `/proc/self/status` 的 `VmRSS` |
+| `disk_used_kib` | int | 状态目录所在文件系统已用容量（KiB） | `statfs`（经 `internal/platform` 收口） |
+| `disk_total_kib` | int | 状态目录所在文件系统总容量（KiB） | 同上 |
+| `load1` | float | 1 分钟系统平均负载 | `/proc/loadavg` 首字段 |
 | `goroutines` | int | 活跃 goroutine 数 | `runtime.NumGoroutine()` |
-| `plugins_total` | int | 已安装插件数 | bbolt `plugins` |
-| `plugins_ready` | int | ready 状态数 | registry 内存态 |
-| `plugins_degraded` | int | degraded 状态数 | registry 内存态 |
-| `enforce` | bool | cgroup 是否生效 | 启动探测结果 |
-| `timers` | int | 常驻定时器数量（≤ 1） | 启动时登记，用于自检 |
-| `uptime_s` | int | 主壳运行秒数 | `time.Since(start)` |
-| `schema_version` | int | bbolt schema 版本 | `meta` bucket |
+| `fds` | int | 打开的文件描述符数 | `/proc/self/fd` 目录项 |
+| `uptime_sec` | int | 主壳进程运行秒数 | 进程启动至今 |
 
-健康检查：`GET /-/healthz` 只返回 `{"ok":true}` 与 HTTP 200，不暴露版本与内部状态；`/system/info` 需登录。前端把 `rss_kb` 与预算并列展示，超预算标红——**观测的目的就是让膨胀无处藏身**。
+非 Linux 平台该端点返回 `501 E_UNSUPPORTED`（Tier B 降级，不静默）；`cgroup_mode` / `delegation` 等能力字段仍在 `system/info`，不在 `metrics` 中重复。插件总数与 ready/degraded 由 `GET /api/v1/plugins` 与 supervisor 统计提供。
+
+健康检查：`GET /-/healthz` 只返回 `{"ok":true}` 与 HTTP 200，不暴露版本与内部状态；两个观测端点都需登录。前端把 `rss_kib` 与预算并列展示，超预算标红——**观测的目的就是让膨胀无处藏身**。

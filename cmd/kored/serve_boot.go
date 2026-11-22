@@ -12,6 +12,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/market"
+	"github.com/pengtang1024/kore/internal/core/metrics"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -70,6 +71,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Market:         buildMarket(cfg, svc),
 		AuditLister:    &auditListerFromStore{db: svc.db},
 		InstallRefresh: svc.reloadOne,
+		Metrics:        metrics.New(app.Paths.Dir(platform.DirState)),
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)

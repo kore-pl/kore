@@ -86,6 +86,9 @@ type Options struct {
 	// 插件立即可 enable/invoke（缺口2）。由 cmd/kored 装配层注入（ReloadOne：
 	// 读 store 已装记录 → 装载清单 → 登记 catalog）；nil 时不刷新（测试/未装配）。
 	InstallRefresh func(id string) error
+	// Metrics 是系统资源采样器；nil 时 GET /api/v1/system/metrics 回 501。
+	// 由 cmd/kored 注入（状态目录来自平台层），本包不持有目录解析逻辑。
+	Metrics MetricsCollector
 }
 
 // CapabilityResolver 由请求解析出调用方 subject 与已授予能力集。
@@ -147,6 +150,7 @@ type Server struct {
 	capAuditor     CapabilityAuditor
 	auditLister    AuditLister
 	installRefresh func(id string) error
+	metrics        MetricsCollector
 	mu             sync.Mutex
 	listeners      []net.Listener
 }
@@ -158,6 +162,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		auth: opts.Auth, loginLimiter: opts.LoginLimiter, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
+		metrics: opts.Metrics,
 	}
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver
