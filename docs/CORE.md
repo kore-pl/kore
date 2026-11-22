@@ -38,7 +38,7 @@
 ### 2.1 `internal/core/config`
 
 - **职责**：内置默认值 → `/etc/kore/config.yaml` 覆盖 → 环境变量覆盖 → 字段校验 → 不可变 `Config` 快照；SIGHUP 时重新解析并按 §6 白名单热替换。优先级：内置默认 < 配置文件 < 环境变量。**内核侧配置覆盖变量共 3 个**：`KORE_CONFIG`（改配置路径）、`KORE_STATE_DIR`（覆盖 `paths.state_dir`）、`KORE_PLUGIN_DIR`（覆盖 `paths.plugin_dir`）。**另有 1 个可选环境变量 `KORE_PRESETS_DIR`**：预设目录，供 §2.14 `GET /api/v1/store/presets` 读取，缺省为空即预设列表返回空列表（非错误），不是 config 覆盖变量、不计入上述 3 个。**派生规则**：`paths.state_dir` 解析优先级 = `KORE_STATE_DIR` > `--state-dir` > 配置 `paths.state_dir` > `/var/lib/kore`；`paths.plugin_dir` 解析优先级 = `KORE_PLUGIN_DIR` > 配置 `paths.plugin_dir` > **`<state_dir>/plugins`（未显式设置时派生）**。即只设 `KORE_STATE_DIR=/tmp/x` 时，状态库为 `/tmp/x/state.db`、插件目录自动为 `/tmp/x/plugins`（M1 修复：此前 `plugin_dir` 写死，与 `state_dir` 脱节）。**路径归一化**：所有 `paths.*`（含派生 `plugin_dir`）在加载末段统一 `filepath.Abs + Clean` 成绝对路径，覆盖来源（配置文件 / 环境变量 / `--state-dir`）同样生效——supervisor 切换 `cmd.Dir` 后不再出现相对路径失配；相对值归一化时逐项写 WARN，便于日志核对，且 `GET /api/v1/system/info` 的 `paths` 段可查。**不支持 `~` 家目录展开**：`paths.*` 以 `~` 开头直接退出码 2（明确报错，不静默拼成 `<cwd>/~`）。键名与默认值以 `DATA-MODEL.md` §3 为唯一真源。
-- **输入输出**：输入为配置文件路径（`KORE_CONFIG`）、`KORE_STATE_DIR`、`KORE_PLUGIN_DIR` 与 `--state-dir`，输出 `*Config`（各模块只读引用）+ `[]ValidationError`；字段组为 `server.*` / `auth.*` / `paths.*` / `log.*` / `resources.*` / `plugins.*` / `security.*`，逐键定义见 `DATA-MODEL.md` §3，本文件不复制。
+- **输入输出**：输入为配置文件路径（`KORE_CONFIG`）、`KORE_STATE_DIR`、`KORE_PLUGIN_DIR` 与 `--state-dir`，输出 `*Config`（各模块只读引用）+ `[]ValidationError`；字段组为 `server.*` / `auth.*` / `paths.*` / `log.*` / `resources.*` / `plugins.*` / `security.*` / `audit.*`，逐键定义见 `DATA-MODEL.md` §3，本文件不复制。
 - **失败模式与处理**：文件不存在 → 用内置默认值 + WARN，继续启动；只有真正必填项缺失才拒绝启动（退出码 2）——`auth.admin_password_hash` **不是**必填项，空值走 §2.3 的首启 bootstrap。YAML 语法错 → stderr 报行号，退出码 2。**未知字段 → WARN + 继续启动**，附最接近的合法键名拼写建议（不因拼写把服务打死）。**类型错误 / 必填缺失 / 取值越界 → 退出码 2**（如 `auth.session_ttl` 超出 1m–720h、`server.addr` 非回环地址）。`auth.initialized=true` 但哈希为空 → 退出码 2（配置损坏，**不重新生成**，避免覆盖已被运维重置的意图）。SIGHUP 重载失败 → 保留旧快照 + ERROR，不回滚进程。
 - **明确不做什么**：不定义或复写配置键（真源在 `DATA-MODEL.md` §3）；不做配置中心/远端拉取/版本管理；不做 schema 迁移（属 store）；不读插件配置（插件自管 `/var/lib/kore/plugins/<id>/` 下文件）；不监听文件变更（零轮询定时器，只认 SIGHUP）。
 
@@ -232,6 +232,7 @@ ftruncate(fd,0); write(fd, "<pid>\n")
 | `auth.session_ttl` | 是 | 只影响新会话与后续续期判断 |
 | `auth.admin_password_hash` | 是 | 只影响新登录，**既有会话不失效**；如需强制全部下线必须重启内核（改哈希不吊销会话） |
 | `security.login_rate_limit.attempts`、`.window`、`.lock` | 是 | 只影响新计数与新锁定 |
+| `audit.invoke_all` | 是 | 下一次 invoke 审计生效（只影响写审计范围，不影响授权） |
 | `resources.defaults.memory_mb`、`.cpu_quota`、`.pids_max` | 是 | 只对之后拉起的插件生效；已运行进程的 cgroup 不改 |
 | `resources.enforce` | 是 | 下一次限额写入生效 |
 | `plugins.allow_unsigned` | 是 | 下一次安装校验生效 |

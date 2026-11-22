@@ -92,6 +92,13 @@ type Store struct {
 	AllowUnsigned bool
 }
 
+// Audit 是审计写入面配置。
+type Audit struct {
+	// InvokeAll 为 true 时审计全部 invoke（含只读方法），用于调试；
+	// 默认 false 只审计需要 admin 能力的写/管理类方法，避免日志爆炸。
+	InvokeAll bool
+}
+
 // RateLimit 是登录限速参数。
 type RateLimit struct {
 	// Attempts 是窗口内失败次数上限。
@@ -136,6 +143,8 @@ type Snapshot struct {
 	Store Store
 	// Security 是安全配置。
 	Security Security
+	// Audit 是审计写入面配置。
+	Audit Audit
 	// CertRenew 是证书续期检查配置。
 	CertRenew CertRenew
 }
@@ -158,6 +167,7 @@ func Default() *Snapshot {
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
 		Security:  Security{LoginRateLimit: RateLimit{Attempts: 5, Window: 60 * time.Second, Lock: 300 * time.Second}},
+		Audit:     Audit{InvokeAll: false},
 		CertRenew: CertRenew{Enabled: false, Interval: 6 * time.Hour},
 	}
 }

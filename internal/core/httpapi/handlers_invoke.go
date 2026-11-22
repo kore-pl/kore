@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -31,7 +32,8 @@ var methodPattern = regexp.MustCompile(`^[a-z][A-Za-z0-9_-]*(\.[a-z][A-Za-z0-9_-
 // 目标操作校验见 authorizeInvoke：会话有效性 + 按目标插件声明的能力做调用校验
 // （内核只认 system:/net:/proc: 前缀与 read/write/admin 动作分级，不维护业务词表）。
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeInvoke(w, r) {
+	auth, ok := s.authorizeInvoke(w, r)
+	if !ok {
 		return
 	}
 	if s.opts.Backend == nil {
@@ -48,7 +50,11 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	start := time.Now()
 	result, err := s.opts.Backend.Invoke(r.Context(), plugin, method, params, requestIDFrom(r.Context()))
+	// 审计口径与授权口径一致：needAdmin（写/管理类）才落 invoke.*，只读默认不审计；
+	// audit.invoke_all=true 时全量审计；同一方法 1s 内超阈值合并成 invoke.burst。
+	s.recordInvokeAudit(plugin, method, auth, time.Since(start), err)
 	if err != nil {
 		writeFailure(w, err)
 		return

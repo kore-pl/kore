@@ -75,6 +75,8 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		LoginLimiter:      loginLimiter(cfg),
 		Market:            buildMarket(cfg, svc),
 		AuditLister:       &auditListerFromStore{db: svc.db},
+		AuditRecorder:     &httpAuditRecorderFromStore{db: svc.db},
+		AuditInvokeAll:    cfg.snapshot != nil && cfg.snapshot.Audit.InvokeAll,
 		CapabilityAuditor: (&capabilityAuditorFromStore{db: svc.db}).Audit,
 		InstallRefresh:    svc.reloadOne,
 		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),

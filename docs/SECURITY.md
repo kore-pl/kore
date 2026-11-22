@@ -95,7 +95,7 @@
 
 **实现约束**：零 ticker / 零 AfterFunc / 零后台 goroutine（G-19），过期条目在判定路径上惰性清理，空闲零开销；**状态只在进程内存，重启清零**（限速状态持久化排在 M3，见 §10 附则）。`security.login_rate_limit.*` 可 SIGHUP 热更，已累计计数与进行中的锁定不变。
 
-**未落地项（如实标注）**：`auth.login` / `ratelimit.hit` 审计事件尚未实现——当前限速只作用于请求响应，不写审计；审计落地前，登录失败与限速命中只能从进程日志（WARN 级 `E_RATELIMIT`）取证。
+**未落地项（如实标注）**：~~`auth.login` / `ratelimit.hit` 审计事件尚未实现~~——**登录审计已落地**：成功写 `login.success`（`result=ok`，detail=`{ip,user_agent,session_id_prefix}`），失败写 `login.failed`（`result=denied`，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`）。IP 只保留前 3 段、UA 截断 100 字符、会话只留 8 字符前缀，**口令任何形式都不进审计**；限速命中不再只靠进程 WARN，可按 `action=login.failed` 从审计库追溯暴力破解。
 
 ## 4. CSRF
 
@@ -233,7 +233,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ## 11. 审计与日志脱敏
 
-- 审计写 bbolt `audit` bucket，保留 30 天或 10 万条（先到为准）：`auth.login`（ok/fail）、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。
+- 审计写 bbolt `audit` bucket，保留 30 天或 10 万条（先到为准）：`login.success`、`login.failed`、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`invoke.<plugin>.<method>`（写/管理类；`audit.invoke_all=true` 时全量）、`invoke.burst`（同方法 1s 内超 10 次合并）、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。登录审计的 `ip` 保留前 3 段、`user_agent` 截断 100 字符，口令不落库。
 - **日志字段白名单**：`ts`、`level`、`event`、`req_id`、`plugin_id`、`method`、`code`、`dur_ms`、`ip_hash`、`ua_hash`、`bytes`。实现上先 marshal 成 map 再按白名单重建，**白名单外字段丢弃而非透传**（fail-closed）。
 - 禁止记录：口令、token、cookie、secret、`Authorization`、完整请求体、签名原文；`ip`/`ua` 只存 sha256 前 16 字节。
 - 日志文件 `/var/log/kore/kore.log`（插件为 `/var/log/kore/plugins/<id>.log`）权限 `0640 root:kore`；轮转容量以 [DATA-MODEL](./DATA-MODEL.md) 为唯一真源（内核 10 MiB × 5、插件 10 MiB × 2），本文件不另立数字。

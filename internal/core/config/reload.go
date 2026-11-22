@@ -5,9 +5,9 @@ import "log/slog"
 // Reload 重新解析配置并只应用白名单字段，返回合并后的新快照。
 //
 // 解析或校验失败时返回错误且不修改旧快照，调用方必须继续使用旧快照。
-// 白名单：log.*、resources.*、security.login_rate_limit.*、plugins.allow_unsigned、
-// cert_renew.*、auth.session_ttl、auth.admin_password_hash；其余（含 paths.*、
-// store.allow_unsigned 信任边界开关）需重启内核。
+// 白名单：log.*、resources.*、security.login_rate_limit.*、audit.invoke_all、
+// plugins.allow_unsigned、cert_renew.*、auth.session_ttl、auth.admin_password_hash；
+// 其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
 func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 	next, warnings, err := load(opts)
 	if err != nil {
@@ -43,6 +43,7 @@ func mergeHot(dst, src *Snapshot) (applied, ignored []string) {
 	applied = append(applied, mergeLog(dst, src)...)
 	applied = append(applied, mergeAuth(dst, src)...)
 	applied = append(applied, mergeRateLimit(dst, src)...)
+	applied = append(applied, mergeAudit(dst, src)...)
 	applied = append(applied, mergeResources(dst, src)...)
 	applied = append(applied, mergeMisc(dst, src)...)
 	ignored = append(ignored, coldChanged(dst, src)...)
@@ -96,6 +97,16 @@ func mergeRateLimit(dst, src *Snapshot) []string {
 	if current.Lock != next.Lock {
 		dst.Security.LoginRateLimit.Lock = next.Lock
 		applied = append(applied, "security.login_rate_limit.lock")
+	}
+	return applied
+}
+
+// mergeAudit 合并 audit.* 可热更字段（调试开关，改完立即作用于下一次 invoke）。
+func mergeAudit(dst, src *Snapshot) []string {
+	var applied []string
+	if dst.Audit.InvokeAll != src.Audit.InvokeAll {
+		dst.Audit.InvokeAll = src.Audit.InvokeAll
+		applied = append(applied, "audit.invoke_all")
 	}
 	return applied
 }

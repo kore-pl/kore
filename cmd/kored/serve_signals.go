@@ -17,8 +17,19 @@ func waitForExit(signals platform.Signals, server *httpapi.Server, cfg *config) 
 			// 限速口径在热更白名单里（CORE §6）：重载后同步到运行中的 limiter，
 			// 否则配置改了不生效——那又是"文档声明 > 实现"。
 			applyLoginPolicy(server, cfg)
+			// audit.invoke_all 同样在白名单里：重载后同步到运行中的审计开关。
+			applyAuditPolicy(server, cfg)
 		}
 	}
+}
+
+// applyAuditPolicy 把当前快照里的 audit.invoke_all 应用到运行中的审计开关。
+// 快照缺失时不动运行值（保持启动时装配的口径）。
+func applyAuditPolicy(server *httpapi.Server, cfg *config) {
+	if cfg.snapshot == nil {
+		return
+	}
+	server.ApplyAuditInvokeAll(cfg.snapshot.Audit.InvokeAll)
 }
 
 // applyLoginPolicy 把当前快照里的 security.login_rate_limit 应用到运行中的限速器。

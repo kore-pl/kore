@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
@@ -73,5 +74,30 @@ func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, reason strin
 		Detail:  map[string]string{"reason": reason},
 	}); err != nil {
 		slog.Warn("capability.denied 审计写入失败", "plugin", plugin, "target", target, "err", err)
+	}
+}
+
+// httpAuditRecorderFromStore 把 httpapi 的 HTTP 侧审计事件接到 audit bucket。
+//
+// 这是 login.success / login.failed / invoke.* / invoke.burst 的落库点：
+// 字段一一透传，result 由 httpapi 按 ok/denied/error 归一；detail 受控校验
+// （DATA-MODEL §9）在 store.PutAudit 内完成，非法即拒收。
+// 写入失败只记 WARN：登录/调用本身已经完成，审计失败不改变业务结果，
+// 但必须在进程日志留痕（审计库不可用时仍可取证）。
+type httpAuditRecorderFromStore struct {
+	db *store.Store
+}
+
+// Record 实现 httpapi.AuditRecorder。
+func (a *httpAuditRecorderFromStore) Record(ev httpapi.AuditEvent) {
+	if err := a.db.PutAudit(store.AuditRecord{
+		Subject: ev.Subject,
+		Action:  ev.Action,
+		Plugin:  ev.Plugin,
+		Target:  ev.Target,
+		Result:  ev.Result,
+		Detail:  ev.Detail,
+	}); err != nil {
+		slog.Warn("HTTP 审计写入失败", "action", ev.Action, "plugin", ev.Plugin, "err", err)
 	}
 }

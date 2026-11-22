@@ -161,6 +161,23 @@ func (p *parser) decodeRateLimit(n *yaml.Node, out *RateLimit) error {
 	return nil
 }
 
+// decodeAudit 解析 audit.*。
+//
+// audit.invoke_all 是调试开关（默认 false）：true 时 HTTP 层审计全部 invoke
+// （含只读方法），false 时只审计需要 admin 能力的写/管理类方法，避免日志爆炸。
+func (p *parser) decodeAudit(n *yaml.Node, out *Audit) error {
+	m, err := p.mapping(n, "audit", auditKeys)
+	if err != nil {
+		return err
+	}
+	if v := m["invoke_all"]; v != nil {
+		if out.InvokeAll, err = p.boolean(v, "audit.invoke_all"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // decodeCertRenew 解析 cert_renew.*。
 func (p *parser) decodeCertRenew(n *yaml.Node, out *CertRenew) error {
 	m, err := p.mapping(n, "cert_renew", certRenewKeys)

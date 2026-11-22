@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
@@ -82,9 +83,16 @@ type Options struct {
 	CapabilityResolver CapabilityResolver
 	// CapabilityAuditor 是 capability.denied 的审计出口；nil 时只记 slog WARN。
 	// 挂点：cmd/kored 注入 store.PutAudit（Result=denied），本包不 import store。
-	CapabilityAuditor CapabilityAuditor // AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
+	CapabilityAuditor CapabilityAuditor
+	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
 	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
 	AuditLister AuditLister
+	// AuditRecorder 是 HTTP 侧审计出口（login.success / login.failed / invoke.*）；
+	// nil 时静默跳过。由 cmd/kored 注入 store.PutAudit 适配器（本包不 import store）。
+	AuditRecorder AuditRecorder
+	// AuditInvokeAll 为 true 时审计全部 invoke（含只读方法，调试用）；默认 false
+	// 只审计需要 admin 能力的写/管理类方法，避免日志爆炸。
+	AuditInvokeAll bool
 	// InstallRefresh 在 POST /store/install 成功后回调，真正重载 registry/supervisor
 	// 使新装或升级的插件立即可 enable/invoke（缺口2 与热升级 P0）。由 cmd/kored
 	// 装配层注入（reloadOne：停旧进程 → 读新清单 → Replace → 按 desired 拉起）。
@@ -225,6 +233,15 @@ type Server struct {
 	capAuditor     CapabilityAuditor
 	capDegradeOnce sync.Once
 	auditLister    AuditLister
+	auditRecorder  AuditRecorder
+	// auditInvokeAll 用 atomic 承载，SIGHUP 热更与请求路径并发读写不产生数据竞争。
+	auditInvokeAll atomic.Bool
+	// burstMu / bursts / burstCalls 是 invoke 突发合并状态（纯内存，零后台 goroutine）。
+	burstMu    sync.Mutex
+	bursts     map[string]*invokeBurstState
+	burstCalls uint64
+	// now 是突发窗口时间源；nil 时用 time.Now（测试可替换）。
+	now            func() time.Time
 	installRefresh func(id string) (string, error)
 	metrics        MetricsCollector
 	privilege      RootActionExecutor
@@ -240,8 +257,10 @@ func New(opts Options, transport platform.Transport) *Server {
 		auth: opts.Auth, loginLimiter: opts.LoginLimiter, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
+		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
 	}
+	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver
 	}

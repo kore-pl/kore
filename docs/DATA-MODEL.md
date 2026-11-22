@@ -62,6 +62,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `security.login_rate_limit.attempts` | int | `5` | 1–20；窗口内失败次数 |
 | `security.login_rate_limit.window` | duration | `60s` | 10s–1h |
 | `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；触发后锁定 IP 时长 |
+| `audit.invoke_all` | bool | `false` | false = 只审计按插件 capabilities 需要 admin 的写/管理类 invoke（只读类不审计，防日志爆炸）；true = 审计全部 invoke（调试用）；SIGHUP 可热更 |
 | `cert_renew.enabled` | bool | `false` | 唯一允许的常驻定时器开关；关闭时内核不创建任何 ticker |
 | `cert_renew.interval` | duration | `"6h"` | 仅 `enabled=true` 时生效；范围 1h–24h；非法值 → 退出码 2 |
 
@@ -117,6 +118,9 @@ security:
     attempts: 5                 # 60s 内 5 次失败即锁定
     window: "60s"
     lock: "300s"                # 锁定 5 分钟
+
+audit:
+  invoke_all: false             # 默认只审计需要 admin 的写/管理类 invoke；true = 全量审计（调试用，SIGHUP 热更）
 
 cert_renew:                     # 唯一允许的常驻定时器，默认关
   enabled: false                # false = 内核不创建任何 ticker
@@ -242,13 +246,15 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `subject` | string | `admin`（管理动作，如 enable / disable）、`system`（自动事件，如 crash / restart、证书续期）或调用方 subject（`capability.denied`） |
-| `action` | string | `login` `logout` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `capability.denied` `invoke` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
+| `action` | string | `login.success` `login.failed` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `capability.denied` `invoke.<plugin>.<method>` `invoke.burst` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
 | `plugin` | string | 涉及插件时填写，否则空 |
 | `target` | string | 动作目标（如 `invoke` 时的 `<plugin>.<verb>`、状态值），否则空 |
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |
 | `detail` | `map[string]string`（**受控例外**：仅允许标量字符串值，禁止嵌套） | 附加信息（如 `{"from":"failed","restarts":"2"}`），≤ 1 KiB；**校验方：`store.PutAudit`**（写入前校验键 ≤32 字符、值 ≤256 字符、键数 ≤16、序列化 ≤1 KiB，长度按字符计；非法即记 WARN 并拒绝写入，不落库） |
 
 时间与顺序由**键**承载（`%020d-%06d`：unix 纳秒 + 同纳秒序号，时钟回拨沿用末键纳秒继续编序，保证字典序严格递增 = 时间序），故不设独立 `at` 字段；`req_id`（请求关联）不在当前写入面——四类事件没有请求上下文，HTTP 侧审计（`login` / `invoke` 等）接入时再追加该字段（向后兼容：旧记录缺字段读为空）。查询遇单条损坏记录只 WARN 跳过，不中断整个查询。
+
+**HTTP 侧审计（登录 / 方法调用）**：`login.success`（result=ok，detail=`{ip,user_agent,session_id_prefix}`）与 `login.failed`（result=denied，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`）在登录处理器内成功与失败各写一条；IP 只保留前 3 段（`192.168.1.x`）、UA 截断 100 字符、会话只留前 8 字符前缀，**任何形式的口令都不进审计**。invoke 审计口径与授权口径一致——只有按插件 `capabilities` 判定需要 admin 的写/管理类方法才落 `invoke.<plugin>.<method>`，只读类（插件只声明 `system:read`）默认不审计；`audit.invoke_all=true` 时全量审计（调试用）。因 capability 是**插件级**而非方法级，声明 `system:admin` 的插件其全部方法都属写/管理类、都会被审计。同一方法 1 秒内调用超过 10 次时，前 10 次逐条、第 11 次起合并为一条 `invoke.burst`（detail=`{method,count,window_ms}`）并抑制本窗口后续记录，避免刷爆审计库。
 
 查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 24h` 读 bbolt 输出；前端列表见 `web/audit.js`。保留 90 天，超期由清理流程删除。
 

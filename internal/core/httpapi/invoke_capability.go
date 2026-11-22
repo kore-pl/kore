@@ -80,6 +80,15 @@ func hostCapabilityAction(capability string) (action string, isHost bool) {
 	return "", false
 }
 
+// invokeAuth 是一次 invoke 鉴权结果，供审计层复用（避免二次读插件清单）。
+type invokeAuth struct {
+	// subject 是调用方会话 subject；未装配鉴权时为空。
+	subject string
+	// needAdmin 为 true 表示该方法按插件能力声明需要 admin（写/管理类），
+	// 也是"默认写审计"的判据。
+	needAdmin bool
+}
+
 // authorizeInvoke 是 /api/v1/invoke 的目标操作鉴权：先验会话，再按目标插件声明的
 // 能力做调用校验（docs/PLUGIN-PROTOCOL §3.1.2「调用校验」）。
 //
@@ -89,18 +98,19 @@ func hostCapabilityAction(capability string) (action string, isHost bool) {
 //   - 插件声明了内核不认识的宿主特权能力 → 501 E_UNSUPPORTED（fail-closed）。
 //
 // 拒绝一律写 capability.denied 审计（subject / 插件 id / 方法 / 原因）。
+// 返回的 invokeAuth 携带 subject 与 needAdmin，供调用方决定是否写 invoke.* 审计。
 //
 // 当前单管理员模式的诚实披露：auth.Session 未携带 capability 字段，默认
 // CapabilityResolver 对任意有效会话返回 6 项全权，因此检查在生产路径恒通过；
 // 多用户接入后注入 CapabilityResolver 即可生效（降级时会打一次 WARN）。
-func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) (invokeAuth, bool) {
 	if s.auth == nil {
-		return true // M0 探活骨架未装配鉴权
+		return invokeAuth{}, true // M0 探活骨架未装配鉴权
 	}
 	subject, granted := s.capResolver(r)
 	if subject == "" {
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
-		return false
+		return invokeAuth{}, false
 	}
 	if s.opts.CapabilityResolver == nil {
 		s.warnCapabilityDegraded()
@@ -110,27 +120,28 @@ func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) bool {
 	if err != nil {
 		slog.Error("读取插件能力声明失败", "plugin", plugin, "err", err)
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "读取插件能力声明失败", plugin)
-		return false
+		return invokeAuth{subject: subject}, false
 	}
 	if !known {
 		// 插件不存在：不在鉴权层伪造 404，交给 Invoke 统一返回 E_NOTFOUND（无执行面）。
-		return true
+		return invokeAuth{subject: subject}, true
 	}
 	requirement := requiredInvokeCapability(declared)
+	result := invokeAuth{subject: subject, needAdmin: requirement.needAdmin}
 	if requirement.unsupported {
 		s.auditDenied(subject, plugin, method, "插件声明了内核不支持的特权能力 "+requirement.name)
 		writeError(w, http.StatusNotImplemented, pluginapi.E_UNSUPPORTED,
 			"插件 "+plugin+" 声明了内核不支持的特权能力 "+requirement.name, requirement.name)
-		return false
+		return result, false
 	}
 	if requirement.needAdmin &&
 		!hasCapability(granted, requirement.name) && !hasCapability(granted, "system:admin") {
 		s.auditDenied(subject, plugin, method, "调用该插件需要 "+requirement.name+" 能力")
 		writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
 			"该方法需要 "+requirement.name+" 权限", requirement.name)
-		return false
+		return result, false
 	}
-	return true
+	return result, true
 }
 
 // pluginDeclaredCapabilities 读取目标插件清单声明的能力集。

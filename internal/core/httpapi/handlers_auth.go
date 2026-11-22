@@ -44,9 +44,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				seconds = 1
 			}
 			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-			// 只记 key 与剩余秒数，绝不记口令；审计事件（auth.login/ratelimit.hit）
-			// 尚未实现，此 WARN 是当前唯一取证信号（docs/SECURITY §3.5）。
+			// 只记 key 与剩余秒数，绝不记口令；同时写 login.failed 审计（reason=rate_limited），
+			// 让暴力破解可从审计库追溯（docs/SECURITY §3.5 / DATA-MODEL §9）。
 			slog.Warn("登录限速命中", "key", loginRateKey, "retry_after_s", seconds)
+			s.recordLoginFailed(r, loginRateKey, "rate_limited")
 			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT,
 				"登录失败次数过多，请稍后重试", "")
 			return
@@ -55,6 +56,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&req); err != nil {
+		// 请求体非法 = 未形成有效凭据尝试，reason 统一记 no_session（不记录请求体）。
+		s.recordLoginFailed(r, loginRateKey, "no_session")
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", "")
 		return
 	}
@@ -63,11 +66,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if s.loginLimiter != nil {
 			s.loginLimiter.RecordFailure(loginRateKey)
 		}
+		s.recordLoginFailed(r, loginRateKey, "wrong_password")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "口令错误", "")
 		return
 	}
 	token, session, err := s.auth.Issue()
 	if err != nil {
+		s.recordLoginFailed(r, loginRateKey, "no_session")
 		writeFailure(w, err)
 		return
 	}
@@ -82,6 +87,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	// 会话与 CSRF cookie 都已下发，按成功落审计（口令与完整 token 均不落库）。
+	s.recordLoginSuccess(r, loginRateKey, token)
 	writeJSON(w, http.StatusOK, sessionBody{Authenticated: true, ExpiresAt: formatExpiry(session.ExpiresAt)})
 }
 
