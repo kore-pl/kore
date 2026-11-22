@@ -82,3 +82,61 @@ func TestStoreNotAssigned(t *testing.T) {
 		t.Fatalf("未装配应 501，实际 %d", rec.Code)
 	}
 }
+
+// TestStoreRefreshEndpoint POST /api/v1/store/refresh 路由可达；未签名索引被强验签门拒 401（R4）。
+// 成功路径的正例由 market 层独立测试覆盖（公钥注入仅在同包可见，不在 httpapi 暴露验签注入面）。
+func TestStoreRefreshEndpoint(t *testing.T) {
+	rec := serve(t, newStoreTestServer(t), http.MethodPost, "/api/v1/store/refresh")
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "E_UNAUTHORIZED") {
+		t.Fatalf("未签名索引 refresh 应 401 E_UNAUTHORIZED，实际 %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStorePresetsEndpoint GET /api/v1/store/presets 路由可达；未签名索引被拒 401（R4）。
+func TestStorePresetsEndpoint(t *testing.T) {
+	rec := serve(t, newStoreTestServer(t), http.MethodGet, "/api/v1/store/presets")
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "E_UNAUTHORIZED") {
+		t.Fatalf("未签名索引 presets 应 401 E_UNAUTHORIZED，实际 %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStoreEndpointsRoutedAndGuarded 三端点路由存在（非 404），后端未装配时统一 501。
+// update 带合法 body，避免先被请求体校验拦在 400。
+func TestStoreEndpointsRoutedAndGuarded(t *testing.T) {
+	cases := []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/store/refresh", ""},
+		{http.MethodGet, "/api/v1/store/presets", ""},
+		{http.MethodPost, "/api/v1/store/update", `{"id":"echo","version":"0.1.1","package_path":"/tmp/e.tar.gz"}`},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		newTestServer().Handler().ServeHTTP(rec,
+			httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+		if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "E_UNSUPPORTED") {
+			t.Fatalf("%s %s 应 501 E_UNSUPPORTED，实际 %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestStoreUpdateValidation POST /api/v1/store/update 缺字段必 400 E_INVALID。
+func TestStoreUpdateValidation(t *testing.T) {
+	rec := httptest.NewRecorder()
+	s := newStoreTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/store/update", strings.NewReader(`{"id":"echo"}`))
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "E_INVALID") {
+		t.Fatalf("缺字段应 400 E_INVALID，实际 %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStoreUpdateEndpoint POST /api/v1/store/update 合法 body 被强验签门拒 401（R4，无落盘）。
+// 成功路径 installer 调用由 market 层 TestStoreUpdateUsesIndexSHA 覆盖。
+func TestStoreUpdateEndpoint(t *testing.T) {
+	s := newStoreTestServer(t)
+	body := `{"id":"echo","version":"0.1.1","package_path":"/tmp/echo.tar.gz"}`
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/store/update", strings.NewReader(body)))
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "E_UNAUTHORIZED") {
+		t.Fatalf("未签名索引 update 应 401 E_UNAUTHORIZED，实际 %d %s", rec.Code, rec.Body.String())
+	}
+}

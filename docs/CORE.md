@@ -37,7 +37,7 @@
 
 ### 2.1 `internal/core/config`
 
-- **职责**：内置默认值 → `/etc/kore/config.yaml` 覆盖 → 环境变量覆盖 → 字段校验 → 不可变 `Config` 快照；SIGHUP 时重新解析并按 §6 白名单热替换。优先级：内置默认 < 配置文件 < 环境变量。**内核侧配置覆盖变量共 3 个**：`KORE_CONFIG`（改配置路径）、`KORE_STATE_DIR`（覆盖 `paths.state_dir`）、`KORE_PLUGIN_DIR`（覆盖 `paths.plugin_dir`）。**派生规则**：`paths.state_dir` 解析优先级 = `KORE_STATE_DIR` > `--state-dir` > 配置 `paths.state_dir` > `/var/lib/kore`；`paths.plugin_dir` 解析优先级 = `KORE_PLUGIN_DIR` > 配置 `paths.plugin_dir` > **`<state_dir>/plugins`（未显式设置时派生）**。即只设 `KORE_STATE_DIR=/tmp/x` 时，状态库为 `/tmp/x/state.db`、插件目录自动为 `/tmp/x/plugins`（M1 修复：此前 `plugin_dir` 写死，与 `state_dir` 脱节）。键名与默认值以 `DATA-MODEL.md` §3 为唯一真源。
+- **职责**：内置默认值 → `/etc/kore/config.yaml` 覆盖 → 环境变量覆盖 → 字段校验 → 不可变 `Config` 快照；SIGHUP 时重新解析并按 §6 白名单热替换。优先级：内置默认 < 配置文件 < 环境变量。**内核侧配置覆盖变量共 3 个**：`KORE_CONFIG`（改配置路径）、`KORE_STATE_DIR`（覆盖 `paths.state_dir`）、`KORE_PLUGIN_DIR`（覆盖 `paths.plugin_dir`）。**另有 1 个可选环境变量 `KORE_PRESETS_DIR`**：预设目录，供 §2.13 `GET /api/v1/store/presets` 读取，缺省为空即预设列表返回空列表（非错误），不是 config 覆盖变量、不计入上述 3 个。**派生规则**：`paths.state_dir` 解析优先级 = `KORE_STATE_DIR` > `--state-dir` > 配置 `paths.state_dir` > `/var/lib/kore`；`paths.plugin_dir` 解析优先级 = `KORE_PLUGIN_DIR` > 配置 `paths.plugin_dir` > **`<state_dir>/plugins`（未显式设置时派生）**。即只设 `KORE_STATE_DIR=/tmp/x` 时，状态库为 `/tmp/x/state.db`、插件目录自动为 `/tmp/x/plugins`（M1 修复：此前 `plugin_dir` 写死，与 `state_dir` 脱节）。键名与默认值以 `DATA-MODEL.md` §3 为唯一真源。
 - **输入输出**：输入为配置文件路径（`KORE_CONFIG`）、`KORE_STATE_DIR`、`KORE_PLUGIN_DIR` 与 `--state-dir`，输出 `*Config`（各模块只读引用）+ `[]ValidationError`；字段组为 `server.*` / `auth.*` / `paths.*` / `log.*` / `resources.*` / `plugins.*` / `security.*`，逐键定义见 `DATA-MODEL.md` §3，本文件不复制。
 - **失败模式与处理**：文件不存在 → 用内置默认值 + WARN，继续启动；只有真正必填项缺失才拒绝启动（退出码 2）——`auth.admin_password_hash` **不是**必填项，空值走 §2.3 的首启 bootstrap。YAML 语法错 → stderr 报行号，退出码 2。**未知字段 → WARN + 继续启动**，附最接近的合法键名拼写建议（不因拼写把服务打死）。**类型错误 / 必填缺失 / 取值越界 → 退出码 2**（如 `auth.session_ttl` 超出 1m–720h、`server.addr` 非回环地址）。`auth.initialized=true` 但哈希为空 → 退出码 2（配置损坏，**不重新生成**，避免覆盖已被运维重置的意图）。SIGHUP 重载失败 → 保留旧快照 + ERROR，不回滚进程。
 - **明确不做什么**：不定义或复写配置键（真源在 `DATA-MODEL.md` §3）；不做配置中心/远端拉取/版本管理；不做 schema 迁移（属 store）；不读插件配置（插件自管 `/var/lib/kore/plugins/<id>/` 下文件）；不监听文件变更（零轮询定时器，只认 SIGHUP）。
@@ -122,7 +122,10 @@
 ### 2.13 `internal/core/market`（软件商店，HTTP 前缀 `/store`）
 
 - **职责**：索引缓存 `/var/lib/kore/store/index.json`（`0600`，含 `id,name,version,requires_kore,sha256,size_bytes,depth_level,scenario_tags`）、**显式刷新**（`POST /store/refresh`，唯一联网入口）、安装/更新任务队列（异步 job）、本地目录导入、出站白名单（仅 refresh 与包下载两处，运行期零后台出站）。
-- **输入输出**：`GET /store/plugins` 读本地缓存（零出站，可带 `stale=true`）；`POST /store/install|update` → `{job_id}`，`GET /store/jobs/{job_id}` 轮询进度；`DELETE /store/plugins/{id}` 卸载；`GET /store/presets` 返回 embed 快照的预设元数据。
+- **输入输出**：`GET /store/plugins` 读本地缓存（零出站，可带 `stale=true`）；`POST /store/install|update` → `{job_id}`，`GET /store/jobs/{job_id}` 轮询进度；`DELETE /store/plugins/{id}` 卸载；`GET /api/v1/store/presets` 见下（M3-D）。
+- **`GET /api/v1/store/presets`（M3-D）**：从环境变量 `KORE_PRESETS_DIR` 读取预设目录，按 id 升序返回预设元数据。
+- **缺省行为**：未设 `KORE_PRESETS_DIR` 时**返回空列表，不是错误**；缺省不指向索引仓，也不是 embed 快照。
+- **验签顺序**：该端点先过 market 强制验签门；索引验签失败即 401，且**不读预设**。
 - **失败模式与处理**：索引缺失/过期 → 200 + `stale=true`（不阻塞首装，用 embed 快照兜底）；刷新失败 → **保留旧缓存**并返回 `E_UPSTREAM`（禁止清空）；job 不存在 → 404 `E_NOTFOUND`；包 sha256 不符 → job `failed` + `E_INVALID`；同一插件并发安装 → 409 `E_CONFLICT`。
 - **明确不做什么**：不做审核 / 账号 / 评分 / 评论；不做自动后台刷新（**零轮询**，G-19）；不代理第三方下载（按索引 URL 取包后**自算 sha256**，索引不是信任源）；不长期存包（安装完成即删临时文件）。
 - **端点实现状态（M2-B 快照；终态规格见上文"输入输出"）**：7 个 store 端点中，M2-B 已接通 4 个路由——`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/install`、`GET /store/jobs/{id}`；其余 `POST /store/refresh`、`GET /store/presets`、`POST /store/update`、`DELETE /store/plugins/{id}` 属后续里程碑。**路由接通 ≠ 功能完成**：`GET /store/jobs/{id}` 虽已注册，handler 当前返回 **501 `E_UNSUPPORTED`**（message 标注 M3 支持），任务进度查询到 M3 才落地；M2-B 阶段该端点仅占位，不返回真实 job 状态。

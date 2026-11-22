@@ -24,6 +24,22 @@ type storeInstallRequest struct {
 	PackagePath string `json:"package_path"`
 }
 
+// storeUpdateRequest 是 POST /api/v1/store/update 的请求体（显式字段，禁 any，G-24）。
+type storeUpdateRequest struct {
+	// ID 插件 id。
+	ID string `json:"id"`
+	// Version 目标版本。
+	Version string `json:"version"`
+	// PackagePath 本地 tar.gz 路径。
+	PackagePath string `json:"package_path"`
+}
+
+// storePresets 是 GET /api/v1/store/presets 的成功响应体。
+type storePresets struct {
+	// Presets 按 id 升序排列的预设元数据。
+	Presets []market.Preset `json:"presets"`
+}
+
 // requireStore 取商店后端；未装配时回 501 E_UNSUPPORTED（不假装成功）。
 func (s *Server) requireStore(w http.ResponseWriter) (*market.Service, bool) {
 	if s.market == nil {
@@ -63,6 +79,58 @@ func (s *Server) handleStorePlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
+}
+
+// handleStoreRefresh 重读索引并验签；失败拒绝并保留旧索引（R4）。
+func (s *Server) handleStoreRefresh(w http.ResponseWriter, r *http.Request) {
+	svc, ok := s.requireStore(w)
+	if !ok {
+		return
+	}
+	res, err := svc.Refresh()
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleStorePresets 返回预设元数据；索引验签失败时拒绝，不读未签名缓存（R4）。
+func (s *Server) handleStorePresets(w http.ResponseWriter, r *http.Request) {
+	svc, ok := s.requireStore(w)
+	if !ok {
+		return
+	}
+	presets, err := svc.Presets()
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, storePresets{Presets: presets})
+}
+
+// handleStoreUpdate 走现有 installer 装新版本（索引验签 + 包 sha256 双门，R4）。
+func (s *Server) handleStoreUpdate(w http.ResponseWriter, r *http.Request) {
+	var req storeUpdateRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", err.Error())
+		return
+	}
+	if req.ID == "" || req.Version == "" || req.PackagePath == "" {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "id/version/package_path 必填", "")
+		return
+	}
+	svc, ok := s.requireStore(w)
+	if !ok {
+		return
+	}
+	res, err := svc.Update(req.ID, req.Version, req.PackagePath)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleStoreInstall 触发本地包安装；body 为 {id,version,package_path}。

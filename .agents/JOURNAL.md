@@ -283,3 +283,80 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 - **有味道的交付（七）**（插件 UI 集成讨论 · 资源视角 agent 可见输出原文，逐字保留）：
   > [🔶 Amazon] Dive Deep，从"零插件首屏"倒推——数据先于直觉。
 - 讨论事实：ui-res 实测现状首屏 gzip 4151 B、app.js 6400 B 原始；20 插件全塞首屏推演 404–1004 KiB（超预算 1.35–3.35 倍），主张按插件懒加载 + 首屏零注入门禁 d(首屏)/d(插件数)=0。
+
+- **有味道的交付（八）**（M3-B 冷启压测 agent 可见输出原文，逐字保留）：
+  > 【复盘】弯路的根因：初版漏了轮次衔接的首样本退出断言，导致 0.00ms 热态样本差点被当冷启收口——pre-mortem S-02 的变体。抓手已固化进测试（换 PID + /proc 消失 + 耗时>0 三断言），同类问题不再发生。
+- 交付事实：m3-b-p95-3 默认路由重派成功——20/20 真冷启、两轮 p95 2.87ms/3.68ms（漂移 0.81ms≤100ms）、make check 10/10；证据 .agents/verify/m3-lazy-p95.md（46 行）。
+
+#### 插件 UI 集成四视角讨论（2026-11-22，待用户拍板）
+
+> 性质：讨论记录，不是决策。四视角（架构 / 安全 / 资源 / 插件作者）已独立研判完毕，用户尚未拍板；以下均为候选主张，不构成任何已生效的契约或 ADR，不触发实现。
+
+##### 1. 背景
+
+- 触发：用户提出"壳子页面怎么展示插件 UI，互相讨论一下，没想好办法"。
+- 现状：web 壳只有 `id="app"` 状态展示，没有任何插件 UI 挂载能力（M2-D 已交付首屏，见本文件 M2 里程碑复盘）。
+- 硬约束：裁决37 规定 web server 不内置——跟随站点插件、可选、多实现；内核与插件都不捆绑任何 web server 二进制。
+- 现行方案：`docs/FRONTEND.md` §4 采用同域 `import()` 动态加载插件前端。
+- 问题升级：安全视角在该同域方案中查出越权漏洞，"怎么展示 UI"因此从纯前端问题升级为隔离 + 授权问题——本节记录的是讨论，不是定案。
+- 资源基线：首屏现状 gzip 4151 B（M2 实测，`make frontend`）；首屏 ≤300 KiB gzip 是 G-03 阻断级红线。
+
+##### 2. 安全发现（重点，可复现）
+
+同域 `import()` 的越权链，分步如下：
+
+1. 插件 JS 与主壳共享同一浏览器 realm（同域 `import()`）。
+2. 同域执行使插件 JS 可读非 HttpOnly 的 `kore_csrf`——`docs/SECURITY.md:99` 明确它是双提交 token、**非 HttpOnly（前端需读取）**。
+3. 同源 `fetch` 自动携带 session cookie，插件 JS 无需接触 cookie 本身即可借势。
+4. 仅被授予 `site:read` 的插件据此构造写请求 `POST /api/v1/plugins/{id}/enable`，启用 `system:admin` 级插件。
+5. 管理端点只查 session + CSRF，**不做目标操作的 capability 校验**——证据 `internal/core/httpapi/middleware.go:24-25`（`withAuth` 只调 `sessionFrom` 校验会话）与 `docs/SECURITY.md:110-112`（能力校验只落在 `invoke` 帧，不在 enable 端点）。
+
+- 漏洞定性：典型 confused deputy（混淆代理）——CSRF 双提交与 SameSite 两道防线在同域恶意脚本前同时失效：token 能读、cookie 能自动带，授权判断被旁落到调用方。
+- 证据锚点：`docs/SECURITY.md:99` / `docs/SECURITY.md:110-112` / `internal/core/httpapi/middleware.go:24-25`，三处均为当前 HEAD 可核对文本。
+- 复现口径（供安全 agent 后续收敛为 PoC，本节不构造）：一个 `site:read` 插件前端在同域上下文读 `kore_csrf`、带 cookie 打 enable 端点，观察是否成功启用高权限插件。
+- 共识底线：任何候选方案必须先过"插件 JS 能否读到 token / 能否自动带 cookie"这一关；现行同域 `import()` 不能原样推进。
+
+##### 3. 四视角主张（各一句 + 被否理由）
+
+四个视角各出一句主张，并各自否掉一个更差选项；四者不互斥，最终组合需用户拍板。
+
+- **架构**：主张独立 origin iframe + postMessage 桥承载插件 UI；**否**同域 `import()` / 同域 Web Component——共享 realm 可读 `kore_csrf`，越权链无法切断。
+- **安全**：主张子帧永不接触 cookie / csrf、主壳为唯一裁决点，写操作经桥由主壳代发；**否** `allow-scripts allow-same-origin` 同源 sandbox iframe——插件可自行移除 sandbox，隔离等于零。
+- **资源**：主张按插件懒加载、资源走 `plugin-assets@ver`、首屏零注入、判据 d(首屏)/d(插件数)=0；**否**全塞首屏——现状 4151 B，20 插件推演 404–1004 KiB（超红线 1.35–3.35 倍），必破预算。
+- **插件作者**：主张包内 `web/` 直接挂 `/plugins/{id}/web/`、沿用现有 `web` 字段零新协议；承认同源 XSS 代价，但**警告**隔离过度劝退贡献者——写个 UI 要跨 origin 配 RPC，生态起不来。
+
+| 视角 | 主张一句话 | 否掉的方案 |
+| --- | --- | --- |
+| 架构 | 独立 origin iframe + 桥 | 同域 import / Web Component |
+| 安全 | 子帧不碰凭证、主壳唯一裁决 | 同源 sandbox iframe |
+| 资源 | 懒加载 + 版本路径 + 首屏零注入 | 全塞首屏 |
+| 插件作者 | 包内 web/ 直接挂、零新协议 | 过度隔离（劝退贡献者） |
+
+##### 4. 待用户拍板的三处分歧
+
+1. **隔离强度**：生态门槛 vs 越权归零——独立 origin 根治越权但要付接入成本，同域零成本但越权链真实存在；不可兼得，需用户定优先级。
+2. **`kore_csrf` 能否改 HttpOnly**：改 HttpOnly 可断掉"插件 JS 读 token"，但须先拉通确认有无其它组件依赖前端读取该 cookie（现行双提交方案明确依赖前端读）。
+3. **asset 路径版本化与否**：`plugin-assets@ver` 带版本利于缓存与灰度，但增加打包与路径约定；不带版本则升级时可能命中旧缓存。
+
+##### 5. lead 倾向（倾向非决策）
+
+- **明确标注：以下是倾向，不是决策。** 用户尚未拍板，本节不落 ADR、不改 `docs/FRONTEND.md` §4、不触发实现。
+- 倾向组合：独立 origin iframe + postMessage 桥 + `kore_csrf` 改 HttpOnly + 版本化 asset 路径。
+- 代价（如实记）：插件作者要接受主壳维护的 RPC shim——写请求经桥由主壳代发，不能直接 fetch 管理端点；这是接入门槛，需生态侧认可。
+- 理由：越权不能拿生态门槛换——`site:read` 插件能启用 `system:admin` 插件是授权根基性漏洞；生态门槛是体验问题、越权是安全问题，优先级不对等。
+- 影响面：该倾向会推翻 `docs/FRONTEND.md` §4 现行同域方案，牵动前端协议、插件包约定、安全模型三处联动，面大，故 lead 不自己定。
+
+##### 6. 下一步
+
+- 用户尚未选择，本节仅作讨论记录留痕；未拍板前不实现同域 `import()` 的 UI 挂载，避免带着越权方案推进。
+- 可让安全 agent 把越权链写成可复现 PoC（一个 `site:read` 插件读 token + 带 cookie 打 enable，观察是否成功启用高权限插件），用红 / 绿证据坐实后再定方案。
+- 三处分歧一旦拍板，再决定是否改 `docs/FRONTEND.md` §4、是否新增 ADR 与门禁；本节点不预判结论。
+
+#### 有味道的交付（九）：M3-A 容器环境不冒充真实宿主（2026-11-22）
+
+- 有味道的交付（agent 可见 PUA 输出原文，逐字保留，不改写）：
+  > 💼 [P8 自检] 冰山下面还有冰山——脚本跑完了，我主动检查了 site 仓源码的 grep（看有没有偷偷 import nginx 库）、检查了 sed 注入逻辑的回滚精度、用 container 而非纯 simulated 让 env_kind 更有价值、补了提案规定的 .agents/verify/m3-nginx-coexist.md 路径让反向命令能真正跑。这些不在原始需求里，是 P8 该做的"多一步"。
+- 有味道的交付（agent 可见 PUA 输出原文，逐字保留）：
+  > 💼 [P8 自检] FAKE-PASS 反向验证我拆成了"假文件必须触发 FAKE-PASS"和"真实证据只有 PARTIAL"两层……颗粒度要到让别人一看就懂，不是自己觉得懂就行。
+- 交付事实：M3-A fixture 475 行；本机无 nginx，走 container 模式，`env_kind=container → verdict=PARTIAL`（不冒充 PASS），真实宿主挂 P2；site 仓 2 commit（`50c2e7f` / `3cb4de6`）；内核 `grep -rnE "nginx|caddy|httpd" internal/ cmd/` 零命中（裁决37）。
+- 教训：**容器 / 模拟 green ≠ 真实宿主验证**；`PARTIAL` 标注是证据纪律，不是降级偷懒——把 env_kind 如实写进判据，才不会让"本地能过"伪装成"宿主共存已证"。

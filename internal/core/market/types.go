@@ -40,6 +40,53 @@ type Plugin struct {
 	ScenarioTags []string `json:"scenario_tags"`
 }
 
+// Preset 是 kore-plugins/presets 下的预设元数据（对外 schema 显式列字段，禁 any/object，G-24）。
+// 本模块只列元数据，不解析安装计划（安装计划属 installer 职责，G-13 边界）。
+type Preset struct {
+	// ID 预设 id。
+	ID string `json:"id"`
+	// Name 展示名。
+	Name string `json:"name"`
+	// Description 场景说明。
+	Description string `json:"description"`
+	// OutOfBox 是否开箱可用（basic 深度插件不得标 true，由 presets-check 守护）。
+	OutOfBox bool `json:"out_of_box"`
+	// Plugins 预设引用的插件条目。
+	Plugins []PresetPlugin `json:"plugins"`
+}
+
+// PresetPlugin 是预设中的单条插件引用。
+type PresetPlugin struct {
+	// ID 插件 id。
+	ID string `json:"id"`
+	// Version 目标版本（精确版本，区间校验属 presets-check）。
+	Version string `json:"version"`
+	// Desired 期望状态（enabled/disabled）。
+	Desired string `json:"desired"`
+}
+
+// RefreshResult 是 POST /store/refresh 的结果视图。
+type RefreshResult struct {
+	// Refreshed 是否成功刷新。
+	Refreshed bool `json:"refreshed"`
+	// PluginCount 已验签索引的插件条数。
+	PluginCount int `json:"plugin_count"`
+	// Message 可读说明。
+	Message string `json:"message"`
+}
+
+// UpdateResult 是 POST /store/update 的结果视图。
+type UpdateResult struct {
+	// ID 插件 id。
+	ID string `json:"id"`
+	// Version 目标版本。
+	Version string `json:"version"`
+	// State 结果状态（succeeded）。
+	State string `json:"state"`
+	// Message 可读说明。
+	Message string `json:"message"`
+}
+
 // InstallJob 是安装任务的进度视图（M2 固定状态，异步队列留 M3）。
 type InstallJob struct {
 	// ID 任务 id。

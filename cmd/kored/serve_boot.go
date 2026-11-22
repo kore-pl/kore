@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/pengtang1024/kore/internal/core/envprobe"
@@ -86,6 +87,7 @@ func buildMarket(cfg config, svc *service) *market.Service {
 	}
 	opts := market.Options{
 		IndexDir:      dir,
+		PresetsDir:    os.Getenv("KORE_PRESETS_DIR"), // 预设目录（可选；空则 presets 返回空列表），不写进默认配置
 		AllowUnsigned: cfg.snapshot.Store.AllowUnsigned,
 		Installer:     installerAdapter(cfg, svc),
 	}
