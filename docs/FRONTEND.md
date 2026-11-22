@@ -53,7 +53,23 @@
 - **滚动策略**：顶栏与侧栏 `position: sticky` 各自独立滚动；内容区是唯一主滚动容器，禁止 `body` 滚动。表格头 sticky，冻结在内容区顶部下方 0px。
 - **密度**：行高 32px、表头 36px、区块间距 16px；表单控件高 28px，紧凑模式 24px。
 
+### 3.1 响应式与手机适配（裁决41）
+
+主壳 UI 必须响应式适配手机 / 平板 / 桌面，插件 iframe UI 同样适配；这是硬需求，不是渐进增强项。
+
+- **viewport**：`index.html` 的 `<meta name="viewport">` 必须含 `width=device-width, initial-scale=1`；缺失或写成固定宽度即返工。
+- **断点**：只用 CSS media query，三段——`640px` 以下手机、`640px–1024px` 平板、`1024px` 以上桌面；断点值集中在 `style.css` 定义，禁止散落硬编码。
+- **禁 JS 探测**：禁止用 `window.innerWidth` / `matchMedia` 等做布局分支（屏幕尺寸判断一律 CSS 负责）；JS 不得因视口宽度切换 DOM 结构或重载组件。
+- **触摸目标**：所有可点击元素（按钮、图标、表格操作、表单控件、侧栏项）在触摸视口下命中区 ≥ 44×44 px；视觉尺寸可小于 44px，命中区不得缩小。
+- **布局降级**：手机下侧栏折叠为抽屉 / 底部入口，顶栏保留连接状态点与用户菜单；表格改卡片或表内横向滚动，不出现整页横向滚动条（延续 §3 内容区纪律）。
+- **插件 iframe**：子帧按自身视口自适应，响应式样式由插件自带；主壳经 postMessage 桥**只传视口元数据**（如宽度档位），不代管子帧布局、不强制尺寸、不注入样式。iframe 容器随主壳断点伸缩，裁决40 的独立 origin / sandbox / 桥校验约束不变。
+- **预算不放宽**：移动端首屏 gzip 仍 ≤ 300 KiB（§7），不因适配引入框架、UI 库或额外依赖；断点与触摸规则只用原生 CSS 实现，零框架不变。
+
 ## 4. 插件前端契约
+
+**安全边界（裁决40）**：插件 UI **不进主壳 realm**。插件前端在**独立站点 origin 的 iframe** 中运行——必须是与站点不同的 origin，**不只是不同端口**：`SameSite=Strict` 按 site 判定，同站不同端口仍会带主域 cookie，因此子帧必须跨站，读不到 `kore_csrf`、不带主域 cookie。插件不碰主壳 cookie / csrf / DOM，只经 postMessage 桥调 `invoke`。`kore_csrf` 改 HttpOnly；管理 API 永不对桥开放。**服务端根因单列**：管理端点（如 `/api/v1/plugins/{id}/enable`，`middleware.go:24-25` 只查 session+CSRF）缺"按目标操作做 capability 校验"，列为 M4 待办独立修补，客户端 UI 隔离只是兜底，不由本方案代替。
+
+**首屏纪律**：首屏只加载主壳三件套，插件 UI 按需入 iframe，`d(首屏)/d(插件数)=0`——装 100 个插件首屏体积不变。`kore` 的 `go:embed` 只含主壳前端，不含任何插件资产；插件前端永不进主二进制。
 
 ### 4.1 清单来源
 
@@ -64,87 +80,101 @@
 | 字段 | 类型 | 必填 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `entry` | string | 是 | 相对包根、以 `.js` 结尾、不含 `..` | ES module 入口，产物须为单入口多 chunk |
-| `styles` | string[] | 否 | ≤ 5 项、合计 ≤ 200 KiB | 按数组顺序注入 `<style>`，卸载时整组移除 |
+| `styles` | string[] | 否 | ≤ 5 项、合计 ≤ 200 KiB | 由 iframe 文档自行加载，主壳不注入样式 |
 | `menus` | object[] | 否 | ≤ 8 项、`path` 必须落在 `/p/<id>/` 下 | 侧栏入口，字段 `id`/`label`/`path`/`order`/`icon?` |
-| `routes` | object[] | 否 | `path` 必须以 `/p/<id>/` 为前缀 | 仅用于启用时的前缀冲突预检；真实组件由模块导出提供 |
+| `routes` | object[] | 否 | `path` 必须以 `/p/<id>/` 为前缀 | 仅用于启用时的前缀冲突预检；真实路由由子帧内部管理 |
 
 `web/` 产物结构：
 
 ```text
 web/
+├── index.html     iframe 文档入口，自行加载 entry 与样式
 ├── index.js       entry，ES module（构建后文件名带 content hash 亦可）
 ├── index.css      styles 指向的文件，可选
 └── chunks/*.js    entry 内部的相对 import，按 URL 解析，不需要清单声明
 ```
 
-**来源与托管链路**：插件前端在 `kore-plugin-<id>` 仓库内用任意栈（Vite 或其它）构建 → 产物以 `web/` 进包 → 安装时落到 `/var/lib/kore/plugins/<id>/<version>/web/` → 由 kore 以 `/plugin-assets/<id>/*` 托管。**kore 的 `go:embed` 只含主壳前端，不含任何插件资产**：插件前端永不进主二进制，M2 不得以"省事"为由把插件前端打进 kore。
+**来源与托管链路**：插件前端在 `kore-plugin-<id>` 仓库内用任意栈（Vite 或其它）构建 → 产物以 `web/` 进包 → 安装时落到 `/var/lib/kore/plugins/<id>/<version>/web/` → 由 kore 以带版本的 `/plugin-assets/<id>@<ver>/` 路径托管（版本化是清缓存与隔离的基础）。**kore 的 `go:embed` 只含主壳前端，不含任何插件资产**：插件前端永不进主二进制，M2 不得以"省事"为由把插件前端打进 kore。
 
-### 4.3 模块导出对象
+### 4.3 桥接口（window.kore.invoke）
+
+子帧里由主壳提供的几十行 RPC shim 暴露唯一入口 `window.kore.invoke`；插件**只调这个入口**，不接触主壳 cookie / csrf / DOM。管理端点永不对桥开放。
 
 ```ts
-export interface KorePluginModule {
-  routes: Array<{ path: string; name: string; component: Component }>
-  menus: Array<{ id: string; label: string; path: string; order: number; icon?: string }>
-  setup?: (ctx: PluginCtx) => void | Promise<void>
-  teardown?: () => void | Promise<void>
-}
-
-export interface PluginCtx {
-  pluginId: string
-  version: string
-  apiBase: '/api/v1'
-  invoke: (method: string, params?: unknown) => Promise<unknown>
-  onEvent: (topic: string, fn: (payload: unknown) => void) => () => void
+// 子帧侧（插件调用）
+declare global {
+  interface Window {
+    kore: {
+      invoke: (method: string, params?: unknown) => Promise<unknown>
+      onEvent: (topic: string, fn: (payload: unknown) => void) => () => void
+    }
+  }
 }
 ```
 
-约束：`routes`/`menus` 必须与 `info.json.web` 声明一致（多出项被丢弃）；`setup` 抛错等同加载失败；`teardown` 抛错只记日志，不阻断卸载。
+桥协议用 postMessage 承载，`req_id` 回投一一对应；请求字段显式定形，禁止 `object` / `any`（G-24）：
+
+```ts
+interface KoreBridgeRequest {
+  kind: 'kore.invoke'
+  req_id: string
+  method: string
+  params_json: string   // 受控载荷，按插件声明的 schema 校验
+}
+interface KoreBridgeResponse {
+  kind: 'kore.result'
+  req_id: string
+  ok: boolean
+  result_json?: string
+  error?: { code: string; message: string }
+}
+```
 
 ### 4.4 注册时序
 
 ```text
 安装完成 ──► POST /api/v1/plugins/{id}/enable
-                 │
-                 ▼
-      supervisor 拉起进程 → kore.hello 返回 methods → 标记 ready
-                 │
-                 ▼
-      主壳 GET /plugin-assets/<id>/info.json 读 web 段
-                 │
-                 ▼
-      injectStyles(styles, {v: version})
-                 │
-                 ▼
-      await import(`/plugin-assets/<id>/${entry}?v=${version}&h=${hash}`)
-                 │
-                 ▼
-      前缀校验 → setup(ctx) → router.addRoute() 逐条 → menuRegistry.add()
-                 │
-                 ▼
-      侧栏出现菜单；失败则整个插件 UI 置为 degraded（4.6）
+                  │
+                  ▼
+       supervisor 拉起进程 → kore.hello 返回 methods → 标记 ready
+                  │
+                  ▼
+       主壳 GET /plugin-assets/<id>@<ver>/info.json 读 web 段
+                  │
+                  ▼
+       主壳入 iframe（独立站点 origin、非仅跨端口，sandbox 限权）
+                  │
+                  ▼
+       子帧加载 /plugin-assets/<id>@<ver>/<entry>，注入几十行 RPC shim
+                  │
+                  ▼
+       前缀校验 → 子帧内部渲染 → 侧栏菜单由主壳按 web.menus 注册
+                  │
+                  ▼
+       侧栏出现菜单；失败则整个插件 UI 置为 degraded（4.6）
 ```
+
+主壳收到子帧消息时**必须**校验 `event.origin`（等于插件 asset 的独立 origin）与 `event.source`（等于该 iframe 的 `contentWindow`），两者任一不符即丢弃；随后按该插件 `granted_capabilities` 限权，管理 API 类 method 一律拒绝、不进桥。
 
 ### 4.5 卸载与热替换
 
-浏览器不提供模块缓存删除 API，因此**用 URL 版本化替代清缓存**：
-
-1. 加载 URL 恒带 `?v=<version>&h=<assetsHash>`；升级后 version 或 hash 变化 → 新 URL 必然是新模块实例。
-2. 卸载顺序固定：`teardown()` → `router.removeRoute(name)` 逐条 → 菜单注销 → 移除注入的 `<style>` 节点 → 清空注册表内对该模块的引用。不保留闭包，旧模块才能被 GC。
-3. 禁止 `import.meta.glob` 静态收集插件前端：插件是运行时安装的，静态 glob 在构建期就固化了集合。
-4. 热替换 = 卸载旧版本 + 按新 version 重新走 4.4；替换过程中该插件菜单置灰，不允许并发二次触发。
-5. `component` 必须是异步组件或已内联在 entry 中，不允许引用主壳内部模块路径（跨包引用一律失败）。
+1. asset 路径恒带版本 `/plugin-assets/<id>@<ver>/`；升级后 `<ver>` 变化 → 新 iframe 加载新路径，无模块缓存残留问题。
+2. 卸载顺序固定：通知子帧 `teardown` → 移除 iframe 节点 → 菜单注销 → 清空该插件的桥 `req_id` 映射与 source 引用。不保留闭包，旧文档才能被 GC。
+3. 禁止把插件前端 `import` 进主壳 bundle：插件运行时安装，静态收集会把集合固化在构建期并让插件进入主壳 realm（越权）。
+4. 热替换 = 卸载旧版本 iframe + 按新 `<ver>` 重新走 4.4；替换过程中该插件菜单置灰，不允许并发二次触发。
+5. 子帧内部组件不允许引用主壳内部模块路径——不同 realm，跨包引用一律失败。
 
 ### 4.6 失败隔离
 
-`import`、前缀校验、`setup`、`addRoute` 全部包在 `try/catch` 内：
+iframe 加载、桥握手、前缀校验、子帧渲染全部包在 `try/catch` 内：
 
-- 失败仅影响该插件：菜单隐藏、已注册路由移除、详情页展示错误摘要（错误类型 + 发生阶段 + 时间戳，栈截断 8 KiB）。
+- 失败仅影响该插件：菜单隐藏、iframe 移除、详情页展示错误摘要（错误类型 + 发生阶段 + 时间戳，栈截断 8 KiB）。
 - 主壳不因此白屏；SSE 通道与其余插件保持可用。
 - 连续 2 次启用失败写入审计事件 `plugin.ui_load_failed`，并在 `/plugins` 行内标红。
 
 ### 4.7 静态资源路径
 
-插件前端资产由主壳托管在 `/plugin-assets/<id>/*`（鉴权后）；`Content-Type` 白名单仅 `js`/`css`/`svg`/`png`/`woff2`/`json`，其余返回 404。带 `?v=` 的请求 `Cache-Control: public, max-age=31536000, immutable`；不带版本参数的返回 `no-cache`。
+插件前端资产由主壳托管在带版本的 `/plugin-assets/<id>@<ver>/*`（鉴权后，但**不把管理 API 挂在该前缀下**）；`Content-Type` 白名单仅 `js`/`css`/`svg`/`png`/`woff2`/`json`/`html`，其余返回 404。带版本的路径统一 `Cache-Control: public, max-age=31536000, immutable`；无版本路径返回 404，不再提供 `no-cache` 的无版本入口。iframe 目标 origin 必须与主站点不同站，子帧不继承主域 cookie。
 
 ## 5. 设计令牌
 
