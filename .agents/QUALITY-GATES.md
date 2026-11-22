@@ -1,10 +1,10 @@
 # .agents · 质量门禁
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-22 · 里程碑: M0
+> 状态: draft · 归属: scribe · 更新: 2026-11-23 · 里程碑: M0
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28）
+## 1. 门禁表（G1–G19 + G-28/G-29）
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -28,6 +28,7 @@
 | G18 | worktree 卫生 | `make wt-check`（F 落地）；等价手工：`git worktree list` + `git branch --list 'wt-*' 'tmp-*'` | `git worktree list` 仅 1 行（主工作树）；临时分支清单为空；残留的 `/tmp/*` 检出目录已删除 | 先 `git worktree remove`，再 `git branch -d`，最后 `git worktree prune`；有改动未合并则先合并或写明放弃原因 | verifier | 里程碑收口 |
 | G19 | 开源资产完整 | `make oss-check`（第 8 段，阻断级）；等价手工：逐个检查根 `LICENSE` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` / `SECURITY.md` / `CHANGELOG.md` / `.github/workflows/ci.yml`，并 `grep -n "MIT License" LICENSE` 与 `grep -n "Permission is hereby granted" LICENSE` | 六件资产齐备；`LICENSE` 含上述两个特征串；无 GPL / Apache / AGPL 等非 MIT 协议头混入 | 缺件即补；协议头冲突则统一为 MIT 并在 PR 中说明；不得以「以后再补」放行 | verifier | 里程碑收口 / 发布前 |
 | G-28 | UI 交付双端证据 | 触发：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，在声明"完成"前；取证：`.agents/verify/screenshots/` 下同时存在 `<场景>-desktop-*.png`（1440×900 或 1280×800，full-page）与 `<场景>-mobile-*.png`（390×844），并用 `file <png>` / `identify -format '%wx%h'` 读实际宽高；另附一段产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前是"可用"还是"占位"） | 三件套齐备，分辨率与命名匹配；自评三段齐全、不出现"应该是 / 大概"式措辞 | 缺任一项即不得声明完成：补截图（不得缩放糊弄分辨率、不得拿桌面图裁成手机图）或补自评；证据缺失时任务记 BLOCKED，不记 PASS | implementer 取证 + verifier 核对 | 检查点（UI 交付） |
+| G-29 | 运行态写边界 | 触发：任务涉及 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` / `bin/kored` 或任何被运行中 `kored` 持有的文件（`git status` 看不出，untracked）。取证：① `curl -s localhost:8787/api/v1/system/info \| jq .paths.index_dir` 必须**逐字等于**配置里的 `kore-plugins/index`（不得指向 `.kore-local-state/` 下任何索引快照）② 商店 `/api/v1/store/plugins` 返回的插件版本必须等于 `kore-plugins/index/plugins.json` 里的版本 ③ 验收报告必须显式声明"本轮是否改动过主实例的运行态配置"，改过则附回切 + 重启 + 复核三行证据 ④ 测试要"不同索引 / 配置 / 状态"时附隔离实例命令（独立 `--config` + state/run/log 落 `/tmp`） | ①② 必须相等（`paths.index_dir` == `kore-plugins/index`、商店版本 == 索引版本）；③ 声明齐全且与事实一致；④ 有隔离实例证据或写明"未触碰主实例"。防的事故：2026-11-23 为测试把 `index_dir` 指向 `signed-index` 快照（04:53:06），恰逢另一轮重签完成（04:53:40），04:59:59 回切前 8787 商店把 discover 0.2.0 显示成 0.1.0——配置回写了、主实例读到的仍是旧数据 | 任一不符即判未完成：回切 + 重启 + 复核后再验一次；未回切或只改配置文件不验 `/api/v1/system/info` 的，任务记 BLOCKED，不记 PASS；workaround 无过期条件（"当 X 发生时失效"）的，记 WARN 并要求补写 | implementer 取证 + verifier 独立复跑 | 检查点（运行态变更） |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
 
@@ -35,7 +36,7 @@
 
 | 层级 | 时机 | 必跑 | 说明 |
 | --- | --- | --- | --- |
-| 检查点 | 每个自洽改动完成时 | G1、G2、G4（不跑 G13：构建产物未就绪） | 快速反馈，防止把坏代码攒成"大提交" |
+| 检查点 | 每个自洽改动完成时 | G1、G2、G4（不跑 G13：构建产物未就绪）；改动过主实例运行态的加 G-29 | 快速反馈，防止把坏代码攒成"大提交" |
 | 合并前 | 任务进入验证阶段 / 合入主干前 | G1–G5、G7、G11、G16、G17（跨仓库变更另加 G12） | 加上测试、依赖、边界、仓库边界；缺一不得合并 |
 | 里程碑 | 里程碑收尾 | 上述全部 + G6、G8、G9、G10、G12、G13、G14、G18、G19；G15 自 M3 起加入 | 加实测预算、体积、协议兼容与发行版可移植性，决定里程碑是否成立 |
 
@@ -77,6 +78,24 @@
 3. **不得替代**：接口 200 / DOM 断言 / 静态代码检查都不能代替截图；不得同一张图缩放冒充双端，不得用设计稿或拼接图。
 4. **自评三问必答**：① 这页替用户解决什么问题；② 与宝塔 / 1Panel 同类功能的**具体**差距（缺哪个能力，不写"待完善"）；③ 当前是"可用"还是"占位"（占位必须写清缺什么、下一步补什么）。
 5. **判定**：`make docs-check` 不校验 PNG（图像不属文档门禁），由 verifier 按本节逐项核对并写进验收报告；缺证据 = 未完成。
+
+### 3.2 G-29 运行态写边界证据格式
+
+```text
+命令: curl -s localhost:8787/api/v1/system/info | jq -r .paths.index_dir
+退出码: 0
+输出: /home/pt/Work/GolandProjects/kore-plugins/index   # 判据：逐字等于配置的 kore-plugins/index
+命令: curl -s localhost:8787/api/v1/store/plugins | jq -r '.data[].version' | sort -u
+退出码: 0
+输出: 0.2.0                                            # 判据：等于 index/plugins.json 里该插件的 version
+运行态改动声明: 本轮未改动主实例运行态（测试走 /tmp 隔离实例）；或：本轮 04:53:06 临时改过 .kore-local.yaml，04:59:59 已回切 + 重启，上述输出为回切后实测；workaround 过期条件：索引重签完成后该快照失效。
+```
+
+1. **不许只看配置文件**：运行态资产是 untracked，`git status` 看不出；把 `.kore-local.yaml` 改回来不等于主实例读到新数据——必须验 `/api/v1/system/info` 的 `paths.index_dir`。
+2. **索引版本对账**：商店返回版本 == `kore-plugins/index/plugins.json` 里该插件的 `version`；不等说明主实例还在读旧索引（副本 / 快照 / 缓存）。
+3. **隔离优先**：测试要"不同索引 / 配置 / 状态"必须独立 `--config` + 独立 state/run/log 落 `/tmp`；改主实例是最贵的手段，不是最省的。
+4. **workaround 带过期条件**：写清"当 X 发生时这个 workaround 失效"；没有过期条件的临时手段等同永久技术债。
+5. **声明义务**：验收报告必须写"本轮是否改动过主实例的运行态配置"；改过则贴回切 + 重启 + 复核三行证据。缺声明视为未验证，任务记 BLOCKED。
 
 ## 4. M0 阶段的合法跳过规则
 

@@ -24,7 +24,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 组件图、进程模型、插件状态机、故障域。
 3. 本领域文档：内核 [docs/CORE.md](docs/CORE.md)｜协议 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md)｜资源 [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md)｜数据 [docs/DATA-MODEL.md](docs/DATA-MODEL.md)｜前端 [docs/FRONTEND.md](docs/FRONTEND.md)｜安全 [docs/SECURITY.md](docs/SECURITY.md)｜决策 [docs/DECISIONS/](docs/DECISIONS/)。
 4. [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段门禁、讨论协议、任务板状态机、上下文交接。
-5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28 门禁命令、执行者、分层与证据格式。
+5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29 门禁命令、执行者、分层与证据格式。
 6. **贡献与治理**：[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — 开源化政策（MIT）、PR / Issue 流程与评审要求。
 7. **安全披露**：[SECURITY.md](SECURITY.md)（根，披露政策）vs [docs/SECURITY.md](docs/SECURITY.md)（设计）——**两者不要混**。
 
@@ -60,6 +60,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-26 | 开源资产完整：根必须有 `LICENSE`（MIT）、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`；`LICENSE` 必须含 `MIT License` 与 `Permission is hereby granted`；不得混入非 MIT 协议头 | 不得发布（GitHub 上缺 `LICENSE` = 默认保留所有权利，与项目声明矛盾） | `make oss-check`（第 8 段，阻断级） |
 | G-27 | 大小写一致性：module 路径全小写且无 `!` 转义；同一目录内不得存在仅大小写不同的文件 / 目录（Windows / macOS 会静默覆盖）；插件 `info.json` 的 `id` 匹配 `^[a-z][a-z0-9-]*$`；文档中 GitHub URL 的 owner 段全小写 | 阻塞级 FAIL（冲突文件在 Windows / macOS clone 时丢失）；**历史组织名指称（见 ADR-0017）**与 URL owner 大小写为 **WARN 级** | `make case-check`（第 9 段） |
 | G-28 | UI 交付双端证据：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，声明"完成"时必须同时给 ① PC 截图（1440×900 或 1280×800，full-page）② 手机截图（390×844）③ 产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前"可用"还是"占位"）；截图存 `.agents/verify/screenshots/`，命名 `<场景>-desktop-*.png` / `<场景>-mobile-*.png` | 缺任一项不得声明完成（任务记 BLOCKED，不记 PASS）；拿接口 200 / DOM 断言 / 设计稿替代截图同判 | 验收报告逐项核对：`file` / `identify` 读 PNG 实际宽高 + 自评三问原文；禁止同图缩放冒充双端 |
+| G-29 | 运行态写边界：`.kore-local.yaml` / `.kore-local-state/`（state.db / plugins / ssl / backups）/ `.kore-local-run/`（socket）/ `bin/kored` 及任何被运行中 `kored` 持有的文件属**运行态资产**，`git status` 看不出但不能在共享工作区随手改；测试要"不同索引 / 配置 / 状态"必须起**隔离实例**（独立 `--config` + state/run/log 落 `/tmp`）；确需临时改主配置时任务卡写明**何时回切**、完成前回切 + 重启 + 复核，workaround 必须带**过期条件** | 主实例读到旧数据即判未完成（如 2026-11-23：04:53:06 指向 `signed-index` 快照 / 04:53:40 重签完成 / 04:59:59 回切，期间商店把 discover 0.2.0 显示成 0.1.0） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 必须等于配置的 `kore-plugins/index`，且商店版本 == 索引文件版本；验收报告必须声明"本轮是否改动过主实例的运行态配置" |
 
 ## 3. 提交规范
 
@@ -87,6 +88,14 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 子 agent 开工前必须读本文件；子 agent 不继承父会话上下文，未注入 = 裸奔。
 - 角色全集（固定 6 个，不增不删）：lead / architect / implementer / verifier / red-team / scribe；各自使命、写域与禁止项见 [.agents/ROLES.md](.agents/ROLES.md)。
 
+**运行态写边界（G-29）**：以下资产不是代码而是**运行态**——`git status` 看不出（untracked）、不进 diff，但改了就直接改变 8787 上主实例的行为，**不得在共享工作区随意改**：`.kore-local.yaml`（本地运行配置）、`.kore-local-state/`（state.db / plugins / ssl / backups）、`.kore-local-run/`（socket）、`bin/kored`（正在运行的二进制）、以及任何被运行中 `kored` 进程持有的文件。
+
+- **测不同就起隔离实例**：测试需要"不同的索引 / 配置 / 状态"时，必须独立 `--config` + 独立 state/run/log 全落 `/tmp`，**绝不改主配置或主 state**；改主配置是最贵的测试手段，不是最省的。
+- **必须临时改主配置时**：任务卡里写明**何时回切**（如索引待重签、当前无法验证），完成任务前把**回切 + 重启 + 复核**三步做完，缺一步不得记 complete。
+- **workaround 必须带过期条件**：写清"当 X 发生时这个 workaround 失效"；没有过期条件的临时手段按永久技术债处理。
+- **回切后验数据不验配置**：`curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 必须等于配置的 `kore-plugins/index`，且商店返回版本 == 索引文件里的版本；只看"配置文件改回来了"不算复核。
+- **事故基线（2026-11-23）**：04:53:06 为测试把 `index_dir` 指向 `signed-index` 快照、04:53:40 另一轮重签完成、04:59:59 回切——期间 8787 把 discover 0.2.0 显示成 0.1.0；这条纪律就是为它补的。
+
 **术语边界（勿漂）**：`kore` = 项目 / 内核仓库 / Go module；`kored` = 守护进程 / 二进制 / `cmd/kored` 入口包；`kore-plugins` = 插件索引仓库；`kore-plugin-<id>` = 单个插件仓库；systemd unit = `kore.service`（`ExecStart=/usr/local/bin/kored`）；Kore Loop = 七阶段（第 7 阶段=归档复盘）。
 
 ## 5. 命令速查
@@ -98,31 +107,24 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make check` | 聚合门禁：docs-check + 依赖白名单 + 薄壳边界 + 跨仓库边界 | 可用：1/4、4/4 真跑；2/4、3/4 打印 N/A（无 `go.mod`）|
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
-| `make vet` | `go vet ./...` | SKIP：无 `go.mod`，M1 起生效 |
-| `make test` | `go test -timeout 200s ./...` | SKIP：无 `go.mod`，M1 起生效 |
+| `make vet` / `make test` | `go vet ./...` / `go test -timeout 200s ./...` | SKIP：无 `go.mod`，M1 起生效 |
 | `make mem` | 采样 RSS + `smaps_rollup`/`status` 拆分，按新证据口径出中位数（G6 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时出实数 |
 | `make frontend` | 构建 `web/dist` 并用 gzip 核对首屏体积 | SKIP：无 `web/package.json`，M2 起生效 |
 | `make repo-check` | 跨仓库边界检查：无插件代码 / 无插件 import / 无旧 SDK 路径 / 无索引 / 无 submodule | 可用（G11 入口）：**5 pass / 0 fail**，M0 真跑 |
 | `make compat-info` | 打印构建参数 + `file` + `go version -m`，并跑 Windows / macOS 交叉编译冒烟（G13 入口） | 可用：参数已钉死；无 `bin/kored` 时对二进制部分 SKIP、交叉编译 `[N/A]`（M0 预期），M1 起出实数 |
-| `make store-check` | 插件仓库三件套校验：`info.json` 必填字段 / `Makefile` 的 `dist` 目标 / `CHANGELOG.md` | 未提供：M1 落地（G-17 入口） |
-| `make presets-check` | 8 类场景预设校验：插件 id 与版本区间可解析、合计资源不超预算 | 未提供：M2 落地（G-18 入口） |
+| `make store-check` / `make presets-check` | 插件仓三件套校验：`info.json` 必填字段 / `Makefile` 的 `dist` 目标 / `CHANGELOG.md`；8 类场景预设 id 与版本区间可解析、合计不超预算 | 未提供：M1 / M2 落地（G-17、G-18 入口） |
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
 ## 6. 细则索引
 
-- [.agents/README.md](.agents/README.md) — agent 体系为什么存在、角色总览图、产物地图、反模式清单。
-- [.agents/ROLES.md](.agents/ROLES.md) — 6 张角色卡（输入/输出/可做/禁止/交接物/完成判据）、冲突仲裁、不可兼任。
-- [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段逐条门禁、讨论协议、状态机、防漂移审计。
+- [.agents/README.md](.agents/README.md)（体系与反模式）、[.agents/ROLES.md](.agents/ROLES.md)（6 张角色卡 / 冲突仲裁 / 不可兼任）、[.agents/WORKFLOW.md](.agents/WORKFLOW.md)（Kore Loop 七阶段 / 讨论协议 / 状态机）。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
-- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28 门禁命令、三层组合、证据格式、M0 跳过规则。
-- [.agents/JOURNAL.md](.agents/JOURNAL.md) — 复盘模板、里程碑记录、反模式沉淀。
-- [.agents/LOG/](.agents/LOG/) — 判断留痕：裁决台账（选项 / 依据 / 影响）、派发台账、会话摘要；与 BOARD（状态）、JOURNAL（教训）互补。
-- [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献流程与行为准则（PR / Issue / 评审要求）。
+- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/JOURNAL.md](.agents/JOURNAL.md)（复盘模板 / 里程碑记录 / 反模式）与 [.agents/LOG/](.agents/LOG/)（裁决 / 派发 / 会话台账）——依次回答"教训 / 状态 / 判断"。
+- [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 贡献流程 / 行为准则 / MIT 开源政策 / CI 与模板。
 - [SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
-- [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 开源化政策（MIT）与 CI / 模板。
-- [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件。
-- [docs/DECISIONS/0018-privilege-model.md](docs/DECISIONS/0018-privilege-model.md) — 提权模型：插件保持低权、root 动作经内核代理（systemd transient unit）；非 root 一律 `available=false` + 可操作提示，提权审计 fail-closed。
+- [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件；例 [0018-privilege-model.md](docs/DECISIONS/0018-privilege-model.md)：插件保持低权、root 动作经内核代理（systemd transient unit），非 root `available=false` + 可操作提示，提权审计 fail-closed。
 - [docs/CORE.md](docs/CORE.md) — **十个内核模块**（config / store / auth / httpapi / registry / supervisor / bus / installer / market / privilege）+ 4 个支撑小节（logger / static / sse / envprobe），合计 §2 共 14 小节；HTTP API **23 个端点**：16 业务 + 7 store，前缀 `/api/v1`；另有 `/-/healthz` 与 3 条静态前缀。
 - [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准。
 - [docs/PLUGIN-MATURITY.md](docs/PLUGIN-MATURITY.md) — **补全工作的唯一依据**：24 插件仓成熟度分级（L0 / L1 / L1.5 / L2 / L3）+ 16 视图主壳 + §3.5 七条新缺口 + Round 3 五批任务与依赖；动插件前先读对应行。
