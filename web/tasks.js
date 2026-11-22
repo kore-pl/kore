@@ -10,7 +10,7 @@
     ['每分钟', '* * * * *'], ['每小时', '0 * * * *'],
     ['每天 3 点', '0 3 * * *'], ['每周一 3 点', '0 3 * * 1']
   ];
-  var S = { entries: [], editIndex: null };
+  var S = { entries: [], editIndex: null, warning: '' };
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -149,13 +149,22 @@
     });
   }
 
+  // showWarning 用灰底提示条表达"环境限制"，与红色错误态严格区分。
+  function showWarning(text) {
+    S.warning = text || '';
+    if (!S.warn) return;
+    S.warn.textContent = S.warning;
+    S.warn.hidden = !S.warning;
+  }
   function paintList() {
     if (!S.listHost) return;
     S.listHost.textContent = '';
     if (S.listMeta) S.listMeta.textContent = S.entries.length ? '共 ' + S.entries.length + ' 条' : '';
     if (!S.entries.length) {
       var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '还没有计划任务，用上方表单新增一条'));
+      add(empty, el('p', 'empty-state-text', S.warning
+        ? '当前环境读不到 crontab，暂无计划任务可显示'
+        : '还没有计划任务，用上方表单新增一条'));
       return;
     }
     var table = add(S.listHost, el('table', 'tasks-table'));
@@ -184,8 +193,10 @@
     setStatus('正在读取计划任务…');
     return invoke('cron.list', {}).then(function (data) {
       S.entries = Array.isArray(data.entries) ? data.entries : [];
+      showWarning(data.warning);
       paintList();
-      setStatus(S.entries.length ? '计划任务已刷新' : '还没有计划任务，用上方表单新增一条', 'ok');
+      if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
+      else setStatus(S.entries.length ? '计划任务已刷新' : '还没有计划任务，用上方表单新增一条', 'ok');
     }, function (err) { setStatus('计划任务读取失败：' + err.message, 'fail'); });
   }
 
@@ -227,6 +238,9 @@
     form.addEventListener('submit', submitForm);
     S.status = add(root, el('div', 'task-status muted'));
     S.status.setAttribute('role', 'status');
+    S.warn = add(root, el('div', 'task-warn'));
+    S.warn.setAttribute('role', 'status');
+    S.warn.hidden = true;
     S.backup = add(root, el('div', 'task-backup mono'));
     S.backup.hidden = true;
     var listPanel = add(root, el('section', 'panel'));
@@ -241,7 +255,7 @@
   function render(container) {
     if (!container) return null;
     container.textContent = '';
-    S.entries = []; S.editIndex = null;
+    S.entries = []; S.editIndex = null; S.warning = '';
     var root = add(container, el('section', 'tasks'));
     build(root);
     load();

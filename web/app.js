@@ -351,22 +351,49 @@
     return bar;
   }
 
+  // residentText 与监控页同源（system/info.supervisor.resident），分母明确标注上限；
+  // 概要页不再自己数插件，避免"概览 2 / 监控 3"的双口径。
+  function residentText(value) {
+    var n = fmtInt(value);
+    return n === '—' ? '—' : n + ' / 上限 3';
+  }
+
+  // humanWarnings 把技术字符串翻成人话；原始细节留在 title，供排查时展开。
+  function humanWarnings(data) {
+    var raw = Array.isArray(data.warnings) ? data.warnings : [];
+    var causes = [];
+    if (data.delegation === false) causes.push('cgroup 委派未开启');
+    if (data.selinux && data.selinux !== 'enforcing') causes.push('SELinux 未启用');
+    var text = causes.length
+      ? '部分隔离能力不可用（' + causes.join('、') + '），资源限额将以观测模式运行'
+      : '部分隔离能力不可用，资源限额将以观测模式运行';
+    var node = el('span', 'warn-summary', text);
+    node.title = raw.join('；');
+    return node;
+  }
+
   function renderInfoPanel() {
     var data = state.info || {};
     var sup = data.supervisor && typeof data.supervisor === 'object' ? data.supervisor : {};
     var rows = [];
     rows.push(row('版本', data.version || '—'));
-    rows.push(row('常驻插件', fmtInt(sup.resident)));
-    rows.push(row('重启计数', fmtInt(sup.restarts)));
+    rows.push(row('常驻插件', residentText(sup.resident)));
     rows.push(row('插件总数', fmtInt(state.plugins.length)));
     var platform = [data.os, data.arch].filter(Boolean).join(' · ');
     rows.push(row('平台', platform || '—'));
     rows.push(row('cgroup', data.cgroup_mode || '—'));
     if (Array.isArray(data.warnings) && data.warnings.length) {
-      rows.push(row('降级告警', data.warnings.join('；')));
+      rows.push(row('降级告警', humanWarnings(data)));
     }
     var box = panel('系统信息', rows);
     box.id = 'kore-info-panel';
+    // 重启计数是历史累计，留在监控页；概览只在非零时给一条黄色小字提示。
+    var restarts = typeof sup.restarts === 'number' && isFinite(sup.restarts) ? sup.restarts : 0;
+    if (restarts > 0) {
+      var note = el('p', 'info-note-warn', '累计重启 ' + restarts + ' 次');
+      note.title = '自进程启动以来的累计重启，不代表当前正在抖动';
+      box.appendChild(note);
+    }
     return box;
   }
 

@@ -348,6 +348,28 @@ html, body {
 .row-note-ok { color: var(--kore-success); }
 .row-note-fail { color: var(--kore-danger); }
 
+/* 概览：历史累计重启只在非零时以黄色小字出现，不进主表（避免误读为抖动） */
+.info-note-warn {
+  margin: 0;
+  padding: var(--kore-space-1) var(--kore-space-4) var(--kore-space-2);
+  color: var(--kore-warning);
+  font-size: var(--kore-font-12);
+}
+
+/* 环境限制提示条：灰底，与红色错误态严格区分（cron 权限、未配置 nginx） */
+.task-warn {
+  margin: var(--kore-space-2) 0;
+  padding: var(--kore-space-2) var(--kore-space-3);
+  color: var(--kore-text-2);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-2);
+  border-left: 3px solid var(--kore-text-3);
+  border-radius: var(--kore-radius-control);
+  font-size: var(--kore-font-12);
+}
+.task-warn[hidden] { display: none; }
+.site-test-brief { display: block; margin-top: var(--kore-space-1); font-size: var(--kore-font-12); }
+
 /* ===== 按钮 ===== */
 button, .btn {
   min-height: 32px;
@@ -447,8 +469,11 @@ button:disabled, .btn:disabled {
   }
   .plugin-table td.cell-ops { flex-wrap: wrap; }
 
-  .rows th, .rows td { display: block; width: auto; }
-  .rows th { padding-bottom: 0; }
+  /* 标签-值窄列同行：390px 下「版本 / 0.1.0」不再上下堆叠，垂直空间省一半 */
+  .rows tr { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: start; gap: var(--kore-space-2); }
+  .rows th, .rows td { display: block; width: auto; padding: var(--kore-space-1) 0; }
+  .rows th { padding-bottom: var(--kore-space-1); }
+  .rows pre { white-space: pre-wrap; }
 }
 
 /* ===== 响应式断点（裁决41）：640 / 1024，值集中定义，禁 JS 探测 ===== */
