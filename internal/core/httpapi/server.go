@@ -45,6 +45,9 @@ type Options struct {
 	// CapabilityAuditor 是 capability.denied 的审计出口；nil 时只记 slog WARN。
 	// 挂点：cmd/kored 注入 store.PutAudit（Result=denied），本包不 import store。
 	CapabilityAuditor CapabilityAuditor
+	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
+	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
+	AuditLister AuditLister
 }
 
 // CapabilityResolver 由请求解析出调用方 subject 与已授予能力集。
@@ -103,6 +106,7 @@ type Server struct {
 	market      *market.Service
 	capResolver CapabilityResolver
 	capAuditor  CapabilityAuditor
+	auditLister AuditLister
 	mu          sync.Mutex
 	listeners   []net.Listener
 }
@@ -113,6 +117,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		opts: opts, transport: transport, mux: http.NewServeMux(),
 		auth: opts.Auth, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
+		auditLister: opts.AuditLister,
 	}
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver
