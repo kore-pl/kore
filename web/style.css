@@ -12,6 +12,7 @@
   --kore-text-3: #7D8590;
   --kore-success: #3FB950;
   --kore-warning: #D29922;
+  --kore-warning-bg: #2B2110;
   --kore-danger: #F85149;
   --kore-info: #58A6FF;
   --kore-border-1: #30363D;
@@ -1667,4 +1668,60 @@ button:disabled, .btn:disabled {
   .term-ops .btn { min-height: var(--kore-touch); }
   .term-stage { padding: var(--kore-space-2); }
   .term-screen { font-size: var(--kore-font-12); }
+}
+
+
+/* ===== 数据库视图（web/db.js）——仅追加，不改既有类 =====
+   实例卡 → 状态条 → 库列表 + SQL 控制台；640px 以下控制台全宽，结果表格在容器内横向滚动。 */
+.db-instance-body { padding: var(--kore-space-3); }
+.db-instances { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-3); }
+.db-instance { width: 100%; text-align: left; padding: var(--kore-space-3); min-height: var(--kore-touch); }
+.db-instance.is-active { border-color: var(--kore-info); box-shadow: inset 3px 0 0 var(--kore-info); }
+.db-inst-head { display: flex; align-items: center; justify-content: space-between; gap: var(--kore-space-2); }
+.db-inst-name { font-weight: 600; font-size: var(--kore-font-14); }
+.db-inst-meta { margin-top: var(--kore-space-1); color: var(--kore-text-3); font-size: var(--kore-font-12); font-variant-numeric: tabular-nums; }
+.db-inst-version { margin-top: var(--kore-space-1); color: var(--kore-text-2); font-size: var(--kore-font-12); }
+.db-inst-error { margin-top: var(--kore-space-2); color: var(--kore-danger); font-size: var(--kore-font-12); word-break: break-word; }
+.db-status { padding: 0 var(--kore-space-4) var(--kore-space-4); }
+.db-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--kore-space-2); }
+.db-stat { display: flex; flex-direction: column; gap: 2px; padding: var(--kore-space-2) var(--kore-space-3); border: 1px solid var(--kore-border-2); border-radius: var(--kore-radius-control); }
+.db-stat-label { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.db-stat-value { font-size: var(--kore-font-14); font-variant-numeric: tabular-nums; }
+.db-layout { display: grid; grid-template-columns: 1fr; gap: var(--kore-space-4); }
+.db-layout .panel { margin-bottom: 0; }
+.db-list { display: flex; flex-direction: column; gap: var(--kore-space-1); padding: 0 var(--kore-space-2) var(--kore-space-2); max-height: 360px; overflow-y: auto; }
+.db-list-hint, .db-status-loading { padding: var(--kore-space-3) var(--kore-space-4); }
+.db-db { display: flex; align-items: center; justify-content: space-between; gap: var(--kore-space-2); width: 100%; min-height: 40px; padding: 0 var(--kore-space-3); text-align: left; background: transparent; border-color: transparent; }
+.db-db:hover { background: var(--kore-bg-2); border-color: var(--kore-border-1); }
+.db-db-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--kore-font-13); }
+.db-db-op { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.db-sql-panel { padding-bottom: var(--kore-space-4); }
+.db-readonly { margin: 0; padding: 0 var(--kore-space-4) var(--kore-space-2); color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.db-sql { display: block; width: calc(100% - var(--kore-space-4) * 2); margin: 0 var(--kore-space-4); padding: var(--kore-space-2) var(--kore-space-3); min-height: 120px; resize: vertical; color: var(--kore-text-1); background: var(--kore-bg-0); border: 1px solid var(--kore-border-1); border-radius: var(--kore-radius-control); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--kore-font-13); line-height: 1.5; }
+.db-sql:focus { border-color: var(--kore-info); outline: none; }
+.db-sql-ops { display: flex; align-items: center; flex-wrap: wrap; gap: var(--kore-space-3); padding: var(--kore-space-2) var(--kore-space-4); }
+.db-query-notice { padding: 0 var(--kore-space-4); }
+.db-notice { margin: var(--kore-space-2) 0; padding: var(--kore-space-2) var(--kore-space-3); color: var(--kore-warning); background: var(--kore-warning-bg); border: 1px solid var(--kore-warning); border-left: 3px solid var(--kore-warning); border-radius: var(--kore-radius-control); font-size: var(--kore-font-12); word-break: break-word; }
+.db-result { padding: 0 var(--kore-space-4); }
+.db-result-scroll { overflow-x: auto; max-width: 100%; }
+.db-result-table { width: 100%; border-collapse: collapse; font-size: var(--kore-font-13); }
+.db-result-table th, .db-result-table td { padding: var(--kore-space-1) var(--kore-space-3); border-bottom: 1px solid var(--kore-border-2); text-align: left; white-space: nowrap; }
+.db-result-table th { color: var(--kore-text-3); font-weight: 400; font-size: var(--kore-font-12); }
+.db-null { color: var(--kore-text-3); font-style: italic; }
+.db-result-meta { display: flex; flex-wrap: wrap; gap: var(--kore-space-3); padding-bottom: var(--kore-space-2); color: var(--kore-text-2); font-size: var(--kore-font-12); }
+.db-truncated { color: var(--kore-warning); }
+.db-result-empty { padding: var(--kore-space-3) 0; font-size: var(--kore-font-12); }
+.db-empty .empty-state-title { margin: 0; font-size: var(--kore-font-14); font-weight: 600; }
+@media (min-width: 640px) {
+  .db-instances { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .db-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .db-instances { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .db-layout { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: start; }
+  .db-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+@media (max-width: 639px) {
+  .db-db, .db-sql-ops .btn { min-height: var(--kore-touch); }
+  .db-list { max-height: none; }
 }

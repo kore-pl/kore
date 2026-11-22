@@ -25,7 +25,10 @@
     monitor: ['M3 16V4', 'M3 16h14', 'M6 12.5l3-4 3 2 4-6'],
     settings: ['M3 6h14', 'M3 10h14', 'M3 14h14', 'M7 4v4', 'M13 8v4', 'M9 12v4'],
     // 终端：窗口外壳 + 提示符折线 + 光标横线（20×20、currentColor、stroke-width 1.5）
-    terminal: ['M3 4h14v12H3z', 'M6 8.5l2.5 1.75L6 12', 'M11 12h3']
+    terminal: ['M3 4h14v12H3z', 'M6 8.5l2.5 1.75L6 12', 'M11 12h3'],
+    // 数据库：圆柱顶盖 + 两侧母线 + 中间一道盘面（20×20、currentColor、stroke-width 1.5）
+    db: ['M4 5.5c0-1.4 2.7-2.5 6-2.5s6 1.1 6 2.5-2.7 2.5-6 2.5-6-1.1-6-2.5z',
+      'M4 5.5v9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-9', 'M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5']
   };
   var byId = Object.create(null);
   var currentId = '';
@@ -201,61 +204,65 @@
     return btn;
   }
 
-  // 终端是壳内置的第 9 项：模块照样懒加载（index.html 不引脚本），首次切到该视图才注入
-  // /assets/terminal.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
-  var termModule = null;
-  function loadTerminal() {
-    if (window.KoreTerminal && typeof window.KoreTerminal.render === 'function') {
-      return Promise.resolve(window.KoreTerminal);
+  // 终端 / 数据库是壳内置的第 9、10 项：index.html 不引脚本，首次切到该视图才注入
+  // /assets/<模块>.js。口径与 app.js 的 ensureModule 一致：只注入一次、失败可重试。
+  var lazyModules = Object.create(null);
+  function ensureLazy(url, globalName) {
+    if (window[globalName] && typeof window[globalName].render === 'function') {
+      return Promise.resolve(window[globalName]);
     }
-    if (termModule) return termModule;
-    termModule = new Promise(function (resolve, reject) {
+    if (lazyModules[url]) return lazyModules[url];
+    lazyModules[url] = new Promise(function (resolve, reject) {
       var script = document.createElement('script');
-      script.src = '/assets/terminal.js';
+      script.src = url;
       script.async = true;
       script.onload = function () {
-        var mod = window.KoreTerminal;
+        var mod = window[globalName];
         if (!mod || typeof mod.render !== 'function') {
-          termModule = null;
-          reject(new Error('terminal.js 未导出 KoreTerminal.render'));
+          delete lazyModules[url];
+          reject(new Error(url + ' 未导出 ' + globalName + '.render'));
           return;
         }
         resolve(mod);
       };
       script.onerror = function () {
-        termModule = null;
-        reject(new Error('terminal.js 加载失败（HTTP 错误或网络中断）'));
+        delete lazyModules[url];
+        reject(new Error(url + ' 加载失败（HTTP 错误或网络中断）'));
       };
       document.head.appendChild(script);
     });
-    return termModule;
+    return lazyModules[url];
   }
-  function terminalView(box) {
-    var live = { destroyed: false, handle: null };
-    box.appendChild(el('div', 'stub', '正在加载终端…'));
-    loadTerminal().then(function (mod) {
-      if (live.destroyed) return;
-      box.textContent = '';
-      try {
-        var handle = mod.render(box);
-        if (handle && typeof handle.destroy === 'function') live.handle = handle;
-      } catch (err) {
+  // lazyView 返回 shell 需要的 render(container)：异步等模块就绪后再渲染；切走时
+  // handle.destroy() 把"迟到的渲染"挡在已卸载容器外，并让模块停掉自己的轮询。
+  function lazyView(globalName, url, label) {
+    return function (box) {
+      var live = { destroyed: false, handle: null };
+      box.appendChild(el('div', 'stub', '正在加载' + label + '…'));
+      ensureLazy(url, globalName).then(function (mod) {
+        if (live.destroyed) return;
         box.textContent = '';
-        box.appendChild(el('div', 'stub', '终端渲染失败：' + (err && err.message ? err.message : err)));
-      }
-    }, function (err) {
-      if (live.destroyed) return;
-      box.textContent = '';
-      box.appendChild(el('div', 'stub', '终端不可用：' + (err && err.message ? err.message : '模块加载失败')));
-    });
-    return {
-      destroy: function () { // 切走时停轮询、关会话（终端的生命周期必须跟着视图）
-        live.destroyed = true;
-        if (live.handle && typeof live.handle.destroy === 'function') {
-          try { live.handle.destroy(); } catch (err) { /* 模块清理失败不阻断切视图 */ }
+        try {
+          var handle = mod.render(box);
+          if (handle && typeof handle.destroy === 'function') live.handle = handle;
+        } catch (err) {
+          box.textContent = '';
+          box.appendChild(el('div', 'stub', label + '渲染失败：' + (err && err.message ? err.message : err)));
         }
-        live.handle = null;
-      }
+      }, function (err) {
+        if (live.destroyed) return;
+        box.textContent = '';
+        box.appendChild(el('div', 'stub', label + '不可用：' + (err && err.message ? err.message : '模块加载失败')));
+      });
+      return {
+        destroy: function () {
+          live.destroyed = true;
+          if (live.handle && typeof live.handle.destroy === 'function') {
+            try { live.handle.destroy(); } catch (err) { /* 模块清理失败不阻断切视图 */ }
+          }
+          live.handle = null;
+        }
+      };
     };
   }
 
@@ -266,9 +273,13 @@
       if (!r || typeof r.id !== 'string' || !r.id || typeof r.render !== 'function') continue;
       items.push(r);
     }
-    var hasTerminal = false;
-    for (var t = 0; t < items.length; t++) if (items[t].id === 'terminal') hasTerminal = true;
-    if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: terminalView });
+    var hasTerminal = false, hasDb = false;
+    for (var t = 0; t < items.length; t++) {
+      if (items[t].id === 'terminal') hasTerminal = true;
+      if (items[t].id === 'db') hasDb = true;
+    }
+    if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', '终端') });
+    if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', '数据库') });
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
 

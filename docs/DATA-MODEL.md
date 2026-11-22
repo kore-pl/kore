@@ -1,6 +1,6 @@
 # 数据模型（配置 · 状态 · 日志）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-22 · 里程碑: M0
 
 kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、**文件日志**。不引入任何数据库服务进程。本文件是字段与落盘格式的唯一来源；协议字段见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)，预算与度量见 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md)。
 
@@ -176,6 +176,8 @@ lazy 插件的 `actual:"idle"` 与 `last_active_at` 必须落盘：主壳重启�
 sessions 只存 token 的 SHA-256 与时间戳：DB 文件泄露时攻击者拿到的是哈希，不能直接复用会话；token 明文只出现在登录响应里，服务端不落盘。
 
 索引仓库 `index/plugins.json` 的 schema 由 `kore-plugins` 仓库的 `index/schema.json` 定义，kore 只读 `id/version/requires_kore/sha256` 四个字段，不复制其字段表；本文件的 `requires_kore` 语义与之保持一致。
+
+索引条目的 `capabilities` 字段是**信息性字段**：内核 `market.Plugin` 不消费它，`GET /store/plugins` 回包里也不含该字段；插件真实能力一律以包内 `info.json` 的 `capabilities` 为准（安装期由 registry 校验，运行期由 supervisor 握手核对）。
 
 示例（`tasks`）：
 
