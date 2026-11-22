@@ -19,6 +19,9 @@ var (
 	ErrStateDir = errors.New("installer: 状态目录不可用")
 	// ErrStore 表示状态库未注入或写入失败（映射退出码 4）。
 	ErrStore = errors.New("installer: 状态库写入失败")
+	// ErrUpstream 表示包下载或下载内容与索引声明不一致（对外映射 E_UPSTREAM）。
+	// 摘要不符时同时满足 errors.Is(err, ErrChecksum)：语义是"上游内容不可信"，不是请求非法。
+	ErrUpstream = errors.New("installer: 上游包下载失败")
 )
 
 // wrap 给错误带上分类与可读上下文；保持 errors.Is 可判定。

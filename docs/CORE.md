@@ -117,14 +117,16 @@
 
 - **职责**：预设解析（构建期 `//go:embed presets/` 快照 + `--offline-dir` 本地目录优先）、sha256 校验、`requires_kore` 区间校验、依赖 DAG 拓扑排序、按序安装并 enable、**失败整预设回滚**（逆序卸载 + 恢复启用状态 + 清已写状态目录）、运行时预检结果透传（只报缺什么/多大，不装运行时）。
 - **输入输出**：输入 `Preset{id,plugins[{id,version_range,optional}],config_template}`（schema 见 [SCENARIOS.md](./SCENARIOS.md) §2）；输出安装计划 `{steps[],resident_quota,disk_bytes,runtime_gaps[]}` 或异步 `job_id`。HTTP `POST /api/v1/store/install|update` 与 CLI `kored install --scenario <id> [--offline-dir] [--yes]`、`kored install --package <tar.gz>` **共用同一实现**。
-- **失败模式与处理**：预设 id 未知 / 版本区间不可解析 → 400 `E_INVALID`；sha256 不符 → 400 `E_INVALID`（不落盘）；`requires_kore` 不满足 → 409 `E_UNSUPPORTED`；常驻配额超限（>3 个或 >24 MiB）→ **安装前** 409 `E_CONFLICT` 并给"需先停用 <id>"建议；包下载失败由 market 层返回 `E_UPSTREAM`；任一步失败即整预设回滚，回滚自身失败则写 `audit` 并保留现场（不删证据）。
-- **明确不做什么**：不实现包下载（网络在 market 层）；不安装运行时（运行时由插件调宿主包管理器，kore 不下载）；不做版本求解（只按索引区间取满足的最高版并 pin）；不做签名校验（M4 由 market 负责 ed25519）。
+- **包下载（`InstallFromURL`，索引 `download_url`）**：内核**唯一出站口**——先把已验签索引声明的 `https://` 地址流式拉到 `<state_dir>/tmp/pkg-*/<id>-<version>.tar.gz`，**边下边算 sha256**（不整包读入内存），单包上限 64 MiB（超限立即中止并删临时文件），摘要必须与索引声明一致才交回 `Install` 复用本地包安装链路；摘要不符/超限/非 200 一律拒并删除临时目录。只允许 `https://`（拒 `http://` / `file://` / `gopher://` 等），客户端 60 s 总超时且禁用 keep-alive（G-19：装完不留空闲连接）。失败不落盘：`defer` 删下载目录 + `Install` 自清 staging。
+- **失败模式与处理**：预设 id 未知 / 版本区间不可解析 → 400 `E_INVALID`；sha256 不符 → 400 `E_INVALID`（不落盘）；`requires_kore` 不满足 → 409 `E_UNSUPPORTED`；常驻配额超限（>3 个或 >24 MiB）→ **安装前** 409 `E_CONFLICT` 并给"需先停用 <id>"建议；包下载失败 / 下载内容与索引声明摘要不符 → **502 `E_UPSTREAM`**（market 按 installer 错误分类映射，可重试或换源）；任一步失败即整预设回滚，回滚自身失败则写 `audit` 并保留现场（不删证据）。
+- **明确不做什么**：不实现第二条安装链路——下载安装与本地包安装共用同一套校验/解包/落位/落库（下载只多"拉到临时文件 + 摘要比对"一步），URL 与 sha256 只能来自已验签索引、不由本包决定；不安装运行时（运行时由插件调宿主包管理器，kore 不下载）；不做版本求解（只按索引区间取满足的最高版并 pin）；不做包签名校验（M4 由 market 负责 ed25519）。
 - **运行期安装约束（state.db 独占锁）**：`serve` 常驻时以独占方式持有 `state.db`，CLI `kored install --package` 与 `--scenario` 同为独立进程、会争同一把锁并退出码 3（状态库被占用）——**这是设计使然，不是缺陷**。serve 运行时请走 `POST /api/v1/store/install`（经同一 installer 校验落盘，并由装配层增量刷新 registry，装完立即可 enable/invoke）；CLI install **仅离线使用**（serve 未启动）。该端点成功返回后，`registry` 已同步登记新插件，无需重启即可启用。
 
 ### 2.13 `internal/core/market`（软件商店，HTTP 前缀 `/store`）
 
 - **职责**：索引缓存 `/var/lib/kore/store/index.json`（`0600`，含 `id,name,version,requires_kore,sha256,size_bytes,depth_level,scenario_tags`）、**显式刷新**（`POST /store/refresh`，唯一联网入口）、安装/更新任务队列（异步 job）、本地目录导入、出站白名单（仅 refresh 与包下载两处，运行期零后台出站）。
 - **输入输出**：`GET /store/plugins` 读本地缓存（零出站，可带 `stale=true`）；`POST /store/install|update` → `{job_id}`，`GET /store/jobs/{job_id}` 轮询进度；`DELETE /store/plugins/{id}` 卸载；`GET /api/v1/store/presets` 见下（M3-D）。
+- **`POST /api/v1/store/install` 请求体（来源三选一，显式字段）**：`package_path` 走本地包（离线场景）；`download=true` + `id`/`version` 从**已验签索引**取 `download_url` 与 `sha256` 下载安装——URL 不接受请求体传入（防 SSRF），协议只允许 `https://`，缺 `sha256` 或 `download_url` 的条目直接拒；两者同给按歧义 400 拒，都不给 400 并提示二选一。失败码：上游不可达/摘要不符 → 502 `E_UPSTREAM`，索引或包结构非法 → 400 `E_INVALID`。
 - **`GET /api/v1/store/presets`（M3-D）**：从环境变量 `KORE_PRESETS_DIR` 读取预设目录，按 id 升序返回预设元数据。
 - **缺省行为**：未设 `KORE_PRESETS_DIR` 时**返回空列表，不是错误**；缺省不指向索引仓，也不是 embed 快照。
 - **验签顺序**：该端点先过 market 强制验签门；索引验签失败即 401，且**不读预设**。

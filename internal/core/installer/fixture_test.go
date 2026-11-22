@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,12 @@ type fixture struct {
 // newFixture 在 t.TempDir() 下建状态库并构造安装器（不碰真实 /var/lib）。
 func newFixture(t *testing.T, limits installer.Limits) *fixture {
 	t.Helper()
+	return newFixtureWith(t, limits, nil)
+}
+
+// newFixtureWith 同 newFixture，但可注入下载客户端（download 测试要信任 httptest 的 TLS 证书）。
+func newFixtureWith(t *testing.T, limits installer.Limits, client *http.Client) *fixture {
+	t.Helper()
 	stateDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st, err := store.Open(stateDir, logger)
@@ -35,6 +42,7 @@ func newFixture(t *testing.T, limits installer.Limits) *fixture {
 	t.Cleanup(func() { _ = st.Close() })
 	inst, err := installer.New(installer.Options{
 		StateDir: stateDir, KoreVersion: "0.1.0", Limits: limits, Logger: logger, Store: st,
+		HTTPClient: client,
 	})
 	if err != nil {
 		t.Fatalf("构造安装器失败: %v", err)

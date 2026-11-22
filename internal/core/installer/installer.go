@@ -1,11 +1,13 @@
 // Package installer 负责插件包的安全校验、解包与原子落位。
 //
-// 薄壳边界：只做包完整性/安全校验与文件落位；不下载包（market 层）、
+// 薄壳边界：只做包完整性/安全校验与文件落位；出站只收敛在 InstallFromURL 一处
+// （把索引声明的 download_url 拉到 <state_dir>/tmp，摘要校验通过后交回 Install）；
 // 不做依赖拓扑安装（M2）、不验签（M4）、不拉起插件进程（supervisor）。
 package installer
 
 import (
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -36,16 +38,22 @@ type Options struct {
 	Logger *slog.Logger
 	// Store 是状态库句柄；安装成功后据此写 plugins / plugin_state。
 	Store Persister
+	// HTTPClient 覆盖 InstallFromURL 的下载客户端；nil 用内置客户端。
+	// 内置客户端固定 60 s 总超时并禁用 keep-alive（G-19：安装后不残留空闲连接）。
+	// 注入面只给"自定义代理 / 私有 CA 信任 / 测试 TLS 服务器"，超时仍受 ctx 60 s 约束。
+	HTTPClient *http.Client
 }
 
 // Installer 是单包安装器；同一 id 的并发安装由调用方串行化。
 type Installer struct {
+	stateDir    string
 	pluginRoot  string
 	koreVersion string
 	expectedSHA string
 	limits      Limits
 	logger      *slog.Logger
 	store       Persister
+	client      *http.Client
 }
 
 // Result 是一次成功安装的结果。
@@ -76,13 +84,19 @@ func New(opts Options) (*Installer, error) {
 	if root == "" {
 		root = filepath.Join(opts.StateDir, "plugins")
 	}
+	client := opts.HTTPClient
+	if client == nil {
+		client = defaultDownloadClient
+	}
 	return &Installer{
+		stateDir:    opts.StateDir,
 		pluginRoot:  root,
 		koreVersion: opts.KoreVersion,
 		expectedSHA: opts.ExpectedSHA256,
 		limits:      opts.Limits.withDefaults(),
 		logger:      logger,
 		store:       opts.Store,
+		client:      client,
 	}, nil
 }
 

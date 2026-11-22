@@ -12,7 +12,7 @@ import (
 )
 
 // Installer 是 market 触发安装所需的最小能力，由装配层用闭包适配 installer.New。
-// market 只触发安装并传入索引声明的 sha256，不下载包（M2-B 第二批）。
+// market 只触发安装并传入索引声明的 sha256；下载安装所需的能力见 URLInstaller。
 type Installer interface {
 	// Install 校验并原子安装本地 tar.gz 包；expectedSHA 来自索引，由安装器自算比对。
 	Install(path, expectedSHA string) error
@@ -90,6 +90,14 @@ func parseIndex(data []byte) (Index, error) {
 // Load 读取并（默认）验签索引，返回按 id 升序的条目。
 // 每次现场重读磁盘，不读写缓存——保留现有端点行为。
 func (s *Service) Load() (Index, error) {
+	return s.readTrusted()
+}
+
+// readTrusted 是索引信任门的唯一实现：现场重读 + 验签通过才返回条目。
+//
+// 验签失败时只有 store.allow_unsigned 显式放行才降级（WARN 审计），默认拒绝。
+// 列表、预设、安装/更新、下载安装全部共用这一道门——不存在"某个入口不验签"的旁路。
+func (s *Service) readTrusted() (Index, error) {
 	data, sig, err := readIndexFiles(s.indexDir)
 	if err != nil {
 		return Index{}, protocolError("E_UPSTREAM", "读取本地索引失败", err.Error())
@@ -217,18 +225,9 @@ func (s *Service) Install(id, version, packagePath string) (*InstallJob, error) 
 
 // installFrom 从给定的已验签索引取条目并交给 installer；供 Install/Update 共用。
 func installFrom(index Index, installer Installer, id, version, packagePath string) (*InstallJob, error) {
-	var found *Plugin
-	for i := range index.Plugins {
-		if index.Plugins[i].ID == id {
-			found = &index.Plugins[i]
-			break
-		}
-	}
-	if found == nil {
-		return nil, protocolError("E_NOTFOUND", "索引中不存在插件", id)
-	}
-	if found.Version != version {
-		return nil, protocolError("E_INVALID", fmt.Sprintf("索引版本为 %s，请求 %s", found.Version, version))
+	found, err := findEntry(index, id, version)
+	if err != nil {
+		return nil, err
 	}
 	if installer == nil {
 		return nil, protocolError("E_UNSUPPORTED", "安装后端未装配")
@@ -237,4 +236,20 @@ func installFrom(index Index, installer Installer, id, version, packagePath stri
 		return nil, protocolError("E_INVALID", "安装失败", err.Error())
 	}
 	return &InstallJob{ID: id + "-" + version, PluginID: id, Version: version, State: "succeeded", Message: "安装完成"}, nil
+}
+
+// findEntry 在已验签索引中定位 id@版本：未收录 → E_NOTFOUND，版本不符 → E_INVALID。
+// 本地包安装与下载安装共用同一套定位口径，避免两条路径对"版本"的判定漂移。
+func findEntry(index Index, id, version string) (*Plugin, error) {
+	for i := range index.Plugins {
+		if index.Plugins[i].ID != id {
+			continue
+		}
+		if index.Plugins[i].Version != version {
+			return nil, protocolError("E_INVALID", fmt.Sprintf("索引版本为 %s，请求 %s",
+				index.Plugins[i].Version, version))
+		}
+		return &index.Plugins[i], nil
+	}
+	return nil, protocolError("E_NOTFOUND", "索引中不存在插件", id)
 }

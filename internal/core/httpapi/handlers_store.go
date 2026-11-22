@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -15,13 +17,37 @@ type storeList struct {
 }
 
 // storeInstallRequest 是 POST /api/v1/store/install 的请求体（显式字段，禁 any，G-24）。
+//
+// 安装来源三选一（显式，无 any）：
+//   - package_path：本地包安装（离线场景，用户自备 tar.gz）；
+//   - download=true + id/version：从**已验签索引**取 download_url 与 sha256 下载安装；
+//   - 两者同给 → 歧义拒绝；两者都不给 → 无法确定来源，拒绝并提示。
 type storeInstallRequest struct {
 	// ID 插件 id。
 	ID string `json:"id"`
 	// Version 目标版本。
 	Version string `json:"version"`
-	// PackagePath 本地 tar.gz 路径（M2 不下载包）。
+	// PackagePath 本地 tar.gz 路径（离线安装用）。
 	PackagePath string `json:"package_path"`
+	// Download 为 true 时按索引 download_url 下载安装（请求体不携带 URL，防 SSRF）。
+	Download bool `json:"download"`
+}
+
+// validate 判定安装来源：id/version 恒定必填，package_path 与 download 恰好二选一。
+// 返回的错误直接作为 400 E_INVALID 的 message，所以文案要给用户可执行的下一步。
+func (r storeInstallRequest) validate() error {
+	if r.ID == "" || r.Version == "" {
+		return errors.New("id/version 必填")
+	}
+	hasPath := strings.TrimSpace(r.PackagePath) != ""
+	switch {
+	case hasPath && r.Download:
+		return errors.New("package_path 与 download=true 不可同时给（安装来源歧义）")
+	case !hasPath && !r.Download:
+		return errors.New("给 package_path（本地包）或 download=true（从索引下载）")
+	default:
+		return nil
+	}
 }
 
 // storeUpdateRequest 是 POST /api/v1/store/update 的请求体（显式字段，禁 any，G-24）。
@@ -133,7 +159,10 @@ func (s *Server) handleStoreUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleStoreInstall 触发本地包安装；body 为 {id,version,package_path}。
+// handleStoreInstall 触发安装：本地包（package_path）或索引下载（download=true）。
+//
+// 下载路径的 URL 与 sha256 只来自已验签索引，请求体无法注入地址（防 SSRF）；
+// 目标版本、摘要不符等失败由 market/installer 映射成 E_UPSTREAM / E_INVALID。
 func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 	var req storeInstallRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -141,17 +170,23 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", err.Error())
 		return
 	}
-	if req.ID == "" || req.Version == "" || req.PackagePath == "" {
-		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "id/version/package_path 必填", "")
+	if err := req.validate(); err != nil {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, err.Error(), "")
 		return
 	}
 	svc, ok := s.requireStore(w)
 	if !ok {
 		return
 	}
-	job, err := svc.Install(req.ID, req.Version, req.PackagePath)
-	if err != nil {
-		writeFailure(w, err)
+	var job *market.InstallJob
+	var installErr error
+	if req.Download {
+		job, installErr = svc.InstallDownload(r.Context(), req.ID, req.Version)
+	} else {
+		job, installErr = svc.Install(req.ID, req.Version, req.PackagePath)
+	}
+	if installErr != nil {
+		writeFailure(w, installErr)
 		return
 	}
 	// 安装已落盘，但 registry 是内存登记表：不刷新则后续 enable/invoke 404。

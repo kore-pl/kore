@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -112,10 +113,32 @@ type marketInstaller struct {
 }
 
 func (m marketInstaller) Install(path, expectedSHA string) error {
-	if m.svc == nil || m.svc.db == nil {
-		return fmt.Errorf("状态库未装配，无法安装")
+	inst, err := m.newInstaller(expectedSHA)
+	if err != nil {
+		return err
 	}
-	inst, err := installer.New(installer.Options{
+	_, err = inst.Install(path)
+	return err
+}
+
+// InstallFromURL 让 marketInstaller 同时满足 market.URLInstaller（下载安装）。
+//
+// 与本地包安装共用同一个 installer：下载只多一段"拉到 <state_dir>/tmp"，
+// 摘要比对、解包、落位、落库仍是同一份逻辑，内核不存在第二条安装链路。
+func (m marketInstaller) InstallFromURL(ctx context.Context, id, version, url, wantSHA256 string) error {
+	inst, err := m.newInstaller(wantSHA256)
+	if err != nil {
+		return err
+	}
+	return inst.InstallFromURL(ctx, id, version, url, wantSHA256)
+}
+
+// newInstaller 构造一个绑定当前状态目录与状态库的安装器。
+func (m marketInstaller) newInstaller(expectedSHA string) (*installer.Installer, error) {
+	if m.svc == nil || m.svc.db == nil {
+		return nil, fmt.Errorf("状态库未装配，无法安装")
+	}
+	return installer.New(installer.Options{
 		StateDir:       m.cfg.StateDir,
 		PluginDir:      m.cfg.snapshot.Paths.PluginDir,
 		KoreVersion:    version,
@@ -123,11 +146,6 @@ func (m marketInstaller) Install(path, expectedSHA string) error {
 		Logger:         slog.Default(),
 		Store:          m.svc.db,
 	})
-	if err != nil {
-		return err
-	}
-	_, err = inst.Install(path)
-	return err
 }
 
 // closeStore 关闭状态库；关闭失败只 WARN，不影响退出码。
