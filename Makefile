@@ -341,7 +341,7 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 	@echo "[RUN ] case-check"
 	@bash scripts/case-check.sh
 
-store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 字段 + 描述类字段四选一（全缺 WARN）+ id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截）
+store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 字段 + 描述类字段四选一（全缺 WARN）+ id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截 + 本地 dist sha ↔ 索引 sha（WARN，DIST_SHA_DIFF））
 	@bash scripts/store-check.sh
 
 presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production）
@@ -408,7 +408,7 @@ check: ## 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[RUN ] 13/17 插件仓开源资产（G-26 延伸：25 仓九件套 + .github 模板 + CI，见 scripts/plugin-oss-check.sh）"; \
 	if ! bash scripts/plugin-oss-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 14/17 store-check（G-17：插件仓三件套 + info.json 必填字段 + id/目录一致 + info/manifest 版本一致；WARN 级）"; \
+	echo "[RUN ] 14/17 store-check（G-17：插件仓三件套 + info.json 必填字段 + id/目录一致 + info/manifest 版本一致 + 本地 dist sha ↔ 索引记录 sha（WARN，DIST_SHA_DIFF）；WARN 级）"; \
 	store_out=$$(bash scripts/store-check.sh 2>&1 || true); printf '%s\n' "$$store_out"; \
 	store_fail=$$(printf '%s\n' "$$store_out" | grep -c '^\[FAIL\]' || true); store_fail=$${store_fail:-0}; \
 	if [ "$$store_fail" -gt 0 ]; then \

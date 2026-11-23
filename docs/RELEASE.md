@@ -15,7 +15,7 @@
 | feat（新增能力/方法/界面） | minor +1（0.x 主版本不动，0.2.0 → 0.3.0） | 新方法、真实执行面替换 noop |
 | fix / refactor / perf / docs 影响产物 | patch +1 | 逻辑修复、方法改名、嵌入清单调整 |
 | 纯文档 / 测试、且不改 dist | 不 bump | 只改 README 注释、测试用例 |
-| **任何改变 dist 包 sha 的改动** | **必须 bump** | 打包脚本、`manifest.json`、`info.json.size_bytes`、Go 源码 |
+| **任何改变 dist 包 sha 的改动** | **必须 bump** | 打包脚本、`manifest.json`、`info.json.size_bytes`、Go 源码、`go.mod` / `go.sum`（依赖升级） |
 
 唯一判据：
 
@@ -23,6 +23,23 @@
 sha256sum dist/<id>-<version>.tar.gz          # 与索引同版本 sha 比对
 # 不相等 → 必须 bump；禁止改索引 sha 了事
 ```
+
+### 1.1 `go.mod` / `go.sum` 依赖升级也算「改变 dist sha 的改动」，必须 bump
+
+**判据不看「改没改业务代码」，只看 `make dist` 出来的 sha 变没变。** 升级 `pkg/pluginapi` 等依赖会改变编进包的模块版本与构建元数据（`go version -m` 可见 dep 版本与 `h1:` 校验），即使 `main.go` 一行没动，dist 字节也会变——必须 bump 版本。
+
+2026-11-23 `firewall@0.2.3` 就是栽在这里：12:38 在 `3325ce7` 上把 `go.mod` / `go.sum` 从 pluginapi v0.1.1 升到 v0.1.2，**`info.json` 版本仍是 0.2.3**；13:28 在该树上跑 `make dist` → 本地 `dist/firewall-0.2.3.tar.gz` 变成 `9c637faa…`，而已发布资产与索引记录的仍是 `353d5626…`。同 `id@version` 双 sha 由此产生，并按 §0 只能「新版本 + 新 release」修正（§3）；本地那份野产物**没有任何发布物对应**，却让 round5 验收报了 `SHA_DIFF firewall 0.2.3`——索引没错，核对口径被污染。
+
+**自检（打包前必看）**：`git diff --stat` 里只要出现 `go.mod` / `go.sum`，就当作会改 dist，先按 §1 表 bump、再打包；禁止用"只升了个依赖"当不 bump 的理由。本地 dist 与索引不一致现由 `make store-check` 的 `DIST_SHA_DIFF` WARN 检出（`make check` 14/17 段）——**检出不等于允许**，它只是把野产物暴露出来，不允许据此改索引或覆盖同版本资产。
+
+### 1.2 `make dist` 会改写工作区 `info.json` 的 `size_bytes`
+
+`make dist` 不只是"打个包"：它按新包体回填**工作区** `info.json` 的 `size_bytes`（文件被改写，`git status` 会多出一条 `M info.json`）。两个容易踩的后果：
+
+- 以为"只跑了个打包命令、没改任何文件"→ 实际工作区已变，干净度判断与后续提交范围必须重新核对；工作树里的野值会像 firewall 那次一样（`2808490`）残留到下次打包才被覆盖，且**从未进过 git**，`git log -S` 查不到。
+- 该字段**只随要发版的那个检查点提交**（和 `info.json` 的 bump 同一提交）。顺手提交一个没 bump 版本时的 `size_bytes`，等于给同 `id@version` 制造第二个内容标识。
+
+打包后固定核对：`git diff --stat` 只应包含本次发版该有的 `info.json`（版本 + `size_bytes`）；纯验证性打包留下、且不在发版检查点内的改动，用 `git checkout -- info.json` 还原后再继续。
 
 ## 2. 发版清单（插件，顺序不可跳）
 

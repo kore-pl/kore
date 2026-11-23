@@ -18,12 +18,28 @@
 #   3) id 匹配 ^[a-z][a-z0-9-]*$ 且等于目录名后缀 kore-plugin-<id>
 #   4) info.json.version == manifest.json.version（manifest 存在时）
 #   5) go.mod 的 replace 只拦 `=> ../` 与绝对路径（`=> ./` 允许，G-17 原文）
+#   6) 本地 dist sha ↔ 索引记录 sha（WARN 级，只读，2026-11-24 补）
+#      对 dist/<id>-<ver>.tar.gz 逐个比对：ver 命中索引账本（plugins.json 当前版本
+#      或 versions.lock.json 版本→sha 基线）时，sha256 必须相等；不等只 WARN 并输出
+#      `DIST_SHA_DIFF <id> <version> index=<sha> dist=<sha>`，不 FAIL。
+#      为什么 WARN 不 FAIL：dist/ 是构建产物、不入库，本地不一致不等于索引错
+#      （已发布物与索引自洽才是硬判据，那个归 validate-index.sh）。它的危害是
+#      **污染验收核对口径**：round5 就报过 `SHA_DIFF firewall 0.2.3`。
+#      为什么比对全部版本而不是只比当前版本：0.2.3 的野产物在版本 bump 到 0.2.6
+#      之后仍留在 dist/，只比当前版本会漏掉它——这正是漏洞本体。
+#      索引未记录该版本（如 pre-lock 的 0.1.0）/ dist 该版本不存在 → 静默跳过。
 #
 # 失败逐条指名到「仓 + 文件 + 字段」，不做汇总掩盖。
 # 不联网、不调用 git、不修改任何文件。退出码: 0 全过；1 有 FAIL；2 参数错误。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 索引侧只读数据源（与 presets-check.sh 的 INDEX_FILE 同名口径）：
+#   INDEX_FILE = 签名索引正文（当前版本 + sha，信任根）
+#   LOCK_FILE  = 版本→sha 账本（全量历史版本基线）
+INDEX_FILE="${INDEX_FILE:-$ROOT/../kore-plugins/index/plugins.json}"
+LOCK_FILE="${LOCK_FILE:-$ROOT/../kore-plugins/index/versions.lock.json}"
+export INDEX_FILE LOCK_FILE
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +48,10 @@ usage() {
   无参数    扫描 ../kore-plugin-*
   repo-dir  指定要校验的插件仓目录，可多个
   --help    打印本帮助
+
+环境变量: INDEX_FILE（签名索引正文，默认 ../kore-plugins/index/plugins.json）
+          LOCK_FILE （版本→sha 账本，默认 ../kore-plugins/index/versions.lock.json）
+          索引不可达时 dist sha 比对打印 [SKIP]，其余判据照跑。
 
 退出码: 0 无 FAIL；1 有 FAIL；2 参数错误。
 USAGE
@@ -65,6 +85,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - "${REPOS[@]}" <<'PY'
+import hashlib
 import json
 import os
 import re
@@ -94,6 +115,38 @@ PREFIX = "kore-plugin-"
 n_pass = 0
 n_fail = 0
 n_warn = 0
+
+# 索引侧只读数据源（不联网、不改索引）：
+#   INDEX_PLUGINS = plugins.json 的 id → 当前版本条目（信任根）
+#   INDEX_LOCK    = versions.lock.json 的 id → [{version, sha256}]（全量账本）
+INDEX_PLUGINS = {}
+INDEX_LOCK = {}
+index_errors = []
+
+def load_json_quiet(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+_index_file = os.environ.get("INDEX_FILE", "")
+if _index_file and os.path.isfile(_index_file):
+    try:
+        _raw = load_json_quiet(_index_file)
+        for _item in _raw.get("plugins", []) if isinstance(_raw, dict) else []:
+            if isinstance(_item, dict) and isinstance(_item.get("id"), str):
+                INDEX_PLUGINS[_item["id"]] = _item
+    except Exception as exc:  # noqa: BLE001 - 索引读不动要报出来，不能假装比对过
+        index_errors.append(f"{_index_file}: {exc}")
+
+_lock_file = os.environ.get("LOCK_FILE", "")
+if _lock_file and os.path.isfile(_lock_file):
+    try:
+        _raw = load_json_quiet(_lock_file)
+        if isinstance(_raw, dict) and isinstance(_raw.get("plugins"), dict):
+            INDEX_LOCK = _raw["plugins"]
+    except Exception as exc:  # noqa: BLE001
+        index_errors.append(f"{_lock_file}: {exc}")
+
+HAS_INDEX = bool(INDEX_PLUGINS or INDEX_LOCK)
 
 def load_json(path):
     with open(path, encoding="utf-8") as fh:
@@ -211,14 +264,64 @@ for raw in sys.argv[1:]:
         else:
             print(f"[OK] {name}")
 
+    # 6) 本地 dist sha ↔ 索引记录 sha（WARN 级，只读；见文件头第 6 条）
+    #    id 取 info.json（已校验与目录一致），info 读不动时退回目录后缀。
+    pid_for_dist = None
+    if isinstance(info, dict) and isinstance(info.get("id"), str):
+        pid_for_dist = info["id"]
+    elif name.startswith(PREFIX):
+        pid_for_dist = name[len(PREFIX):]
+    dist_dir = os.path.join(repo, "dist")
+    if HAS_INDEX and pid_for_dist and os.path.isdir(dist_dir):
+        dist_prefix = pid_for_dist + "-"
+        for fn in sorted(os.listdir(dist_dir)):
+            if not fn.startswith(dist_prefix) or not fn.endswith(".tar.gz"):
+                continue
+            ver = fn[len(dist_prefix):-len(".tar.gz")]
+            expected = None
+            # 当前版本以 plugins.json（信任根）为准，其余历史版本查账本
+            cur = INDEX_PLUGINS.get(pid_for_dist)
+            if (
+                isinstance(cur, dict)
+                and cur.get("version") == ver
+                and isinstance(cur.get("sha256"), str)
+            ):
+                expected = cur["sha256"].strip().lower()
+            else:
+                for entry in INDEX_LOCK.get(pid_for_dist, []) or []:
+                    if (
+                        isinstance(entry, dict)
+                        and entry.get("version") == ver
+                        and isinstance(entry.get("sha256"), str)
+                    ):
+                        expected = entry["sha256"].strip().lower()
+                        break
+            if not expected:
+                # 索引未记录该版本（pre-lock 历史版本）→ 不是本检查判据，静默跳过
+                continue
+            try:
+                with open(os.path.join(dist_dir, fn), "rb") as fh:
+                    got = hashlib.sha256(fh.read()).hexdigest()
+            except OSError as exc:  # noqa: BLE001 - 读不动就报出来，不静默
+                warnings.append(f"dist/{fn} 读取失败，无法比对 sha: {exc}")
+                continue
+            if got != expected:
+                warnings.append(
+                    f"DIST_SHA_DIFF {pid_for_dist} {ver} index={expected} dist={got}"
+                )
+
     for item in warnings:
         n_warn += 1
         print(f"[WARN] {name}: {item}")
 
 print("")
+if not HAS_INDEX:
+    print("[SKIP] 索引账本不可达（INDEX_FILE / LOCK_FILE），本地 dist sha 比对跳过")
+for item in index_errors:
+    print(f"[WARN] 索引账本读取失败，dist sha 比对可能不完整: {item}")
 print("检查范围: 三件套 + info.json 必填 14 字段(协议 §3.1 ∪ G-17 ∪ G-20) + "
       "描述类字段四选一(WARN) + id/目录一致(G-27) + info/manifest 版本一致 + "
-      "go.mod replace 跨仓拦截")
+      "go.mod replace 跨仓拦截 + 本地 dist sha ↔ 索引记录 sha(WARN, DIST_SHA_DIFF)")
 print(f"store-check: {n_pass} pass, {n_fail} fail, {n_warn} warn")
 sys.exit(1 if n_fail else 0)
 PY
