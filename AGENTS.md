@@ -124,11 +124,9 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
 - [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30 门禁命令、三层组合、证据格式、M0 跳过规则。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md)（复盘模板 / 里程碑记录 / 反模式）与 [.agents/LOG/](.agents/LOG/)（裁决 / 派发 / 会话台账）——依次回答"教训 / 状态 / 判断"。
-- [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 贡献流程 / 行为准则 / MIT 开源政策 / CI 与模板。
-- [SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
+- [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 贡献流程 / 行为准则 / MIT 开源政策 / CI 与模板；[SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）**两者不要混**。
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件；例 [0018-privilege-model.md](docs/DECISIONS/0018-privilege-model.md)：插件保持低权、root 动作经内核代理（systemd transient unit），非 root `available=false` + 可操作提示，提权审计 fail-closed。
 - [docs/CORE.md](docs/CORE.md) — **十个内核模块**（config / store / auth / httpapi / registry / supervisor / bus / installer / market / privilege）+ 4 个支撑小节（logger / static / sse / envprobe），合计 §2 共 14 小节；HTTP API **23 个端点**：16 业务 + 7 store，前缀 `/api/v1`；另有 `/-/healthz` 与 3 条静态前缀。
-- [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准。
-- [docs/PLUGIN-MATURITY.md](docs/PLUGIN-MATURITY.md) — **补全工作的唯一依据**：24 插件仓成熟度分级（L0 / L1 / L1.5 / L2 / L3）+ 16 视图主壳 + §3.5 七条新缺口 + Round 3 五批任务与依赖；动插件前先读对应行。
+- [docs/MILESTONE-M0.md](docs/MILESTONE-M0.md) — 本次交付文件级清单与可执行验收标准；[docs/PLUGIN-MATURITY.md](docs/PLUGIN-MATURITY.md) — **补全工作的唯一依据**：24 插件仓成熟度分级（L0 / L1 / L1.5 / L2 / L3）+ 16 视图主壳（含全局搜索四源 / 操作审计入口）+ §3.5 12 条缺口 + Round 5 五批任务与依赖；动插件前先读对应行。
 
 **里程碑同步规则（判据不得滞后于阶段）**：每新增里程碑，`scripts/docs-check.sh` 的里程碑允许集（元信息校验正则及配套注释/标题/错误文案）必须**同轮放宽**——阶段已进入新里程碑而判据仍停在旧号，等同于门禁失守，该检查点不予合入。

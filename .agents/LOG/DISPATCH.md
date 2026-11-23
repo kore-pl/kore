@@ -34,6 +34,7 @@
 | 2026-11-22 | 模块路径改名 `kore-project` → `pengtang1024` | kore-rename-module | `go.mod`、`go.sum`、`pkg/pluginapi/go.mod`、`scripts/dep-check.sh`、`docs/**`、`cmd/`、`internal/`、`../kore-plugin-echo` | ADR-0017 | 文档 77 文件 / 163 处 + 代码 import 全量改；残留 3 处为历史/假设名（`scripts/case-check.sh` 1、`docs/OPEN-SOURCE.md` 2） | —（待提交，HEAD 仍为旧路径） | completed |
 | 2026-11-22 | 开源六件套 + G-26 | kore-oss-assets | `LICENSE`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`CHANGELOG.md`、`.github/workflows/ci.yml`、`docs/OPEN-SOURCE.md` | ADR-0017 | 六件齐 + MIT；`make oss-check` 8 pass / 0 fail | —（待提交） | completed |
 | 2026-11-22 | 只读探测：GitHub 归属与提交身份 | kore-gh-probe / kore-git-identity | 只读，无写域 | — | `gh auth status`（pengtang1024）→ ADR-0017 选项对比；`git log --format='%ae'` 11 条同邮箱 | —（只读，无产出） | completed |
+| 2026-11-23 | Round 4 收口：PLUGIN-MATURITY 按代码事实重判（6 个 L0 → L1.5 + monitor 修正 + db-mysql L2）+ CS-R4-01 登记 + AGENTS 压到 132 行 | update-maturity-r4 | `docs/PLUGIN-MATURITY.md`、`.agents/BOARD.md`、`AGENTS.md`、`.agents/LOG/DISPATCH.md` | lead 派发（Round 4 六插件 + 主壳两能力） | `PLUGIN-MATURITY` 178 行 / `BOARD` 179 行 / `AGENTS` 132 行 + 本台账 1 行；24 仓版本比对 22 一致 / 2 待重签；业务方法 127 | 本次提交 | completed |
 
 ## 未回收与待补
 
