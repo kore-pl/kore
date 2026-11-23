@@ -39,7 +39,7 @@
 | 终端 | `terminal` | **L2** | 6：create / write / resize / read / close / list | 真实 PTY 全生命周期、增量读写 | 缺多标签、断线重连、命令历史、字号/全屏 |
 | 日志 | `logs` | **L1.5** | 4：sources / tail / search / stats（另 config.get/set） | 真实文件与 `journalctl` 读取、since 过滤、搜索、统计、配置契约 | 缺实时跟踪、下载、清理、切割、按站点聚合 |
 | 进程 | `process` | **L1.5** | 4：list / detail / kill / tree | 真实 procfs：CPU 差分、详情、信号白名单、进程树 | 缺端口/fd 归属、优先级、守护自启、资源趋势 |
-| SSL 证书 | `ssl` | **L1.5** | 6：list / import / selfsign / renew / verify / issue（issue 返 `E_UNSUPPORTED`） | 真实证书落盘、x509 解析、TLS 探测、自签续期 | 缺 ACME 签发/自动续期、绑定站点、到期提醒、强制 HTTPS |
+| SSL 证书 | `ssl` | **L1.5** | 10：list / import / selfsign / renew / verify / issue / expiring / renew.set / acme.status / acme.issue（`issue` 兼容入口返 `E_UNSUPPORTED`） | 真实证书落盘、x509 解析、TLS 探测、自签续期 + **续期前备份**、到期聚合告警（`expiring`，<7 critical / <30 warning）、自动续期任务描述（`renew.set` → 内核 scheduler）、ACME 客户端探测与显式调用（ADR-0020，先导入后写 `.acme` 归属标记） | ACME 仅骨架（需外部 certbot/acme.sh + 用户 confirm，本机无客户端故未做真机签发）；仍缺绑定站点、强制 HTTPS、ACME 自动续期 |
 | 备份 | `backup` | **L1.5** | 5：create / list / restore / delete / verify（另 config.get/set） | 标准库 tar.gz 真实打包、原子恢复、sha256 校验、配置契约 | 缺定时、保留策略、下载、进度、站点/数据库维度 |
 | 监控 | `monitor` | **L1.5** | 4：system / processes / disks / temperature | 真实 `/proc` 采集（`internal/monitor/collector_*.go`，零 ticker、非 Linux `E_UNSUPPORTED`）；主壳监控页读插件数据（`web/monitor-cards.js`）；`alert.set` 已移除 | 缺历史曲线、阈值告警（无通知中心）、进程 TOP 排序、跨平台真实实现 |
 | 防火墙 | `firewall` | **L1.5** | 5：status / rules / allowPort / denyPort / deleteRule | 真实 ufw/iptables 执行、SSH 端口保护、dry-run（`internal/fwop/runner.go`）；`requires_root` + 5 个 `root_actions` 走内核通道（ADR-0018），非 root 返 `E_NEED_ROOT`（不是 401） | 缺**提权成功路径**（真 root 未证，R5-1）、enable/disable、IP 黑白名单、防爆破、变更审计 |
@@ -113,7 +113,7 @@
 | 2 | `db-mysql` 缺建库/删库/改密/备份/导入导出 | **部分补** | 0.3.0 已有 11 方法（含 createDatabase / dropDatabase / createUser / dropUser / grant / export / import）+ `web/db-l2.js` 双端页面；仍缺改密与备份 | 改密进 R5-3；备份归 R5-4 |
 | 3 | `backup` 缺定时备份/保留策略/异地存储 | 仍在 | 5 方法只做手动 create/list/restore/delete/verify；README 明示 S3 不在插件内 | R5-4（异地按 G-11 明确不做，只留外部同步钩子） |
 | 4 | `cron` 缺任务类型（备份/URL）/执行日志/立即执行 | 仍在 | 4 个 crontab CRUD 方法 | R5-4 |
-| 5 | `ssl` 缺 ACME 自动申请与续期 | 仍在 | `methods.go:104` 的 `issue` 返 `E_UNSUPPORTED`；`internal/certs/renew.go:15` 对 ACME 证书同样返回 | R5-4（先出 ADR：客户端与 DNS-01/HTTP-01） |
+| 5 | `ssl` 缺 ACME 自动申请与续期 | **部分补（骨架）** | 已交付 `expiring`（到期分级）、`renew.set`（生成内核 scheduler 任务描述）+ `ssl.renew` 的 `days_before` 跳过、续期前落盘备份；ACME 走 ADR-0020：只探测/显式调用外部 certbot·acme.sh，本机无客户端故真机签发未验证（替身测试覆盖 argv 与导入）；ACME 自动续期仍不做（G-10 不后台联网） | 结案骨架部分；真机签发待有客户端的环境补验 |
 | 6 | 站点容器模式 `site_dir_exists` 只看宿主路径 | 仍在 | `inspect.go:74` 仍 `os.Stat(root)`；容器内 root 在宿主不存在会误报 false | 单列任务（`docker exec test -d` 或返回三态 `unknown`），不塞进 R5 任一批 |
 | 7 | 主壳缺全局搜索/审计入口/告警中心/长任务进度 | **部分补** | 搜索（`web/search.js` 四源 + Ctrl/Cmd+K）与审计入口（`web/audit.js` + `GET /api/v1/audit`，`round4-audit.md`）已交付；告警中心与长任务进度仍无（`store.js:275` 仍是伪进度） | 告警/进度不单独造底座，随 R5-4 的备份/任务失败通知先落最小模型 |
 | 8 | 插件凭据无法跨插件传递 | 仍在 | kored 无 `password_env` 注入（`grep -rn password_env internal cmd` 零命中）；`discover` 探服务端版本仍需 `MYSQL_PWD` / `REDISCLI_AUTH`；按 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md) §6.1 候选 A | v1.0 前必须做，与 R5-2 的最小权限模型同批评审 |
@@ -149,7 +149,7 @@
 | `runtime-python` | 4 | versions / info / projects / doctor | 真实检测 Python、pip/site-packages、项目、健康检查 |
 | `site` | 16 | list / create / delete / status / get / bindSSL / unbindSSL / setRewrite / getRewrite / setProxy / unsetProxy / setRedirect / unsetRedirect / disable / enable / setIndex | 真实写 nginx vhost + test/reload，含容器 nginx |
 | `ssh-guard` | 2 | status / ban.list | 读注入文本做 sshd 合规审计；封禁清单恒空 |
-| `ssl` | 6 | list / import / selfsign / renew / verify / issue | 真实证书落盘与 x509/TLS 校验；issue 返 `E_UNSUPPORTED` |
+| `ssl` | 10 | list / import / selfsign / renew / verify / issue / expiring / renew.set / acme.status / acme.issue | 真实证书落盘与 x509/TLS 校验；续期前备份；到期聚合告警；续期任务描述交内核 scheduler；ACME 仅探测 + 显式调用（ADR-0020） |
 | `terminal` | 6 | create / write / resize / read / close / list | 真实 PTY 会话全生命周期 |
 | `waf` | 2 | rules / blockLog | 规则与拦截日志（noop，不接 WAF 引擎） |
 

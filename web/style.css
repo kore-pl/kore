@@ -1935,7 +1935,7 @@ button:disabled, .btn:disabled {
 .ssl-domain-name { font-weight: 600; word-break: break-all; }
 .ssl-cert-error { margin-top: var(--kore-space-1); color: var(--kore-danger); font-size: 11px; }
 .ssl-issuer { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
-.ssl-days { font-variant-numeric: tabular-nums; }
+.ssl-days { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ssl-days.is-warn { color: var(--kore-warning); }
 .ssl-days.is-fail { color: var(--kore-danger); }
 .ssl-expired { margin-left: var(--kore-space-1); color: var(--kore-danger); font-size: 11px; }
@@ -1955,6 +1955,37 @@ button:disabled, .btn:disabled {
 .bak-name { display: block; font-weight: 600; word-break: break-all; }
 .bak-id { display: block; margin-top: 2px; color: var(--kore-text-3); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
 .ssl-source, .bak-id { user-select: all; }
+
+/* 到期告警条（ssl.expiring）：红=7 天内/已过期，黄=30 天内，绿=全部安全。 */
+.ssl-expiry-host { margin-bottom: var(--kore-space-3); }
+.ssl-expiry-host:empty { display: none; }
+.ssl-expiry {
+  display: flex; align-items: flex-start; gap: var(--kore-space-3);
+  padding: var(--kore-space-3) var(--kore-space-4);
+  border: 1px solid var(--kore-border-1); border-left-width: var(--kore-space-1);
+  border-radius: var(--kore-radius-container); background: var(--kore-bg-1);
+  font-size: var(--kore-font-13);
+}
+.ssl-expiry-critical { border-color: var(--kore-danger); background: var(--kore-bg-2); }
+.ssl-expiry-warning { border-color: var(--kore-warning); background: var(--kore-warning-bg); }
+.ssl-expiry-ok { border-color: var(--kore-success); }
+.ssl-expiry-icon { flex: 0 0 auto; font-size: var(--kore-font-14); line-height: 1.4; }
+.ssl-expiry-critical .ssl-expiry-icon, .ssl-expiry-critical .ssl-expiry-text { color: var(--kore-danger); }
+.ssl-expiry-warning .ssl-expiry-icon, .ssl-expiry-warning .ssl-expiry-text { color: var(--kore-warning); }
+.ssl-expiry-ok .ssl-expiry-icon, .ssl-expiry-ok .ssl-expiry-text { color: var(--kore-success); }
+.ssl-expiry-body { flex: 1 1 auto; min-width: 0; }
+.ssl-expiry-text { font-weight: 600; }
+.ssl-expiry-list { display: flex; flex-wrap: wrap; gap: var(--kore-space-1) var(--kore-space-3); margin-top: var(--kore-space-1); color: var(--kore-text-2); }
+.ssl-expiry-item { display: inline-flex; align-items: baseline; gap: var(--kore-space-1); white-space: nowrap; }
+.ssl-expiry-days { color: var(--kore-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ssl-expiry-actions { margin-bottom: var(--kore-space-3); }
+.ssl-expiry-actions[hidden] { display: none; }
+/* ACME 区块：状态行 + 表单 + 结果。 */
+.ssl-acme-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2); margin-bottom: var(--kore-space-3); font-size: var(--kore-font-12); }
+.ssl-acme-tool { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--kore-text-1); }
+.ssl-acme-confirm { flex-direction: row; align-items: center; gap: var(--kore-space-2); font-size: var(--kore-font-12); color: var(--kore-text-2); }
+.ssl-acme-confirm input { width: auto; min-height: 0; }
+.ssl-acme-form { padding: 0 var(--kore-space-4) var(--kore-space-4); }
 .bak-result-host:empty, .bak-confirm-host:empty { display: none; }
 .bak-kv { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: var(--kore-space-1) var(--kore-space-3); margin: 0; padding: var(--kore-space-3) var(--kore-space-4); font-size: var(--kore-font-12); }
 .bak-kv dt { color: var(--kore-text-3); overflow-wrap: anywhere; }
@@ -1978,6 +2009,11 @@ button:disabled, .btn:disabled {
   .ssl-table, .bak-table { font-size: var(--kore-font-12); }
   .ssl-acme .btn, .bak-confirm-ops .btn, .bak-form .btn, .ssl-form .btn, .bak-ops .btn { min-height: var(--kore-touch); }
   .ssl-acme-note { flex: 1 1 100%; }
+  .ssl-acme-note { flex: 1 1 100%; }
+  .ssl-expiry { flex-direction: column; gap: var(--kore-space-2); }
+  .ssl-expiry-item { flex: 1 1 100%; flex-wrap: wrap; white-space: normal; }
+  .ssl-expiry-list { flex-direction: column; }
+  .ssl-expiry-actions .btn, .ssl-acme-form .btn { width: 100%; min-height: var(--kore-touch); }
   .bak-kv { grid-template-columns: 96px minmax(0, 1fr); }
 }
 
