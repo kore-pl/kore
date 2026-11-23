@@ -62,6 +62,9 @@
 | 2026-11-23 | Round 7 · 降权 P0 双修（独立通道 socket + 安装 mode 归一） | kore-verify-privilege（接手） | `internal/core/privilege/`、`internal/core/installer/` | 降权基线（`6ceeba8`） | `kore-channel.sock` 0660 `root:kore` + 四关校验；安装文件 mode 归一；`2310226` | `2310226` | confirmed（三端已推） |
 | 2026-11-23 | Round 7 · 推送收口（三端） | release-r5 / scribe | `kore` 三端（origin=gitea → github → gitee） | 上述四轨 | 三端推送回读一致、`make check` 13 段、主实例重启复核 healthz/商店全绿、三端一致性 0/78；本批台账提交 | 本次提交 | confirmed |
 
+| 2026-11-23 | **task-183 修入口失联：README 加「开始使用」入口 + docs 索引「我想做什么」导航** | kore-impl-site-cap | `README.md`、`docs/README.md`、`QUICKSTART.md`（仅尾部） | — | README 顶部新增 4 行入口表（QUICKSTART / RUNBOOK / OPERATIONS / docs 总览）+ 一句引导；`docs/README.md` 新增 §0「我想做什么？」10 行导航表 + §1.7「运维与操作」（QUICKSTART/OPERATIONS/RUNBOOK/USABILITY），既有文档地图未动；QUICKSTART 尾部加「## 接下来」3 条链接。README 25 条相对链接逐条 `test -e` 实测全可达（失效 0，未改任何链接）；`make docs-check` exit 0 | `fbfa2f3` | confirmed |
+| 2026-11-23 | **G-12 留痕：`fbfa2f3` 混入他人未提交改动（不拆分）** | kore-impl-site-cap（实际作者 p0-login / task-170） | `QUICKSTART.md` 第 2 节 | p0-login 并行改同一文件 | `git add QUICKSTART.md` **整文件暂存**把 p0-login 未提交的 §2 重写（`## 2. 准备配置…` → `## 2. 设置管理员口令（一条命令）` + `admin-password --generate`）一并带入提交。**内容正确、零丢失**（逐字在 HEAD），未 amend/revert/reset；已横向通报 p0-login 与 lead，p0-login 选 A（保持现状、不补说明 commit）。教训：**提交前用 `git diff --cached` 逐文件确认，别整文件 `add` 一个别人正在改的文件** | `fbfa2f3` | confirmed（不拆） |
+
 
 ## 未回收与待补
 
