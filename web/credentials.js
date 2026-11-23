@@ -135,8 +135,14 @@
   }
   function revoke(row, grantee) {
     if (S.busy) return;
+    S.confirm = { kind: 'revoke', row: row, grantee: grantee };
+    paint();
+  }
+  function revokeNow(row, grantee) {
+    if (S.busy) return;
     S.busy = true;
     request('DELETE', EP + '/' + encodeURIComponent(row.id) + '/grants/' + encodeURIComponent(grantee)).then(function () {
+      S.confirm = null;
       afterWrite('已撤销「' + grantee + '」对 ' + row.name + ' 的读取权限。');
     }, function (err) { S.busy = false; S.error = human(err); S.notice = ''; paint(); });
   }
@@ -149,7 +155,7 @@
     }, function (err) { S.busy = false; S.error = human(err); S.notice = ''; paint(); });
   }
   function remove(row) {
-    S.confirm = { row: row };
+    S.confirm = { kind: 'delete', row: row };
     paint();
   }
   function confirmDelete(row) {
@@ -162,16 +168,25 @@
   }
   function confirmDialog() {
     if (!S.confirm) return null;
-    var row = S.confirm.row;
+    var row = S.confirm.row, revoking = S.confirm.kind === 'revoke';
     var back = el('div', 'cred-backdrop'); back.setAttribute('role', 'dialog'); back.setAttribute('aria-modal', 'true');
     var box = add(back, el('div', 'cred-dialog'));
-    add(box, el('h3', 'cred-dialog-title', '删除凭据 ' + row.name + '？'));
-    add(box, el('p', 'cred-dialog-hint', '删除后不可恢复；依赖它的插件在下次重启时会取不到这个凭据，可能无法连接数据库/缓存。'));
+    if (revoking) {
+      add(box, el('h3', 'cred-dialog-title', '撤销「' + S.confirm.grantee + '」的授权？'));
+      add(box, el('p', 'cred-dialog-hint', '撤销后「' + S.confirm.grantee + '」在下次重启时将取不到凭据 ' +
+        row.name + '，相关功能可能不可用；需要时可重新授权。'));
+    } else {
+      add(box, el('h3', 'cred-dialog-title', '删除凭据 ' + row.name + '？'));
+      add(box, el('p', 'cred-dialog-hint', '删除后不可恢复；依赖它的插件在下次重启时会取不到这个凭据，可能无法连接数据库/缓存。'));
+    }
     var ops = add(box, el('div', 'cred-dialog-ops'));
     var cancel = add(ops, btn('取消', 'btn-ghost'));
-    var ok = add(ops, btn('确认删除', 'cred-danger'));
+    var ok = add(ops, btn(revoking ? '确认撤销' : '确认删除', 'cred-danger'));
     on(cancel, function () { S.confirm = null; paint(); });
-    on(ok, function () { ok.disabled = true; confirmDelete(row); });
+    on(ok, function () {
+      ok.disabled = true;
+      if (revoking) revokeNow(row, S.confirm.grantee); else confirmDelete(row);
+    });
     return back;
   }
   function rowCells(row, actions) {
