@@ -74,7 +74,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 不提交未验证改动；门禁没跑或跑挂时，明确报告阻塞原因，不"先提交再说"。
 - **插件发版（G-17 延伸）**：`info.json` + `manifest.json` 版本同步 bump，`CHANGELOG.md` 记条目，dist 两打 + 干净树复现一致；索引同步 `versions.lock.json` 与 `presets/*.json`。**同 `id@version` 只允许一个 sha，任何改变 dist sha 的改动必须 bump**（见 [docs/RELEASE.md](docs/RELEASE.md)）。
 - **高频交付（裁决36）**：一处自洽且过了对应门禁即提交并 `git push`，不攒到任务收尾；插件仓每次改动后重建 `dist` 并核对 sha 与索引一致，打包产物及时生成用于验证。
-- **镜像推送（Gitee）**：推送时 `origin`（GitHub，主）与 `gitee` 双推，**先 origin 后 gitee**；gitee 失败只 WARN、不阻塞主仓。Gitee release **只保留最新 5 个**（GitHub 全量保留），超出用 `scripts/gitee-release-prune.sh` 清理（先 `--dry-run` 再真删）。详见 [docs/GITEE-MIRROR.md](docs/GITEE-MIRROR.md)。
+- **镜像推送（Gitee）**：推送时 `origin`（Gitea，权威源）**先推**，再推 `github`（GitHub 镜像）与 `gitee`（Gitee 镜像）；镜像失败只 WARN、不阻塞权威源（依据 [ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md) 决策 B）。Gitee release **只保留最新 5 个**（GitHub 全量保留），超出用 `scripts/gitee-release-prune.sh` 清理（先 `--dry-run` 再真删）。详见 [docs/GITEE-MIRROR.md](docs/GITEE-MIRROR.md)。
 
 **隔离环境与 worktree**：**隔离验证优先用 `git archive`，需要真实编辑才用 worktree。**
 
