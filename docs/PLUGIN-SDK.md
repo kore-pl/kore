@@ -139,7 +139,7 @@ for {
 | `scenario_tags` | string[] | `[]` | 枚举仅 `web`/`data`/`ops`/`sec`/`app`，写成 preset 名即 `E_INVALID` |
 | `size_bytes` | int | `0` | `make dist` 打包时回填；仓库内可为 0，须 ≥0 |
 
-**`requires_root` / `root_actions`（ADR-0018）**：需要宿主 root 的插件在 `info.json` 声明这两个字段（`root_actions` 非空时 `requires_root` 必须为 `true`）。SDK **v0.1.2 起**提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`：在插件测试里读 `info.json` 的 `root_actions`、逐条调用 `ValidateRootAction`，失败即测试失败——这样清单与代码的漂移会在 CI 暴露，而不是等用户安装。schema 与命令白名单口径见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) §3.1.3。
+**`requires_root` / `root_actions`（ADR-0018）**：需要宿主 root 的插件在 `info.json` 声明这两个字段（`root_actions` 非空时 `requires_root` 必须为 `true`）。SDK **v0.1.2 起**提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`：在插件测试里读 `info.json` 的 `root_actions`、逐条调用 `ValidateRootAction`，失败即测试失败——这样清单与代码的漂移会在 CI 暴露，而不是等用户安装。schema 与**受控命令形状**口径见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) §3.1.3（白名单单位是「命令 + 子命令 + 参数形状」，见 [ADR-0022](./DECISIONS/0022-root-command-shapes.md)）。
 
 ## 4. 包格式与 dist
 

@@ -21,14 +21,19 @@ type Runner interface {
 
 // BuildSystemdRunArgv 返回 systemd-run 的**完整 argv 原文**：
 //
-//	systemd-run --uid=0 --collect --wait --pipe \
+//	systemd-run --uid=0 --collect --wait \
 //	  -p StandardOutput=file:<stdout> -p StandardError=file:<stderr> \
 //	  --unit=<unit> -- <argv...>
 //
 // 不含 shell：整条命令是固定参数数组，插件只能选 action id 与追加参数。
+//
+// **不能加 --pipe**：--pipe 会把 unit 的 stdout/stderr 接管成到 systemd-run 父进程的
+// 管道，此时 `-p StandardOutput=file:` / `-p StandardError=file:` 被 systemd 静默忽略，
+// unit 输出不会落到文件，内核读到的 stdout/stderr 永远为空（本机 systemd 259 实测：
+// 文件不创建、systemd-run 仍退出 0）。等待完成与退出码透传由 --wait 负责，不需要 --pipe。
 func BuildSystemdRunArgv(unit, stdoutPath, stderrPath string, argv []string) []string {
 	out := []string{
-		"systemd-run", "--uid=0", "--collect", "--wait", "--pipe",
+		"systemd-run", "--uid=0", "--collect", "--wait",
 		"-p", "StandardOutput=file:" + stdoutPath,
 		"-p", "StandardError=file:" + stderrPath,
 		"--unit=" + unit, "--",

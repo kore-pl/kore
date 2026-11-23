@@ -45,21 +45,20 @@ const (
 // rootActionIDPattern 是 root_actions[].id 的协议正则。
 var rootActionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// RootCommandAllowlist 是 argv[0] 允许的**命令名**白名单（协议数据）。
+// RootCommandAllowlist 是 argv[0] 允许的**命令名集合**（协议数据，由
+// RootCommandPolicies 派生，保持向后兼容的只读视图）。
 //
-// 使用命令名的原因：同一发行版中命令可能落在 /sbin、/usr/sbin 或 /usr/bin，
-// 内核用 LookPath 解析；不想依赖 PATH 的插件可直接声明绝对路径（绝对路径不需要
-// 出现在本白名单里，但仍要通过路径形态校验）。本表只回答"允许执行哪些程序"，
-// 不回答"哪个插件用它做什么"——业务语义仍在插件自己的动作 id 与 description。
-var RootCommandAllowlist = map[string]struct{}{
-	"nginx":     {},
-	"ufw":       {},
-	"iptables":  {},
-	"systemctl": {},
-	"crontab":   {},
-	"chmod":     {},
-	"chown":     {},
-	"docker":    {},
+// 只回答"允许执行哪些程序"已不够：真正的安全边界在 rootpolicy.go 的**形状**表
+// （子命令 + 参数形状 + 追加参数形状）。新增命令必须同时给出形状，否则不放行。
+var RootCommandAllowlist = derivedCommandAllowlist()
+
+// derivedCommandAllowlist 从 RootCommandPolicies 派生命令名集合。
+func derivedCommandAllowlist() map[string]struct{} {
+	names := make(map[string]struct{}, len(RootCommandPolicies))
+	for name := range RootCommandPolicies {
+		names[name] = struct{}{}
+	}
+	return names
 }
 
 // ValidateRootAction 校验单条 root_actions 的 schema；错误信息面向插件作者。
@@ -92,6 +91,11 @@ func ValidateRootAction(action RootAction) error {
 		return fmt.Errorf("argv 总长度超过 %d 个字符", MaxRootArgvRunes)
 	}
 	if err := validateArgv0(action.Argv[0]); err != nil {
+		return err
+	}
+	// 形状校验：声明 argv 必须整体落在受控命令形状内（子命令 + 参数形状）。
+	// 追加参数在执行期由 privilege 用 ValidateRootAppendedArgv 另行校验。
+	if err := ValidateRootArgv(action.Argv); err != nil {
 		return err
 	}
 	if action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS {

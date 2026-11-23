@@ -130,25 +130,38 @@
 - **审计口径**：按**最终生效能力**判定——只有 `write` / `admin` 类才写 `invoke.<plugin>.<method>`；最终为 `*:read` 的方法不写（`audit.invoke_all=true` 时仍全量审计）。方法级能力让「同一插件只读方法不审计、写方法审计」成为协议能力，而不是内核业务词表。
 - **诚实披露**：当前单管理员模式下会话恒持 6 项全权，授权侧检查在单用户生产路径恒通过；方法级能力此时**只在审计侧实际生效**。多用户接入并注入 capability 解析器后，方法级授权同时在授权侧生效。
 
-### 3.1.3 root_actions（提权动作清单，ADR-0018）
+### 3.1.3 root_actions（提权动作清单，ADR-0018 / ADR-0022）
 
 需要宿主 root 的动作**不在插件进程里执行**：插件只声明固定 argv，由内核经 systemd transient unit 代理执行；插件自身永不获得 root，也不得自行 exec sudo / setuid / 直接写 `/etc`。
 
 | 字段 | 类型 | 必填 | 约束 |
 | --- | --- | --- | --- |
 | id | string | 是 | `^[a-z][a-z0-9-]*$`；同一插件内唯一；用户只能按 id 选动作 |
-| argv | string[] | 是 | **固定数组、不经 shell**：1–32 项；`argv[0]` 为规范化绝对路径（无 `..`、非 `/`）或命令白名单名；每项 ≤256 字符、总长 ≤4096；不得含 NUL/控制字符 |
+| argv | string[] | 是 | **固定数组、不经 shell**：1–32 项；`argv[0]` 为命令名，或**落在系统二进制目录内**（`/bin` `/sbin` `/usr/bin` `/usr/sbin` `/usr/local/bin` `/usr/local/sbin`）的规范化绝对路径；整个 argv 必须匹配该命令的受控语句形状（§3.1.3.1）；每项 ≤256 字符、总长 ≤4096；不得含 NUL/控制字符 |
 | timeout_s | int | 是 | 1–300；超时 kill transient unit |
 | description | string | 否 | ≤200 字符；启用/升级确认时展示 |
 | irreversible | bool | 否 | `true` 时必须携带一次性 `confirm` 令牌（见 §3.1.4） |
 
-**命令白名单**（协议常量，唯一实现在 `pkg/pluginapi/rootaction.go`）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker`。
+**受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `ipset` `resolvectl` `unbound-control` `dig` `fail2ban-client`。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
 
-**SDK 自检（`pkg/pluginapi` v0.1.2 起）**：公开 SDK 提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（样例见 `pkg/pluginapi/rootaction_test.go`）——不要手写一份 schema，也不要用跨仓 `replace`（G-17 禁止）；清单与代码的漂移应在插件 CI 暴露，而不是等用户安装时才报错。
+#### 3.1.3.1 形状校验（两层）
 
-**执行口径**：内核 `POST /api/v1/plugins/<id>/root-action` → `systemd-run --uid=0 --collect --wait --pipe -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=kore-root-<plugin>-<action>-<rand> -- <argv...>`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`）；stdout/stderr 各截断 1 MiB。
+1. **声明层**：`info.json` 里的 `argv` 必须逐位匹配该命令的某个语句形状（`Literal` 或 `ArgShape`：IP/CIDR、端口、`kore_` 前缀表名、单元名、路径…）。
+2. **执行层**：请求里的追加参数（来自插件进程，**视为不可信**）只能落在该形状的 `Tail` 上，个数也要对上；`Tail` 为空表示该动作**禁止追加参数**。声明合法 ≠ 声明+追加合法（`nft list table …` 追加 `counter drop` 就能把只读动作变成写规则）。
 
-**G-01 边界**：内核只校验 schema（id/argv/timeout），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。
+其余硬规则：
+
+- **绝对路径不绕过形状**，且目录必须在上面的系统二进制目录内——插件不能把自己写的可执行文件声明成 `/tmp/x/nft`。
+- **`kore_` 命名空间**：`nft` 表名、`ipset` 集合名必须 `kore_` 前缀；不许操作宿主的 `filter` / `nat` 等表。
+- **批处理**：一条动作可含多条语句（独立 `;` 元素分隔，≤8 句，花括号内的 `;` 不切分），**只有最后一条语句可带追加参数**。
+- **表达式字符集**：`nft` 表达式 token 禁 `;`、引号、反引号、`$`、空白、换行，首字符不得是 `-`（挡住 `-f <脚本>`）；允许 `|` `&` `{}` `()` 是因为 nft 表达式需要，且 argv 不经 shell。
+- **只读优先**：`iptables` / `systemctl` / `docker` / `crontab` 目前只开放只读子命令；`chmod` 只允许三位八进制（**无 setuid/setgid/sticky**）且路径限定 kore 自有目录。写操作要等真实消费者出现再按形状补齐并更新 ADR-0022。
+
+**SDK 自检（`pkg/pluginapi` v0.1.2 起）**：公开 SDK 提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（样例见 `pkg/pluginapi/rootaction_test.go`）——不要手写一份 schema，也不要用跨仓 `replace`（G-17 禁止）；清单与代码的漂移应在插件 CI 暴露，而不是等用户安装时才报错。**形状表变更（ADR-0022）需要 SDK 新版本（v0.1.3+）**：插件钉的 SDK 尚未包含某命令时，自检应显式 skip 并写明「需要 pluginapi ≥ 该版本」，不得改写成本地宽松校验。
+
+**执行口径**：内核 `POST /api/v1/plugins/<id>/root-action` → `systemd-run --uid=0 --collect --wait -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=kore-root-<plugin>-<action>-<rand> -- <argv...>`（**不加 `--pipe`**：与 file: 输出属性并存会被 systemd 静默忽略、stdout/stderr 丢失；`--wait` 已负责等待与退出码透传）。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）；stdout/stderr 各截断 1 MiB。
+
+**G-01 边界**：内核只校验 schema（id/argv/timeout）与**参数形状**（族/前缀/地址/端口这些语法级约束），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。
 
 **降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT`；无 systemd → `E_NO_SYSTEMD`；两者都必须带可操作 `hint`，禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
 

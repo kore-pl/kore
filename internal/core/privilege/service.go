@@ -157,6 +157,12 @@ func (s *Service) validateRequest(req Request) *pluginapi.Error {
 	if err := ValidateAction(req.Action); err != nil {
 		return errCode(pluginapi.E_INVALID, "root_action schema 非法："+err.Error(), "")
 	}
+	// 追加参数来自插件进程（视为不可信），必须落在该动作命中形状的 Tail 上：
+	// 声明 argv 合法不代表「声明 + 追加」合法——`nft list …` + `counter drop` 就
+	// 会把只读动作变成写规则（ADR-0022）。
+	if err := pluginapi.ValidateRootAppendedArgv(req.Action.Argv, req.Args); err != nil {
+		return errCode(pluginapi.E_INVALID, "追加参数不合法："+err.Error(), "")
+	}
 	if len(req.Args) > pluginapi.MaxRootArgs-1 {
 		return errCode(pluginapi.E_INVALID, "args 数量超限", "")
 	}

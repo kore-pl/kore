@@ -118,7 +118,7 @@ func TestRootActionNeedRoot(t *testing.T) {
 
 // TestRootActionNotFound 未声明的 action → 404 E_NOTFOUND。
 func TestRootActionNotFound(t *testing.T) {
-	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw"}, TimeoutS: 5}}
+	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw", "status"}, TimeoutS: 5}}
 	ts, session, csrf := newRootActionServer(t, backend, nil)
 	status, body := doRootAction(t, ts, session, csrf, `{"action_id":"ufw-allow"}`)
 	if status != http.StatusNotFound || !strings.Contains(string(body), pluginapi.E_NOTFOUND) {
@@ -128,7 +128,7 @@ func TestRootActionNotFound(t *testing.T) {
 
 // TestRootActionInvalidBody 未知字段 / 非法 action_id → 400 E_INVALID。
 func TestRootActionInvalidBody(t *testing.T) {
-	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw"}, TimeoutS: 5}}
+	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw", "status"}, TimeoutS: 5}}
 	ts, session, csrf := newRootActionServer(t, backend, nil)
 	for _, body := range []string{`{"action_id":"ufw-status","argv":["rm"]}`, `{"action_id":"UFW"}`, `{}`} {
 		status, raw := doRootAction(t, ts, session, csrf, body)
@@ -185,7 +185,7 @@ func TestRootActionConfirmToken(t *testing.T) {
 
 // TestConfirmTokenRejectsNonIrreversible 非不可回滚动作不签发令牌。
 func TestConfirmTokenRejectsNonIrreversible(t *testing.T) {
-	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw"}, TimeoutS: 5}}
+	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw", "status"}, TimeoutS: 5}}
 	ts, session, _ := newRootActionServer(t, backend, nil)
 	req, _ := http.NewRequest(http.MethodGet,
 		ts.URL+"/api/v1/plugins/firewall/root-action/ufw-status/confirm-token", nil)
@@ -202,7 +202,7 @@ func TestConfirmTokenRejectsNonIrreversible(t *testing.T) {
 
 // TestRootActionPluginBearer 插件 bearer 身份：只允许自己的动作且需要 system:admin。
 func TestRootActionPluginBearer(t *testing.T) {
-	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw"}, TimeoutS: 5}}
+	backend := rootActionBackend{action: pluginapi.RootAction{ID: "ufw-status", Argv: []string{"ufw", "status"}, TimeoutS: 5}}
 	pluginAuth := func(token string) (string, []string, bool) {
 		switch token {
 		case "good":

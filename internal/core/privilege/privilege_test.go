@@ -108,7 +108,10 @@ func TestValidateActionSchema(t *testing.T) {
 		ok     bool
 	}{
 		{"合法命令名", ufwStatus(), true},
-		{"合法绝对路径", Action{ID: "a", Argv: []string{"/usr/bin/id"}, TimeoutS: 1}, true},
+		{"合法绝对路径（系统目录）", Action{ID: "a", Argv: []string{"/usr/sbin/ufw", "status"}, TimeoutS: 1}, true},
+		{"绝对路径目录不受控", Action{ID: "a", Argv: []string{"/tmp/nft", "list", "ruleset"}, TimeoutS: 1}, false},
+		{"未受控命令", Action{ID: "a", Argv: []string{"sed", "-i", "s/a/b/", "/etc/passwd"}, TimeoutS: 1}, false},
+		{"子命令未锁定", Action{ID: "a", Argv: []string{"ufw", "enable"}, TimeoutS: 1}, false},
 		{"非法 id 大写", Action{ID: "Ufw", Argv: []string{"ufw"}, TimeoutS: 5}, false},
 		{"非法 id 下划线", Action{ID: "ufw_status", Argv: []string{"ufw"}, TimeoutS: 5}, false},
 		{"空 argv", Action{ID: "a", Argv: nil, TimeoutS: 5}, false},
@@ -133,19 +136,20 @@ func TestValidateActionSchema(t *testing.T) {
 	}
 }
 
-// TestExecuteArgvFixed 证明用户追加的 args 只能附在声明 argv 之后，argv[0] 不可替换。
+// TestExecuteArgvFixed 证明追加参数只能附在声明 argv 之后、且必须落在形状 Tail 上。
 func TestExecuteArgvFixed(t *testing.T) {
-	runner := &fakeRunner{out: "Status: active\n"}
+	runner := &fakeRunner{out: "Rule added\n"}
 	auditor := &fakeAuditor{}
 	svc := testService(t, runner, auditor, true, true)
-	action := ufwStatus()
+	// ufw allow 的形状是「声明 [allow] + 追加 <ufw-target>」。
+	action := Action{ID: "ufw-allow", Argv: []string{"ufw", "allow"}, TimeoutS: 5}
 	result, err := svc.Execute(context.Background(), Request{
 		Actor: "admin", PluginID: "firewall", Action: action, Args: []string{"22/tcp"},
 	})
 	if err != nil {
 		t.Fatalf("执行失败：%v", err)
 	}
-	if !result.Executed || result.ExitCode != 0 || result.Stdout != "Status: active\n" {
+	if !result.Executed || result.ExitCode != 0 || result.Stdout != "Rule added\n" {
 		t.Fatalf("结果不符：%+v", result)
 	}
 	if len(runner.calls) != 1 {
@@ -155,19 +159,60 @@ func TestExecuteArgvFixed(t *testing.T) {
 	if strings.Join(runner.calls[0], "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("argv 不是固定前缀 + 追加参数：got %v want %v", runner.calls[0], want)
 	}
-	// 传入与命令同名的 arg 也不能替换 argv[0]。
+	// 追加参数不能替换 argv[0]：路径形态的 arg 不是合法目标形状 → E_INVALID 且不执行。
 	_, err = svc.Execute(context.Background(), Request{
-		Actor: "admin", PluginID: "firewall", Action: action, Args: []string{"systemctl"},
+		Actor: "admin", PluginID: "firewall", Action: action, Args: []string{"../systemctl"},
 	})
-	if err != nil {
-		t.Fatalf("第二次执行失败：%v", err)
+	if code := codeOf(t, err); code != pluginapi.E_INVALID {
+		t.Fatalf("非法追加参数应 E_INVALID，实际 %q", code)
 	}
-	if runner.calls[1][0] != "ufw" || runner.calls[1][1] != "status" {
-		t.Fatalf("argv[0] 被追加参数替换：%v", runner.calls[1])
+	if len(runner.calls) != 1 {
+		t.Fatalf("非法追加参数不得执行：%v", runner.calls)
 	}
-	// 审计应有两轮 begin+end。
-	if len(auditor.events) != 4 {
-		t.Fatalf("审计应有 begin/end 各两条，实际 %d：%+v", len(auditor.events), auditor.events)
+	// 审计：第一轮 begin+end 两条 + 第二轮 deny 一条。
+	if len(auditor.events) != 3 {
+		t.Fatalf("审计应有 begin/end + deny 三条，实际 %d：%+v", len(auditor.events), auditor.events)
+	}
+	if auditor.events[2].Decision != DecisionDeny {
+		t.Fatalf("第三条应为 deny 审计：%+v", auditor.events[2])
+	}
+}
+
+// TestExecuteRejectsAppendedInjection 追加参数注入（分号 / 命令替换 / 换行）在执行期
+// 被拒绝，且不产生任何执行（ADR-0022）。
+func TestExecuteRejectsAppendedInjection(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		args []string
+	}{
+		{"分号拼接第二语句", []string{"ufw", "allow"}, []string{"22/tcp; ufw disable"}},
+		{"命令替换", []string{"ufw", "allow"}, []string{"$(reboot)"}},
+		{"换行", []string{"ufw", "allow"}, []string{"22\ndisable"}},
+		{"只读语句被追加写参数", []string{"nft", "list", "table", "inet", "kore_waf"},
+			[]string{"counter", "drop"}},
+		{"集合元素非 IP", []string{"nft", "add", "element", "inet", "kore_waf", "banned4"},
+			[]string{"{", "not-an-ip", "}"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			auditor := &fakeAuditor{}
+			svc := testService(t, runner, auditor, true, true)
+			_, err := svc.Execute(context.Background(), Request{
+				Actor: "admin", PluginID: "waf",
+				Action: Action{ID: "probe", Argv: tc.argv, TimeoutS: 5}, Args: tc.args,
+			})
+			if code := codeOf(t, err); code != pluginapi.E_INVALID {
+				t.Fatalf("应 E_INVALID，实际 %q", code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("注入参数不得执行：%v", runner.calls)
+			}
+			if len(auditor.events) != 1 || auditor.events[0].Decision != DecisionDeny {
+				t.Fatalf("应有一条 deny 审计：%+v", auditor.events)
+			}
+		})
 	}
 }
 
@@ -309,10 +354,37 @@ func TestTimeoutKillsUnit(t *testing.T) {
 // TestBuildSystemdRunArgv 锁定 systemd-run argv 原文（报告与文档引用这一份）。
 func TestBuildSystemdRunArgv(t *testing.T) {
 	got := strings.Join(BuildSystemdRunArgv("kore-root-firewall-ufw-status-abcd", "/tmp/o", "/tmp/e", []string{"ufw", "status"}), " ")
-	const want = "systemd-run --uid=0 --collect --wait --pipe -p StandardOutput=file:/tmp/o " +
+	const want = "systemd-run --uid=0 --collect --wait -p StandardOutput=file:/tmp/o " +
 		"-p StandardError=file:/tmp/e --unit=kore-root-firewall-ufw-status-abcd -- ufw status"
 	if got != want {
 		t.Fatalf("systemd-run argv 漂移：\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestBuildSystemdRunArgvNoPipeWithFileOutput 锁定"文件输出与 --pipe 互斥"的不变量。
+//
+// systemd-run 同时带 --pipe 与 `-p StandardOutput=file:...` 时，文件重定向被静默忽略：
+// unit 输出走管道、文件不创建，内核读到空 stdout/stderr（R5-1 真 root 实测缺陷）。
+// 本测试防止 argv 再次漂回该组合。
+func TestBuildSystemdRunArgvNoPipeWithFileOutput(t *testing.T) {
+	argv := BuildSystemdRunArgv("kore-root-firewall-ufw-status-abcd", "/tmp/o", "/tmp/e",
+		[]string{"ufw", "status"})
+	hasPipe := false
+	hasFileOutput := false
+	for _, arg := range argv {
+		if arg == "--pipe" {
+			hasPipe = true
+		}
+		if strings.HasPrefix(arg, "StandardOutput=file:") ||
+			strings.HasPrefix(arg, "StandardError=file:") {
+			hasFileOutput = true
+		}
+	}
+	if hasPipe && hasFileOutput {
+		t.Fatalf("argv 同时含 --pipe 与 file: 输出属性，systemd 会静默丢弃文件输出：%v", argv)
+	}
+	if hasFileOutput != true {
+		t.Fatalf("argv 必须用 file: 属性收集输出：%v", argv)
 	}
 }
 
