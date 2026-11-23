@@ -114,7 +114,7 @@
 | `dir` | `string` | `<state>/backups` | 备份包与 sidecar 落盘目录，必须是绝对路径 |
 | `allow_roots` | `list(item=string)` | `["/var/www","/etc/kore"]` | 备份源路径白名单根，每项绝对路径 |
 
-保存后 `backup.create/list/verify/restore/delete` 下一次调用即用新目录与白名单，`restart_required=false`。`KORE_BACKUP_DIR` / `KORE_BACKUP_ALLOW_ROOTS` 继续兼容。
+保存后 `backup.create/list/verify/restore/delete/retention/stats` 下一次调用即用新目录与白名单，`restart_required=false`。`KORE_BACKUP_DIR` / `KORE_BACKUP_ALLOW_ROOTS` 继续兼容。
 
 ### 7.3 `kore-plugin-db-mysql`
 
