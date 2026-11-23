@@ -49,8 +49,8 @@ type Manager struct {
 	// 需要 root 的动作只能走 root-action 通道（禁止假装已经降权）。
 	demotion Demotion
 	mu       sync.Mutex
-	plugins map[string]*instance
-	gates   map[string]*gate
+	plugins  map[string]*instance
+	gates    map[string]*gate
 	// slotMu 串行全部槽位准入 + 冷启（resident enable/invoke 与 lazy 唤醒），
 	// 保证并发启用/唤醒既不突破 maxSlots，也不突破 resident 独占配额。
 	slotMu sync.Mutex
