@@ -383,6 +383,120 @@
         '（插件未启用或版本过旧时会出现）'));
     });
   }
+  // ---------------- 克隆站点（site.clone）----------------
+  function fmtBytes(n) {
+    var v = Number(n) || 0;
+    if (v < 1024) return v + ' B';
+    if (v < 1048576) return (v / 1024).toFixed(1) + ' KiB';
+    if (v < 1073741824) return (v / 1048576).toFixed(1) + ' MiB';
+    return (v / 1073741824).toFixed(2) + ' GiB';
+  }
+  // 建议域名：把第一段换成 <第一段>-clone（src.example.com → src-clone.example.com）。
+  function suggestCloneDomain(domain) {
+    var parts = String(domain || '').split('.');
+    if (!parts.length) return '';
+    parts[0] = parts[0].replace(/-clone\d*$/, '') + '-clone';
+    return parts.join('.');
+  }
+  function cloneErrorText(err) {
+    var code = err && err.code ? err.code : '';
+    if (code === 'E_CONFLICT') return '该域名已有站点，请换一个域名。';
+    if (code === 'E_NOTFOUND') return '请选择一个已托管的站点（当前站点可能不在插件清单里）。';
+    if (code === 'E_INVALID' && /KORE_STATE_DIR/.test(String(err.message || ''))) {
+      return '复制站点目录只允许在插件的数据目录内进行；可以关闭「复制站点目录」，只克隆配置。';
+    }
+    var text = errText(err);
+    var hint = hintFor('site.clone', err);
+    return text + (hint ? ' ' + hint : '');
+  }
+  // 克隆面板：一个表单完成（源站点自动带出、新域名预填、copy_root 默认关并有说明）。
+  function buildClonePanel(box, d) {
+    var panel = add(box, el('section', 'panel site-edit-section'));
+    var head = add(panel, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', '克隆站点'));
+    add(head, el('span', 'panel-meta', '复制当前站点的全部配置到新域名（做测试环境）'));
+    var form = add(panel, el('form', 'site-form'));
+    var domainField = add(form, el('label', 'field'));
+    add(domainField, el('span', 'field-label', '新域名（至少两个标签，全小写）'));
+    var newDomain = add(domainField, el('input', 'field-input'));
+    newDomain.type = 'text';
+    newDomain.autocomplete = 'off';
+    newDomain.value = suggestCloneDomain(d.domain);
+    newDomain.setAttribute('data-field', 'clone-domain');
+    var copyLine = add(form, el('label', 'field field-check'));
+    var copyRoot = add(copyLine, el('input', 'files-checkbox'));
+    copyRoot.type = 'checkbox';
+    add(copyLine, el('span', null, '同时复制站点文件（默认关闭）'));
+    var copyHint = add(form, el('p', 'field-hint',
+      '关闭 = 新站点共用源目录（不复制文件），适合先验证配置；勾选后会把文件复制到新目录。'));
+    var rootField = add(form, el('label', 'field'));
+    rootField.style.display = 'none';
+    add(rootField, el('span', 'field-label', '新站点目录（勾选复制时必填）'));
+    var newRoot = add(rootField, el('input', 'field-input'));
+    newRoot.type = 'text';
+    newRoot.autocomplete = 'off';
+    newRoot.value = d.root ? String(d.root).replace(/\/+$/, '') + '-clone' : '';
+    newRoot.setAttribute('data-field', 'clone-root');
+    copyRoot.addEventListener('change', function () {
+      rootField.style.display = copyRoot.checked ? '' : 'none';
+      copyHint.textContent = copyRoot.checked
+        ? '会把源目录的文件复制到新目录；目录必须在插件数据目录内（宿主路径会明确报错并提示改用只克隆配置）。'
+        : '关闭 = 新站点共用源目录（不复制文件），适合先验证配置。';
+    });
+    var msg = add(form, el('div', 'site-status muted'));
+    msg.setAttribute('role', 'status');
+    var ops = add(form, el('div', 'site-edit-ops'));
+    var submit = add(ops, el('button', 'btn btn-primary', '克隆站点'));
+    submit.type = 'submit';
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var target = newDomain.value.trim().toLowerCase();
+      if (!target) { msg.textContent = '请填写新域名。'; msg.className = 'site-status row-note-fail'; return; }
+      if (target === d.domain) { msg.textContent = '新域名不能和源站点相同。'; msg.className = 'site-status row-note-fail'; return; }
+      if (copyRoot.checked && !newRoot.value.trim()) {
+        msg.textContent = '勾选了复制站点文件，请填写新站点目录（或取消勾选只克隆配置）。';
+        msg.className = 'site-status row-note-fail';
+        return;
+      }
+      var params = { source_domain: d.domain, new_domain: target };
+      if (copyRoot.checked) {
+        params.copy_root = true;
+        params.root = newRoot.value.trim();
+      }
+      submit.disabled = true;
+      submit.textContent = '正在克隆…';
+      msg.textContent = '正在复制配置' + (copyRoot.checked ? '与站点文件' : '') + '，随后校验并 reload nginx…';
+      msg.className = 'site-status muted';
+      invoke('site.clone', params).then(function (r) {
+        submit.disabled = false;
+        submit.textContent = '克隆站点';
+        var lines = [
+          '配置已复制到 ' + r.domain + (r.ssl_copied ? '（含 SSL）' : '') +
+            '；伪静态 ' + (r.rewrite_copied ? '已复制' : '无') +
+            '；反向代理 ' + (r.proxy_copied ? '已复制' : '无') +
+            '；重定向 ' + (r.redirect_count || 0) + ' 条'
+        ];
+        lines.push(r.root_copied
+          ? '站点文件：已复制 ' + (r.copied_files || 0) + ' 个文件，共 ' + fmtBytes(r.copied_bytes)
+          : '站点文件：未复制（与源站点共用目录 ' + (r.root || '—') + '）');
+        lines.push('nginx 校验：' + (r.test_skipped ? '未检测（本机未配置 nginx）' : r.test_passed ? '通过' : '失败') +
+          '；reload：' + (r.reload_skipped ? '未执行' : r.reloaded ? '已完成' : '未完成') +
+          '；整体生效：' + (r.applied ? '是' : '否'));
+        if (r.hint) lines.push(r.hint);
+        msg.textContent = lines.join('；');
+        msg.className = 'site-status ' + (r.applied ? 'row-note-ok' : 'row-note-fail');
+        setStatus('已克隆站点：' + r.domain + (r.applied ? '（已生效）' : '（未完全生效，见详情）'), r.applied ? 'ok' : 'fail');
+        load();
+      }, function (err) {
+        submit.disabled = false;
+        submit.textContent = '克隆站点';
+        var text = cloneErrorText(err);
+        if (err && err.hint && text.indexOf(err.hint) < 0) text += '（' + err.hint + '）';
+        msg.textContent = '克隆失败：' + text;
+        msg.className = 'site-status row-note-fail';
+      });
+    });
+  }
   function paintDetail() {
     if (!S.detailHost) return;
     var d = S.detail;
@@ -429,6 +543,7 @@
     var statusHost = add(statusPanel, el('div', 'site-status-host'));
     on(recheck, function () { loadStatus(d.domain, statusHost); });
     loadStatus(d.domain, statusHost);
+    buildClonePanel(box, d);
     S.editHost = add(box, el('div', 'site-edit-host'));
     loadEditor(d);
   }
