@@ -13,6 +13,14 @@
   var CARDS_URL = '/assets/monitor-cards.js';
   var STYLE_ID = 'kore-mon-style';
   var FALLBACK_NOTE = '当前使用内核基础指标，安装 monitor 插件可获得磁盘/网络/温度详情';
+  /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。 */
+  var THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
+  var SERIES = [
+    { key: 'cpu_percent', label: 'CPU%', cls: 'mon-line-cpu' },
+    { key: 'memory_percent', label: '内存%', cls: 'mon-line-mem' },
+    { key: 'disk_percent', label: '磁盘%', cls: 'mon-line-disk' }
+  ];
+  var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
     procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null,
     cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null };
@@ -43,7 +51,22 @@
     '.mon-proc-head{display:flex;gap:8px}',
     '.mon-sort{min-height:44px;padding:0 12px;font-size:12px}',
     '.mon-sort[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
-    '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}'
+    '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}',
+    '.mon-chart-body{padding:8px 16px 12px}',
+    '.mon-chart{display:block;width:100%;height:180px}',
+    '.mon-chart .mon-grid{stroke:var(--kore-border-2);stroke-width:1}',
+    '.mon-chart .mon-line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}',
+    '.mon-line-cpu{stroke:var(--kore-info)}',
+    '.mon-line-mem{stroke:var(--kore-success)}',
+    '.mon-line-disk{stroke:var(--kore-warning)}',
+    '.mon-legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--kore-text-2);padding-top:8px}',
+    '.mon-legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle;border-radius:2px}',
+    '.mon-alert-body{padding:8px 16px 12px;display:flex;flex-direction:column;gap:8px}',
+    '.mon-alert{padding:10px 12px;border-left:3px solid var(--kore-warning);background:var(--kore-bg-0);border-radius:4px}',
+    '.mon-alert-critical{border-left-color:var(--kore-danger)}',
+    '.mon-alert-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+    '.mon-alert-val{margin-left:auto;font-size:13px;font-variant-numeric:tabular-nums}',
+    '.mon-alert-hint{margin:6px 0 0;font-size:12px;line-height:1.6;color:var(--kore-text-2)}'
   ].join('\n');
 
   function el(tag, cls, text) {
@@ -195,6 +218,89 @@
     });
   }
 
+  function svgEl(tag, cls) {
+    var n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    if (cls) n.setAttribute('class', cls);
+    return n;
+  }
+
+  /* 历史曲线：monitor.system.history 是列式数组（timestamps + cpu/memory/load1/disk），
+     直接用 SVG polyline 画，不引任何图表库。 */
+  function chartInto(host, history) {
+    var ts = history && Array.isArray(history.timestamps) ? history.timestamps : [];
+    if (ts.length < 2) {
+      add(host, el('span', 'muted', ts.length
+        ? '已有 1 个采样点，再刷新一次即可连线（默认 60s 一个点）'
+        : '暂无历史采样点，点「刷新」后开始积累（默认 60s 一个点）'));
+      return;
+    }
+    var W = 640, H = 180, PAD = 26;
+    var svg = svgEl('svg', 'mon-chart');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'CPU/内存/磁盘历史曲线（最近 ' + ts.length + ' 个采样点）');
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      var y = H - PAD - (H - 2 * PAD) * v / 100, line = svgEl('line', 'mon-grid');
+      line.setAttribute('x1', PAD); line.setAttribute('x2', W - PAD);
+      line.setAttribute('y1', y.toFixed(1)); line.setAttribute('y2', y.toFixed(1));
+      svg.appendChild(line);
+    });
+    SERIES.forEach(function (series) {
+      var values = Array.isArray(history[series.key]) ? history[series.key] : [], pts = [], i, v;
+      for (i = 0; i < values.length; i++) {
+        v = num(values[i]);
+        if (v === null) continue;
+        pts.push((PAD + (W - 2 * PAD) * i / (values.length - 1)).toFixed(1) + ',' +
+          (H - PAD - (H - 2 * PAD) * Math.max(0, Math.min(100, v)) / 100).toFixed(1));
+      }
+      if (pts.length < 2) return;
+      var poly = svgEl('polyline', 'mon-line ' + series.cls);
+      poly.setAttribute('points', pts.join(' '));
+      svg.appendChild(poly);
+    });
+    add(host, svg);
+    var legend = add(host, el('div', 'mon-legend'));
+    SERIES.forEach(function (series) {
+      var item = add(legend, el('span')), swatch = add(item, el('i'));
+      swatch.style.background = 'var(--kore-' + (series.key === 'cpu_percent' ? 'info'
+        : series.key === 'memory_percent' ? 'success' : 'warning') + ')';
+      add(item, el('span', null, series.label));
+    });
+    add(legend, el('span', null, '· 最近 ' + ts.length + ' 点 · 间隔 ' +
+      (num(history.interval_s) === null ? '—' : history.interval_s) + 's'));
+  }
+
+  function chartPanel(d) {
+    var p = S.C.panel('历史曲线', null, 'mon-chart-body');
+    chartInto(p.body, d.history || {});
+    return p;
+  }
+
+  /* 阈值告警：alerts 由后端按本次 thresholds 计算；超限行左侧红/黄高亮 + 人话 hint。 */
+  function alertPanel(d) {
+    var alerts = Array.isArray(d.alerts) ? d.alerts : [];
+    var p = S.C.panel('阈值告警', null, 'mon-alert-body');
+    if (!alerts.length) {
+      add(p.body, el('span', 'muted', '未超过阈值：CPU / 内存 / 磁盘高于 ' +
+        THRESHOLDS.cpu_percent + '% / ' + THRESHOLDS.memory_percent + '% / ' +
+        THRESHOLDS.disk_percent + '% 时在此提示'));
+      return p;
+    }
+    alerts.forEach(function (a) {
+      var critical = a.level === 'critical';
+      var row = el('div', 'mon-alert' + (critical ? ' mon-alert-critical' : ''));
+      var head = add(row, el('div', 'mon-alert-head'));
+      add(head, S.C.chip(critical ? 'fail' : 'warn',
+        (critical ? '严重' : '警告') + ' · ' + (METRIC_LABEL[a.metric] || a.metric || '指标')));
+      add(head, el('span', 'mon-alert-val',
+        (num(a.current) === null ? '—' : a.current.toFixed(1)) + '% / 阈值 ' +
+        (num(a.threshold) === null ? '—' : a.threshold) + '%'));
+      add(row, el('p', 'mon-alert-hint', a.hint || '超过阈值，请按提示处理'));
+      add(p.body, row);
+    });
+    return p;
+  }
+
   /* ---------- 插件数据：全部卡片 + 磁盘/网络/温度/进程 ---------- */
   function paintPlugin(d) {
     var C = S.C;
@@ -202,6 +308,8 @@
     C.systemCards(d || {}).forEach(function (node) { S.cards.appendChild(node); });
 
     S.panels.textContent = '';
+    S.panels.appendChild(alertPanel(d || {}));
+    S.panels.appendChild(chartPanel(d || {}));
     S.panels.appendChild(C.diskPanel(d || {}));
     S.panels.appendChild(C.netPanel(d || {}));
     var temp = C.panel('温度', null, 'mon-temp');
@@ -278,7 +386,7 @@
     ensureCards().then(function () {
       if (stale(gen)) return;
       // 先试插件：成功即全量渲染；任何失败（未安装 / E_* / 超时 / 网络）都走内核降级。
-      invoke('system', { per_cpu: false }).then(function (d) {
+      invoke('system', { per_cpu: false, thresholds: THRESHOLDS }).then(function (d) {
         if (stale(gen)) return;
         S.mode = 'plugin';
         setSource(); notice([]);
