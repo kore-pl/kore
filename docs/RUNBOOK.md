@@ -424,8 +424,17 @@ curl -s -o /dev/null -w 'new=%{http_code}\n' -X POST http://127.0.0.1:8787/api/v
   - 读写状态的 CLI 先打印 `配置: <绝对路径>（存在/不存在）｜状态目录: <绝对路径>`，不一致一眼可见；
   - 配置文件不存在、且没有显式给 `--config` → **退出码 2 fail-closed**，绝不按默认值新建库；`--config` 给了但文件不存在同样退出 2；
   - `kored status [--config ...]` 打印配置路径 / 状态目录 / profile / healthz 与 state.db 持有者 pid；实例未运行给「未运行」，不是异常栈。
-  - `paths.state_dir` 等相对路径按**进程 cwd** 归一化为绝对路径；写配置时用绝对路径，避免同一份配置在不同目录下算出不同库。
+  - `paths.state_dir` 等相对路径**按配置文件所在目录**归一化为绝对路径（不再是进程 cwd），同一份配置在任何目录启动都指向同一个库；见 §7.2.2。
 - 正确姿势：先 `kored status --config <与 serve 相同>` 核对路径，再 `kored install --config <同一个> --package ...`。
+
+### 7.2.2 `paths.*` 与 `server.socket`：相对路径会随执行目录变化
+
+**结论：配置文件里的路径一律写绝对路径。**
+
+- 归一化基准是**配置文件所在目录**，不是进程 cwd。相对值加载时转成绝对路径并留 WARN 供核对：`paths.state_dir 已归一化为绝对路径 /opt/kore/data（相对值 "./data" 按配置文件目录 /opt/kore/config 解析，与启动目录无关）`。
+- 覆盖来源基准不同（不误伤 shell 习惯）：`--state-dir` / `KORE_STATE_DIR` / `KORE_PLUGIN_DIR` 的相对值按**当前 cwd** 立成绝对路径；配置文件里的相对值按**配置文件目录**解析。两者最终都是绝对路径，下游（supervisor 切 `cmd.Dir`）不再受 cwd 影响。
+- 受影响字段：`paths.state_dir` / `log_dir` / `run_dir` / `index_dir` / `plugin_dir` / `server.socket`。不要写 `~`：不做家目录展开，直接报错。
+- 历史形态（已修）：归一化曾用 `filepath.Abs`（基准进程 cwd）——同一份配置在 `/opt/kore` 与 `/tmp` 启动会算出两个状态库，**不报错、结果错**。
 
 ### 7.3 配置文件被改坏 / 完全没配置
 

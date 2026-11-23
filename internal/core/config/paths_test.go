@@ -76,6 +76,67 @@ func TestLoadRejectsTildePath(t *testing.T) {
 	}
 }
 
+// TestLoadRelativePathsStableAcrossCwd 是本字段的事故回归：同一份配置在两个
+// 不同进程 cwd 下加载，必须算出**同一个** state_dir 绝对路径。
+//
+// 事故形态：归一化曾用 filepath.Abs（基准 cwd），同一份 config 在不同目录启动
+// kored 会算出不同状态库——第二个 state.db，不报错、结果错。
+func TestLoadRelativePathsStableAcrossCwd(t *testing.T) {
+	cfgDir := t.TempDir()
+	path := filepath.Join(cfgDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(relativePathsYAML), 0o600); err != nil {
+		t.Fatalf("写入配置失败: %v", err)
+	}
+	want := filepath.Join(cfgDir, ".kore-local-state")
+
+	loadFrom := func(cwd string) string {
+		t.Helper()
+		t.Chdir(cwd)
+		snap, _, err := Load(Options{FlagPath: path})
+		if err != nil {
+			t.Fatalf("cwd=%s 时 Load 失败: %v", cwd, err)
+		}
+		return snap.Paths.StateDir
+	}
+
+	first := loadFrom(t.TempDir())
+	second := loadFrom(t.TempDir())
+	if first != second {
+		t.Fatalf("不同 cwd 算出不同 state_dir：%q vs %q（这正是要消灭的静默分叉）", first, second)
+	}
+	if first != want {
+		t.Fatalf("state_dir = %q，期望按配置文件目录解析为 %q", first, want)
+	}
+}
+
+// TestLoadSocketNormalized 验证 server.socket 这类路径字段同样按配置文件目录归一，
+// 否则 UDS 落点也会随 cwd 漂移（同一类静默分叉）。
+func TestLoadSocketNormalized(t *testing.T) {
+	cfgDir := t.TempDir()
+	path := filepath.Join(cfgDir, "config.yaml")
+	body := "server:\n  socket: \"./run/kore.sock\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("写入配置失败: %v", err)
+	}
+	snap, warnings, err := Load(Options{FlagPath: path})
+	if err != nil {
+		t.Fatalf("Load 失败: %v", err)
+	}
+	want := filepath.Join(cfgDir, "run", "kore.sock")
+	if snap.Server.Socket != want {
+		t.Fatalf("server.socket = %q，期望 %q", snap.Server.Socket, want)
+	}
+	var hit bool
+	for _, w := range warnings {
+		if w.Key == "server.socket" && strings.Contains(w.Message, want) {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("缺少 server.socket 归一化告警（日志需可核对）: %+v", warnings)
+	}
+}
+
 // TestLoadKeepsAbsolutePaths 验证已经是绝对路径的值不被改动。
 func TestLoadKeepsAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()

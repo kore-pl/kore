@@ -117,7 +117,9 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 	}
 	warnings = append(warnings, applyOverrides(snap, opts.StateDir)...)
 	// 覆盖来源（含环境变量 / 命令行）也可能带相对路径，归一化必须放在最后一步。
-	pathWarnings, err := normalizePaths(snap)
+	// 基准是配置文件所在目录，不是进程 cwd——同一份配置在任何目录启动都指向同一库。
+	baseDir := configBaseDir(path)
+	pathWarnings, err := normalizePaths(snap, baseDir)
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -134,27 +136,42 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 func applyOverrides(snap *Snapshot, flagStateDir string) []Warning {
 	var warnings []Warning
 	if flagStateDir != "" {
-		snap.Paths.StateDir = flagStateDir
+		snap.Paths.StateDir = absFromCwd(flagStateDir)
 	}
 	if v := os.Getenv(EnvStateDir); v != "" {
-		snap.Paths.StateDir = v
+		snap.Paths.StateDir = absFromCwd(v)
 		warnings = append(warnings, Warning{
 			Source:  snap.Source,
 			Key:     "paths.state_dir",
-			Message: "被环境变量 " + EnvStateDir + " 覆盖为 " + v,
+			Message: "被环境变量 " + EnvStateDir + " 覆盖为 " + snap.Paths.StateDir,
 		})
 	}
 	if v := os.Getenv(EnvPluginDir); v != "" {
-		snap.Paths.PluginDir = v
+		snap.Paths.PluginDir = absFromCwd(v)
 		warnings = append(warnings, Warning{
 			Source:  snap.Source,
 			Key:     "paths.plugin_dir",
-			Message: "被环境变量 " + EnvPluginDir + " 覆盖为 " + v,
+			Message: "被环境变量 " + EnvPluginDir + " 覆盖为 " + snap.Paths.PluginDir,
 		})
 	} else if snap.Paths.PluginDir == "" {
 		snap.Paths.PluginDir = filepath.Join(snap.Paths.StateDir, "plugins")
 	}
 	return warnings
+}
+
+// absFromCwd 把命令行 / 环境变量给出的路径立成绝对路径。
+//
+// 这类值来自用户当时的 shell，相对路径以 **进程 cwd** 为基准才是用户本意
+// （刻意与配置文件里的相对路径区分：后者的基准是配置文件目录）。立成绝对路径
+// 之后，下游（supervisor 切换 cmd.Dir）不再受 cwd 影响。
+func absFromCwd(raw string) string {
+	if raw == "" || filepath.IsAbs(raw) {
+		return filepath.Clean(raw)
+	}
+	if abs, err := filepath.Abs(raw); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(raw)
 }
 
 // logWarnings 把告警逐条写成 WARN；未知字段只告警、不阻断启动。
