@@ -28,14 +28,19 @@
 #      为什么比对全部版本而不是只比当前版本：0.2.3 的野产物在版本 bump 到 0.2.6
 #      之后仍留在 dist/，只比当前版本会漏掉它——这正是漏洞本体。
 #      索引未记录该版本（如 pre-lock 的 0.1.0）/ dist 该版本不存在 → 静默跳过。
-#   7) README「发布产物」版本 ↔ info.json.version（WARN 级，只读，2026-11-24 补）
-#      只解析「发布产物」那一行里的 `dist/<id>-<semver>.tar.gz`（各仓当前统一形态）；
-#      与 info.json.version 不一致时输出
-#      `README_VERSION_DRIFT <id> info=<ver> readme=<ver>`，只 WARN 不 FAIL——
+#   7) README 全文 dist/<id>-<ver>.tar.gz 版本 ↔ info.json.version（WARN 级，只读）
+#      2026-11-24 起从「只比发布产物行」扩到「README 全文所有 rev 引用」：
+#      代码块示例（`tar -tzf dist/app-deploy-0.3.1.tar.gz`）、`make dist` 说明行、
+#      `sha256sum dist/...` 与「发布产物」行同源，只查后者会漏掉前者
+#      （app-deploy README:98 就是这样裸奔到 bump 的）。
+#      每条与 info.json.version 不一致的引用单独输出
+#      `README_VERSION_DRIFT <id> info=<ver> readme=<ver> (line N)`——带行号、
+#      多处漂移全部列出（不只报第一个），只 WARN 不 FAIL：
 #      README 是文档不是制品，漂移不改 dist sha，但它每轮都要人工追：
 #      container 在 cf50949 修过一次版本示例，bump 后再次漂移，故收进机制。
-#      解析必须可靠、不猜：无「发布产物」段 / 行内无 dist/<id>-<ver>.tar.gz /
-#      包名与插件 id 不一致 / 同行出现多个不同版本 → 该仓 [SKIP] 并说明原因。
+#      解析必须可靠、不猜：README 内无 dist/<id>-<ver>.tar.gz 引用 → 该仓 [SKIP]
+#      并说明原因；只比对 <id> == info.json.id 的引用——他插件产物示例不是本仓
+#      制品，拿本仓 info.json.version 去判它等于制造假 WARN。
 #
 # 失败逐条指名到「仓 + 文件 + 字段」，不做汇总掩盖。
 # 不联网、不调用 git、不修改任何文件。退出码: 0 全过；1 有 FAIL；2 参数错误。
@@ -119,8 +124,7 @@ DESC_FIELDS = ("description", "title", "summary", "name")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 DIST_RE = re.compile(r"^dist\s*:", re.M)
 PREFIX = "kore-plugin-"
-# README「发布产物」段解析（只认 `dist/<id>-<semver>.tar.gz` 这一确定形态）
-README_MARKER = "发布产物"
+# README 全文中 `dist/<id>-<semver>.tar.gz` 引用解析（代码块 / 正文同一形态）
 README_VER_RE = re.compile(
     r"dist/(?P<pid>[a-z][a-z0-9-]*)-"
     r"(?P<ver>\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?)"
@@ -325,48 +329,46 @@ for raw in sys.argv[1:]:
                     f"DIST_SHA_DIFF {pid_for_dist} {ver} index={expected} dist={got}"
                 )
 
-    # 7) README「发布产物」版本 ↔ info.json.version（WARN 级，只读；见文件头第 7 条）
-    #    解析不出就 [SKIP] 说明原因——不拿「行内任意版本号」硬猜。
+    # 7) README 全文 dist/<id>-<ver>.tar.gz 版本 ↔ info.json.version
+    #    （WARN 级，只读；见文件头第 7 条）
+    #    全文逐行扫，不只「发布产物」行——代码块示例与正文同源、同会漂移。
+    #    只比 <id> == info.json.id 的引用；解析不出引用就 [SKIP] 说明原因，
+    #    不拿「行内任意版本号」硬猜。
     readme_path = os.path.join(repo, "README.md")
     if not isinstance(info, dict) or not isinstance(info.get("version"), str):
-        print(f"[SKIP] {name}: README 发布产物版本不比对——info.json.version 不可读")
+        print(f"[SKIP] {name}: README 版本比对跳过——info.json.version 不可读")
     elif not os.path.isfile(readme_path):
-        print(f"[SKIP] {name}: README 发布产物版本不比对——无 README.md")
+        print(f"[SKIP] {name}: README 版本比对跳过——无 README.md")
     else:
+        own_pid = info.get("id") if isinstance(info.get("id"), str) else None
+        refs = []  # (lineno, pid, ver)，保留行号用于定位
         with open(readme_path, encoding="utf-8", errors="replace") as fh:
-            marker_lines = [ln for ln in fh if README_MARKER in ln]
-        readme_ver = None
-        skip_reason = None
-        if not marker_lines:
-            skip_reason = f"README 无「{README_MARKER}」段"
-        else:
-            hits = []
-            for ln in marker_lines:
+            for lineno, ln in enumerate(fh, 1):
                 for match in README_VER_RE.finditer(ln):
-                    hits.append((match.group("pid"), match.group("ver")))
-            if not hits:
-                skip_reason = f"「{README_MARKER}」行内未找到 dist/<id>-<ver>.tar.gz"
+                    refs.append((lineno, match.group("pid"), match.group("ver")))
+        own_refs = [r for r in refs if own_pid and r[1] == own_pid]
+        if not own_refs:
+            if refs:
+                skip_reason = (
+                    f"README 有 dist 引用但无本仓 <id>={own_pid} 的产物示例"
+                    f"（他插件示例不计）"
+                )
             else:
-                versions = sorted({v for _, v in hits})
-                pids = sorted({p for p, _ in hits})
-                if len(versions) > 1 or len(pids) > 1:
-                    skip_reason = (
-                        f"「{README_MARKER}」段内产物包名/版本不唯一: "
-                        f"pids={','.join(pids)} versions={','.join(versions)}"
-                    )
-                elif isinstance(info.get("id"), str) and pids[0] != info["id"]:
-                    skip_reason = (
-                        f"产物包名 {pids[0]} 与 info.json.id {info['id']} 不一致"
-                    )
-                else:
-                    readme_ver = versions[0]
-        if skip_reason:
-            print(f"[SKIP] {name}: README 发布产物版本不比对——{skip_reason}")
-        elif readme_ver != info["version"]:
-            warnings.append(
-                f"README_VERSION_DRIFT {pid_for_dist} "
-                f"info={info['version']} readme={readme_ver}"
-            )
+                skip_reason = "README 内未找到 dist/<id>-<ver>.tar.gz 引用"
+            print(f"[SKIP] {name}: README 版本比对跳过——{skip_reason}")
+        else:
+            # 同一行重复引用同一版本只报一次；不同行分别报——全部列出，不只报首个。
+            seen = set()
+            for lineno, _pid, readme_ver in own_refs:
+                if readme_ver == info["version"]:
+                    continue
+                if (lineno, readme_ver) in seen:
+                    continue
+                seen.add((lineno, readme_ver))
+                warnings.append(
+                    f"README_VERSION_DRIFT {own_pid} "
+                    f"info={info['version']} readme={readme_ver} (line {lineno})"
+                )
 
     for item in warnings:
         n_warn += 1
@@ -380,7 +382,8 @@ for item in index_errors:
 print("检查范围: 三件套 + info.json 必填 14 字段(协议 §3.1 ∪ G-17 ∪ G-20) + "
       "描述类字段四选一(WARN) + id/目录一致(G-27) + info/manifest 版本一致 + "
       "go.mod replace 跨仓拦截 + 本地 dist sha ↔ 索引记录 sha(WARN, DIST_SHA_DIFF) + "
-      "README 发布产物版本 ↔ info.json.version(WARN, README_VERSION_DRIFT)")
+      "README 全文 dist/<id>-<ver>.tar.gz 版本 ↔ info.json.version"
+      "(WARN, README_VERSION_DRIFT, 带行号)")
 print(f"store-check: {n_pass} pass, {n_fail} fail, {n_warn} warn")
 sys.exit(1 if n_fail else 0)
 PY
