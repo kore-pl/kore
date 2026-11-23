@@ -1,4 +1,4 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-24 · 里程碑: M5 · 关联: [0016-resource-budget-final](./0016-resource-budget-final.md)、[0023-zero-intrusion](./0023-zero-intrusion.md)、[0046-cron-wake-path](./0046-cron-wake-path.md)、[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md)
+> 状态: accepted · 归属: architect · 更新: 2026-11-24 · 里程碑: M5 · 关联: [0016-resource-budget-final](./0016-resource-budget-final.md)、[0023-zero-intrusion](./0023-zero-intrusion.md)、[0046-cron-wake-path](./0046-cron-wake-path.md)、[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md)
 
 # ADR-0048: 升级后置动作（`post_upgrade`）——声明式、内核不认识业务
 
@@ -75,3 +75,37 @@ A 与 C 的差别只在「动作以什么名字暴露」：A 用协议保留名�
 2. **冷启代价**：声明了 `post_upgrade` 的 lazy 插件每次升级会冷启一次；只在升级时发生，且可由插件自行控制动作轻重（cron 的迁移是读改写一次 crontab）。
 3. **槽位压力**：若升级时槽位已满，`Ensure` 可能驱逐 LRU lazy 或返回 `E_RATELIMIT`；此时动作失败**可见**（WARN + 告警），安装本身仍成功。
 4. 复审条件：出现第二个需要「升级后动作」的插件时，评估是否改为批量/合并调用；若将来 `triggers` 事件分发落地，可评估用 `event:` 替代本字段（届时需新 ADR）。
+
+## 7. 实施记录（2026-11-24，accepted 落地）
+
+裁决 C 已落地并两仓咬合：`kore` `b71a900`（机制）+ `kore-plugin-cron` `d67e5f7`（第一个消费者，0.7.0），变更集 `CS-20261124-03`（见 [BOARD](../../.agents/BOARD.md) §5）。
+
+### 7.1 落地清单
+
+| 落点 | 文件:行 | 说明 |
+| --- | --- | --- |
+| 清单字段 | `internal/core/registry/manifest.go:144` | `PostUpgrade string`，tag `json:"post_upgrade,omitempty"`——可选，缺省空串即不调用 |
+| 形态与域校验 | `internal/core/registry/validate.go:173-192`（`validatePostUpgrade`，注释在 `:169`） | 前缀必须等于 `"<自身 id>."`；动作段走 `methodActionPattern`；**不校验动作是否已实现**（内核不持有插件方法清单，也不维护动词表） |
+| 重载后调用 | `cmd/kored/serve_runtime.go:319`（`reloadOne` 调用点）、`:332-346`（`runPostUpgrade`）、`:37`（`postUpgradeTimeout = 15 * time.Second`） | 重载成功后按声明经 `bus.Call` 调用一次 |
+| 失败可见 | `cmd/kored/serve_runtime.go:348`（`alertPostUpgradeFailure`） | 失败写 WARN + 告警中心一条记录；不回滚安装 |
+| 协议文档 | `docs/PLUGIN-PROTOCOL.md:75`（字段行）、`:420`（§12 第 6 步）、`:467`（§16.1 非破坏性判断） | 语义、调用时机、lazy 冷启一次后按 `idle_timeout_s` 回收 |
+| 内核文档 | `docs/CORE.md:126` | 「重载成功后若新清单声明了 `post_upgrade`」一段 |
+| 插件声明 | `kore-plugin-cron/info.json`（`"post_upgrade": "cron.migrate"`）、`methods.go`（新增 `cron.migrate`，`system:admin`，与启动期迁移同一实现、幂等）、版本 `0.7.0` | 第一个消费者；启动期迁移保留为老内核兜底 |
+
+### 7.2 验收证据（2026-11-24 复跑）
+
+- `go test ./internal/core/registry/ -run TestParsePostUpgrade -count=1` → `ok ... 0.004s`，exit 0（形态正例 + `kore.post_upgrade` 保留域 / 非法动作段反例）；
+- `go test ./cmd/kored/ -run TestReloadOneRunsDeclaredPostUpgrade -count=1` → `ok ... 0.326s`，exit 0（lazy 插件**从未被调用**，`reloadOne` 后探针文件存在；改前该测试 FAIL）；
+- `kore-plugin-cron`：`go test -run TestPostUpgradeHookDeclaredAndImplemented -count=1 .` → `ok ... 0.004s`，exit 0（守护「声明即实现」，防 `E_NOTFOUND` 静默）。
+
+### 7.3 与原文的差异
+
+- 原文 §5 列的断言名与实现一致（`TestReloadOneRunsDeclaredPostUpgrade` / `TestParsePostUpgrade`）；插件侧新增的 `TestPostUpgradeHookDeclaredAndImplemented`（`kore-plugin-cron/methods_test.go:140`）是 §3「声明了却没实现」这一风险的守护落地——原文点到风险但未给文件名。
+- 「内核不持有插件方法清单（`methods` 数组内核不解析）」与实现一致：`validatePostUpgrade` 只校验形态与域归属。
+
+### 7.4 生效边界（accepted 的范围）
+
+- **已生效的是内核机制**：`kore` 是源码构建的单二进制，解析 / 校验 / 重载后调用 / 失败告警均已进 main 并带测试，下一次 `make build` + 重启即对运行实例生效。**本卡未重启主实例 8787，未做真机 `POST /store/update` 端到端**。
+- **未生效的是分发链**：`cron` 0.7.0 未入索引（`kore-plugins`）、未发版；用户侧要等 cron 0.7.0 入索引 + 重签后才拿到该声明。老内核（早于 `b71a900`）忽略该字段，行为退化为「首次调用时启动迁移」，不是回归。
+- **未证明项**：升级时槽位已满的路径（`Ensure` 驱逐 LRU lazy 或 `E_RATELIMIT`）只有代码路径与 §6 风险描述，无实测告警证据；声明了 `post_upgrade` 的 lazy 插件冷启耗时未做 p95 采样。
+- accepted 的含义是**机制设计定案且已落地可验证**，不等于插件已发布到用户；G-14 的「非破坏性」判断见 §4，不因本次转 accepted 而改口径。
