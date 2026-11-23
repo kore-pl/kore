@@ -109,11 +109,11 @@
 1. **只允许已声明方法**：目标方法必须在插件 `info.json.method_capabilities` 里显式声明（`kore-plugin-cron/info.json:11`），并**拒绝** `system:admin` 级方法（如 `cron.add` / `cron.run`）——委派凭据的能力上限**低于**会话，不等于会话。
 2. **无 admin 能力继承**：凭据不解析成 `subject=admin`；能力解析走独立白名单（G-01：内核不维护业务词表，白名单只认 read 动作与显式 `(plugin, method)` 二元组）。
 3. **审计 fail-closed**：写不进审计就**拒绝执行**（对齐 ADR-0018 提权审计口径），不是「记不上也放行」。
-4. **通道防伪只做防伪**：socket `0600` + `SO_PEERCRED` uid 必须等于 kored 属主或 root（`internal/core/httpapi/local_access.go:80-92` 已有实现），但只用于**拒绝陌生对端**，不构成身份——身份来自凭据本身（`internal/core/httpapi/channel.go:46-60` 是这种多因子通道的先例）。
+4. **通道防伪只做防伪**：socket `0600` + `SO_PEERCRED` uid 必须等于 kored 属主或 root（`internal/core/httpapi/local_access.go:80-92` 已有实现），但只用于**拒绝陌生对端**，不构成身份——身份来自凭据本身（`internal/core/httpapi/channel.go:52-70` 是这种多因子通道的先例）。
 5. **参数与体积**：`--params` 只从文件或 stdin 读，≤64 KiB（对齐 `handlers_scheduler.go:17`），不引入 shell 解析。
 6. **退出码语义**：复用 `cmd/kored/main.go:18-25` 码表；插件业务失败需要新码（建议 7 = 远端方法失败），不得把业务失败压成 0 或 2。
 
-CSRF：CLI 走 UDS 时无浏览器可达性，`internal/core/httpapi/middleware.go:150-155` 已有 UDS 免 CSRF 的先例；但**认证不能跟着一起免**（同一段注释写明「只免 CSRF，不免认证」）。所以 A2 需要的是 `withAuth` 认 bearer（`channel.go` 的 root-action 分支是模板），不是 CSRF 豁免。
+CSRF：CLI 走 UDS 时无浏览器可达性，`internal/core/httpapi/middleware.go:154-161` 已有 UDS 免 CSRF 的先例；但**认证不能跟着一起免**（同一段注释写明「只免 CSRF，不免认证」）。所以 A2 需要的是 `withAuth` 认 bearer（`channel.go` 的 root-action 分支是模板），不是 CSRF 豁免。
 
 ## 6. 风险与已知缺口
 

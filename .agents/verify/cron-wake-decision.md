@@ -2,7 +2,7 @@
 
 > 结论先行：**推荐 B2 —— 撤回「宿主条目唤醒插件」的承诺，收敛到内核 scheduler；不新增 `kored invoke` 免登录通道。**
 > 但任务卡的前提需要纠正：**没有任何一条 `cron` 写的 crontab 条目试图唤醒插件**。shell/http 写的是自包含命令、由系统 cron 在插件用户下直接执行；`type=plugin` 根本不写 crontab，第二跳由浏览器 POST 内核 scheduler 完成。断链在**承诺面**（3 份文档 + 1 条已采纳决策记录），不在运行期。
-> 取证锚点：`HEAD=ca4f45e`；`kore-plugin-cron HEAD=ecec619`。引用行号按这两个提交解析。
+> 取证锚点：代码基线 `3765708`（`middleware.go` 注释漂移修正后的 HEAD），ADR/报告提交 `0e4b68e`；`kore-plugin-cron HEAD=ecec619`。引用行号按这两个基线解析。
 > 本轮：只读代码 / 文档，未起服务、未改代码、未 sudo、未改动主实例运行态配置。产出 ADR 草案 [ADR-0046](../../docs/DECISIONS/0046-cron-wake-path.md)（`状态: proposed`）。
 
 ## 1. 断链复核（问题 1）
@@ -88,7 +88,7 @@ ADR-0019 把「外部触发器（用户 cron 调 HTTP）」列为**可选增强*
 
 - `0043:18` 鉴权行：`withAuth` 对全部 `/api/v1/*` 一律会话校验，「UDS / loopback **不再跳过**」；
 - `0043:29-31`：选项 C「本机 UDS 保留免登录、只给浏览器加登录页」被**否决**，理由「留下第二套身份来源，能力解析与审计都会分叉」；
-- 代码现状同口径：`internal/core/httpapi/middleware.go:18-19`、`:33-61`；UDS 只剩「免 CSRF」豁免（`middleware.go:150-155`），且注释明写「只免 CSRF，不免认证」。
+- 代码现状同口径：`internal/core/httpapi/middleware.go:21-32`、`:33-61`；UDS 只剩「免 CSRF」豁免（`middleware.go:154-161`），且注释明写「只免 CSRF，不免认证」。
 
 所以 A1 真要落地，**必须改 ADR-0043 本身**（新 ADR 取代 / amendment），不能宣称兼容。
 
@@ -97,7 +97,7 @@ ADR-0019 把「外部触发器（用户 cron 调 HTTP）」列为**可选增强*
 1. **只允许已声明方法**——目标方法必须在 `info.json.method_capabilities` 显式声明（`kore-plugin-cron/info.json:11`），并**拒绝** `system:admin` 级方法（`cron.add` / `cron.run` 这类）；委派上限低于会话。
 2. **无 admin 能力继承**——不解析成 `subject=admin`，能力走独立白名单（G-01：不维护业务词表，只认 read 动作与显式 `(plugin, method)`）。
 3. **审计 fail-closed**——写不进审计就拒绝执行。
-4. **通道防伪只做防伪**——socket `0600` + `SO_PEERCRED` uid ∈ {kored 属主, root}（`local_access.go:80-92` 已有）只用于拒绝陌生对端，**不构成身份**；`channel.go:46-60` 是这种多因子通道的先例。
+4. **通道防伪只做防伪**——socket `0600` + `SO_PEERCRED` uid ∈ {kored 属主, root}（`local_access.go:80-92` 已有）只用于拒绝陌生对端，**不构成身份**；`channel.go:52-70` 是这种多因子通道的先例。
 5. **参数只从文件 / stdin，≤64 KiB**（对齐 `handlers_scheduler.go:17`），不做 shell 解析。
 6. **退出码语义**——复用 `cmd/kored/main.go:18-25` 码表；插件业务失败需新码（建议 7）。
 
