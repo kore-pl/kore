@@ -30,10 +30,48 @@ sha256sum dist/<id>-<version>.tar.gz          # 与索引同版本 sha 比对
 2. **打包**：`make build && make dist`；导出 `sha256` 与 `size_bytes`。
 3. **可复现**：同树 `make dist` 两次 sha 一致；`git archive HEAD | tar -x -C /tmp/x && cd /tmp/x && make dist` 的 sha 与第 2 步一致。
 4. **提交**：`chore(release): bump vX.Y.Z`（只含 `info.json` / `manifest.json` / `CHANGELOG.md`，用 `kore/scripts/safe-commit.sh`）。
-5. **发布**：`git tag -a vX.Y.Z`（**必须 annotated**，见 §5）→ `git push origin vX.Y.Z` → `gh release create vX.Y.Z dist/<id>-<version>.tar.gz`。
+5. **发布**：`git tag -a vX.Y.Z <sha>`（**必须 annotated 且显式钉住提交 sha，不钉 HEAD**，见 §2.1/§5）→ `git push origin vX.Y.Z` → `gh release create vX.Y.Z dist/<id>-<version>.tar.gz`。
 6. **索引**：更新 `kore-plugins/index/plugins.json` 的 `version` / `sha256` / `size_bytes` / `download_url`；把新版本追加到 `index/versions.lock.json`；同步 `presets/*.json` 的固定版本。
 7. **重签**（长期密钥，ADR-0025）：`KORE_SIGNING_KEY=~/.config/kore/signing/index-signing.seed bash scripts/sign-index.sh` → `bash scripts/validate-index.sh` 正向 exit 0、篡改正文反例非 0 → `make check`。首次播种用 `--generate`，流程见 [SIGNING-KEY-SOP](./SIGNING-KEY-SOP.md)。
 8. **市场页（免重启）**：`bash scripts/build-market.sh`。公钥是编译期常量且**永不随重签变化**，日常重签**不需要** `make build`、不需要重启 kored；只有轮换/泄漏应急换公钥时才 `cd ../kore && make build` + 重启一次，见 [RUNBOOK](./RUNBOOK.md) §1。
+
+## 2.1 发版窗口冻结与 tag 钉 sha（2026-11-23 kore-plugin-waf v0.4.1 事故）
+
+**事故**：`v0.4.1` 的 tag 一度指向 `244ddad`（该提交的 `info.json` 已经是 **0.4.2**），而 release 挂的资产是从 `23f8b7a` 打出的 `201635ab…` / 2934045 B。根因不是手滑，而是**发版窗口内该仓仍有源码提交**：另一轨道在 `23f8b7a` 之后提交了 0.4.2 的测试与 bump，发版方按默认 HEAD 打了 tag。tag 与资产不是同一棵树，同版本出现两个内容标识。
+
+**规则 1：发版窗口冻结。** 某仓一旦开始「打 tag → 推三端 → 建 release」，该仓**立即冻结源码提交**，直到 tag 与 release 资产双向核对完成；同一时刻**一个仓只允许一个发版动作在跑**。窗口内需要改代码时，取消本次发版、按新版本号重来——不允许"边发边改"。
+
+**规则 2：tag 必须钉住提交 sha，不钉 HEAD。**
+
+```bash
+git tag -a v<ver> <sha> -m "..."      # 显式给 sha，禁止省略参数走默认 HEAD
+git cat-file -t v<ver>                # 必须输出 tag（annotated）
+git ls-remote --tags origin 'v<ver>*' # 回读 v<ver>^{} 必须 == <sha>
+git rev-parse v<ver>^{}               # 与"该版本 dist 是从哪棵树打出来的"逐字对上
+```
+
+反例（本次）：`v0.4.1` → `244ddad`，而资产 `201635ab…` 来自 `23f8b7a`——**tag 的 peeled sha ≠ 打 dist 的树**，事故成立。事后对齐 tag 与资产只是事故处置；已推送的 tag 不允许 force push 移动，按 §0 只能「新版本 + 新 release」。
+
+**发布后自查清单（3 条，缺一不得宣布发版完成）：**
+
+1. tag 的 peeled sha == 打 dist 用的那棵树：`git rev-parse v<ver>^{}` == 打 dist 时所在 HEAD；
+2. release 资产 sha256 == 该树 dist sha256：`curl -sSL <资产 url> | sha256sum` 与 `sha256sum dist/<id>-<version>.tar.gz` 一致；
+3. `info.json` 的版本 == tag 版本：`git show v<ver>:info.json | grep '"version"'`。
+
+## 2.2 代理可见性门禁（SDK / module 发布）
+
+发布 SDK tag 后，**默认 GOPROXY 可能尚未索引新版本**，此时不能宣布"可消费"。实测 `pluginapi v0.1.5`：默认 `go get` 180s 超时，`GOPROXY=direct` 立即成功。
+
+- 判据：干净目录（`GOWORK=off`、无 `replace`）`go get <module>@vX.Y.Z` 走**默认 GOPROXY** 成功，且 `go list -m -versions` 列出该版本；
+- proxy 首次抓取是分钟级延迟：失败先重试/等待，**不要**改版本号或 retract 掩盖；同时记录 `GOPROXY=direct` 结果作对照；
+- 两条路径都通过后，才把"干净目录消费验证"写进证据。
+
+## 2.3 索引延迟反例（商店显示旧版本）
+
+2026-11-23 事故：索引重签与主实例 `index_dir` 回切不同步，8787 把 `discover 0.2.0` 显示成 `0.1.0`。发版后必须核对**三方版本一致**：
+
+- release tag 版本 == `kore-plugins/index/plugins.json` 的 `version` == `GET /api/v1/store/plugins` 返回版本；
+- 索引更新/重签/主实例回切未完成前，不得宣布发版完成；索引侧延迟不是"已发布"。
 
 ## 3. 门禁
 
