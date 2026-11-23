@@ -1,8 +1,11 @@
 /* kore 主壳 · 数据库管理（web/db.js）——零框架 / 零 CDN / 无外链。
-   调用形态：POST /api/v1/invoke/<id>/<id>.<action>，本例 /api/v1/invoke/db-mysql/db-mysql.instances。
-   window.KoreDb.render(container) 调 db-mysql 的 db-mysql.instances / .databases / .query / .status；
-   插件 businessVerb 只剥 "db-mysql." 前缀，裸动词（如 instances）会 E_NOTFOUND「未知方法」——
-   方法段必须写完整限定名，不得退化为裸动词。
+   调用形态：POST /api/v1/invoke/<plugin-id>/<plugin-id>.<action>。
+   window.KoreDb.render(container) 支持两类实例，按页头的 MySQL / PostgreSQL 切换分派：
+     MySQL      → db-mysql.instances / .databases / .query / .status（另有 db-l2 写操作）
+     PostgreSQL → db-postgres.instances / .databases / .query / .status（只读，无 L2）
+   协议（PLUGIN-PROTOCOL §7.2.1）：方法段必须带域前缀，裸动词（如 instances）直接
+   E_NOTFOUND「未知方法」——本文件所有方法名都经 methodFor() 拼出完整限定名，不做裸名回退。
+   空态：PG 的 instances 在 count=0 / 全部不可达时返回 hint，本页原样展示为「怎么办」引导。
    写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。
    L2 管理（建库/删库/建用户/授权/导入导出）在 web/db-l2.js，首次执行写操作或展开
    「用户与授权」时才注入（/assets/db-l2.js）；删库/删用户必须手输名称后才解锁提交。
@@ -18,6 +21,7 @@
       statusError: '', dbError: '', dbLoaded: false, queryError: '', busy: false, destroyed: false,
       discoveryState: 'loading', discovery: null, discoveryError: '',
       autoNotice: null, autoPending: false, selectedDb: '', includeSystem: false, l2Promise: null,
+      dbType: 'mysql', instHint: '', container: null,
       l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null };
   }
   var S = fresh();
@@ -65,8 +69,36 @@
       });
     });
   }
-  function invoke(method, params) { return invokeAt(API, method, params); }
+  // 方法名按当前实例类型拼完整限定名（<plugin-id>.<action>），裸方法名不会被后端接受。
+  function isPg() { return S.dbType === 'postgres'; }
+  function methodFor(action) { return (isPg() ? 'db-postgres.' : 'db-mysql.') + action; }
+  function dbTitle() { return isPg() ? 'PostgreSQL' : 'MySQL'; }
+  function defaultPort() { return isPg() ? 5432 : 3306; }
+  // 沿用完整方法名的调用方（如 db-l2 的 db-mysql.createDatabase）按前缀选 base，避免写死 MySQL 入口。
+  function invoke(method, params) {
+    return invokeAt(String(method).indexOf('db-postgres.') === 0 ? '/api/v1/invoke/db-postgres/' : API, method, params);
+  }
+  // 实例类型选择记在本机（失败静默回默认），下次打开数据库页保持用户上次的选择。
+  function loadTypePref() {
+    try { return localStorage.getItem('kore.db.type') === 'postgres' ? 'postgres' : 'mysql'; } catch (e) { return 'mysql'; }
+  }
+  function saveTypePref(type) { try { localStorage.setItem('kore.db.type', type); } catch (e) { /* 隐私模式忽略 */ } }
+  function isMissingPlugin(text) { return /E_NOTFOUND|未安装|未启用|未找到插件/.test(String(text || '')); }
+  // PostgreSQL 侧的错误原文 → 「怎么办」；MySQL 继续用 hintFor。
+  function pgHintFor(text) {
+    var msg = String(text || '');
+    if (isMissingPlugin(msg)) return 'PostgreSQL 插件（db-postgres）未安装或未启用：到「插件」页安装并启用后刷新本页。';
+    if (/E_INVALID|配置|config/i.test(msg)) return '连接配置不完整或非法：点「配置连接」补齐 host/port/用户名与密码后再试。';
+    if (/E_UPSTREAM|超时|refused|连接.*失败|不可达|no such host/i.test(msg)) {
+      return '检查 PostgreSQL 是否已启动、端口是否监听、host 是否可达；容器部署请填宿主机的发布端口（如 15432）。';
+    }
+    return '检查插件设置里的 host/port/用户名与密码，确认服务已启动并允许该账号从本机登录。';
+  }
+  function errHint(text) { return isPg() ? pgHintFor(text) : hintFor(text); }
   function fmtInt(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('zh-CN') : '—'; }
+  function fmtPct(ratio) {
+    return typeof ratio === 'number' && isFinite(ratio) && ratio >= 0 ? (ratio * 100).toFixed(1) + '%' : '—';
+  }
   function fmtUptime(sec) {
     if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) return '—';
     var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -156,7 +188,12 @@
     '.db-l2-input-row{display:flex;gap:var(--kore-space-2);align-items:center}' +
     '.db-l2-input-row .field-input{flex:1 1 auto;min-width:0}' +
     '.db-l2-checks{display:flex;flex-wrap:wrap;gap:var(--kore-space-1) var(--kore-space-3)}' +
-    '.db-l2-checks .field-check{min-height:32px}.db-l2-copy{color:var(--kore-success)}.db-l2-error{padding:var(--kore-space-2) 0}';
+    '.db-l2-checks .field-check{min-height:32px}.db-l2-copy{color:var(--kore-success)}.db-l2-error{padding:var(--kore-space-2) 0}' +
+    '.db-type-switch{display:inline-flex;flex:0 0 auto;border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);overflow:hidden}' +
+    '.db-type-switch .btn{border:0;border-radius:0;min-height:32px;padding:0 var(--kore-space-3);font-size:var(--kore-font-12);white-space:nowrap}' +
+    '.db-type-switch .btn[aria-pressed="true"]{background:var(--kore-info);color:#fff}' +
+    '.db-pg-note{margin:0 var(--kore-space-4) var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.6}' +
+    '.db-type-row{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;padding:0 var(--kore-space-3) var(--kore-space-2)}';
   function ensureL2Style() {
     if (document.getElementById('kore-db-l2-style')) return;
     var style = document.createElement('style');
@@ -248,6 +285,28 @@
     function title(text) { add(main, el('p', 'db-auto-title', text)); }
     function text(value) { add(main, el('p', 'db-auto-text', value)); }
     function act(cls, label, fn) { add(actions, btn({ parent: actions, cls: cls }, label, fn)); }
+
+    // PostgreSQL 没有 discover 自动探测：横幅直接用 instances 的 hint 与连通状态说话。
+    if (isPg()) {
+      var pgConn = connectedInstance();
+      if (pgConn) {
+        badge('已连接');
+        title('已连接 PostgreSQL ' + shortVersion(pgConn.version) + '（' + (pgConn.host || '127.0.0.1') + ':' + (pgConn.port || 5432) + '）');
+        text('连接信息来自插件设置（db-postgres 配置契约），保存后下一次调用立即生效；要改地址或密码点「配置连接」。');
+        if (S.autoNotice) add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+        act('btn-primary', '配置连接', function () { openSettings(false); });
+        act('btn-ghost', '重新读取', function () { loadInstances(false); });
+        return;
+      }
+      box.classList.add('is-none');
+      badge('PostgreSQL');
+      title('PostgreSQL 实例未配置或不可达');
+      text(S.instHint || (isMissingPlugin(S.loadError) ? pgHintFor(S.loadError) : '正在读取实例与连接配置…'));
+      if (S.autoNotice) add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
+      act('btn-primary', '配置连接', function () { openSettings(false); });
+      act('btn-ghost', '重新读取', function () { loadInstances(false); });
+      return;
+    }
 
     // 优先级①：只要有一个实例真的连通，横幅就以实例卡的服务端版本为准——
     // 即使 discover 是旧版、只探到客户端版本，也不再出现"横幅说没连上、实例卡说可达"的自相矛盾。
@@ -348,13 +407,26 @@
       var fail = add(S.instBody, el('div', 'empty-state db-empty'));
       add(fail, el('p', 'empty-state-title', '读取实例失败'));
       add(fail, el('p', 'empty-state-text', S.loadError));
-      add(fail, el('p', 'empty-state-text', '怎么办：' + hintFor(S.loadError)));
+      add(fail, el('p', 'empty-state-text', '怎么办：' + errHint(S.loadError)));
       var retry = add(fail, el('button', 'btn btn-primary', '重新读取'));
       retry.type = 'button'; on(retry, function () { loadInstances(false); });
       return;
     }
     if (!S.instances.length) {
       var empty = add(S.instBody, el('div', 'empty-state db-empty'));
+      if (isPg()) {
+        // 空态引导：优先用插件返回的 hint（count=0 与「全不可达」两种文案由后端决定）。
+        add(empty, el('p', 'empty-state-title', '还没有 PostgreSQL 连接'));
+        add(empty, el('p', 'empty-state-text',
+          S.instHint || (isMissingPlugin(S.loadError) ? pgHintFor(S.loadError)
+            : '插件设置里还没有保存连接信息：请填写 host / port / 用户名 / 密码。')));
+        var pgOps = add(empty, el('div', 'db-auto-actions'));
+        add(pgOps, btn({ parent: pgOps, cls: 'btn-primary' }, '配置连接', function () { openSettings(false); }));
+        add(pgOps, btn({ parent: pgOps, cls: 'btn-ghost' }, '重新读取', function () { loadInstances(false); }));
+        add(empty, el('p', 'empty-state-text',
+          '也可以先导出环境变量再重启内核：KORE_PG_HOST / KORE_PG_PORT / KORE_PG_USER / KORE_PG_PASSWORD_ENV。'));
+        return;
+      }
       add(empty, el('p', 'empty-state-title', '还没有数据库连接'));
       var svc = S.discovery;
       var why;
@@ -394,12 +466,12 @@
       var top = add(card, el('div', 'db-inst-head'));
       add(top, el('span', 'db-inst-name', inst.name === 'default' ? '默认连接' : inst.name));
       top.appendChild(chip(inst.reachable ? 'ok' : 'fail', inst.reachable ? '可达' : '不可达'));
-      add(card, el('div', 'db-inst-meta', (inst.host || '—') + ':' + (inst.port || 3306)));
+      add(card, el('div', 'db-inst-meta', (inst.host || '—') + ':' + (inst.port || defaultPort())));
       if (inst.reachable) {
         add(card, el('div', 'db-inst-version', inst.version || '版本未知'));
       } else {
         add(card, el('div', 'db-inst-error', '连接失败：' + (inst.error || '原因未知'))).title = inst.error || '';
-        add(card, el('div', 'db-inst-hint', '怎么办：' + hintFor(inst.error)));
+        add(card, el('div', 'db-inst-hint', '怎么办：' + errHint(inst.error)));
       }
       on(card, function () { selectInstance(inst.name); });
     });
@@ -410,8 +482,12 @@
     if (S.statusError) { S.statusHost.appendChild(notice('状态读取失败：' + S.statusError)); return; }
     if (!S.status) { add(S.statusHost, el('div', 'db-status-loading muted', '正在读取实例状态…')); return; }
     var d = S.status, grid = add(S.statusHost, el('div', 'db-stats'));
-    [['连接线程', fmtInt(d.threads_connected)], ['运行时长', fmtUptime(d.uptime_s)], ['查询总数', fmtInt(d.queries)],
-      ['慢查询', fmtInt(d.slow_queries)], ['最大连接', fmtInt(d.max_connections)], ['版本', d.version || '—']].forEach(function (item) {
+    var stats = isPg()
+      ? [['连接数', fmtInt(d.connections)], ['数据库', fmtInt(d.databases)], ['运行时长', fmtUptime(d.uptime_s)],
+        ['缓存命中率', fmtPct(d.cache_hit_ratio)], ['命中块', fmtInt(d.blocks_hit)], ['版本', d.version || '—']]
+      : [['连接线程', fmtInt(d.threads_connected)], ['运行时长', fmtUptime(d.uptime_s)], ['查询总数', fmtInt(d.queries)],
+        ['慢查询', fmtInt(d.slow_queries)], ['最大连接', fmtInt(d.max_connections)], ['版本', d.version || '—']];
+    stats.forEach(function (item) {
       var cell = add(grid, el('div', 'db-stat'));
       add(cell, el('span', 'db-stat-label', item[0]));
       add(cell, el('span', 'db-stat-value', item[1]));
@@ -504,18 +580,26 @@
     S.dbCount = add(dbHead, el('span', 'panel-meta', ''));
     // 工具栏单独成行：库面板在桌面端只有 260px，塞进 panel-head 会把标题挤成竖排。
     var headOps = add(dbPanel, el('div', 'db-toolbar'));
-    headOps.appendChild(l2Btn('新建数据库', function () {
-      withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
-    }));
-    headOps.appendChild(l2Btn('导入', function () {
-      withL2(function (mod, ctx) { mod.openImport(ctx); });
-    }));
+    if (!isPg()) {
+      headOps.appendChild(l2Btn('新建数据库', function () {
+        withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
+      }));
+      headOps.appendChild(l2Btn('导入', function () {
+        withL2(function (mod, ctx) { mod.openImport(ctx); });
+      }));
+    }
     // 系统库默认被插件过滤；需要核对系统库（并确认它们没有删除入口）时显式纳入。
     var sysToggle = add(headOps, el('label', 'field field-check db-sys-toggle'));
     var sysBox = add(sysToggle, el('input', null));
     sysBox.type = 'checkbox'; sysBox.checked = !!S.includeSystem;
     add(sysToggle, el('span', null, '显示系统库'));
-    sysToggle.title = '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
+    sysToggle.title = isPg()
+      ? '勾选后包含 template0 / template1（postgres 维护库始终显示）'
+      : '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
+    if (isPg()) {
+      add(dbPanel, el('p', 'db-pg-note',
+        'PostgreSQL 前端本版只读：实例探测、库列表与只读 SQL；建库 / 建用户 / 导入导出不在本版本范围。'));
+    }
     sysToggle.addEventListener('change', function () {
       S.includeSystem = sysBox.checked;
       loadDbs();
@@ -526,11 +610,15 @@
     var sqlPanel = add(layout, el('section', 'panel db-sql-panel'));
     var sqlHead = add(sqlPanel, el('div', 'panel-head'));
     add(sqlHead, el('span', 'panel-title', 'SQL 控制台')); add(sqlHead, el('span', 'panel-meta', 'Ctrl+Enter 执行'));
-    add(sqlPanel, el('p', 'db-readonly', '仅支持 SELECT / SHOW / DESCRIBE / EXPLAIN'));
+    add(sqlPanel, el('p', 'db-readonly', isPg()
+      ? '仅支持 SELECT / SHOW / EXPLAIN / WITH（只读；查询在连接默认库执行）'
+      : '仅支持 SELECT / SHOW / DESCRIBE / EXPLAIN'));
     S.sql = add(sqlPanel, el('textarea', 'db-sql'));
     S.sql.rows = 5; S.sql.spellcheck = false;
-    S.sql.placeholder = 'SELECT * FROM kore_ui.demo LIMIT 20';
-    S.sql.setAttribute('aria-label', 'SQL 输入（仅支持 SELECT / SHOW / DESCRIBE / EXPLAIN）');
+    S.sql.placeholder = isPg() ? 'SELECT version()' : 'SELECT * FROM kore_ui.demo LIMIT 20';
+    S.sql.setAttribute('aria-label', isPg()
+      ? 'SQL 输入（仅支持 SELECT / SHOW / EXPLAIN / WITH）'
+      : 'SQL 输入（仅支持 SELECT / SHOW / DESCRIBE / EXPLAIN）');
     S.sql.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); runQuery(); }
     });
@@ -542,19 +630,21 @@
     S.queryNoticeHost = add(sqlPanel, el('div', 'db-query-notice'));
     S.resultHost = add(sqlPanel, el('div', 'db-result'));
     paintQueryNotice(); paintRunState(); paintResult();
-    // 用户管理放在折叠区：账号列表要额外查 mysql.user，不展开就不发这次查询。
-    var users = add(host, el('details', 'panel db-l2-panel'));
-    var sum = add(users, el('summary', 'db-l2-summary'));
-    add(sum, el('span', 'panel-title', '用户与授权'));
-    add(sum, el('span', 'panel-meta', '创建账号 · 授权 · 删除'));
-    S.l2UsersHost = add(users, el('div', 'db-l2-users'));
-    users.addEventListener('toggle', function () {
-      if (!users.open || !S.l2UsersHost) return;
-      withL2(function (mod, ctx) {
-        if (S.l2UsersHandle) S.l2UsersHandle.destroy();
-        S.l2UsersHandle = mod.mountUsers(ctx, S.l2UsersHost);
+    // 用户管理放在折叠区：账号列表要额外查 mysql.user，不展开就不发这次查询。PG 无 L2，不渲染。
+    if (!isPg()) {
+      var users = add(host, el('details', 'panel db-l2-panel'));
+      var sum = add(users, el('summary', 'db-l2-summary'));
+      add(sum, el('span', 'panel-title', '用户与授权'));
+      add(sum, el('span', 'panel-meta', '创建账号 · 授权 · 删除'));
+      S.l2UsersHost = add(users, el('div', 'db-l2-users'));
+      users.addEventListener('toggle', function () {
+        if (!users.open || !S.l2UsersHost) return;
+        withL2(function (mod, ctx) {
+          if (S.l2UsersHandle) S.l2UsersHandle.destroy();
+          S.l2UsersHandle = mod.mountUsers(ctx, S.l2UsersHost);
+        });
       });
-    });
+    }
   }
   function selectInstance(name) {
     if (!name || S.selected === name) return;
@@ -568,7 +658,13 @@
   function useDb(name) {
     if (!S.sql) return;
     S.selectedDb = name;
-    S.sql.value = 'SHOW TABLES FROM `' + String(name).replace(/`/g, '``') + '`';
+    if (isPg()) {
+      // PG 插件在连接默认库上执行只读查询，没有跨库 USE；这里给可直接执行的库信息查询。
+      S.sql.value = "SELECT datname AS database, pg_size_pretty(pg_database_size(datname)) AS size " +
+        "FROM pg_database WHERE datname = '" + String(name).replace(/'/g, "''") + "'";
+    } else {
+      S.sql.value = 'SHOW TABLES FROM `' + String(name).replace(/`/g, '``') + '`';
+    }
     S.sql.focus();
     runQuery();
   }
@@ -579,7 +675,7 @@
     var instance = S.selected;
     S.busy = true; S.queryError = ''; S.result = null;
     paintQueryNotice(); paintRunState(); paintResult();
-    invoke('db-mysql.query', { instance: instance, sql: sql }).then(function (data) {
+    invoke(methodFor('query'), { instance: instance, sql: sql }).then(function (data) {
       if (S.destroyed || S.selected !== instance) return;
       S.busy = false; S.result = data;
       paintRunState(); paintResult();
@@ -592,7 +688,7 @@
   function loadStatus() {
     var name = S.selected;
     if (!name) return;
-    invoke('db-mysql.status', { instance: name }).then(function (data) {
+    invoke(methodFor('status'), { instance: name }).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.status = data; paintStatus();
     }, function (err) {
@@ -606,9 +702,13 @@
     S.dbLoaded = false; paintDbs();
     var params = { instance: name };
     if (S.includeSystem) params.include_system = true;
-    invoke('db-mysql.databases', params).then(function (data) {
+    invoke(methodFor('databases'), params).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
-      S.dbs = data.databases || []; S.dbLoaded = true; paintDbs();
+      // MySQL 返回库名字符串数组，PostgreSQL 返回 [{name,size_bytes}]；这里统一成名字。
+      S.dbs = (data.databases || []).map(function (db) {
+        return typeof db === 'string' ? db : (db && db.name) || '';
+      }).filter(function (dbName) { return dbName; });
+      S.dbLoaded = true; paintDbs();
     }, function (err) {
       if (S.destroyed || S.selected !== name) return;
       S.dbError = err.message; S.dbLoaded = true; paintDbs();
@@ -618,9 +718,10 @@
     if (reset) { S.selected = ''; S.status = null; S.dbs = []; S.dbLoaded = false; S.result = null; }
     S.loadError = '';
     paintInstances();
-    invoke('db-mysql.instances', {}).then(function (data) {
+    invoke(methodFor('instances'), {}).then(function (data) {
       if (S.destroyed) return;
       S.instances = data.instances || [];
+      S.instHint = data.hint || '';
       if (S.autoPending) {
         S.autoPending = false;
         var first = S.instances.length ? S.instances[0] : null;
@@ -632,7 +733,7 @@
             (first.version ? ' · ' + first.version : '') + '（' + first.host + ':' + first.port + '）' };
         } else if (first) {
           S.autoNotice = { tone: 'warn', text: '保存成功，但连接失败：' + (first.error || '原因未知') +
-            '。怎么办：' + hintFor(first.error) };
+            '。怎么办：' + errHint(first.error) };
         } else {
           S.autoNotice = { tone: 'warn', text: '保存成功，但没有可用的连接；请检查设置后重试。' };
         }
@@ -673,8 +774,8 @@
   function openSettings(fromDiscovery) {
     if (!S.root) return;
     var svc = S.discovery;
-    var opts = { title: '数据库连接', focusKey: 'password' };
-    if (fromDiscovery && svc && svc.running) {
+    var opts = { title: isPg() ? 'PostgreSQL 连接' : '数据库连接', focusKey: 'password' };
+    if (!isPg() && fromDiscovery && svc && svc.running) {
       opts.prefill = { host: '127.0.0.1', port: svcPort(svc), user: 'root' };
       opts.autoKeys = { host: true, port: true, user: true };
       opts.autoNote = '已从本机检测结果自动填入主机、端口、用户名（标“已自动填入”），只需填写密码。';
@@ -683,33 +784,53 @@
       S.autoPending = true; S.autoNotice = null;
       loadInstances(true);
     };
+    var pluginId = isPg() ? 'db-postgres' : 'db-mysql';
     if (window.KoreShell && typeof window.KoreShell.openConfig === 'function') {
-      window.KoreShell.openConfig(S.root, 'db-mysql', opts);
+      window.KoreShell.openConfig(S.root, pluginId, opts);
     } else if (window.KoreConfig && typeof window.KoreConfig.open === 'function') {
-      window.KoreConfig.open(S.root, 'db-mysql', opts);
+      window.KoreConfig.open(S.root, pluginId, opts);
     } else {
       S.instBody.insertBefore(notice('配置面板不可用，请刷新页面重试'), S.instBody.firstChild);
     }
   }
+  // 切换实例类型：整页重绘，避免 MySQL 的 discover/L2 状态残留到 PostgreSQL 页。
+  function switchType(type) {
+    if (S.dbType === type || !S.container) return;
+    saveTypePref(type);
+    render(S.container);
+  }
   function render(container) {
     if (!container) return null;
     S = fresh();
+    S.dbType = loadTypePref();
+    S.container = container;
     container.textContent = '';
     ensureL2Style();
     var root = add(container, el('section', 'db'));
     S.root = root;
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '数据库'));
-    add(head, el('p', 'view-sub', 'MySQL / MariaDB 实例、库列表与只读 SQL 控制台；本机服务可自动检测并一键连接。'));
+    add(head, el('p', 'view-sub', 'MySQL / MariaDB 与 PostgreSQL 实例、库列表与只读 SQL 控制台；' +
+      'MySQL 本机服务可自动检测并一键连接，PostgreSQL 走插件配置（空态会给下一步引导）。'));
     S.bannerHost = add(root, el('div', 'db-banner-host'));
     var instPanel = add(root, el('section', 'panel')), instHead = add(instPanel, el('div', 'panel-head'));
-    add(instHead, el('span', 'panel-title', 'MySQL 实例'));
+    add(instHead, el('span', 'panel-title', dbTitle() + ' 实例'));
     S.instCount = add(instHead, el('span', 'panel-meta', ''));
     var gear = add(instHead, el('button', 'btn btn-ghost', '设置'));
     gear.type = 'button'; on(gear, function () { openSettings(false); });
+    // 实例类型切换放在独立一行：手机上标题/计数/设置已经占满 panel-head。
+    var typeRow = add(instPanel, el('div', 'db-type-row'));
+    var typeSwitch = add(typeRow, el('div', 'db-type-switch'));
+    typeSwitch.setAttribute('role', 'group'); typeSwitch.setAttribute('aria-label', '实例类型');
+    [['mysql', 'MySQL'], ['postgres', 'PostgreSQL']].forEach(function (item) {
+      var typeBtn = add(typeSwitch, el('button', 'btn btn-ghost', item[1]));
+      typeBtn.type = 'button';
+      typeBtn.setAttribute('aria-pressed', S.dbType === item[0] ? 'true' : 'false');
+      on(typeBtn, function () { switchType(item[0]); });
+    });
     S.instBody = add(instPanel, el('div', 'db-instance-body')); S.detailHost = add(root, el('div', 'db-detail'));
     autoBanner();
-    detect();
+    if (!isPg()) detect();
     loadInstances(false);
     return { destroy: function () { S.destroyed = true; } };
   }

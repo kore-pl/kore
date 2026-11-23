@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-22 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
 
 # kore 前端架构（FRONTEND）
 
@@ -44,6 +44,8 @@
 | `/settings` | 主壳设置 | 会话信息、日志级别、导出配置、登出 | `GET /api/v1/self`、`GET /api/v1/system/info`、`POST /api/v1/auth/logout` |
 
 **业务方法调用形态（硬约束）**：插件业务方法一律走 `POST /api/v1/invoke/<plugin-id>/<method>`，其中 `method` 必须是完整限定名 `<plugin-id>.<action>`——例如 `POST /api/v1/invoke/db-mysql/db-mysql.instances`，**不得**写成裸动词 `POST /api/v1/invoke/db-mysql/instances`。内核按 [PLUGIN-PROTOCOL](PLUGIN-PROTOCOL.md) §7.2 把 `method` 原样转发、不做方法名改写，裸动词只有插件自己保留的兼容层才认；插件一旦收紧命名（如 `db-mysql` 只认 `db-mysql.` 前缀），裸动词立即变成 `E_NOTFOUND 未知方法`。因此每个视图模块的文件头注释都要写明本条调用形态，方法段一律带域前缀（`file.list`、`site.status`、`db-mysql.query` 等）。
+
+**补充（2026-11-23 真机实测）**：已收紧命名的插件不保留裸动词兼容层，裸方法名直接 404 `E_NOTFOUND 未知方法`；前端视图、脚本与插件桥一律写死完整限定名，不做裸名回退或前缀猜测（契约原文见 [PLUGIN-PROTOCOL](PLUGIN-PROTOCOL.md) §7.2.1）。
 
 `GET /-/healthz` 不进入前端路由，只给探针与 `curl` 用。
 

@@ -273,6 +273,21 @@
 - Response 固定字段：`type`、`id`、`req_id`（**必填回显，必须与请求一致**）、`result` 或 `error` 二选一；缺 `req_id` 视为协议违规，调用方按 `E_INVALID` 处理。
 - `params`：JSON 对象，缺省为 `{}`；业务字段由插件定义，必须可向后兼容（加可选字段）。`timeout_ms`：缺省或 `<= 0` 一律视为**未设置**、取默认 15000；有效范围 1000–120000，越界按边界夹取（下限 1000、上限 120000），由调用方在截断处打 WARN（SDK 本身不写日志）。统一入口：HTTP `POST /api/v1/invoke/{plugin}/{method}`，body 即 `params`；内核组装 envelope 后转发，响应解包为 `{result}` 或 `{error}`。
 
+### 7.2.1 方法名调用契约（HTTP 入口）
+
+调用形态固定为 `POST /api/v1/invoke/<plugin-id>/<plugin-id>.<action>`：
+
+- **方法段必须带域前缀**：`method` 一律写成 `<plugin-id>.<action>`，前缀与 URL 里的 `<plugin-id>` 一致；内核只校验与转发，**不补前缀、不改写、不做别名或大小写映射**。
+- **裸方法名一律 `E_NOTFOUND`**：`POST /api/v1/invoke/db-postgres/instances` → 404 `{"code":"E_NOTFOUND","message":"未知方法: instances"}`；插件不要求、也不应保留裸动词兼容层。跨插件前缀（对 `db-postgres` 传 `db-mysql.instances`）同样 404；`kore.*` 走业务入口一律 400 `E_INVALID`（§7.2）。
+- 调用方（主壳视图、脚本、插件桥）必须把完整方法名**写死**在常量或拼装函数里，不得由裸 action 交给后端"猜"前缀；拼错即 404，不会被静默重试或回退（§10 的重试只看送达与幂等，不看方法名）。
+
+| 场景 | 请求 | 结果 |
+| --- | --- | --- |
+| ✅ 正确 | `POST /api/v1/invoke/db-postgres/db-postgres.instances` | 200，`{"instances":[...],"count":N}` |
+| ❌ 裸方法名 | `POST /api/v1/invoke/db-postgres/instances` | 404 `E_NOTFOUND 未知方法: instances` |
+| ❌ 跨插件前缀 | `POST /api/v1/invoke/db-postgres/db-mysql.instances` | 404 `E_NOTFOUND` |
+| ❌ 内核命名空间 | `POST /api/v1/invoke/db-postgres/kore.ping` | 400 `E_INVALID`（`kore.*` 业务入口一律拒绝） |
+
 ### 7.3 可选配置方法
 
 插件可额外实现 `<id>.config.get` / `<id>.config.set`，把环境变量 + 重启的配置方式换成自描述表单；字段类型、存储路径（`<state_dir>/plugins/<id>/config.json`，0600）、优先级（文件 > 环境变量 > 默认值）与热生效口径见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)。两个方法都是普通业务方法，仍走 §7.2 envelope 与 `POST /api/v1/invoke/{plugin}/{method}`；未实现时返回 `E_NOTFOUND`，不影响插件加载。
