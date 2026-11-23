@@ -24,7 +24,7 @@ func (stubIdentity) Current() (Account, error) { return Account{}, ErrUnsupporte
 func (stubIdentity) Lookup(string) (Account, bool, error) { return Account{}, false, ErrUnsupported }
 
 // Ensure 返回 ErrUnsupported。
-func (stubIdentity) Ensure(string) (Account, error) { return Account{}, ErrUnsupported }
+func (stubIdentity) Ensure(string, []string) (Account, error) { return Account{}, ErrUnsupported }
 
 // Apply 返回 ErrUnsupported（不得伪造 SysProcAttr）。
 func (stubIdentity) Apply(*exec.Cmd, Account) error { return ErrUnsupported }
@@ -37,3 +37,9 @@ func (stubAccess) Own(string, Account, os.FileMode) error { return ErrUnsupporte
 
 // Traversable 返回 ErrUnsupported。
 func (stubAccess) Traversable(string) error { return ErrUnsupported }
+
+// ensureGroup 返回 ErrUnsupported（非 Linux 无系统组语义）。
+func ensureGroup(string) error { return ErrUnsupported }
+
+// ownGroup 返回 ErrUnsupported（非 Linux 无 chgrp 语义）。
+func ownGroup(string, string, os.FileMode) error { return ErrUnsupported }

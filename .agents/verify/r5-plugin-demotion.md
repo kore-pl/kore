@@ -200,7 +200,7 @@ POST /api/v1/plugins/terminal/enable → HTTP 502
 
 根因：安装器用 `MkdirTemp` 的 `0700` 落位版本目录（属主 root），降权后 `kore-<id>` 属 other 类，**无法穿越/exec**。修复：`prepareDemotion` 对 `<id>/<version>` 版本树补 `o+rx`（目录/可执行文件），入口跟随符号链接检查但树内符号链接不跟随；属主与写权限不动。修复后同一 enable → HTTP 200、`"state":"ready"`。
 
-## 9. 已知阻断（需裁决，本轮未改）
+## 9. 插件侧通道：从已知阻断到已实现（P0-1 修复）
 
 [SECURITY §7](../../docs/SECURITY.md) 规定内核 UDS `kore.sock` 为 `root:root 0600`、"只有 root 可直连"，而 ADR-0018 的插件 bearer 通道要求插件能连它。实测：
 
@@ -218,7 +218,7 @@ $ kore.sock restored: srw------- root:root
 # 回滚后重启插件复测 → 仍 E_NEED_ROOT（connect: permission denied）
 ```
 
-→ **代码路径可用，唯一阻断点是内核 socket 权限**。**2026-11-23 lead 裁决采纳方案①「独立通道 socket」**（独立路径 + `0660 root:kore` + `SO_PEERCRED` 同时校验 uid 与 pid；否决②放宽 `kore.sock`、③只由管理会话发起）。本轮只固化插件降权，通道 socket 实现留待下一轮（ADR-0018「插件侧通道的已知阻断」已记裁决）。
+→ **代码路径可用，唯一阻断点是内核 socket 权限**。**2026-11-23 lead 裁决采纳方案①「独立通道 socket」**（否决②放宽 `kore.sock`、③只由管理会话发起），随后已落地，见 §16。
 
 ## 10. 验证命令与退出码
 
@@ -310,7 +310,7 @@ PASS
 
 **未证明（明确列出，不得当成已通过）**
 
-1. **插件 → 内核 bearer 通道**：默认 `0600` 内核 socket 下插件连不上（本轮显式退化为 `E_NEED_ROOT`）；临时放宽后代码路径可用，但**产品默认路径不通**。已裁决方案①（独立通道 socket），本轮未实现（见 §9）。
+1. **插件 → 内核 bearer 通道**：已按方案①实现（独立通道 socket，见 §16），默认权限下插件可连；残余边界是共享组 `kore` 的回收与限流（见 §16.4）。
 2. **macOS / Windows**：平台桩只保证编译，插件仍同用户运行。
 3. **无 `useradd` / `adduser` 的发行版**（Alpine/busybox 等）：未实测。
 4. **SELinux / AppArmor enforcing** 下的 `Credential` + chown + o+x 全链路：未实测。
@@ -320,7 +320,7 @@ PASS
 
 ## 14. 需 lead / 用户裁决
 
-1. **插件侧通道的 socket 口径**（§9）：三选一（独立通道 socket / 放宽 0660 + 共享组 / 只允许管理会话发起）。这是"插件低权"落地后唯一阻断产品路径的缺口，需 ADR 增补与 httpapi 改动（不在本任务写域）。
+1. **通道 socket 的口径**：已按方案①实现（`0660 root:kore` + bearer + `SO_PEERCRED(uid,pid)`）。残余裁决项：共享组 `kore` 未纳入 `kore uninstall` 清理；是否要为"每插件一个通道 socket + 属主 kore-<id>"支付动态 listener 成本（当前判断：不值得）。
 2. **container 插件在降权后的定位**：本机 `docker.sock` 为 `root:docker 0660`，插件降权后必然不可用；把它加进 `docker` 组等价 root，与 ADR 冲突 → 建议 container 声明 `root_actions` 走通道（受限命令形状），或明确标注"需要把 kored 运行在 docker 组 + 自行承担等价 root 风险"。
 3. **site / waf / dns / runtime-\***：降权后"装可写但用不了"，需各自声明 `root_actions`（协议已在），否则产品体验上会出现"启用了但全红"。是否接受"先声明再启用"的过渡期，需产品口径。
 4. **插件目录世界可读**（版本树 o+rx）：当前包内只有二进制与 `info.json`，可接受；若未来包内可能含敏感文件（证书、密钥），需要改为"按插件 uid chown 目录 + 只读 bind"或安装期显式声明，请确认。
@@ -343,3 +343,102 @@ go build -trimpath -buildvcs=false -o /tmp/r5d/kored ./cmd/kored
 systemd-run --user --unit=r5d-root --collect sudo -n /tmp/r5d/kored serve --config /tmp/r5d/config.yaml
 #   登录 → enable → invoke；插件进程 Uid 见 /proc/<pid>/status；root-action 见 §7
 ```
+
+## 16. P0 修复证据（2026-11-23 17:00–17:20，waf 真机回归暴露）
+
+### 16.1 P0-1 降权插件连不上内核 socket → 独立通道 socket
+
+根因（不是 `ownSocket`）：`ownSocket` 管的是**插件自己的协议 socket**（`<run>/plugins/<id>.sock`，已 `chown kore-<id> 0600`，hello 正常）；插件连不上的是**管理 socket `kore.sock`（root:root 0600）**——`KORE_KERNEL_SOCK` 原先指向它，降权后 `connect: permission denied`，root-action 通道对插件不可用。
+
+修复：新增**独立通道 socket**（ADR-0018「插件侧通道」）：
+- 路径 `<run>/kore-channel.sock`，`root:kore` **0660**；主 `kore.sock` 保持 `0600 root:root` 不放宽；
+- root 内核启动时创建共享组 `kore`（`platform.EnsureGroup`）；插件降权时加入该组，`Credential.Groups` 带该 gid；
+- 通道只接受 `POST /api/v1/plugins/<id>/root-action`，四关校验：bearer 所属 id == 路径 id、`SO_PEERCRED.uid == kore-<id>`、pid == supervisor 记录的**子进程 pid**、已获 `system:admin`；
+- 拒绝路径落 `capability.denied` 审计 + WARN；管理 cookie 在通道完全无效。
+
+隔离实例实测（root kored，18875）：
+
+```text
+# 通道 socket 与共享组
+660 root:kore /tmp/r5p/run/kore-channel.sock
+kore:x:971:
+
+# 降权插件进程与组
+pid=3379742 user=kore-terminal
+Uid:	994	994	994	994
+Gid:	969	969	969	969
+Groups:	969 971 
+$ sudo -n id kore-terminal
+uid=994(kore-terminal) gid=969(kore-terminal) groups=969(kore-terminal),971(kore)
+
+# 注入给插件的通道路径
+KORE_KERNEL_SOCK=/tmp/r5p/run/kore-channel.sock
+
+# 判据：默认权限下、不做任何 chmod，插件经通道成功
+POST /api/v1/invoke/firewall/status
+{"backend":"ufw","available":true,"enabled":false,"default_in":"","rules_count":0,"error":""}
+
+# 审计：subject=firewall（插件身份，非 admin）
+2026-11-23T09:12:06Z firewall ufw-status ok allow begin -1 kore-root-firewall-ufw-status-4ecc531d
+2026-11-23T09:12:06Z firewall ufw-status ok allow end 0 kore-root-firewall-ufw-status-4ecc531d
+
+# 边界：非组成员（pt）连通道 socket 被拒
+CONNECT_DENIED: [Errno 13] Permission denied
+```
+
+单测：`internal/core/httpapi/channel_test.go` 覆盖 4 类拒绝（非 root-action 路径 404、无 bearer 401、token/路径不一致 401、uid/pid/peercred 不符 401）与成功路径（200 + 执行器被调用）；`internal/platform` root 门禁用例断言 `Credential.Groups == [主组, 通道组]` 且 `id -G` 含通道组。
+
+### 16.2 P0-2 root 安装的插件文件非 root 读不到
+
+根因：`extract.writeEntry` 采信包内 mode（`| 0o600`）——root 构建的 `info.json` 0600；`commit` 落位的版本目录来自 `MkdirTemp` 的 0700；插件根由 `.staging` 的 `MkdirAll` 隐式创建为 0700。结果非 root 启动的 kored 连目录都进不去，清单读取失败 → 插件被判「未安装」。
+
+修复（B + C：可读归一 + 可操作诊断）：
+- `extract`：**不采信包内 mode**——可执行 → 0755，其余 → 0644；
+- `commit`：版本目录 `Chmod 0755`；
+- `ensureRoot`：插件根 0755；
+- `loadCatalog`：清单读取遇到 `fs.ErrPermission` 时 ERROR 级输出 `chown -R <kored 用户> <dir>` / `chmod -R a+rX <dir>` 的可操作提示，不再静默按"未安装"跳过。
+
+root 安装后实测（同一份文件，非 root `pt` 直接读）：
+
+```text
+755 root:root /tmp/r5p/state/plugins
+755 root:root /tmp/r5p/state/plugins/firewall
+755 root:root /tmp/r5p/state/plugins/firewall/0.2.3
+644 root:root /tmp/r5p/state/plugins/firewall/0.2.3/info.json
+755 root:root /tmp/r5p/state/plugins/firewall/0.2.3/bin/firewall
+
+$ head -c 80 /tmp/r5p/state/plugins/firewall/0.2.3/info.json
+{
+  "id": "firewall",
+  ...
+nonroot_read_exit=0
+```
+
+单测：`TestInstallNormalizesFileModes`（包内 0600/0700 → 落位 0644/0755，版本目录 0755）。
+
+### 16.3 本轮门禁（2026-11-23 17:2x）
+
+```text
+$ go build ./...
+build_exit=0
+$ go vet ./...
+vet_exit=0
+$ go test -count=1 -timeout 300s ./...
+gotest_exit=0（15 包 ok，无 FAIL）
+$ make build
+build_exit=0
+$ make check
+check_exit=0（13/13 段：docs-check 5 pass/1 warn + dep + thin-shell 4/0 + repo 5/0
+  + canonical 9/0 + log + wt + oss 8/0 + case 28/0 + frontend + secret 0 FAIL
+  + zero-intrusion 11 pass/0 fail）
+$ GOOS=windows GOARCH=amd64 go build ./internal/platform ./internal/core/httpapi ./internal/core/supervisor ./internal/core/installer
+cross_ok
+```
+
+### 16.4 仍未证明 / 残余
+
+1. 共享组 `kore` 未纳入 `kore uninstall` 清理（空组无害，属残留）。
+2. 每插件独立通道 socket + 属主 `kore-<id>` 未实现（当前判断不值得：动态 listener 成本 vs uid/pid 双校验已挡住冒用）。
+3. 通道无独立速率限制（仅产生 WARN/审计噪音，不越权）。
+4. SELinux/AppArmor enforcing、busybox（无 groupadd/usermod）、macOS/Windows 仍未实测。
+5. 非 root kored 读 root 安装的**状态库**（state.db 0600 root）仍需同用户启动；本轮只修插件文件可读与诊断，不承诺跨用户切换整套 state。

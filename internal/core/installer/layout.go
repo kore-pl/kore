@@ -49,6 +49,12 @@ func (in *Installer) commit(staging string, manifest *registry.Manifest, sum str
 		in.restoreStash(final, stash)
 		return nil, wrap(ErrStateDir, "原子落位失败：%v", err)
 	}
+	// 版本目录本身是 MkdirTemp 的 0700：root 安装后非 root kored 连目录都进不去
+	// （"插件未安装"）。与文件 mode 归一保持一致，版本目录固定 0755。
+	if err := os.Chmod(final, 0o755); err != nil {
+		in.restoreStash(final, stash)
+		return nil, wrap(ErrStateDir, "设置版本目录权限失败：%v", err)
+	}
 	if err := in.record(manifest, sum); err != nil {
 		if rmErr := os.RemoveAll(final); rmErr != nil {
 			in.logger.Error("回滚已落位目录失败，需人工清理", "dir", final, "err", rmErr)

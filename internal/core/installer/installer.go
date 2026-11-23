@@ -80,6 +80,20 @@ type Result struct {
 	SHA256 string
 }
 
+// ensureRoot 确保插件根目录存在且为 0755（可穿越、可列举）。
+//
+// 根目录若沿用 MkdirAll 的 0700，root 安装后非 root 启动的 kored 连插件目录都
+// 进不去（清单"读不到 → 未安装"）。插件包内容公开，根目录 0755 不构成泄密。
+func (in *Installer) ensureRoot() error {
+	if err := os.MkdirAll(in.pluginRoot, 0o755); err != nil {
+		return wrap(ErrStateDir, "建立插件根目录失败：%v", err)
+	}
+	if err := os.Chmod(in.pluginRoot, 0o755); err != nil {
+		return wrap(ErrStateDir, "设置插件根目录权限失败：%v", err)
+	}
+	return nil
+}
+
 // New 构造安装器；只做参数检查，不触碰文件系统。
 func New(opts Options) (*Installer, error) {
 	if opts.StateDir == "" {
@@ -135,6 +149,9 @@ func (in *Installer) Install(path string) (*Result, error) {
 		return nil, err
 	}
 	in.report(ref, "verify", 45, "包摘要校验通过")
+	if err := in.ensureRoot(); err != nil {
+		return nil, err
+	}
 	staging, err := in.newStaging(ref)
 	if err != nil {
 		return nil, err

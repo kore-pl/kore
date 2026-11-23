@@ -26,8 +26,10 @@ var nologinCandidates = []string{"/usr/sbin/nologin", "/sbin/nologin", "/bin/fal
 // 刻意不查 PATH：kored 以 root 运行时 PATH 可能被环境改写，用固定路径避免
 // 「PATH 里放一个同名 useradd」把 root 权限交给非可信二进制。
 var (
-	useraddCandidates = []string{"/usr/sbin/useradd", "/usr/bin/useradd", "/sbin/useradd"}
-	adduserCandidates = []string{"/usr/sbin/adduser", "/usr/bin/adduser", "/sbin/adduser"}
+	useraddCandidates  = []string{"/usr/sbin/useradd", "/usr/bin/useradd", "/sbin/useradd"}
+	adduserCandidates  = []string{"/usr/sbin/adduser", "/usr/bin/adduser", "/sbin/adduser"}
+	groupaddCandidates = []string{"/usr/sbin/groupadd", "/usr/bin/groupadd", "/sbin/groupadd"}
+	usermodCandidates  = []string{"/usr/sbin/usermod", "/usr/bin/usermod", "/sbin/usermod"}
 )
 
 // systemIdentity / systemAccess 返回 Linux 宿主实现。
@@ -69,7 +71,34 @@ func (linuxIdentity) Lookup(name string) (Account, bool, error) {
 	if err != nil {
 		return Account{}, false, fmt.Errorf("%w: 用户 %s 的 gid %q 非法", ErrAccount, name, entry.Gid)
 	}
-	return Account{Name: entry.Username, UID: uid, GID: gid}, true, nil
+	groups, err := supplementaryGroups(entry, gid)
+	if err != nil {
+		return Account{}, false, err
+	}
+	return Account{Name: entry.Username, UID: uid, GID: gid, Groups: groups}, true, nil
+}
+
+// supplementaryGroups 返回用户除主组外的补充组 gid。
+//
+// 降权时这些组会随 Credential 写给子进程；通道共享组（默认 kore）就是靠它
+// 让插件能 connect 0660 的 root-action 通道 socket。
+func supplementaryGroups(entry *user.User, primary int) ([]int, error) {
+	ids, err := entry.GroupIds()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 读取用户 %s 的组关系: %v", ErrAccount, entry.Username, err)
+	}
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		gid, convErr := strconv.Atoi(id)
+		if convErr != nil {
+			return nil, fmt.Errorf("%w: 用户 %s 的组 id %q 非法", ErrAccount, entry.Username, id)
+		}
+		if gid == primary {
+			continue
+		}
+		out = append(out, gid)
+	}
+	return out, nil
 }
 
 // Ensure 确保系统账户存在；不存在时用固定 argv 的 useradd / adduser 创建。
@@ -77,10 +106,27 @@ func (linuxIdentity) Lookup(name string) (Account, bool, error) {
 // 只允许 root 调用（创建系统账户需要 CAP_SETUID/SETGID 与 /etc/passwd 写权限）。
 // 创建产物固定为：系统账户（--system）、无 home（--no-create-home）、
 // nologin shell、与用户名同名的独立主组（不共享组，避免插件间横向访问）。
-func (i linuxIdentity) Ensure(name string) (Account, error) {
-	if acct, ok, err := i.Lookup(name); err != nil {
+func (i linuxIdentity) Ensure(name string, extraGroups []string) (Account, error) {
+	groups, err := validateGroupNames(extraGroups)
+	if err != nil {
 		return Account{}, err
+	}
+	for _, group := range groups {
+		if err := ensureGroup(group); err != nil {
+			return Account{}, err
+		}
+	}
+	if _, ok, lookupErr := i.Lookup(name); lookupErr != nil {
+		return Account{}, lookupErr
 	} else if ok {
+		// 已存在的用户：只补组关系（降权后要让插件进入通道共享组）。
+		if err := ensureMembership(name, groups); err != nil {
+			return Account{}, err
+		}
+		acct, found, lookupErr := i.Lookup(name)
+		if lookupErr != nil || !found {
+			return Account{}, fmt.Errorf("%w: 补组后重新查询用户 %s 失败：%v", ErrAccount, name, lookupErr)
+		}
 		return acct, nil
 	}
 	if os.Geteuid() != 0 {
@@ -109,6 +155,9 @@ func (i linuxIdentity) Ensure(name string) (Account, error) {
 			"--shell", shell}, groupArgs...)
 		argv = append(argv, name)
 		if err := runAccountTool(argv); err == nil {
+			if err := ensureMembership(name, groups); err != nil {
+				return Account{}, err
+			}
 			if acct, ok, lookupErr := i.Lookup(name); lookupErr == nil && ok {
 				return acct, nil
 			}
@@ -123,6 +172,9 @@ func (i linuxIdentity) Ensure(name string) (Account, error) {
 			"--shell", shell, "--disabled-login"}, adduserGroupArgs...)
 		argv = append(argv, name)
 		if err := runAccountTool(argv); err == nil {
+			if err := ensureMembership(name, groups); err != nil {
+				return Account{}, err
+			}
 			if acct, ok, lookupErr := i.Lookup(name); lookupErr == nil && ok {
 				return acct, nil
 			}
@@ -151,10 +203,22 @@ func (linuxIdentity) Apply(cmd *exec.Cmd, acct Account) error {
 	}
 	attr := &syscall.SysProcAttr{}
 	if os.Geteuid() == 0 && acct.UID != 0 {
+		groups := make([]uint32, 0, 1+len(acct.Groups))
+		seen := map[uint32]struct{}{}
+		for _, gid := range append([]int{acct.GID}, acct.Groups...) {
+			if gid <= 0 {
+				continue
+			}
+			if _, dup := seen[uint32(gid)]; dup {
+				continue
+			}
+			seen[uint32(gid)] = struct{}{}
+			groups = append(groups, uint32(gid))
+		}
 		attr.Credential = &syscall.Credential{
 			Uid:    uint32(acct.UID),
 			Gid:    uint32(acct.GID),
-			Groups: []uint32{uint32(acct.GID)},
+			Groups: groups,
 		}
 	} else {
 		attr.Credential = &syscall.Credential{
@@ -198,6 +262,99 @@ func (linuxAccess) Traversable(path string) error {
 	}
 	if err := os.Chmod(path, mode|0o001); err != nil {
 		return fmt.Errorf("platform: 设置目录 %s 可穿越: %w", path, err)
+	}
+	return nil
+}
+
+// validateGroupNames 校验并去重组名（空列表返回 nil）。
+func validateGroupNames(names []string) ([]string, error) {
+	out := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if err := validateAccountName(name); err != nil {
+			return nil, fmt.Errorf("组名 %q: %w", name, err)
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// ensureGroup 确保系统组存在（仅 root 可用），存在时直接返回。
+func ensureGroup(name string) error {
+	if _, err := user.LookupGroup(name); err == nil {
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("%w: 创建系统组 %s 需要 root", ErrAccount, name)
+	}
+	tool := firstExisting(groupaddCandidates)
+	if tool == "" {
+		return fmt.Errorf("%w: 系统组 %s 不存在，且未找到 groupadd（shadow-utils）", ErrAccount, name)
+	}
+	if err := runAccountTool([]string{tool, "--system", name}); err != nil {
+		return fmt.Errorf("%w: 创建系统组 %s 失败：%v", ErrAccount, name, err)
+	}
+	if _, err := user.LookupGroup(name); err != nil {
+		return fmt.Errorf("%w: 系统组 %s 创建后仍不可查：%v", ErrAccount, name, err)
+	}
+	return nil
+}
+
+// ensureMembership 确保用户属于给定组；缺哪个补哪个（usermod -aG）。
+func ensureMembership(name string, groups []string) error {
+	entry, err := user.Lookup(name)
+	if err != nil {
+		return fmt.Errorf("%w: 查询系统用户 %s: %v", ErrAccount, name, err)
+	}
+	ids, err := entry.GroupIds()
+	if err != nil {
+		return fmt.Errorf("%w: 读取用户 %s 的组关系: %v", ErrAccount, name, err)
+	}
+	current := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		current[id] = struct{}{}
+	}
+	for _, groupName := range groups {
+		group, err := user.LookupGroup(groupName)
+		if err != nil {
+			return fmt.Errorf("%w: 查询系统组 %s: %v", ErrAccount, groupName, err)
+		}
+		if _, ok := current[group.Gid]; ok {
+			continue
+		}
+		tool := firstExisting(usermodCandidates)
+		if tool == "" {
+			return fmt.Errorf("%w: 把 %s 加入组 %s 需要 usermod（shadow-utils）", ErrAccount, name, groupName)
+		}
+		if err := runAccountTool([]string{tool, "-aG", groupName, name}); err != nil {
+			return fmt.Errorf("%w: 把 %s 加入组 %s 失败：%v", ErrAccount, name, groupName, err)
+		}
+	}
+	return nil
+}
+
+// ownGroup 把 path 的属组改为 group 并设置 mode（属主不变，需 root）。
+func ownGroup(path, group string, mode os.FileMode) error {
+	entry, err := user.LookupGroup(group)
+	if err != nil {
+		return fmt.Errorf("%w: 查询系统组 %s: %v", ErrAccount, group, err)
+	}
+	gid, err := strconv.Atoi(entry.Gid)
+	if err != nil {
+		return fmt.Errorf("%w: 组 %s 的 gid %q 非法", ErrAccount, group, entry.Gid)
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		return fmt.Errorf("%w: chgrp %s → %s(%d): %v", ErrAccount, path, group, gid, err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("platform: chmod %s %04o: %w", path, mode.Perm(), err)
 	}
 	return nil
 }

@@ -85,6 +85,9 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),
 		Privilege:         svc.privilege,
 		PluginAuth:        svc.pluginTokenAuth,
+		ChannelSocket:     svc.channelSocket,
+		ChannelGroup:      "kore",
+		PluginPeer:        svc.manager.PluginPeer,
 		Scheduler:         svc.sched,
 		Alerts:            alertSink(svc.db),
 	}, app.Transport)

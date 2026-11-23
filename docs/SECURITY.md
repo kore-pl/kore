@@ -132,8 +132,9 @@
 
 ## 6. 插件隔离
 
-- **系统用户**：每个插件一个 `kore-<id>`，不与其它插件共享 uid。`kored` 以 root 启动时**按需创建**（该插件第一次启动前）：`useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin --user-group kore-<id>`（不传 `-m`，默认不建 home；固定候选路径、不查 `PATH`；无 `useradd` 时回退 Debian `adduser`）。用户建不出来 → **该插件启动失败**（`E_INTERNAL` + 人话提示），不退回同 uid。`kored` 非 root 时是**显式降级形态**：插件与内核同 uid（WARN + 本节 §15 标注），需要 root 的动作只能走 root-action 通道。
-- **目录权限**：`/var/lib/kore/plugins/<id>`（`KORE_STATE_DIR`）属 `kore-<id>:kore-<id>`、**0700**（不为可写放宽到 0777）；状态根与运行根（`/var/lib/kore`、`/run/kore` 及其 `plugins` 子目录）为 root:root **0701**（只补 o+x：可穿越、不可列举）；`<id>/<version>` 版本树由安装器落位、属主 root，**补 o+rx** 让插件能 exec 自己的二进制（属主与写权限不动）；插件 socket `/run/kore/plugins/<id>.sock` 由主壳创建后 `chown kore-<id>`、**0600**。
+- **系统用户**：每个插件一个 `kore-<id>`，不与其它插件共享 uid。`kored` 以 root 启动时**按需创建**（该插件第一次启动前）：`useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --user-group kore-<id>`，并**加入通道共享组 `kore`**（固定候选路径、不查 `PATH`；无 `useradd` 时回退 Debian `adduser`，已存在用户只补组关系）。用户建不出来 → **该插件启动失败**（`E_INTERNAL` + 人话提示），不退回同 uid。`kored` 非 root 时是**显式降级形态**：插件与内核同 uid（WARN + 本节 §15 标注），需要 root 的动作只能走 root-action 通道。
+- **目录权限**：`/var/lib/kore/plugins/<id>`（`KORE_STATE_DIR`）属 `kore-<id>:kore-<id>`、**0700**（不为可写放宽到 0777）；状态根与运行根（`/var/lib/kore`、`/run/kore` 及其 `plugins` 子目录）为 root:root **0701**（只补 o+x：可穿越、不可列举）；插件根 `<pluginDir>`、版本目录 `<id>/<version>` 为 root:root **0755**，包内文件由安装器**归一为 0644（不可执行）/ 0755（可执行）**——不采信包内 mode（root 构建的 0600 会让非 root 启动的 kored 读不到清单而误判"未安装"）；插件 socket `/run/kore/plugins/<id>.sock` 由主壳创建后 `chown kore-<id>`、**0600**。
+- **提权通道 socket（独立）**：`<run>/kore-channel.sock` 属 `root:kore`、**0660**，仅供插件请求 root-action；内核不经它暴露任何管理端点（只认 `POST /api/v1/plugins/<id>/root-action`）。连接必须同时通过：插件 bearer（token 所属 id == 路径 id）、`SO_PEERCRED` 的 **uid 必须等于该插件 `kore-<id>`**、**pid 必须等于 supervisor 记录的子进程 pid**、且插件已获 `system:admin`。管理入口 `/run/kore/kore.sock` 仍是 `root:root 0600`，不因通道放宽。
 - **cgroup v2**：`/sys/fs/cgroup/kore/<id>.slice`；控制文件 `memory.max` / `memory.high` / `memory.swap.max` / `cpu.max` / `pids.max` 的取值与默认值以 [RESOURCE-MODEL](./RESOURCE-MODEL.md) 为唯一真源，本文件不复制数值。安全含义：supervisor 在拉起前按 `resources` 声明与全局上限**取小值**后写入，插件无法自报放大；超限分别表现为 OOM kill、限流、fork 失败。oneshot 进程退出后 RSS 计 0。
 - **进程属性**：环境 = 内核进程环境（运维经 env 注入插件配置类变量，见 RUNBOOK）覆盖以 5 个唯一变量 `KORE_PLUGIN_ID` / `KORE_PLUGIN_SOCK` / `KORE_PLUGIN_TOKEN` / `KORE_STATE_DIR` / `KORE_LOG_DIR`；降权时另覆写 `HOME=<KORE_STATE_DIR>` / `USER` / `LOGNAME` 为插件身份（避免插件读写 `/root` 得到难归因的 EACCES）。stdin 关闭；stdout/stderr 重定向到 `/var/log/kore/plugins/<id>.log`。
 
@@ -296,6 +297,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 - **进程身份**：root 内核下，supervisor 在 bind / exec **之前**解析（必要时按需创建）`kore-<id>`；`exec.Cmd.SysProcAttr.Credential` 写入 uid/gid，并**显式把补充组收为仅目标 gid**（否则子进程继承 root 的 `docker` / `sudo` 等组 = 换 uid 不换实质）。用户建不出来 / chown 失败 / Credential 写入失败 → **本次启动失败**（`E_INTERNAL` + 可操作提示），绝不退回同 uid。
 - **socket 与身份校验**：插件 socket 由主壳 listen 后 `chown kore-<id>`、`0600`；hello 阶段用 `SO_PEERCRED` 校验 `pid` 且（降权时）`uid == kore-<id>`，不符即拒绝进入 ready。凭据不可用而处于降权状态时 **fail-closed**。
+- **插件 → 内核 root-action 通道（独立 socket）**：`<run>/kore-channel.sock` 为 `root:kore 0660`，插件用户通过共享组 `kore` 获得 connect 权限；请求必须同时通过 bearer（token 所属插件 == 路径插件）、`SO_PEERCRED` 的 uid==`kore-<id>` 与 pid==supervisor 记录的子进程、`system:admin` 能力四关。管理入口 `kore.sock` 保持 `0600 root:root` 不放宽；拒绝路径落 `capability.denied` 审计并 WARN。
 - **目录收口**：`KORE_STATE_DIR`（`<pluginDir>/<id>`）`0700 kore-<id>`；状态根/运行根 `0701 root:root`（只补 o+x，可穿越不可列举）；版本树补 `o+rx` 让插件能 exec 自己的二进制（属主与写权限不动）。详见 §6。
 - **非 root 内核是显式降级**：启动时 WARN「插件降权未生效（插件与内核同 uid）」，插件仍需 root 的动作只能返回 `E_NEED_ROOT`，管理面经 root-action 通道执行。
 - **降级必须显式**：非 root / 无 systemd / polkit 拒绝时，插件返回 `available=false` + `E_NEED_ROOT`（无 systemd 为 `E_NO_SYSTEMD`）+ 可操作 `hint`；禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
@@ -318,17 +320,28 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 > 硬约束：**禁止**为了"都能用"把插件加入 sudoers、给 `CAP_SYS_ADMIN`、或把目录放宽成 0777——那等于换皮不换实质。
 
-### 15.3 已知阻断：插件 → 内核的 bearer 通道与 §7 的 socket 口径冲突
+### 15.3 插件 → 内核 root-action 通道（独立 socket，已实现）
 
-§7 规定 `/run/kore/kore.sock` 为 `root:root 0600`、"只有 root 可直连"，但本节的"插件 bearer 调 root-action"要求插件能连它。降权后实测：`kore-firewall` 连该 UDS 得 `connect: permission denied`，`firewall.status` 显式退化为 `E_NEED_ROOT`；在隔离实例中把该 socket 临时 `chmod 0666` 后同一调用 `available=true / exit_code=0`（随后回滚 `0600`），证明**代码路径可用、唯一阻断点是 socket 权限**。
+历史问题：§7 的 `/run/kore/kore.sock` 是 `root:root 0600`，插件降权后连它得 `connect: permission denied`，`firewall.status` 退化为 `E_NEED_ROOT`（曾在隔离实例 `chmod 0666` 才跑通）。**已按 lead 裁决的方案①落地**：
 
-**裁决（2026-11-23，lead）**：新增**独立通道 socket**（方案①）——独立 socket + `0660 root:kore` + 组内各 `kore-<id>` + `SO_PEERCRED` 同时校验 uid 与 pid；**不放宽** `kore.sock`（否决方案②：所有 kore 组进程可连管理面，爆炸半径过大），**也不接受**"只由管理会话发起"（否决方案③：插件自主 root 动作会彻底不可用，waf/dns 自动响应报废）。该实现留待下一轮落地（本轮先固化插件降权）。
+| 项 | 实现 |
+| --- | --- |
+| socket | `<run>/kore-channel.sock`（`kore.sock` 旁），**0660 root:kore**；管理入口 `kore.sock` 仍 `0600 root:root` |
+| 组 | 共享系统组 `kore`（root 内核启动时创建）；插件用户降权时加入该组，随 `Credential.Groups` 获得 gid |
+| 路由 | 通道只接受 `POST /api/v1/plugins/<id>/root-action`；其它路径 404；**完全不接受管理会话 cookie** |
+| 校验 | ① bearer token 有效且 token 所属 id == 路径 id；② `SO_PEERCRED` uid == 该插件 `kore-<id>` uid；③ pid == supervisor 记录的子进程 pid；④ 已获 `system:admin`。任一不符 401 + `capability.denied` 审计（不向调用方泄露具体失败点） |
+| 失败策略 | root 内核下通道建不起来（组/属组/listen）→ kored 启动失败（exit 6/5），不静默降级；非 root 内核不建通道，插件 `KORE_KERNEL_SOCK` 缺省 → 显式 `E_NEED_ROOT` |
+
+被否决：②放宽 `kore.sock` 到 0660（所有 kore 组进程可连管理面，爆炸半径过大）；③只由管理会话发起（插件自主 root 动作彻底不可用，waf/dns 自动响应报废）。
+**残余取舍（见 §15.4）**：共享组方案下 socket 属主是 `root` 而非 `kore-<id>`（无法用单 socket 表达每插件属主）；身份边界靠 bearer + uid/pid 双校验，而非文件属主。若未来要"每插件一个通道 socket"，需引入按插件 listener，成本更高。
 
 ### 15.4 未证明项（明确列出，不得当成已通过）
 
 1. **macOS / Windows（Tier B）**：非 Linux 只有 `ErrUnsupported` 桩，插件仍与内核同用户；§6.3「macOS 独立 uid」仍是目标。
 2. **无 `useradd` / `adduser` 的发行版**（部分 Alpine / busybox）：按需建用户只有固定候选路径 + Debian `adduser` 回退，**未实测**。
 3. **SELinux / AppArmor enforcing 宿主**：`Credential` + `chown` + o+x 全链路未在 enforcing 下实测。
-4. **版本树世界可读（已知约束）**：为让插件 exec 自己的二进制，`<id>/<version>` 目录与可执行文件补了 `o+rx`，即**所有本地用户可读**。当前包内只有二进制与 `info.json`，可接受；**触发条件**：一旦插件包内含证书 / 私钥 / 口令等敏感材料，必须改为按包属主可读（`0700 kore-<id>`，或安装期按清单 chown 到插件用户），否则等于把敏感材料暴露给所有本地用户。
+4. **版本树与清单世界可读（已知约束）**：安装器把插件根/版本目录归一为 0755、文件 0644/0755（否则非 root 启动的 kored 读不到清单）；当前包内只有二进制、`info.json` 与前端资产，可接受；**触发条件**：一旦插件包内含证书 / 私钥 / 口令等敏感材料，必须改为按包属主可读（`0700 kore-<id>`，或安装期按清单 chown 到插件用户 + 目录 0700），否则等于把敏感材料暴露给所有本地用户。
 5. **插件可写自己的状态目录**（含版本子目录的父目录）：能破坏/替换自己的版本目录，只影响自身可用性，不构成提权；未做防篡改。
-6. **root ↔ 非 root 切换**：先以 root 运行（目录已 chown 给 `kore-<id>`）再以非 root 运行会因目录不可进入而启动失败；未做自动回切，仅保证错误可见。
+6. **root ↔ 非 root 切换**：先以 root 运行（目录已 chown 给 `kore-<id>`）再以非 root 运行会因目录不可进入而启动失败；未做自动回切，仅保证错误可见（清单读取失败现在会给出 chown/chmod 可操作提示，不再只打"未安装"）。
+7. **共享组 `kore` 的回收**：`kore uninstall` 目前按前缀清理 `kore-<id>` 用户/组，**共享组 `kore` 的删除未纳入**（空组无害，但属残留）；跨发行版 groupadd/usermod 的 busybox 形态未实测。
+8. **通道抗重放/限流**：通道复用 root-action 的 confirm/审计，但没有独立速率限制；同组内恶意插件可高频触发被拒请求（仅产生 WARN/审计噪音，不越权）。

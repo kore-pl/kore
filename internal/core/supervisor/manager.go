@@ -233,6 +233,22 @@ func (m *Manager) instance(id string) (*instance, error) {
 	return inst, nil
 }
 
+// PluginPeer 返回插件当前进程的低权 uid 与 pid（供独立通道 socket 的 SO_PEERCRED
+// 双校验）：只有已降权且处于 ready 的插件才返回 ok=true。未降权 / 非 root 内核
+// 返回 false——通道必须 fail-closed，不允许退化成"只要持有 token 就放行"。
+func (m *Manager) PluginPeer(id string) (uid, pid int, ok bool) {
+	inst, found := m.lookup(id)
+	if !found {
+		return 0, 0, false
+	}
+	acct := inst.accountValue()
+	view := inst.snapshot()
+	if acct.UID <= 0 || view.PID <= 0 || view.State != StateReady {
+		return 0, 0, false
+	}
+	return acct.UID, view.PID, true
+}
+
 // PluginToken 返回插件当前进程的 KORE_PLUGIN_TOKEN（root-action 通道鉴权用）；
 // 未运行或未注入时 ok=false。token 只在进程生命周期内有效，停止/退出即清空。
 func (m *Manager) PluginToken(id string) (string, bool) {

@@ -28,9 +28,14 @@ type Options struct {
 	LogDir string
 	// Version 是内核版本，写进 hello 响应。
 	Version string
-	// KernelSocket 是内核 UDS 路径；非空时注入插件 KORE_KERNEL_SOCK，
-	// 供插件经 root-action 通道请求内核代理提权（ADR-0018）。
+	// KernelSocket 是**独立通道 socket** 路径（ADR-0018 方案①）；非空时注入插件
+	// KORE_KERNEL_SOCK，供插件经 root-action 通道请求内核代理提权。空串表示通道
+	// 不可用（非 root / 未启用），插件据此显式返回 E_NEED_ROOT，而不是去连管理面。
 	KernelSocket string
+	// ChannelGroup 是通道 socket 的共享属组（Linux，默认 kore）：插件用户会在
+	// 降权时被加入该组，并随 Credential 获得该 gid，从而能 connect 0660 的通道
+	// socket；socket 本身由 httpapi 以 root:<group> 0660 创建。
+	ChannelGroup string
 	// HelloTimeout 是 exec→hello 完成的硬超时，默认 2s。
 	HelloTimeout time.Duration
 	// ShutdownGrace 是 kore.shutdown 后等进程退出的宽限，默认 5s。
@@ -82,6 +87,9 @@ func (o *Options) withDefaults() {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if o.ChannelGroup == "" {
+		o.ChannelGroup = "kore"
 	}
 	if o.Identity == nil {
 		o.Identity = platform.SystemIdentity()

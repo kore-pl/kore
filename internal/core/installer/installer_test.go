@@ -52,6 +52,42 @@ func TestInstallSuccess(t *testing.T) {
 	assertEmptyDir(t, filepath.Join(f.pluginRoot(), ".staging"))
 }
 
+// TestInstallNormalizesFileModes 覆盖 R5 P0：安装不采信包内 mode。
+//
+// root 构建的包常把 info.json / 前端资产写成 0600、入口 0700；root 安装后若原样
+// 保留，非 root 启动的 kored 读不到清单 → 插件被误判"未安装"（waf 实测）。
+// 归一规则：可执行 → 0755，其余 → 0644（插件包内容公开，世界可读）。
+func TestInstallNormalizesFileModes(t *testing.T) {
+	f := newFixture(t, installer.Limits{})
+	entries := validEntries(t, nil)
+	entries[0].mode = 0o600 // info.json（root 构建常见）
+	entries[1].mode = 0o700 // bin/site
+	entries[2].mode = 0o600 // web/index.js
+	pkg := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", entries)
+	if _, err := f.inst.Install(pkg); err != nil {
+		t.Fatalf("安装应成功: %v", err)
+	}
+	base := filepath.Join(f.pluginRoot(), "site", "0.1.0")
+	want := map[string]os.FileMode{
+		base:                                   0o755,
+		filepath.Join(base, "info.json"):       0o644,
+		filepath.Join(base, "web", "index.js"): 0o644,
+		filepath.Join(base, "bin", "site"):     0o755,
+	}
+	for path, mode := range want {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("%s 未落位: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != mode {
+			t.Fatalf("%s 权限 = %04o，期望 %04o（不采信包内 mode）", path, got, mode)
+		}
+		if mode == 0o644 && info.Mode().Perm()&0o004 == 0 {
+			t.Fatalf("%s 缺 world-read 位，非 root kored 仍会读不到", path)
+		}
+	}
+}
+
 // TestInstallForceReplacesSameVersion 覆盖 P1「同版本重装」：
 // 不带 Force → ErrConflict；带 Force → 覆盖目录与记录，且不留备份目录。
 func TestInstallForceReplacesSameVersion(t *testing.T) {

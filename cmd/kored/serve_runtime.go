@@ -38,14 +38,16 @@ const (
 
 // service 是 serve 进程持有的内核运行件；关闭顺序由 shutdownAll 控制。
 type service struct {
-	catalog       *registry.Catalog
-	manager       *supervisor.Manager
-	bus           *bus.Bus
-	states        *stateRepo
-	backend       *daemon
-	auth          *auth.Manager
-	db            *store.Store
-	privilege     *privilege.Service // ADR-0018 提权通道执行器
+	catalog   *registry.Catalog
+	manager   *supervisor.Manager
+	bus       *bus.Bus
+	states    *stateRepo
+	backend   *daemon
+	auth      *auth.Manager
+	db        *store.Store
+	privilege *privilege.Service // ADR-0018 提权通道执行器
+	// channelSocket 是插件 → 内核 root-action 的独立通道 UDS（空表示未启用）。
+	channelSocket string
 	sched         *scheduler.Service // ADR-0019 定时任务调度器（单 ticker）
 	pluginRootDir string             // 插件落盘根目录，供 reloadOne 重载登记复用
 	// reloadMu 串行化同一进程内的安装后重载：Stop→Forget→Replace→Start 不能交错，
@@ -80,12 +82,22 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		slog.Error("插件登记扫描失败", "err", err)
 		return nil, exitStore
 	}
+	// 插件 root-action 通道：root 内核下建独立 socket（ADR-0018 方案①）。
+	// 非 root 不建通道，KernelSocket 留空 → 插件显式 E_NEED_ROOT，不去连管理面。
+	channelSocket, channelGroup := "", "kore"
+	if current, err := platform.SystemIdentity().Current(); err == nil && current.UID == 0 {
+		if err := platform.EnsureGroup(channelGroup); err != nil {
+			slog.Error("创建插件通道共享组失败（root-action 通道不可用）", "group", channelGroup, "err", err)
+			return nil, exitEnv
+		}
+		channelSocket = filepath.Join(app.Paths.Dir(platform.DirRun), "kore-channel.sock")
+	}
 	manager, err := supervisor.New(supervisor.Options{
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
-		KernelSocket: socketPath(app),
-		ResidentMax:  cfg.snapshot.Resources.ResidentMax,
-		Auditor:      &storeAuditor{db: db},
+		KernelSocket: channelSocket, ChannelGroup: channelGroup,
+		ResidentMax: cfg.snapshot.Resources.ResidentMax,
+		Auditor:     &storeAuditor{db: db},
 	})
 	if err != nil {
 		slog.Error("supervisor 装配失败", "err", err)
@@ -101,6 +113,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		db: db, backend: newDaemon(catalog, manager, frameBus, states),
 		privilege:     privilege.New(privilege.Options{Auditor: &rootActionAuditor{db: db}}),
 		pluginRootDir: root,
+		channelSocket: channelSocket,
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}

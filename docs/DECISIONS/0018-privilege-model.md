@@ -179,14 +179,21 @@ file（自身权限内）、logs、process（同 uid）、terminal（当前用�
 
 > 判据：**失效必须是结构化、可操作、可审计的**；不允许为了"都能用"放宽成 0777、加 sudoers 或授 `CAP_SYS_ADMIN`。
 
-### 插件侧通道的已知阻断（已裁决，待下一轮实现）
+### 插件侧通道（已实现：独立通道 socket）
 
-[SECURITY](../SECURITY.md) §7 规定内核 UDS `/run/kore/kore.sock` 为 `root:root 0600`、"只有 root 可直连"；而本文「调用方边界」又要求插件用 `KORE_PLUGIN_TOKEN` bearer 调通道——**降权后这两条自相矛盾**。实测：
+**历史问题**：[SECURITY](../SECURITY.md) §7 的 `/run/kore/kore.sock` 为 `root:root 0600`/"只有 root 可直连"，而本文「调用方边界」要求插件用 `KORE_PLUGIN_TOKEN` bearer 调通道——降权后自相矛盾（实测 `connect: permission denied`，`firewall.status` 退化为 `E_NEED_ROOT`；临时 `chmod 0666` 可跑通，证明阻断点只是 socket 权限）。
 
-- 默认 `0600`：`kore-firewall` 连内核 socket 得 `connect: permission denied`，`firewall.status` 退化为 `E_NEED_ROOT`（显式、非静默）；
-- 隔离实例里把该 socket 临时 `chmod 0666` 后，同一调用 `available=true`、`exit_code=0`（随后立即回滚 `0600`），证明**代码路径可用，唯一阻断点是 socket 权限**。
+**三方案对比与裁决（2026-11-23，lead）**
 
-**裁决（2026-11-23，lead）**：采用**独立通道 socket**——独立路径（如 `/run/kore/root/` 下）+ `0660 root:kore` + 组内各 `kore-<id>` + `SO_PEERCRED` 同时校验 uid（必须等于该插件 `kore-<id>`）与 pid（必须是 supervisor 记录的子进程）。否决：②放宽 `kore.sock` 到 `0660`（所有 kore 组进程可连管理面，爆炸半径过大）；③只由管理会话发起（插件自主 root 动作彻底不可用，waf/dns 自动响应报废）。**本轮只固化降权，通道实现留待下一轮**，届时补本节的三方案对比与 socket 细节。
+| 方案 | 权限面 | 结论 |
+| --- | --- | --- |
+| ① 独立通道 socket（**采纳**） | 新增 `<run>/kore-channel.sock`（`0660 root:kore`），只开 root-action 一条路由；主 `kore.sock` 保持 0600 | 爆炸半径最小：通道不暴露管理端点；身份靠 bearer + `SO_PEERCRED(uid,pid)` 双校验 |
+| ② 放宽 `kore.sock` 到 0660 | 所有 kore 组进程可连**管理面** | 否决：管理面与插件通道共用一个 socket，权限面被放大 |
+| ③ 只由管理会话发起 | 插件不能自主触发 root 动作 | 否决：waf/dns 的自动响应/自动处置报废 |
+
+**实现**：`cmd/kored` 在 root 内核下确保共享组 `kore` 存在并建通道 socket；`supervisor` 把插件用户加入该组、`Credential.Groups` 写入 gid，并把 `KORE_KERNEL_SOCK` 指向通道；`httpapi` 用独立 `http.Server` 提供通道处理器——只接受 `POST /api/v1/plugins/<id>/root-action`，要求 bearer 所属插件 == 路径插件、`SO_PEERCRED` 的 uid==`kore-<id>` 且 pid==supervisor 记录的子进程、`system:admin` 已授予；拒绝落 `capability.denied` 审计。管理会话 cookie 在通道上完全无效。
+
+**实现选择与被否决**：通道复用 root-action 的 schema/confirm/fail-closed 审计链，不新造协议。被否决的"每插件一个通道 socket + 属主 `kore-<id>`"：需要按插件动态 listener（httpapi 生命周期/热升级复杂度显著上升），而共享组 + uid/pid 双校验已把"同组其它插件冒用"挡住；残留取舍是 socket 属主为 root 而非插件 uid（见未证明项）。
 
 ### 未证明项（不得当成已通过）
 
@@ -232,7 +239,7 @@ file（自身权限内）、logs、process（同 uid）、terminal（当前用�
 **负面 / 已知代价**：协议新增字段（`requires_kore` 抬升，插件需重发版）；systemd 依赖使 Alpine 类环境只能降级；启用时逐条确认增加操作步骤（与易用性四原则的"步骤尽量少"存在张力，需在 UI 侧用预设默认勾选缓解）；**v0.x 之前需要 root 的插件仍然不可用**，本 ADR 不改善当下可用性，只定义口径。
 
 **记录在案的漂移（2026-11-23 已收敛）**：此前文档写"主壳 root 运行、插件 `kore-<id>`"而实测同 uid（`start.go:80` 未设 Credential）。本轮已实现插件降权并以真 root 隔离实例证明（`.agents/verify/r5-plugin-demotion.md`），[SECURITY](../SECURITY.md) §6 / §15 同步为"已实现 + 降级矩阵 + 未证明项"。
-**仍存漂移（不掩盖）**：①独立通道 socket 已裁决但未实现（见「插件侧通道的已知阻断」），插件自连通道当前不可用；②[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md)「运行目录 0700/0600」的表述未包含降权所需的 o+x 父链（该文件本轮有其他轨道的未提交改动，未在写域内，需由对应 owner 同步）；③cgroup 落盘仍未实现（与本 ADR 无关，另轨）。
+**仍存漂移（不掩盖）**：①共享组 `kore` 尚未纳入 `kore uninstall` 清理（空组无害）；②[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md)「运行目录 0700/0600」的表述未包含降权所需的 o+x 父链（该文件本轮有其他轨道的未提交改动，未在写域内，需由对应 owner 同步）；③cgroup 落盘仍未实现（与本 ADR 无关，另轨）。
 
 **另一条既成授权**：本机 `docker` 组成员可读写 `docker.sock`（`root:docker 0660`），等价 root。它不属于本 ADR 的提权机制，但**必须**在威胁模型里显式列出——否则"插件低权"只是名义上的。container 插件在无 docker 组时是否必须降级，属 v0.x 插件侧任务。
 

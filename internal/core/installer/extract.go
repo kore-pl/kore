@@ -110,7 +110,7 @@ func writeEntry(src io.Reader, dest string, header *tar.Header, total int64, lim
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return total, wrap(ErrInvalid, "建立 %q 的父目录失败：%v", header.Name, err)
 	}
-	// 先以 0600 落地，校验字节数后再按包内 mode 收紧/放开，避免半截可执行文件。
+	// 先以 0600 落地，校验字节数后再设置最终 mode，避免半截可执行文件。
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return total, wrap(ErrInvalid, "写入 %q 失败：%v", header.Name, err)
@@ -120,7 +120,14 @@ func writeEntry(src io.Reader, dest string, header *tar.Header, total int64, lim
 	if copyErr != nil || closeErr != nil || written != header.Size {
 		return total, wrap(ErrInvalid, "写入 %q 不完整（%d/%d）", header.Name, written, header.Size)
 	}
-	mode := os.FileMode(header.Mode).Perm() | 0o600
+	// **不采信包内 mode**：包可能是 root 构建的（info.json 写成 0600），root 安装后
+	// 非 root 启动的 kored 读不到清单，插件会被误判"未安装"（R5 waf 实测 P0）。
+	// 归一为：可执行 → 0755，其余（清单/前端资产/配置模板）→ 0644；文件内容本身
+	// 不含凭据，世界可读是插件包的公开语义（见 SECURITY §6）。
+	mode := os.FileMode(0o644)
+	if header.Mode&0o111 != 0 {
+		mode = 0o755
+	}
 	if err := os.Chmod(target, mode); err != nil {
 		return total, wrap(ErrInvalid, "设置 %q 权限失败：%v", header.Name, err)
 	}

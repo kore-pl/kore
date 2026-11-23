@@ -116,6 +116,16 @@ type Options struct {
 	// Alerts 是告警中心持久层（alerts bucket）；nil 时 alerts/* 端点回 501、
 	// 各检查点埋点静默跳过。由 cmd/kored 注入（本包不 import store，G-01）。
 	Alerts AlertSink
+	// ChannelSocket 是插件 → 内核 root-action 的**独立通道** UDS（ADR-0018 方案①）；
+	// 空串表示不启用。通道只接受插件 bearer + SO_PEERCRED(uid,pid) 双校验过的
+	// root-action 请求，不放宽主 socket /run/kore/kore.sock（仍 0600 root）。
+	ChannelSocket string
+	// ChannelGroup 是通道 socket 的属组（Linux）：socket 以 root:<group> 0660 创建，
+	// 插件用户降权时被加入该组；空串时用 kore。
+	ChannelGroup string
+	// PluginPeer 返回插件当前进程的低权 uid 与 pid（supervisor.PluginPeer 注入），
+	// 供通道 SO_PEERCRED 双校验；nil 表示通道装配不完整（Start 拒绝启用通道）。
+	PluginPeer func(pluginID string) (uid, pid int, ok bool)
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
@@ -260,6 +270,8 @@ type Server struct {
 	scheduler      *scheduler.Service
 	// alerts 是告警中心持久层；nil 时端点 501、埋点跳过。
 	alerts AlertSink
+	// channelServer 是独立通道 socket 的服务端；nil 表示未启用通道。
+	channelServer *http.Server
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
 	loginStreakMu   sync.Mutex
 	loginFailStreak int
@@ -299,6 +311,18 @@ func New(opts Options, transport platform.Transport) *Server {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	// 独立通道：单独一个 http.Server，处理器只认插件 root-action（channel.go）。
+	// ConnContext 把 net.Conn 带进请求上下文，供 SO_PEERCRED 双校验使用。
+	if opts.ChannelSocket != "" {
+		server.channelServer = &http.Server{
+			Handler: server.channelHandler(),
+			ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+				return context.WithValue(ctx, channelConnKey{}, conn)
+			},
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+	}
 	return server
 }
 
@@ -314,7 +338,7 @@ func (s *Server) Start() error {
 	s.track(uds)
 	go s.serve(uds)
 	if s.opts.Addr == "" {
-		return nil
+		return s.startChannel()
 	}
 	tcp, err := net.Listen("tcp", s.opts.Addr)
 	if err != nil {
@@ -323,12 +347,55 @@ func (s *Server) Start() error {
 	}
 	s.track(tcp)
 	go s.serve(tcp)
+	return s.startChannel()
+}
+
+// startChannel 绑定独立通道 socket（插件 root-action 专用）。
+//
+// 失败即返回错误让 kored 拒绝启动：通道是"插件低权"模型的安全边界之一，
+// 起不来时不能假装成功（否则插件会一直 E_NEED_ROOT 且无人知晓原因）。
+func (s *Server) startChannel() error {
+	if s.opts.ChannelSocket == "" {
+		return nil
+	}
+	if s.pluginAuth == nil || s.opts.PluginPeer == nil || s.channelServer == nil {
+		_ = s.httpServer.Close()
+		return fmt.Errorf("通道装配不完整：ChannelSocket 需要 PluginAuth + PluginPeer")
+	}
+	listener, err := s.transport.Listen(s.opts.ChannelSocket)
+	if err != nil {
+		_ = s.httpServer.Close()
+		return fmt.Errorf("监听通道 socket %s: %w", s.opts.ChannelSocket, err)
+	}
+	group := s.opts.ChannelGroup
+	if group == "" {
+		group = "kore"
+	}
+	if err := platform.OwnGroup(s.opts.ChannelSocket, group, 0o660); err != nil {
+		_ = listener.Close()
+		_ = s.httpServer.Close()
+		return fmt.Errorf("设置通道 socket 属组 %s: %w", group, err)
+	}
+	s.track(listener)
+	go s.serveChannel(listener)
 	return nil
+}
+
+// serveChannel 运行通道监听器（独立 http.Server，独立处理器）。
+func (s *Server) serveChannel(listener net.Listener) {
+	if err := s.channelServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("通道服务异常退出", "socket", listener.Addr().String(), "err", err)
+	}
 }
 
 // Shutdown 在 ctx 内优雅关闭；ctx 由调用方给 5s 超时。
 func (s *Server) Shutdown(ctx context.Context) error {
 	err := s.httpServer.Shutdown(ctx)
+	if s.channelServer != nil {
+		if channelErr := s.channelServer.Shutdown(ctx); err == nil {
+			err = channelErr
+		}
+	}
 	s.mu.Lock()
 	for _, listener := range s.listeners {
 		_ = listener.Close()

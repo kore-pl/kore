@@ -157,6 +157,9 @@ type Account struct {
 	UID int
 	// GID 主组 id；负数表示未知（非 Linux）。
 	GID int
+	// Groups 是补充组 gid（不含主组）；Linux 降权时随 Credential 一起写入。
+	// 用途：插件用户加入内核通道共享组后，才能 connect 0660 root:<group> 的通道 socket。
+	Groups []int
 }
 
 // Identity 收口「插件进程以哪个 uid/gid 运行」的全部平台专有操作。
@@ -170,8 +173,9 @@ type Identity interface {
 	// Lookup 查询账户；不存在时返回 ok=false（不视为错误）。
 	Lookup(name string) (Account, bool, error)
 	// Ensure 确保系统账户存在（仅 root 可用）：不存在则创建无 home、
-	// nologin shell、独立主组的系统账户；创建失败返回 ErrAccount 包装错误。
-	Ensure(name string) (Account, error)
+	// nologin shell、独立主组的系统账户，并把用户加入 extraGroups（不存在的组
+	// 会按系统组创建）；已存在的用户只补组关系。创建失败返回 ErrAccount 包装错误。
+	Ensure(name string, extraGroups []string) (Account, error)
 	// Apply 把子进程身份写入 cmd（Linux 设置 SysProcAttr.Credential 并清空
 	// 继承的补充组）；失败表示无法安全降权，调用方必须拒绝启动进程。
 	Apply(cmd *exec.Cmd, acct Account) error
@@ -193,6 +197,16 @@ func SystemIdentity() Identity { return systemIdentity() }
 
 // SystemAccess 返回宿主 Access 实现（装配层未显式注入时的默认值）。
 func SystemAccess() Access { return systemAccess() }
+
+// EnsureGroup 确保宿主系统组存在（仅 root 可用）；非 Linux 返回 ErrUnsupported。
+//
+// 用于插件 → 内核 root-action 通道的共享组（默认 kore）：通道 socket 为
+// root:<group> 0660，插件用户加入该组后才能 connect（见 ADR-0018 实施记录）。
+func EnsureGroup(name string) error { return ensureGroup(name) }
+
+// OwnGroup 把 path 的属组改为 group 并设置 mode（属主不变）；非 Linux 返回
+// ErrUnsupported。用于通道 socket：root:<group> 0660。
+func OwnGroup(path, group string, mode os.FileMode) error { return ownGroup(path, group, mode) }
 
 // Platform 聚合五接口，由 New 按构建目标返回。
 type Platform struct {

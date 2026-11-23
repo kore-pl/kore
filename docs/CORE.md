@@ -176,10 +176,11 @@
 | 项 | 值 |
 | --- | --- |
 | 可执行文件 | `/var/lib/kore/plugins/<id>/<version>/bin/<id>`（`info.json.entry` 相对包根） |
-| 运行身份 | 系统用户/组 `kore-<id>`（uid/gid 由 `useradd --system --no-create-home` 提供，主壳启动时确保存在） |
+| 运行身份 | 系统用户/组 `kore-<id>`（uid/gid 由 `useradd --system --no-create-home` 提供，主壳启动时确保存在）；另加入通道共享组 `kore`，随 `Credential.Groups` 获得该 gid |
 | cgroup | `/sys/fs/cgroup/kore/<id>.slice`：`memory.max = resources.memory_mb × 1 MiB`；`cpu.max = "<cpu_quota> 100000"`；`pids.max = resources.pids_max` |
-| 环境变量 | 注入插件的仅 5 个：`KORE_PLUGIN_ID`、`KORE_PLUGIN_SOCK`、`KORE_PLUGIN_TOKEN`（hello HMAC 用，Windows 必需）、`KORE_STATE_DIR=/var/lib/kore/plugins/<id>`、`KORE_LOG_DIR=/var/log/kore/plugins`（**内核侧另有 `KORE_CONFIG` / `KORE_STATE_DIR` / `KORE_PLUGIN_DIR` / `KORE_PROFILE` / `KORE_HOME` 五个配置覆盖变量，不注入插件**，见 §2.1）；任务目录为 `<KORE_STATE_DIR>/tasks`（派生，不另设 env）；协议版本与 capabilities 来自 `info.json` 与 `kore.hello`，**不设环境变量**（无 `KORE_SOCKET` 等别名） |
+| 环境变量 | 注入插件的固定 5 个：`KORE_PLUGIN_ID`、`KORE_PLUGIN_SOCK`、`KORE_PLUGIN_TOKEN`（hello HMAC 用，Windows 必需）、`KORE_STATE_DIR=/var/lib/kore/plugins/<id>`、`KORE_LOG_DIR=/var/log/kore/plugins`；通道启用时另加 `KORE_KERNEL_SOCK=<run>/kore-channel.sock`（**内核侧另有 `KORE_CONFIG` / `KORE_STATE_DIR` / `KORE_PLUGIN_DIR` / `KORE_PROFILE` / `KORE_HOME` 五个配置覆盖变量，不注入插件**，见 §2.1）；任务目录为 `<KORE_STATE_DIR>/tasks`（派生，不另设 env）；协议版本与 capabilities 来自 `info.json` 与 `kore.hello`，**不设环境变量**（无 `KORE_SOCKET` 等别名） |
 | socket | 主壳**作为 server** 先 bind `/run/kore/plugins/<id>.sock`（`chmod 0600`、`chown kore-<id>`；其它插件用户既读不到也连不上），插件以 client 身份 `connect` |
+| 提权通道 socket | `<run>/kore-channel.sock`（`root:kore 0660`，只接受插件 bearer + `SO_PEERCRED(uid,pid)` 双校验的 `root-action`；管理入口 `kore.sock` 仍 `0600 root:root`） |
 | 工作目录 | `/var/lib/kore/plugins/<id>`（`0700 kore-<id>`），插件不得写工作目录之外 |
 | stdout/stderr | 重定向到 `/var/log/kore/plugins/<id>.log`（`0640 root:kore`），内核不解析内容 |
 | umask | `0077` |

@@ -24,6 +24,7 @@ type fakeIdentity struct {
 	ensureErr error
 	account   platform.Account
 	ensured   []string
+	groups    []string
 }
 
 // Current 返回伪造的内核身份。
@@ -39,12 +40,13 @@ func (f *fakeIdentity) Lookup(name string) (platform.Account, bool, error) {
 	return acct, true, nil
 }
 
-// Ensure 记录创建请求；ensureErr 非空时模拟 useradd 失败。
-func (f *fakeIdentity) Ensure(name string) (platform.Account, error) {
+// Ensure 记录创建请求与通道组；ensureErr 非空时模拟 useradd 失败。
+func (f *fakeIdentity) Ensure(name string, groups []string) (platform.Account, error) {
 	if f.ensureErr != nil {
 		return platform.Account{}, f.ensureErr
 	}
 	f.ensured = append(f.ensured, name)
+	f.groups = append(f.groups, groups...)
 	acct := f.account
 	acct.Name = name
 	return acct, nil
@@ -107,6 +109,9 @@ func TestStartDemotesPluginProcess(t *testing.T) {
 	}
 	if len(identity.ensured) != 1 || identity.ensured[0] != "kore-demote" {
 		t.Fatalf("应按需创建系统用户 kore-demote，实际 %v", identity.ensured)
+	}
+	if len(identity.groups) != 1 || identity.groups[0] != "kore" {
+		t.Fatalf("降权应把插件加入通道共享组 kore，实际 %v", identity.groups)
 	}
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {

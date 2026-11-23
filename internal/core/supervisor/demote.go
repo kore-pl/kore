@@ -49,7 +49,7 @@ func (m *Manager) prepareDemotion(inst *instance) (platform.Account, error) {
 	}
 	created := false
 	if !ok {
-		acct, err = m.identity.Ensure(name)
+		acct, err = m.identity.Ensure(name, []string{m.opts.ChannelGroup})
 		if err != nil {
 			return platform.Account{}, errf(pluginapi.E_INTERNAL,
 				"插件 %s 需要系统用户 %s，但创建失败：%v（需 root 启动 kored + shadow-utils/adduser，或预先手工创建该用户）",

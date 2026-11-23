@@ -138,19 +138,41 @@ func TestEnsureAndApplySystemAccount(t *testing.T) {
 		t.Skip("需要 root 才能创建系统账户")
 	}
 	identity := SystemIdentity()
-	name := "kore-r5test-" + strconv.Itoa(os.Getpid())
-	// 防御：名字必须落在测试专用前缀，避免误删真实插件用户。
-	if !strings.HasPrefix(name, "kore-r5test-") {
-		t.Fatalf("测试用户名异常: %s", name)
+	pid := strconv.Itoa(os.Getpid())
+	name := "kore-r5test-" + pid
+	channelGroup := "kore-r5test-grp-" + pid
+	// 防御：名字必须落在测试专用前缀，避免误删真实插件用户/组。
+	if !strings.HasPrefix(name, "kore-r5test-") || !strings.HasPrefix(channelGroup, "kore-r5test-") {
+		t.Fatalf("测试用户名/组名异常: %s / %s", name, channelGroup)
 	}
 	t.Cleanup(func() {
 		if tool := firstExisting([]string{"/usr/sbin/userdel", "/usr/bin/userdel", "/sbin/userdel"}); tool != "" {
 			_ = exec.Command(tool, name).Run()
 		}
+		if tool := firstExisting([]string{"/usr/sbin/groupdel", "/usr/bin/groupdel", "/sbin/groupdel"}); tool != "" {
+			_ = exec.Command(tool, channelGroup).Run()
+		}
 	})
-	acct, err := identity.Ensure(name)
+	if err := EnsureGroup(channelGroup); err != nil {
+		t.Fatalf("EnsureGroup 失败: %v", err)
+	}
+	acct, err := identity.Ensure(name, []string{channelGroup})
 	if err != nil {
 		t.Fatalf("Ensure 失败: %v", err)
+	}
+	group, err := user.LookupGroup(channelGroup)
+	if err != nil {
+		t.Fatalf("复核共享组失败: %v", err)
+	}
+	groupGID, _ := strconv.Atoi(group.Gid)
+	found := false
+	for _, gid := range acct.Groups {
+		if gid == groupGID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("账户补充组 %v 缺少共享组 %s(%d)", acct.Groups, channelGroup, groupGID)
 	}
 	if acct.UID == 0 {
 		t.Fatalf("新建系统用户不应是 uid 0: %+v", acct)
@@ -177,11 +199,25 @@ func TestEnsureAndApplySystemAccount(t *testing.T) {
 	if got != strconv.Itoa(acct.UID) {
 		t.Fatalf("子进程 uid=%s，期望 %d", got, acct.UID)
 	}
-	// 补充组必须被清空为仅目标 gid：继承 root 的 docker/sudo 组等价 root。
-	if got := cmd.SysProcAttr.Credential.Groups; len(got) != 1 || got[0] != uint32(acct.GID) {
-		t.Fatalf("Credential.Groups = %v，期望 [%d]（只保留目标 gid）", got, acct.GID)
+	// 补充组必须精确为「主组 + 显式授予的共享组」：继承 root 的 docker/sudo 组
+	// 等价 root，但通道共享组是刻意授予（否则插件连不上 0660 的通道 socket）。
+	gotGroups := cmd.SysProcAttr.Credential.Groups
+	if len(gotGroups) != 2 || gotGroups[0] != uint32(acct.GID) || gotGroups[1] != uint32(groupGID) {
+		t.Fatalf("Credential.Groups = %v，期望 [%d %d]（主组 + 通道共享组）", gotGroups, acct.GID, groupGID)
 	}
 	if cmd.SysProcAttr.Credential.NoSetGroups {
-		t.Fatal("root 降权必须主动 setgroups（只保留目标 gid），不能继承补充组")
+		t.Fatal("root 降权必须主动 setgroups，不能继承补充组")
+	}
+	// 子进程实际组关系复核：id -G 应包含共享组，且不含 root 的 docker/sudo。
+	cmdGroups := exec.Command("id", "-G")
+	if err := identity.Apply(cmdGroups, acct); err != nil {
+		t.Fatalf("Apply(id -G) 失败: %v", err)
+	}
+	gout, err := cmdGroups.Output()
+	if err != nil {
+		t.Fatalf("id -G 失败: %v", err)
+	}
+	if !strings.Contains(" "+strings.TrimSpace(string(gout))+" ", " "+strconv.Itoa(groupGID)+" ") {
+		t.Fatalf("子进程组 %s 不含共享组 %d", strings.TrimSpace(string(gout)), groupGID)
 	}
 }

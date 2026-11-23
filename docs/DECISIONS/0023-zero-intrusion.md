@@ -106,7 +106,7 @@
 | # | 侵入 | 位置 | 清理 | 边界 |
 | --- | --- | --- | --- | --- |
 | 1 | systemd unit + enable 软链 | `/etc/systemd/system/kore.service`、`multi-user.target.wants/kore.service` | `kore uninstall`（停服务 + 删文件 + `daemon-reload`） | 只此一个 unit；不装自启动则为零 |
-| 2 | 插件系统用户 | `/etc/passwd`、`/etc/group` 的 `kore-<id>` | `kore uninstall` 按前缀 `userdel` | 仅 root 内核 + 首次启用时创建 |
+| 2 | 插件系统用户 | `/etc/passwd`、`/etc/group` 的 `kore-<id>`；共享通道组 `kore`（`/etc/group` 一条，无同名用户） | `kore uninstall` 按前缀 `userdel`（共享组 `kore` 在目录为空时由运维/后续版本清理） | 仅 root 内核 + 首次启用/启用通道时创建；非 root portable 实例不创建 |
 | 3 | 用户批准的宿主变更 | nginx conf.d、ufw/nft 规则、crontab、fail2ban、docker 资源、DB/Redis 数据 | `uninstall` 按 `changes.jsonl` 提示回滚 | 必须有清单条目；默认不自动回滚 |
 | 4 | 显式安装的二进制（可选） | `/usr/local/bin/kored` | `make uninstall` / 用户自行删除 | 默认"解压即用"，不写系统目录 |
 

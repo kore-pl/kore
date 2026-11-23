@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -127,9 +128,18 @@ func loadCatalog(catalog *registry.Catalog, repo *stateRepo, root string) error 
 		return err
 	}
 	for _, ref := range refs {
-		manifest, loadErr := registry.Load(registry.PluginDir(root, ref.ID, ref.Version))
+		dir := registry.PluginDir(root, ref.ID, ref.Version)
+		manifest, loadErr := registry.Load(dir)
 		if loadErr != nil {
-			slog.Warn("已装插件清单不可用，跳过", "plugin_id", ref.ID, "version", ref.Version, "err", loadErr)
+			if errors.Is(loadErr, fs.ErrPermission) {
+				// 可操作提示：不做静默"未安装"——告诉运维具体路径与修法（非 root 启动
+				// 读不到 root 安装的插件目录；修复后无需重装）。
+				slog.Error("插件清单无读权限，按未安装跳过（请修正属主或权限后重启）",
+					"plugin_id", ref.ID, "version", ref.Version, "dir", dir,
+					"hint", "该插件由其他用户安装：chown -R <kored 运行用户> "+dir+" 或 chmod -R a+rX "+dir, "err", loadErr)
+			} else {
+				slog.Warn("已装插件清单不可用，跳过", "plugin_id", ref.ID, "version", ref.Version, "err", loadErr)
+			}
 			continue
 		}
 		if addErr := catalog.Add(manifest); addErr != nil {
