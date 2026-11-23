@@ -92,7 +92,13 @@ func runAdminPassword(args []string, stdout, stderr io.Writer) int {
 	if code != exitOK {
 		return code
 	}
-	path := coreconfig.ResolvePath(opts.config)
+	// 与 serve 共用同一套解析（KORE_CONFIG > --config > profile 默认），再归一为
+	// 绝对路径：写哪个文件、打印哪个路径、`serve --config` 读哪个文件必须是同一个。
+	path, err := adminPasswordConfigPath(opts.config)
+	if err != nil {
+		fmt.Fprintf(stderr, "配置路径解析失败: %v\n", err)
+		return exitConfig
+	}
 	if err := writeAdminPasswordHash(path, hash); err != nil {
 		fmt.Fprintf(stderr, "写入配置失败: %v\n", err)
 		return exitConfig
@@ -245,9 +251,14 @@ func firstRunAuthGuide(cfg *config, stderr io.Writer) {
 		fmt.Fprintf(stderr, "生成口令哈希失败: %v\n", err)
 		return
 	}
-	path := cfg.snapshot.Source
-	if strings.TrimSpace(path) == "" {
-		path = coreconfig.ResolvePath(cfg.opts.config)
+	source := cfg.snapshot.Source
+	if strings.TrimSpace(source) == "" {
+		source = cfg.opts.config
+	}
+	path, err := adminPasswordConfigPath(source)
+	if err != nil {
+		fmt.Fprintf(stderr, "配置路径解析失败: %v\n", err)
+		return
 	}
 	if err := writeAdminPasswordHash(path, hash); err != nil {
 		fmt.Fprintf(stderr, "写入配置失败: %v\n", err)
@@ -255,6 +266,20 @@ func firstRunAuthGuide(cfg *config, stderr io.Writer) {
 	}
 	cfg.reload()
 	fmt.Fprintf(stderr, "已写入 %s（权限 0600），本次启动即用新口令登录。\n", path)
+}
+
+// adminPasswordConfigPath 按与 serve 相同的语义解析配置文件并归一为绝对路径。
+//
+// 优先级完全交给 config.ResolvePath（KORE_CONFIG > --config > profile 默认），
+// 这里只补 Abs：相对路径必须落到「当前工作目录」下的同一个文件，否则提示里
+// 打印的路径和实际写的文件可能不是同一个。
+func adminPasswordConfigPath(flagPath string) (string, error) {
+	path := coreconfig.ResolvePath(flagPath)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(abs), nil
 }
 
 // writeAdminPasswordHash 原子写入 auth.admin_password_hash，权限固定 0600。

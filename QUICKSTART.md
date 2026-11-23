@@ -16,35 +16,36 @@ make build          # 产出 bin/kored（CGO_ENABLED=0 单二进制，已内嵌 
 
 ## 2. 设置管理员口令（一条命令）
 
-新装没有管理员口令时面板能打开、但任何口令都登不进去。一条命令搞定：
+新装没有管理员口令时面板能打开、但任何口令都登不进去。一条命令搞定——**这里的 `--config` 必须和 §3 启动时完全一致**：
 
 ```bash
-./bin/kored admin-password --generate
+./bin/kored admin-password --generate --config ./kore-quickstart.yaml
 ```
 
-kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次**，同时把 PBKDF2 哈希原子写进配置文件：
+kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次**，同时把 PBKDF2 哈希原子写进 `--config` 指向的那个文件（打印的是它的绝对路径）：
 
 ```
 管理员口令（只显示这一次，请立即保存）：Xy7k...（24 字符）
 
-已将口令哈希写入 /opt/kore/config/config.yaml（权限 0600）
+已将口令哈希写入 /绝对路径/kore-quickstart.yaml（权限 0600）
 提示：重启 kored 后生效；忘记口令可再执行 `kored admin-password --set` 重置。
 ```
 
-- 配置文件路径默认 `<install>/config/config.yaml`（设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`），也可用 `--config <path>` 指定。
+- **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径，相对路径都按当前工作目录归一。
+- 忘记自己用了哪个路径时，看命令打印的绝对路径（`admin-password` 与 `serve` 启动日志里的配置路径是同一个）。
 - 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。
 - 命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。
 
 ### 2.1 自己指定口令
 
 ```bash
-./bin/kored admin-password --set          # 读两次、输入不回显；不一致直接报错且不写文件
+./bin/kored admin-password --set --config ./kore-quickstart.yaml   # 读两次、输入不回显；不一致直接报错且不写文件
 ```
 
 非交互环境（CI / 容器）没有终端可交互，必须走管道：
 
 ```bash
-printf '%s' "$KORE_ADMIN_PW" | ./bin/kored admin-password --set --stdin
+printf '%s' "$KORE_ADMIN_PW" | ./bin/kored admin-password --set --stdin --config ./kore-quickstart.yaml
 ```
 
 ### 2.2 打开 TCP 监听
@@ -64,18 +65,19 @@ paths:
   log_dir:   "./kore-log"
 ```
 
-> 想先写 yaml 再生成口令也可以：`admin-password` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关。
+> 想先写 yaml 再生成口令也可以：`admin-password --config ./kore-quickstart.yaml` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关——只要和 §3 的 `--config` 是同一个文件。
 
 ### 2.3 首启自动引导（忘了上面那步也不会卡死）
 
 `kored serve` 启动时如果发现「配置文件不存在 或 `auth.admin_password_hash` 为空」，不再只打一条干瘪 WARN：
 
 - **stdin 是终端** → 直接提示输入两次新口令，写入配置文件后用新口令启动；
-- **stdin 不是终端**（systemd / 容器 / 重定向）→ 只打印可操作提示、**不阻塞启动**，避免把服务卡在等输入上。此时面板能打开但登录不了，先离线执行 `kored admin-password --generate` 再重启即可。
+- **stdin 不是终端**（systemd / 容器 / 重定向）→ 只打印可操作提示、**不阻塞启动**，避免把服务卡在等输入上。此时面板能打开但登录不了，先离线执行 `kored admin-password --generate --config <与 serve 相同的配置文件>` 再重启即可（TTY 分支直接写入 serve 自己解析的那个文件，不会再出现路径不一致）。
 
 ## 3. 启动
 
 ```bash
+# --config 必须与 §2 生成口令时用的是同一个文件
 ./bin/kored serve --config ./kore-quickstart.yaml
 ```
 

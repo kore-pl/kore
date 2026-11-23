@@ -128,7 +128,9 @@
 
 来自 portable 全新安装的垂直切片（`5155445`，证据 [.agents/verify/v1-user-journey.md](../.agents/verify/v1-user-journey.md)）——按现有文档从零到「登录后能用」在第 2 步断掉，共 9 条（P0 4 / P1 3 / P2 2）。**P0 四条修复中（task-170/171），未修完前不标 v1 易用达标。**
 
-1. **P0-1 没有首次安装文档**：`docs/QUICKSTART.md` 不存在，`docs/RUNBOOK.md` 无「安装」章节；二进制放哪、`KORE_HOME` 怎么设、怎么启动都要自己猜。
-2. **P0-2 首启 bootstrap 未发生**：文档承诺生成并打印管理员临时口令（[CORE.md](./CORE.md) §2.3），实际全新实例不生成 config、日志无口令、登录 401，整条旅程断在第 2 步。
+> **复验状态（2026-11-23，`3f2c870`）**：P0-1 / P0-2 的中途状态（口令能生成但路径与 `serve` 不一致导致 401）已在 [.agents/verify/v1-user-journey-round2.md](../.agents/verify/v1-user-journey-round2.md) 记录，现行文档与命令已统一 `--config` 语义，见下方第 1、2 条。
+
+1. **P0-1 首次安装文档缺失（已修复）**：仓库根 [QUICKSTART.md](../QUICKSTART.md) 覆盖「构建 → 口令 → 启动 → 浏览器访问」四步；`docs/RUNBOOK.md` §7 补「重置管理员口令」。复验证据见 [v1-user-journey-round2.md](../.agents/verify/v1-user-journey-round2.md)。
+2. **P0-2 首启 bootstrap 未发生（已修复）**：`kored admin-password --generate/--set [--stdin]/--hash` 一条命令写口令（原子写 + 0600 + 只打印一次），`serve` 首启检测到缺哈希时 TTY 直接引导、非 TTY 只提示不阻塞；`admin-password` 与 `serve` 共用同一套 `--config` / `KORE_CONFIG` 解析，路径不一致导致的 401 已在 round2 复验中修正。
 3. **P0-3 CLI 安装与运行中服务互斥且未文档化**：服务运行时 `kored install --package` 报「状态库已被占用」，必须先停服务，但文档未写。
 4. **P0-4 非 root 卸载假成功**：`kored uninstall --purge --yes` 打印需要 root 后 **exit 0**，`data/` 与 `--purge` 实际未生效；按退出码判成功会留下整个安装目录。

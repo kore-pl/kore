@@ -328,3 +328,49 @@ func TestFirstRunAuthGuideTTYSetsPassword(t *testing.T) {
 		t.Fatalf("首启引导未给出写入成功提示:\n%s", stderr.String())
 	}
 }
+
+// TestAdminPasswordAndServeResolveSameConfig 覆盖「文档路径不自洽」的硬缺口：
+// --generate 写的文件必须与 `serve --config` 解析到的是同一个（相对路径按 cwd 归一）。
+func TestAdminPasswordAndServeResolveSameConfig(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("取当前目录失败: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("切换工作目录失败: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	const rel = "kore-quickstart.yaml"
+	withAdminFakes(t, false)
+	var stdout, stderr bytes.Buffer
+	if code := runAdminPassword([]string{"--generate", "--config", rel}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("--generate 应退出 0，实际 %d，stderr=%s", code, stderr.String())
+	}
+	plain := generatedPassword(t, stdout.String())
+	abs := filepath.Join(dir, rel)
+	if !strings.Contains(stdout.String(), abs) {
+		t.Fatalf("提示必须打印实际写入的绝对路径 %s:\n%s", abs, stdout.String())
+	}
+	// serve 用完全相同的 --config 语义解析：必须读到刚写的哈希且口令可校验。
+	cfg, code := loadConfig(serveOptions{config: rel}, io.Discard)
+	if code != exitOK {
+		t.Fatalf("serve 用同一 --config 加载配置失败（退出码 %d）", code)
+	}
+	hash := cfg.snapshot.Auth.AdminPasswordHash
+	if hash == "" {
+		t.Fatal("serve 解析到的配置里没有 admin_password_hash —— 两边不是同一个文件")
+	}
+	ok, err := auth.VerifyPassword(hash, plain)
+	if err != nil || !ok {
+		t.Fatalf("serve 解析到的哈希无法校验生成的口令: ok=%v err=%v", ok, err)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("读配置文件失败: %v", err)
+	}
+	if !strings.Contains(string(data), hash) {
+		t.Fatal("serve 解析到的哈希不在 admin-password 写入的文件里")
+	}
+}
