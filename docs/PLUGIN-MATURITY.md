@@ -15,7 +15,7 @@
 | 盘点范围 | 任务给定的 **24 个** `kore-plugin-*` 仓；`discover` 自 Round 2 起纳入，不留在表外 |
 | 盘点时刻 | **2026-11-23 13:32 +08:00**。正处并发发版窗口（`container` 0.4.0 / `db-postgres` 0.3.0 / `integrity` 0.3.0 / `logs` 0.4.0 / `redis` 0.5.0 / `runtime-php` 0.2.1 / `ssl` 0.4.0 / `waf` 0.3.0 / `process` 0.2.1 / `runtime-node` 0.2.1 / `site` 0.3.1 / `file` 0.3.0 / `terminal` 0.2.0 / `monitor` 0.3.0 / `cron` 0.4.0 / `ssh-guard` 0.2.1 / `backup` 0.4.0 等均已 bump），一律按 **HEAD** 计、未提交工作树不计；**索引对齐与方法数都是滚动量，§6 命令实测为准** |
 
-**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**，上一版「L0 2 / L1 1」不成立。真缺口只剩 **2 条**：**插件凭据不能跨插件传递**（§5 #8）与 **root 内核下插件未降权**（#13，插件当前与内核同 uid，可绕过通道与审计）；**方法级 capability 仍是部分补**（#12，17/24 仓声明，内核侧已就绪）。索引对齐是滚动量：盘点时刻 HEAD **14/24**（10 个刚发版仓待重签，清单见 §6 命令输出）。
+**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**，上一版「L0 2 / L1 1」不成立。真缺口只剩 **1 条**：**插件凭据不能跨插件传递**（§5 #8）；**插件降权已落地**（#13，`6ceeba8`：`kore-<id>` + `SysProcAttr.Credential` + 降级矩阵）；**方法级 capability 仍是部分补**（#12，17/24 仓声明，内核侧已就绪）。索引对齐是滚动量：盘点时刻 HEAD **14/24**（10 个刚发版仓待重签，清单见 §6 命令输出）。
 
 ### 0.1 文档声明 vs 代码事实（本轮重判）
 
@@ -28,7 +28,7 @@
 | 5 | §3.5 #12 写「只读方法也按 **admin 类**进审计」、声明「**3/24** 仓」 | **审计记录根本没有 capability 字段**：修复前只读也写一条 `invoke.*`（判定来源是插件级 admin），修复后 `needAdmin=false` 时**连记录都不写**（= 完全不落库）；已声明仓为 **17/24** | `internal/core/store/audit.go:36-44`（无 capability 字段）、`httpapi/audit_http.go:137`（审计门）、`httpapi/invoke_capability.go:165-177`（判定/回退）、`.agents/verify/r5-12-method-capability.md` §3/§4（18875 vs 18876 A/B） | #12 改部分补 + **措辞纠正为"只读完全不落库 vs 写调用落库"** |
 | 6 | `ssl` L1.5（10 方法已列） | 与代码一致；expiring / renew.set / acme.status / acme.issue 均在 | `../kore-plugin-ssl/methods.go:139,150,161,171` | 维持 L1.5（ACME 仍骨架） |
 | 7 | `process`「缺优先级」 | HEAD 0.2.1：protect + renice 已提交、tag 已推，**并补了 5 条方法级 capability**（list/detail/tree=`proc:read`，kill/renice=`proc:write`） | `../kore-plugin-process/CHANGELOG.md` 0.2.1、`methods.go:46` | 计入（索引待重签） |
-| 8 | 主壳 **16 视图** | **19 视图**：旧表漏计 `runtimes`（业务组）与 `integrity`（平台组）两个早已存在的视图，再加上已接入导航的 `container`（资源组） | `web/shell.js:58-61`（四组 ids 共 19 个） | §3.3.1 重写为 19（不是 17） |
+| 8 | 主壳 **16 视图** | **19 视图**：旧表漏计 `runtimes`（业务组）与 `integrity`（平台组）两个早已存在的视图，再加上已接入导航的 `container`（资源组）；`process` 视图已完成 0.2.1 适配（`c43aed6`） | `web/shell.js:58-61`（四组 ids 共 19 个） | §3.3.1 重写为 19（不是 17） |
 | 9 | §3.5 #10「`runtime-php` / `runtime-python` 0.2.0 未入索引」 | 两仓已入索引（#10 结案）；索引对齐是滚动量，盘点时刻 14/24 | §6 版本比对命令（读 HEAD） | #10 改"已补" |
 | 10 | §3.3.2「告警/通知中心 无」「长任务进度 伪」 | **均已落地**：铃铛 + 抽屉 + 3 端点 + 服务端埋点；SSE 真实阶段进度 | `httpapi/handlers_alerts.go:19`、`httpapi/sse.go`、`web/shell.js:395-449`、`ui-alerts-progress.md`（双端截图） | 两行改"已达标" |
 | 11 | 配置契约 **6 个仓** | **9 个仓**：另含 `dns` / `ssh-guard` / `waf` | §6 `grep -rl '"config.get"'` | 口径更新 |
@@ -51,6 +51,8 @@
 **判级纪律**：级别只认代码事实（`file:line`）；"能编译 + 单测绿"不进任何一级的判据；L2 的"双端页面"指 PC 与手机各一张实拍图，接口 200 不算。只读域（`monitor` / `logs` / `dns`）读侧接线完成即记 L1.5，但须在级别列注明"只读"。未提交的工作树改动**不计入**任何一级。
 
 ## 2. 功能矩阵（3.2，24 个插件仓）
+
+**depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**（G-20 判据：`tests/fault/` 实跑 + dist 可复现）。**方法总数不变**（仍 164 命令口径 / 完整 196），本轮只升 depth 与补 fault 测试。
 
 | 能力域 | 插件（版本） | 现级别 | 现有方法（数量） | 已补（代码事实） | 仍缺（到 L2 / L3） |
 | --- | --- | --- | --- | --- | --- |
@@ -147,14 +149,14 @@
 | 10 | `runtime-php` / `runtime-python` 0.2.0 未入索引 | **已补** | 两仓 0.2.0 已入索引（本条结案）；索引对齐是滚动量（§6 实测：盘点时刻 14/24，10 个刚发版仓待重签） | 结案；余项归重签收口 |
 | 11 | 提权只验证了拒绝路径 | **已补** | `r5-1-privilege-success.md`：真 root `systemd-run --uid=0` → ufw 全动作跑通、stdout/exit code 完整、幂等、回滚后 `ufw show added` 为空且 `iptables -S` 与基线 diff=0、两阶段 `root.action` 审计、非 root 403+hint 回归；并修掉 `--pipe`+file: 导致的输出恒空阻断缺陷 | 结案；**未证项**：ufw 活动状态下的数据面效果、插件降权组合（→#13） |
 | 12 | 插件级 capability 让只读方法也进审计 | **部分补** | 语义已纠正：**只读调用完全不落库**（`audit_http.go:137` 的 `needAdmin=false` 直接 return；`audit.invoke_all` 默认 false；记录无 capability 字段 `store/audit.go:36-44`），写调用落 1 条 `invoke.*`；判定/回退 `invoke_capability.go:165-177`（方法级命中优先，未命中回退插件级取最高要求）。已声明 **17/24 仓**。证据：`r5-12-method-capability.md` §3（6 个只读方法审计增量 0、写 +1、回退 +1/+0）、§4（`e1e804a` vs `ff92f6c` A/B：同一 `site.list` 修复前 +1 / 修复后 +0） | 剩 7 仓按仓补声明（内核侧不再改） |
-| 13 | **root 内核下插件未降权**（本轮新增） | **仍在** | ADR-0018 身份模型要求"内核 root + 插件降到 `kore-<id>`"，实现计划第 3 条未落地：`supervisor/demote.go` 与 `SysProcAttr.Credential` 接入**仅存在于工作树**（`git ls-files` 无 demote.go，supervisor 6 文件 M、ADR 实现记录为未提交编辑）；现状插件与内核同 uid | **R5-1 后续单列**：插件可绕过通道与审计直接执行 `ufw`/`nginx -s reload`，通道不是安全边界 |
+| 13 | **root 内核下插件未降权**（本轮新增） | **已补** | `6ceeba8`（P0 插件降权，16 文件）：`supervisor/demote.go` + `SysProcAttr.Credential` 落地，插件进程降到 `kore-<id>`；降权不可用时走降级矩阵并显式声明，不静默；与 ADR-0018 身份模型一致 | 结案；**未证项**：真 root 端到端在降权后尚未复验（R5-1 后续单列）：插件可绕过通道与审计直接执行 `ufw`/`nginx -s reload`，通道不是安全边界 |
 | 14 | **SDK 发布链缺 root_actions schema**（本轮新增） | **已补** | `pkg/pluginapi/v0.1.2` tag 已发（`git show pkg/pluginapi/v0.1.2:pkg/pluginapi/rootaction.go` 存在），`root_actions` schema + 白名单随 tag 固化；插件侧 `ssh-guard` 已 bump 到 v0.1.2 并加 schema 自检 | 结案 |
 
 **回退样本选型的教训**：验证「无方法级声明时按插件级判定」**不能拿 `logs` 当反例**——它插件级只声明 `system:read`，回退后同样不审计；必须选**插件级含 write/admin** 的仓（本轮 A/B 用的是 `process` 0.2.0 的 `proc:write`；HEAD 下同类样本可用 `db-postgres` / `runtime-php` 的 `system:admin`）。
 
 **命名约束（写方法时的硬限制）**：内核 `methodActionPattern` = `^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`（`internal/core/registry/validate.go:55`）——**不支持下划线**。所以 `integrity.verify_file` 无法写进 `method_capabilities`（integrity 0.3.0 的声明里只有 baseline / baseline.list / check / status / schedule.*），这类方法只能回退插件级能力。**新方法名一律用 camelCase**（如 `verifyFile`），否则永远拿不到方法级审计收益。
 
-汇总：**14 条 = 已补 9（#1 #3 #4 #6 #7 #9 #10 #11 #14）/ 部分补 3（#2 #5 #12）/ 仍在 2（#8 #13）**；v1.0 前必须 **2 条（#8 #13）**；索引对齐为滚动量，以 §6 命令实测为准。
+汇总：**14 条 = 已补 10（#1 #3 #4 #6 #7 #9 #10 #11 #13 #14）/ 部分补 3（#2 #5 #12）/ 仍在 1（#8）**；v1.0 前必须 **1 条（#8）**；索引对齐为滚动量，以 §6 命令实测为准。
 
 ## 6. 附录：24 仓方法清单（命令口径 164 + `redis` 注册表 16 = 180；`site` verbRegistry 另计 16 → 完整 196）
 

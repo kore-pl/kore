@@ -127,6 +127,8 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 | CS-20261123-04 | Round 5 并行收口：方法级 capability（§3.5 #12）+ 插件降权（§3.5 #13）+ 17 仓发版/能力补全 + 索引第 32/33 次重签（第 33 次 `b4f688b` 已双推）；**`kore` 侧 22+ commit 与 24 仓 main 均本地未推，发布链待批次收口** | `kore` @ `f086312`（R5-2 rootpolicy 形状表）→ `6ceeba8`（P0 插件降权，16 文件）→ `50d3681`（SDK v0.1.2 rootaction 进 tag）→ `1e0c10a`（SDK v0.1.3 pluginapitest）→ `8566d43`（新公钥同步 `market/verify.go`）→ `1cec22b`（PLUGIN-MATURITY 按代码事实重判）→ `f7bd150`（ADR-0018：root 执行器移除 `--pipe`）；并行支线 `67e99fd` / `aebabbf`（process 0.2.0 / 0.2.1）、`81e84d8` / `d661d68`（cron 0.4.0 / 0.4.1）、`2db5f92`（waf）；`kore-plugins` @ `b4f688b`（第 33 次重签：12 条版本入索引 + `versions.lock` + 预设同步 + 私钥销毁，**已双推**；第 32 次签 6 条后追加清单致作废）；插件仓 17 个版本：`redis` 0.5.0、`logs` 0.4.0、`container` 0.4.0、`process` 0.2.1、`cron` 0.4.1、`ssh-guard` 0.2.2、`backup` 0.4.0、`site` 0.3.1、`file` 0.3.0、`monitor` 0.3.0、`terminal` 0.2.0、`integrity` 0.3.0、`db-postgres` 0.3.0、`ssl` 0.4.0、`db-mysql` 0.3.1、`waf` 0.3.0、`runtime-php` 0.2.1（各仓 commit 见各仓 `RELEASE-EVIDENCE.md` / CHANGELOG，索引以 `b4f688b` 为准） | 无协议破坏性变更；方法级 `method_capabilities` 成为 24 仓口径（本批新增 logs / container / redis / ssl / integrity / db-postgres / file / monitor / terminal / site / ssh-guard）；**插件降权为 P0 安全修正**（`kore-<id>` 前缀 + 降级矩阵），不改变调用方契约；索引签名与 `kore` 新公钥同批（第 33 次） | 插件仓（bump → dist 两打 → tag 干净树复现 → 本地 commit/tag）→ `kore-plugins`（`versions.lock` + 12 条索引 + 第 33 次重签，已推）→ `kore`（新公钥 `verify.go` + 文档重判）；**推送收口**：24 仓 main + `kore` 22+ commit 待批次推，推送前不置 `confirmed` | 本地验收：`logs` 0.4.0 dist `274ef4c0…3069`（size 1,532,739）两跑一致 + tag 干净树复现一致；各插件仓 `make check` / `go test` 通过（证据见各仓 `RELEASE-EVIDENCE.md`）；`make docs-check` + `make log-check` 退出码见本轮收口提交；**待做**：`validate-index.sh` 正例/反例 + 24 条资产 `curl -L` + 隔离实例商店 12 条新版复核 + 第 34 次重签（waf 0.3.0 等未入索引） | in_progress |
 规则：一行内写全「仓库 / tag 或 commit / 协议影响 / 合并顺序 / 验收方式」才允许置 `completed`；缺任一列视为未完成（G-15）。状态含义：`completed` = 变更集内仓库与顺序齐备、本地验收通过；`confirmed` = 已发布且干净 clone / `git ls-remote` 复验通过（里程碑收口口径，2026-11-22 由 verifier 报告与本节证据共同支撑）。
 
+| CS-20261123-05 | 拓扑与发布链收口：GitHub 迁 `kore-pl` 组织 + Gitea 唯一权威源 + 8 仓 production 升级 + 第 35 次重签（8 条新版本）+ process 视图接线 + 文档 URL 迁移（module 路径保持 `pengtang1024`） | `kore` @ `8c1578e`（第 35 把新公钥）→ `c43aed6`（process 视图 0.2.1 适配）→ `8c3265e` / `2e17105` / `3876009`（文档迁移：仓库地址 `kore-pl`、module 声明 `pengtang1024`）→ `9118249`（BOARD §9.1 issue 映射）；`kore-plugins` @ `f586c0e`（第 35 次重签，8 条新版本入索引，三端已推）；插件仓 8 个新版本：`container` 0.4.1、`db-postgres` 0.3.1、`dns` 0.3.1、`integrity` 0.3.2、`runtime-node` 0.2.3、`runtime-python` 0.2.3、`ssh-guard` 0.2.3、`waf` 0.3.1（均 `depth_level: production`，各仓 CHANGELOG / RELEASE-EVIDENCE 为证） | 无协议破坏性变更；module 路径保持 `github.com/pengtang1024/kore`（ADR-0024 决策 C），仓库地址统一 `github.com/kore-pl/*`；8 仓仅升 depth 与补 fault 测试，方法契约不变 | 插件仓（bump → dist 两打 → tag 干净树复现）→ `kore-plugins`（`versions.lock` + 8 条索引 + 第 35 次重签）→ `kore`（新公钥 `8c1578e` + process 视图 `c43aed6` + 文档迁移）；三端推送顺序 origin（Gitea）→ github → gitee | 三端推送完成（`kore` / `kore-plugins` / 8 插件仓）；商店复核全绿（索引 24 条、8 新版可安装、无 401）；`make check` 12 段 exit 0；`go build ./...` / `go vet ./...` exit 0；文档 `make docs-check` exit 0 | confirmed |
+
 ## 6. 里程碑裁决记录
 
 M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何任务先读这里，不要再以"某份正文当前这么写"为依据推翻。**M1 的裁决（第 21–30 条）不复制到本表**，以 [LOG/DECISIONS.md](LOG/DECISIONS.md) 为唯一真源；下表 1–11 是 M0 期间直接以 BOARD 收口的口径。
@@ -190,11 +192,14 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
   - **第 34 次重签未做**：`waf` 0.3.0 与本轮新发版插件尚未入索引（第 33 次只覆盖 12 条），索引同步是滚动量。
   - **R5-1 真 root 端到端未在降权后复验**：`--pipe` 修复与真 root 通道验证发生在降权提交前，降权后未重跑同一命令。
 
-### 9.1 GitHub Issues 镜像（2026-11-23，公开可认领队列）
+### §9.1 任务队列（Gitea 权威源）
 
-**BOARD 仍是权威台账**；下列 issue 是公开镜像 + 认领入口，双向可查（issue 正文含「背景 / 要做什么 / 验收判据」三段）。认领后回填 issue 号与 owner。
+**BOARD 仍是权威台账**（G-15/G-23）；Issues 是**公开镜像 + 可认领队列**，双向可查。GitHub Issues 保留为公开镜像，**后续更新以 Gitea 为准**：
 
-| 遗留项 | issue |
+- 集中层（跨仓 / 内核 / 协议）：`https://gitea.iouf.cn/kore-pl/kore/issues`
+- 分散层（各插件仓自身缺口）：`https://gitea.iouf.cn/kore-pl/<repo>/issues`
+
+| 遗留项 | Gitea issue |
 | --- | --- |
 | firewall 0.2.3 之后 tag 漂移，下次发版必须 bump（同类：process / redis / ssl / waf） | kore-pl/kore#1 |
 | 零侵入阶段 B：`kored uninstall` + `userdel` 清理 | kore-pl/kore#2 |
@@ -205,4 +210,4 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 | container docker socket 错误提示与 ADR-0018 冲突 | kore-pl/kore-plugin-container#1 |
 | 硬编码版本断言清理（dns / runtime-node / runtime-python） | kore-pl/kore-plugin-dns#1 |
 
-**状态**：以上均 open、未认领；标签体系见 `kore-pl/kore` 的 `P0` / `P1` / `P2` / `zero-intrusion` / `frontend` / `protocol` / `capability` / `release-chain`。
+**状态**：以上均 open、未认领；标签体系（Gitea 仓级）`P0` / `P1` / `P2` / `zero-intrusion` / `frontend` / `protocol` / `capability` / `release-chain`。GitHub 侧 8 个 issue 已加迁移标注（不关闭，保留历史）。

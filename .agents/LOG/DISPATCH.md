@@ -48,6 +48,14 @@
 | 2026-11-23 | Round 5 · 文档重判（PLUGIN-MATURITY 按代码事实） | kore-architect-maturity | `docs/PLUGIN-MATURITY.md` | 各仓能力事实 | 方法数 / capability 覆盖率 / 下划线命名约束 / 视图数按代码同步（L0 0 / L1 0 / L1.5 18 / L2 5） | `1cec22b` | completed |
 | 2026-11-23 | Round 5 · 台账收口（DISPATCH / BOARD / JOURNAL） | kore-scribe-round5 | `.agents/LOG/DISPATCH.md`、`.agents/BOARD.md`、`.agents/JOURNAL.md` | 上述各轨 | 11 条派发汇总 + `CS-20261123-04` + 5 条教训 + 6 项遗留 | 本次提交 | in_progress |
 
+| 2026-11-23 | 26 仓 GitHub 迁移到 `kore-pl` 组织（`gh api transfer`，transfer 遇 422 按 60s 退避） | verify-privilege | GitHub 组织设置（非文件写域） | 迁移前 26 仓 main 已推 | 26/26 仓 owner 变为 `kore-pl`，tag/release 随仓迁移，旧 URL 302 | — | confirmed |
+| 2026-11-23 | 在 Gitea（`gitea.iouf.cn/kore-pl`）建 26 仓并首次推送（三端拓扑：origin=Gitea / github / gitee） | verify-privilege | Gitea 组织与 26 仓（非文件写域） | 26 仓迁移完成 | 26 仓远端齐备、`git ls-remote` 三端一致 | — | confirmed |
+| 2026-11-23 | 8 仓 production 升级（`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1）——`rel-container` 3 个 / `impl-backup` 2 个 / `impl-file` 2 个 + `release-r5` 1 个 | 各仓 owner（见备注） | 各插件仓 `info.json` / `CHANGELOG.md` / `tests/fault/` | 各仓功能补全完成 | 8 仓 `depth_level: production` + `tests/fault/` 实跑 + dist 可复现 | 各仓 CHANGELOG / `RELEASE-EVIDENCE.md` | confirmed |
+| 2026-11-23 | 索引第 35 次重签（8 条新版本 + 新公钥 `8c1578e`） | verify-privilege（接手） | `kore-plugins/index/`、`kore-plugins/scripts/`、`kore/internal/core/market/verify.go` | 8 仓 dist 就绪 | 第 35 把签名 + 8 条索引 + 三端已推（`kore` @ `8c1578e`、`kore-plugins` @ `f586c0e`） | `8c1578e` / `f586c0e` | confirmed |
+| 2026-11-23 | process 视图 P0（主壳前端适配 `process` 0.2.1） | container-view | `web/process.js`、`web/shell.js` | process 0.2.1 方法就绪 | 视图接线 + 双端截图，commit `c43aed6` | `c43aed6` | confirmed |
+| 2026-11-23 | Issues 体系（Gitea 权威源）：`kore` 5 个 + 插件仓 3 个，标签 8 个 | architect | `.agents/BOARD.md` §9.1、Gitea issue | 无 | 8 issue 建成并回填 BOARD；GitHub 8 个加迁移标注 | `9118249` + 本批 | confirmed |
+| 2026-11-23 | 文档 GitHub URL 迁移（仓库地址 → `kore-pl`，module 路径保持 `pengtang1024`） | architect（`8c3265e`）+ release-r5 | `docs/`、`.agents/`、`README.md`、`AGENTS.md` | 迁移完成 | 13 文件提交；136 个 `.go` import 误改已回退，`go build`/`go vet` exit 0 | `8c3265e` / `2e17105` / `3876009` / `9118249` | confirmed |
+
 ## 未回收与待补
 
 1. **`internal/core/config` / `registry` 的派发记录缺失**：文件已落盘（2026-11-22 00:2x），但会话内没有对应的 `team_task_*` 或派发消息可引；owner 列留 `—`，等 lead 补登记后再回填。
