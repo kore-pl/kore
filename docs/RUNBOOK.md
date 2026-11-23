@@ -65,7 +65,13 @@ strings bin/kored | grep -c "${NEW_KEY:0:8}"    # 判据：≥ 1
 
 `0` 就停在这里：说明 build 用的还是旧源码或旧产物，别往下走。
 
-### 步骤 6 — 重启 kored（换信任根必须重启）
+### 步骤 6 — 重启 kored（**仅公钥变更时需要**；ADR-0025 后常规重签不再重启）
+
+> **先判：这一把改没改公钥？**
+> - **重签不改公钥**（ADR-0025 方案 A：长期密钥固定，只改 `index/plugins.json` 正文 + `.sig`）→ **不需要 `make build`、不需要重启**。索引每请求重读磁盘（`readTrusted`），重启只会无谓打断插件与在跑任务。
+> - **公钥变更**（轮换密钥，`verify.go:IndexPublicKeyHex` 变了）→ **必须** `make build` + 重启：旧进程内存里是旧公钥，不重启则商店全部 401。
+>
+> 自第 41 把起默认走「不改公钥」，因此**常规发布不再有重启步骤**；长期密钥的备份与轮换见 [SIGNING-KEY-SOP.md](./SIGNING-KEY-SOP.md)。
 
 ```bash
 systemctl restart kore && systemctl is-active kore            # 生产：判据 active
@@ -94,7 +100,7 @@ systemd-run --user --unit=kored-local --collect \
 systemctl --user restart kored-local && systemctl --user is-active kored-local
 ```
 
-判据：PID 变化 + 启动日志出现 `kore ready`；`cat /proc/$(systemctl --user show kored-local -p MainPID --value)/cgroup` **不得含 `dsh-subprocess`**（见下）。旧进程内存里还是旧公钥，这步省不掉。
+判据：PID 变化 + 启动日志出现 `kore ready`；`cat /proc/$(systemctl --user show kored-local -p MainPID --value)/cgroup` **不得含 `dsh-subprocess`**（见下）。**仅当公钥变更时**这步才省不掉。
 
 > **禁止 `setsid nohup ./bin/kored serve … &`（2026-11-23 18:13 事故）**：`setsid`/`nohup` 只改会话与控制终端，**不脱离 cgroup v2**。在 agent 工具调用里这样启的 kored 仍留在该调用的 transient scope（`dsh-subprocess-*.scope`）里，调用收尾/超时被清理时整 scope 收到 SIGTERM，kored 与全部插件一起被杀——日志只有「插件进程意外退出 signal: terminated」，没有正常关闭记录。`systemd-run --user --unit=kored-local` 让 kored 落在自己的 unit cgroup，才算真正脱离。
 
@@ -110,9 +116,9 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 
 判据：`code=200`，且 count 等于 `../kore-plugins/index/plugins.json` 的 `plugins` 长度。
 
-### 跳过第 5 / 6 步的后果
+### 跳过第 5 / 6 步的后果（仅公钥变更时）
 
-旧二进制或旧进程仍是旧公钥 → 新签名验不过 → `E_UNAUTHORIZED` → 商店**全部请求 401**（列表、详情、预设、安装/更新/下载共用同一道门）。表象是"登录正常、商店整页空且 401"，且**不会自愈**：索引每请求重读，公钥只在进程启动时载入。
+改了公钥却没 rebuild/重启：旧二进制或旧进程仍是旧公钥 → 新签名验不过 → `E_UNAUTHORIZED` → 商店**全部请求 401**（列表、详情、预设、安装/更新/下载共用同一道门）。表象是"登录正常、商店整页空且 401"，且**不会自愈**：索引每请求重读，公钥只在进程启动时载入。
 
 ## 2. 插件升级发布流程（bump → dist → release → 索引 → 重签 → 重启 → 端到端安装）
 
