@@ -78,6 +78,8 @@
 
 ### 6.1 跨插件凭据传递（设计债，v1.0 前必须做）
 
+> **2026-11-23 更新**：已出 [ADR-0026](./DECISIONS/0026-credential-transport.md) 草案，待裁决。结论候选为「内核托管凭据库 + 按授权读取 + 环境变量注入」，本节候选 A（仅把本插件 password 映射到自己的 password_env）保留为轻量形态，B/C 在 ADR 中被否决。
+
 **问题（2026-11-23 实测）**：插件探测外部服务需要凭据，凭据却存在**另一个插件**的 `config.json` 里，两者互不可见：
 
 - `discover` 要探测 MySQL 服务端版本（`SELECT VERSION()`）与 Redis 服务端版本（`INFO server`），需要 `MYSQL_PWD` / `REDISCLI_AUTH`；
