@@ -71,9 +71,9 @@
 
 **常驻只留 2 个**：`site`(10) + `monitor`(6) = 16 MiB。3 是硬上限、不是目标；`cron` 转 lazy 后不再占常驻位（见下）。
 
-**`cron` 为什么不常驻、也不自己跑调度器**：`cron` 是 lazy，且只负责把任务**写成宿主调度器的条目**——Linux 用 `systemd timer`（`kore-<task>.timer`）或 `/etc/cron.d/kore-*`，macOS 用 launchd `StartCalendarInterval`，Windows 用 Task Scheduler；但「宿主条目到点唤醒插件」的 CLI 入口 `kored invoke` **未实现**——没有命令行唤醒入口，宿主 timer / cron 无法直接调用插件。当前可用的到点唤醒是内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`），到点经 bus 调插件并按需冷启动目标插件。
+**`cron` 为什么不常驻、也不自己跑调度器**：`cron` 是 lazy，三类任务各有真实落点（ADR-0046 §1.2）——`shell` / `http` 写**本插件用户自己的 crontab**（`crontab -` 从 stdin 整份写回），行内容是 `'<plugin-bin>' __task-run '<runlog>' '<name>' '<cmd>'`，由系统 cron 直接 exec 插件二进制的隐藏子命令 `__task-run` 写执行日志，**全程不经内核**，也不需要任何 CLI 唤醒入口；`plugin` 类型**不写 crontab**，只返回 `scheduler_task` 建议，由内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`）到点经 bus 调插件并按需冷启动。**没有对外 CLI 唤醒入口**：`kored invoke` 未实现（ADR-0046 裁为设计选择、不再计划），宿主 timer / 外部程序不能直接唤醒 lazy 插件。
 
-理由三条：① kore 默认零后台定时器，唯一例外是 `scheduler` 单 ticker（ADR-0019，无启用任务时不起，G-19 红线不破）；② 常驻一个插件只为"到点唤醒"不值得占 12 MiB 配额；③ 宿主调度器本来就存在，不引入新守护进程。**它不是"每 60 s 轮询"**——没有循环、没有 sleep 轮询，只有宿主到点触发的一次性调用。**当前缺口**：宿主条目到点唤醒插件的 CLI 入口 `kored invoke` 未实现，这条路径尚不可用；在此之前定时唤醒走内核 `scheduler`（ADR-0019，`POST /api/v1/scheduler/tasks`）。
+理由三条：① kore 默认零后台定时器，唯一例外是 `scheduler` 单 ticker（ADR-0019，无启用任务时不起，G-19 红线不破）；② 常驻一个插件只为"到点唤醒"不值得占 12 MiB 配额；③ 宿主 cron 本来就存在，不引入新守护进程。**它不是"每 60 s 轮询"**——没有循环、没有 sleep 轮询，只有宿主到点触发的一次性调用。**没有外部 CLI 唤醒入口**：`kored invoke` 未实现且不再计划（ADR-0046 B2）；`shell` / `http` 由用户 crontab 直接执行插件二进制 `__task-run`，`plugin` 型任务走内核 `scheduler`（ADR-0019，`POST /api/v1/scheduler/tasks`）。
 
 ### 3.1 `minimal` — 极简（只要一个入口）
 

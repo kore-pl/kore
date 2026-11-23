@@ -345,7 +345,7 @@ WantedBy=multi-user.target
 | --- | --- | --- |
 | `serve`（默认） | 启动主壳（§4–§7 全流程） | 是 |
 | `db dump` / `backup` / `restore` | **未实现**：无对应子命令，照敲得到「未知子命令」退出码 2。替代：停机手工流程见 [DATA-MODEL](./DATA-MODEL.md) §10 与 [OPERATIONS](./OPERATIONS.md) §2（停服 → `bbolt` / `tar` → 校验 → 恢复） | 否 |
-| `invoke <plugin> <method>` | **未实现**：没有对外的 CLI 唤醒入口。一次性调用走 `POST /api/v1/invoke/{plugin}/{method}`（登录会话 + `X-Kore-CSRF`）；定时唤醒走内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`），由 bus 按需拉起插件 | 否 |
+| `invoke <plugin> <method>` | **未实现且不再计划**（ADR-0046 裁决 B2）：没有对外的 CLI 唤醒入口。一次性调用走 `POST /api/v1/invoke/{plugin}/{method}`（登录会话 + `X-Kore-CSRF`）；定时唤醒走内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`），由 bus 按需拉起插件 | 否 |
 | `install --scenario <id>` | **未实现（M2）**：当前返回 `E_UNSUPPORTED` 并列出替代路径（`--package` 单包 / 面板商店逐插件安装；无批量预设一键装） | 否 |
 | `install --package <tar.gz>` | 单包安装（离线/内网） | 否 |
 | `version` | 版本 / 协议版本（`cmd/kored/main.go:40-42`；**不打印 commit**，`kored --version` 不是有效写法） | 否 |

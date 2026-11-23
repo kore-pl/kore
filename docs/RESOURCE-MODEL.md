@@ -238,11 +238,12 @@ cgroup 缺失或受限**不是**硬要求，任何降级都不触发退出码 6�
 
 ## 5. oneshot 调度模型
 
-触发源两种（当前可用）+ 一种未实现，按优先级：
+触发源两种，按优先级：
 
 1. **HTTP invoke**：`POST /api/v1/invoke/{plugin}/{method}`，body 为 `params`，同步等待结果。
 2. **内核 scheduler**：`POST /api/v1/scheduler/tasks` 创建 `{plugin,method,params,schedule|interval_s}` 任务（需 `system:admin`）；`internal/core/scheduler` 用单 ticker（ADR-0019；无启用任务时零 ticker）到点经 bus 调 `Invoke`，与 HTTP invoke 同一调用面、同样按需冷启动插件。
-3. **CLI / 宿主调度器（未实现）**：`kored invoke` 没有对应子命令，**没有对外命令行唤醒入口**；systemd timer / cron 无法直接唤醒插件。需要宿主级定时请改用第 2 条（等价能力，API 入口）；`info.json.triggers` 里的 `cron` 条目只作元数据提示。
+
+**没有对外 CLI 唤醒入口**：`kored invoke` 未实现且不再计划（ADR-0046 裁决 B2），宿主 timer / 外部程序不能直接唤醒 lazy 插件；宿主级定时请走第 2 条（内核 scheduler），`info.json.triggers` 里的 `cron` 条目只作元数据提示。`cron` 插件的 `shell` / `http` 任务不经过这条调用面——它把 `'<plugin-bin>' __task-run '<runlog>' '<name>' '<cmd>'` 直接写进本插件用户的 crontab，由系统 cron 执行插件二进制自身。
 
 拉起-执行-回收时序：
 

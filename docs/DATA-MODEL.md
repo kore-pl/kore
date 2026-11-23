@@ -27,7 +27,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 
 多版本并存：每个 `<id>/<version>/` 是独立目录，升级保留当前 + 上一版本；回滚 = 把 registry 指向上一版本目录并以该目录 `bin/<id>` 重启进程，删除目录即释放磁盘。插件包由 `kore-plugin-<id>` 仓库 `make dist` 产出，本仓库只解包与登记，不构建插件。商店缓存不是真源：真源在 `kore-plugins` 的 `index/plugins.json`，`/var/lib/kore/store/index.json` 只是离线可看的副本，丢失或过期即可直接删除，下次显式刷新重建。
 
-CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 `flag` 手写分发，不引入 cobra/urfave 等 CLI 框架（依赖白名单 G-02）。**已实现**（`kored help` 为唯一权威清单）：`serve`（默认）/ `version` / `install` / `uninstall` / `status` / `upgrade` / `audit` / `admin-password`。**未实现**：`kored db dump` / `kored backup` / `kored restore` / `kored invoke <plugin> <method>`——备份恢复按 §10 的停机手工流程执行，`invoke` 与 `db` 系列上线前不可执行。
+CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 `flag` 手写分发，不引入 cobra/urfave 等 CLI 框架（依赖白名单 G-02）。**已实现**（`kored help` 为唯一权威清单）：`serve`（默认）/ `version` / `install` / `uninstall` / `status` / `upgrade` / `audit` / `admin-password`。**未实现**：`kored db dump` / `kored backup` / `kored restore` / `kored invoke <plugin> <method>`——备份恢复按 §10 的停机手工流程执行，`db` 系列上线前不可执行；`invoke` 已由 ADR-0046 裁决**不再计划**（没有对外 CLI 唤醒入口，定时唤醒走内核 scheduler）。
 
 ## 3. config.yaml
 

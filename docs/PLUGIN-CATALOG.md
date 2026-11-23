@@ -76,7 +76,7 @@
 | M3 | `monitor`(6) | 2 | 16 MiB | ✅ 推荐 ≤2 / 目标 ≤19.2 |
 | M4 | 无（全部 lazy/oneshot） | 2 | 16 MiB | ✅ 推荐 ≤2 / 目标 ≤19.2 |
 
-为什么只有这两个常驻：站点要接请求（晚 300 ms 冷启动不可接受）、监控要连续采样（lazy 会让采样断档）。`cron` 看似必须常驻，其实它只负责写宿主调度条目；而「宿主条目到点唤醒插件」所需的 CLI 入口（`kored invoke`）**未实现**——当前内核里可用的到点唤醒只有 `internal/core/scheduler`（ADR-0019，`POST /api/v1/scheduler/tasks` 建任务），插件在被调用时短暂拉起，因此 `cron` 仍转 lazy。其余能力都可以"用户点开/事件到达时才拉起"，代价是首次点击多 100–300 ms。
+为什么只有这两个常驻：站点要接请求（晚 300 ms 冷启动不可接受）、监控要连续采样（lazy 会让采样断档）。`cron` 看似必须常驻，其实它不自己跑调度：`shell` / `http` 任务写**本插件用户 crontab**（由系统 cron 直接 exec 插件二进制的 `__task-run`，全程不经内核），`plugin` 任务只返回 `scheduler_task` 建议、由内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`）到点经 bus 拉起插件，因此 `cron` 仍转 lazy。**没有对外 CLI 唤醒入口**（`kored invoke` 未实现，ADR-0046 裁为设计选择、不再计划）。其余能力都可以"用户点开/事件到达时才拉起"，代价是首次点击多 100–300 ms。
 
 ### 6.1 深度等级（12 生产级 / 8 基础级）
 
