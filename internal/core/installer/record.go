@@ -124,13 +124,18 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	if previousDesired == "enabled" {
 		desired = previousDesired
 	}
-	stateRaw, err := json.Marshal(stateRecord{
-		Desired: desired, Actual: stateActual, UpdatedAt: now,
-	})
-	if err != nil {
-		return wrap(ErrStore, "序列化插件状态失败：%v", err)
-	}
 	err = in.store.Update(func(tx *store.Tx) error {
+		// 读改写而非整体覆盖：stateRecord 只认识安装器负责的字段，直接覆盖会把
+		// 装配层写入的 post_upgrade_pending（禁用态升级的唯一凭据）、restarts 以及
+		// 未来版本追加的未知字段一起抹掉——同版本强制重装即可触发，迁移永久丢失。
+		existing, getErr := tx.Get(bucketPluginState, manifest.ID)
+		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
+		}
+		stateRaw, mergeErr := mergeStateRecord(existing, desired, stateActual, now)
+		if mergeErr != nil {
+			return mergeErr
+		}
 		if err := tx.Put(bucketPlugins, manifest.ID, pluginRaw); err != nil {
 			return err
 		}
@@ -170,6 +175,42 @@ func PreviousVersion(p Persister, id string) (string, error) {
 		return "", wrap(ErrStore, "读取已装版本失败：%v", err)
 	}
 	return version, nil
+}
+
+// mergeStateRecord 在既有 plugin_state 值上只覆盖安装器负责的字段
+// （desired / actual / updated_at），其余字段原样保留。
+//
+// 保留范围包括装配层写入的 post_upgrade_pending / restarts，以及未来版本追加、
+// 本包尚不认识的字段——「整体覆盖」会静默丢数据，而这份记录是跨层共用的。
+// 解析放在一处收口：只做 JSON 对象级合并，不解释未知字段的语义。
+func mergeStateRecord(existing []byte, desired, actual, updatedAt string) ([]byte, error) {
+	fields := make(map[string]json.RawMessage)
+	if len(existing) > 0 {
+		if err := json.Unmarshal(existing, &fields); err != nil {
+			return nil, err
+		}
+	}
+	if fields == nil {
+		fields = make(map[string]json.RawMessage)
+	}
+	owned := map[string]string{
+		"desired":    desired,
+		"actual":     actual,
+		"updated_at": updatedAt,
+	}
+	for key, value := range owned {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[key] = raw
+	}
+	// 首次安装补上 restarts，保持 DATA-MODEL §5 的记录形状与既有行为一致；
+	// 已存在时不重置（重启计数属运行期事实，重装不应清零）。
+	if _, ok := fields["restarts"]; !ok {
+		fields["restarts"] = json.RawMessage("0")
+	}
+	return json.Marshal(fields)
 }
 
 // previous 读已装版本、期望状态与既有授予记录；不存在返回空值（首次安装）。

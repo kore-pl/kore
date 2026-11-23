@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pengtang1024/kore/internal/core/installer"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 // TestInstallSuccess 覆盖验收用例 1：正常安装后目录结构、plugins 与 plugin_state 均正确。
@@ -140,6 +141,65 @@ func TestInstallForceReplacesSameVersion(t *testing.T) {
 	}
 	if strings.Join(names, ",") != "0.1.0,current" {
 		t.Fatalf("force 成功后只应有版本目录与稳定链接（current），实际: %v", names)
+	}
+}
+
+// TestForceReinstallPreservesPostUpgradePending 覆盖 P0「同版本强制重装抹掉待补跑标记」：
+//
+// installer 若用 stateRecord 整体覆盖 plugin_state，会把装配层写入的
+// post_upgrade_pending（禁用态升级的唯一凭据）连同它不认识的未来字段一起抹掉，
+// 用户启用后跑旧迁移、且无任何提示。断言：installer 只覆盖自己负责的字段
+// （desired/actual/updated_at），未知字段原样保留，同时已知字段仍被正确更新。
+func TestForceReinstallPreservesPostUpgradePending(t *testing.T) {
+	f := newFixture(t, installer.Limits{})
+	pkg := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", validEntries(t, nil))
+	if _, err := f.inst.Install(pkg); err != nil {
+		t.Fatalf("首次安装应成功: %v", err)
+	}
+
+	// 模拟装配层 daemon.deferPostUpgrade 写入待补跑标记，并夹带一个 installer
+	// 完全不认识的未来字段与运行期重启计数——整体覆盖会把这些一起清掉。
+	const seededUpdatedAt = "2020-01-01T00:00:00Z"
+	seeded := []byte(`{"desired":"enabled","actual":"ready","restarts":3,` +
+		`"post_upgrade_pending":"0.2.0","future_field":{"keep":true},` +
+		`"updated_at":"` + seededUpdatedAt + `"}`)
+	if err := f.store.Update(func(tx *store.Tx) error {
+		return tx.Put("plugin_state", "site", seeded)
+	}); err != nil {
+		t.Fatalf("写入待补跑标记失败: %v", err)
+	}
+
+	// 同版本 force 重装，复现「禁用态升级 → 启用前又 force 重装」的等价序列。
+	replacement := writePackage(t, t.TempDir(), "site-0.1.0.tar.gz",
+		validEntries(t, map[string]any{"name": "重装后名字"}))
+	if _, err := f.withForce(t).Install(replacement); err != nil {
+		t.Fatalf("force 重装应成功: %v", err)
+	}
+
+	state := f.pluginState(t, "site")
+	if got := state["post_upgrade_pending"]; got != "0.2.0" {
+		t.Fatalf("force 重装后待补跑标记丢失: got=%v want=0.2.0（state=%v）", got, state)
+	}
+	if _, ok := state["future_field"]; !ok {
+		t.Fatalf("force 重装后 installer 不认识的字段丢失: %v", state)
+	}
+	if got := state["restarts"]; got != float64(3) {
+		t.Fatalf("force 重装不应重置 restarts: got=%v want=3", got)
+	}
+	//  installer 负责的字段必须仍被正确更新：desired 按既有策略保留、actual 归 stopped、时间刷新。
+	if got := state["desired"]; got != "enabled" {
+		t.Fatalf("desired 应按既有策略保留 enabled，实际 %v", got)
+	}
+	if got := state["actual"]; got != "stopped" {
+		t.Fatalf("actual 应重置为 stopped，实际 %v", got)
+	}
+	if got, _ := state["updated_at"].(string); got == "" || got == seededUpdatedAt {
+		t.Fatalf("updated_at 应刷新为本次安装时间，实际 %v", state["updated_at"])
+	}
+	// plugins 记录（包哈希）同样必须更新，不能因为保留未知字段就跳过已知字段。
+	wantSum := fileHash(t, replacement)
+	if rec := f.pluginRecord(t, "site"); rec["package_sha256"] != wantSum {
+		t.Fatalf("plugins 包哈希未更新: got=%v want=%s", rec["package_sha256"], wantSum)
 	}
 }
 
