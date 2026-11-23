@@ -51,17 +51,19 @@
   };
   // 导航按使用频率分四组：运维是日常入口，常驻手机底部 5 个 tab；
   // 其余项进「更多」抽屉并按组展示，组标题不增加点击层级（仍 ≤2 次点击）。
+  // key 是 i18n 键（ADR-0021：中文为主、英文可选），title 是缺 i18n 时的中文兜底。
   var NAV_GROUPS = [
-    { title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
-    { title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
-    { title: '资源', ids: ['files', 'backup', 'ssl'] },
-    { title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'settings'] }
+    { key: 'nav.group.ops', title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
+    { key: 'nav.group.biz', title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
+    { key: 'nav.group.res', title: '资源', ids: ['files', 'backup', 'ssl'] },
+    { key: 'nav.group.platform', title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'settings'] }
   ];
+  var OTHER_GROUP = { key: 'nav.group.other', title: '其他' };
   function groupTitle(id) {
     for (var i = 0; i < NAV_GROUPS.length; i++) {
-      if (NAV_GROUPS[i].ids.indexOf(id) >= 0) return NAV_GROUPS[i].title;
+      if (NAV_GROUPS[i].ids.indexOf(id) >= 0) return NAV_GROUPS[i];
     }
-    return '其他';
+    return OTHER_GROUP;
   }
   // 按组顺序重排路由，未知 id 保序落到末尾「其他」；手机前 5 项因此固定为「运维」组。
   function orderRoutes(list) {
@@ -77,9 +79,10 @@
     for (var m = 0; m < list.length; m++) if (!seen[list[m].id]) { out.push(list[m]); seen[list[m].id] = true; }
     return out;
   }
-  function groupLabel(title, drawer) {
-    var n = el('div', drawer ? 'kore-nav-drawer-group' : 'kore-nav-group', title);
-    n.setAttribute('role', 'presentation'); return n;
+  function groupLabel(group, drawer) {
+    var n = el('div', drawer ? 'kore-nav-drawer-group' : 'kore-nav-group');
+    n.setAttribute('role', 'presentation');
+    return bindLabel(n, group.key, group.title);
   }
   var byId = Object.create(null);
   var currentId = '';
@@ -98,6 +101,54 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  /* ===== i18n 绑定（ADR-0021）=====
+     文案统一走 window.KoreI18n.t；缺 i18n.js / 缺 key / 键名原样返回时，一律回退到
+     硬编码中文兜底——保证脚本加载失败也绝不把 key 名显示给用户。
+     绑定表按 mount 重建，语言切换后由 relabel() 原地重写文字，不重建导航、不丢视图。 */
+  var labelBindings = [];  // { node, key, fallback }
+  var attrBindings = [];   // { node, attr, key, fallback }
+  var i18nListening = false;
+
+  function tr(key, fallback, params) {
+    var i18n = window.KoreI18n;
+    if (i18n && typeof i18n.t === 'function') {
+      var hit = i18n.t(key, params);
+      if (hit && hit !== key) return hit;
+    }
+    var out = fallback === undefined || fallback === null ? key : String(fallback);
+    if (params) {
+      for (var k in params) {
+        if (Object.prototype.hasOwnProperty.call(params, k)) out = out.split('{' + k + '}').join(String(params[k]));
+      }
+    }
+    return out;
+  }
+  function bindLabel(node, key, fallback) {
+    node.textContent = tr(key, fallback);
+    labelBindings.push({ node: node, key: key, fallback: fallback });
+    return node;
+  }
+  function bindAttr(node, attr, key, fallback) {
+    node.setAttribute(attr, tr(key, fallback));
+    attrBindings.push({ node: node, attr: attr, key: key, fallback: fallback });
+    return node;
+  }
+  function relabel() {
+    for (var i = 0; i < labelBindings.length; i++) {
+      var b = labelBindings[i];
+      if (b.node.isConnected !== false) b.node.textContent = tr(b.key, b.fallback);
+    }
+    for (var j = 0; j < attrBindings.length; j++) {
+      var a = attrBindings[j];
+      if (a.node.isConnected !== false) a.node.setAttribute(a.attr, tr(a.key, a.fallback));
+    }
+  }
+  function watchLocale() {
+    if (i18nListening || !window.KoreI18n || typeof window.KoreI18n.onChange !== 'function') return;
+    window.KoreI18n.onChange(relabel);
+    i18nListening = true;
   }
 
   // 'store' / '#/store' / '/store' / '#/store?x' 统一成 'store'；空值回默认视图。
@@ -190,7 +241,8 @@
     try {
       handle = route.render(viewBox) || null;
     } catch (err) {
-      viewBox.appendChild(el('div', 'stub', '视图渲染失败：' + (err && err.message ? err.message : err)));
+      viewBox.appendChild(el('div', 'stub', tr('common.viewRenderFailed', '视图渲染失败：{error}',
+        { error: err && err.message ? err.message : err })));
     }
     return route;
   }
@@ -246,7 +298,7 @@
     btn.type = 'button';
     btn.setAttribute('data-view', route.id);
     btn.appendChild(navIcon(route.id));
-    btn.appendChild(el('span', 'kore-nav-label', route.label));
+    btn.appendChild(bindLabel(el('span', 'kore-nav-label'), 'nav.' + route.id, route.label));
     if (isDrawerItem) btn.setAttribute('role', 'menuitem');
     btn.addEventListener('click', function () {
       if (drawerOpen) setDrawer(false, false);
@@ -288,10 +340,12 @@
   }
   // lazyView 返回 shell 需要的 render(container)：异步等模块就绪后再渲染；切走时
   // handle.destroy() 把"迟到的渲染"挡在已卸载容器外，并让模块停掉自己的轮询。
-  function lazyView(globalName, url, label) {
+  // labelKey / label 是该视图的文案键与中文兜底；加载态与失败态用通用键（common.*）。
+  function lazyView(globalName, url, labelKey, label) {
+    var labelOf = function () { return tr(labelKey, label); };
     return function (box) {
       var live = { destroyed: false, handle: null };
-      box.appendChild(el('div', 'stub', '正在加载' + label + '…'));
+      box.appendChild(el('div', 'stub', tr('common.loadingNamed', '正在加载{name}…', { name: labelOf() })));
       ensureLazy(url, globalName).then(function (mod) {
         if (live.destroyed) return;
         box.textContent = '';
@@ -300,12 +354,14 @@
           if (handle && typeof handle.destroy === 'function') live.handle = handle;
         } catch (err) {
           box.textContent = '';
-          box.appendChild(el('div', 'stub', label + '渲染失败：' + (err && err.message ? err.message : err)));
+          box.appendChild(el('div', 'stub', tr('common.renderFailed', '{name}渲染失败：{error}',
+            { name: labelOf(), error: err && err.message ? err.message : err })));
         }
       }, function (err) {
         if (live.destroyed) return;
         box.textContent = '';
-        box.appendChild(el('div', 'stub', label + '不可用：' + (err && err.message ? err.message : '模块加载失败')));
+        box.appendChild(el('div', 'stub', tr('common.unavailable', '{name}不可用：{error}',
+          { name: labelOf(), error: err && err.message ? err.message : tr('common.moduleLoadFailed', '模块加载失败') })));
       });
       return {
         destroy: function () {
@@ -449,10 +505,10 @@
     searchTrigger = el('button', 'kore-search-trigger');
     searchTrigger.type = 'button';
     searchTrigger.id = 'kore-search-trigger';
-    searchTrigger.setAttribute('aria-label', '全局搜索（Ctrl+K）');
+    searchTrigger.setAttribute('aria-label', tr('common.searchShortcut', '搜索（Ctrl+K）'));
     searchTrigger.setAttribute('aria-haspopup', 'dialog');
     searchTrigger.setAttribute('aria-expanded', 'false');
-    searchTrigger.title = '全局搜索（Ctrl+K）';
+    searchTrigger.title = tr('common.searchShortcut', '搜索（Ctrl+K）');
     var svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('viewBox', '0 0 20 20'); svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6');
@@ -462,7 +518,7 @@
     p.setAttribute('d', 'M12.5 12.5 17 17');
     svg.appendChild(c); svg.appendChild(p);
     searchTrigger.appendChild(svg);
-    searchTrigger.appendChild(el('span', 'kore-search-trigger-label', '搜索'));
+    searchTrigger.appendChild(bindLabel(el('span', 'kore-search-trigger-label'), 'common.search', '搜索'));
     searchTrigger.appendChild(el('kbd', null, 'Ctrl K'));
     searchTrigger.addEventListener('click', openSearch);
     return searchTrigger;
@@ -517,35 +573,38 @@
       if (items[t].id === 'runtimes') hasRuntimes = true;
       if (items[t].id === 'integrity') hasIntegrity = true;
     }
-    if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', '终端') });
-    if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', '数据库') });
-    if (!hasLogs) items.push({ id: 'logs', label: '日志', render: lazyView('KoreLogs', '/assets/logs.js', '日志') });
-    if (!hasProcess) items.push({ id: 'process', label: '进程', render: lazyView('KoreProcess', '/assets/process.js', '进程') });
-    if (!hasSsl) items.push({ id: 'ssl', label: 'SSL', render: lazyView('KoreSsl', '/assets/ssl.js', 'SSL') });
-    if (!hasBackup) items.push({ id: 'backup', label: '备份', render: lazyView('KoreBackup', '/assets/backups.js', '备份') });
-    if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'Redis') });
-    if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', '防火墙') });
-    if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', '运行环境') });
-    if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', '完整性') });
+    if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端') });
+    if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', 'nav.db', '数据库') });
+    if (!hasLogs) items.push({ id: 'logs', label: '日志', render: lazyView('KoreLogs', '/assets/logs.js', 'nav.logs', '日志') });
+    if (!hasProcess) items.push({ id: 'process', label: '进程', render: lazyView('KoreProcess', '/assets/process.js', 'nav.process', '进程') });
+    if (!hasSsl) items.push({ id: 'ssl', label: 'SSL', render: lazyView('KoreSsl', '/assets/ssl.js', 'nav.ssl', 'SSL') });
+    if (!hasBackup) items.push({ id: 'backup', label: '备份', render: lazyView('KoreBackup', '/assets/backups.js', 'nav.backup', '备份') });
+    if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'nav.redis', 'Redis') });
+    if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', 'nav.firewall', '防火墙') });
+    if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境') });
+    if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', 'nav.integrity', '完整性') });
     items = orderRoutes(items);
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
 
     byId = Object.create(null);
     navButtons = Object.create(null);
+    labelBindings = [];
+    attrBindings = [];
+    watchLocale();
     releaseHandle();
     moreBtn = null; drawer = null; backdrop = null; drawerOpen = false;
     currentId = '';
 
     var shell = el('div', 'kore-shell');
     var nav = el('nav', 'kore-nav');
-    nav.setAttribute('aria-label', '主导航');
+    bindAttr(nav, 'aria-label', 'nav.mainLabel', '主导航');
     var brand = el('div', 'kore-nav-brand');
     brand.appendChild(el('span', 'kore-nav-brand-name', 'Kore'));
-    brand.appendChild(el('span', 'kore-nav-brand-sub', '控制台'));
+    brand.appendChild(bindLabel(el('span', 'kore-nav-brand-sub'), 'nav.brandSub', '控制台'));
     nav.appendChild(brand);
 
-    var lastGroup = '';
+    var lastGroup = null;
     for (var j = 0; j < items.length; j++) {
       var route = {
         id: items[j].id,
@@ -555,7 +614,7 @@
       };
       byId[route.id] = route;
       var group = groupTitle(route.id);
-      if (group !== lastGroup) { nav.appendChild(groupLabel(group, false)); lastGroup = group; }
+      if (!lastGroup || group.key !== lastGroup.key) { nav.appendChild(groupLabel(group, false)); lastGroup = group; }
       var btn = navItem(route, false);
       navButtons[route.id] = [btn];
       nav.appendChild(btn);
@@ -568,7 +627,8 @@
       moreBtn.setAttribute('aria-expanded', 'false');
       moreBtn.setAttribute('aria-controls', 'kore-more-drawer');
       moreBtn.appendChild(navIcon('more'));
-      moreBtn.appendChild(el('span', 'kore-nav-label', '更多'));
+      moreBtn.appendChild(bindLabel(el('span', 'kore-nav-label'), 'nav.more', '更多'));
+      bindAttr(moreBtn, 'aria-label', 'nav.more', '更多');
       moreBtn.addEventListener('click', function () { setDrawer(!drawerOpen, false); });
       nav.appendChild(moreBtn);
     }
@@ -591,16 +651,16 @@
       drawer.id = 'kore-more-drawer';
       drawer.hidden = true;
       drawer.setAttribute('role', 'menu');
-      drawer.setAttribute('aria-label', '更多导航');
+      bindAttr(drawer, 'aria-label', 'nav.drawerLabel', '更多导航');
       // 手机端侧栏品牌块让位给底部 tab bar，抽屉里补一处品牌标题，产品名仍是「Kore」。
       var drawerHead = el('div', 'kore-nav-drawer-head');
       drawerHead.appendChild(el('span', 'kore-nav-brand-name', 'Kore'));
-      drawerHead.appendChild(el('span', 'kore-nav-brand-sub', '更多导航'));
+      drawerHead.appendChild(bindLabel(el('span', 'kore-nav-brand-sub'), 'nav.moreTitle', '更多导航'));
       drawer.appendChild(drawerHead);
-      var lastDrawerGroup = '';
+      var lastDrawerGroup = null;
       for (var k = 0; k < extras.length; k++) {
         var extraRoute = byId[extras[k].id], drawerGroup = groupTitle(extraRoute.id);
-        if (drawerGroup !== lastDrawerGroup) { drawer.appendChild(groupLabel(drawerGroup, true)); lastDrawerGroup = drawerGroup; }
+        if (!lastDrawerGroup || drawerGroup.key !== lastDrawerGroup.key) { drawer.appendChild(groupLabel(drawerGroup, true)); lastDrawerGroup = drawerGroup; }
         var extraBtn = navItem(extraRoute, true);
         navButtons[extraRoute.id].push(extraBtn);
         drawer.appendChild(extraBtn);

@@ -97,6 +97,53 @@
   }
   function hint(text) { return el('div', 'settings-hint', text); }
 
+  /* ===== 语言（ADR-0021）：中文为主、英文可选，唯一入口在本页 =====
+     切换后写 localStorage 并由 i18n.js 通知导航原地重写；本页重绘以更新自身文案。
+     未翻译的键由 i18n.js 回退中文，这里只负责把失败说清楚（不静默、不假装成功）。 */
+  function tr(key, fallback) {
+    var i18n = window.KoreI18n;
+    if (i18n && typeof i18n.t === 'function') {
+      var hit = i18n.t(key);
+      if (hit && hit !== key) return hit;
+    }
+    return fallback === undefined || fallback === null ? key : String(fallback);
+  }
+  function buildLanguage() {
+    var i18n = window.KoreI18n;
+    var current = i18n && typeof i18n.locale === 'function' ? i18n.locale() : 'zh-CN';
+    var sel = el('select', 'settings-select');
+    sel.id = 'kore-language-select';
+    sel.setAttribute('aria-label', tr('settings.language.label', '界面语言'));
+    [['zh-CN', 'settings.language.zh', '中文（简体）'],
+      ['en-US', 'settings.language.en', 'English']].forEach(function (item) {
+      var opt = el('option', null, tr(item[1], item[2]));
+      opt.value = item[0];
+      if (item[0] === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    var status = el('div', 'settings-hint');
+    status.id = 'kore-language-status';
+    sel.addEventListener('change', function () {
+      var target = sel.value;
+      sel.disabled = true;
+      status.textContent = '';
+      var task = i18n && typeof i18n.setLocale === 'function'
+        ? i18n.setLocale(target)
+        : Promise.reject(new Error('i18n 未加载'));
+      task.then(function () {
+        if (host) paint(host);
+      }, function () {
+        sel.disabled = false;
+        sel.value = current;
+        status.textContent = tr('settings.language.failed', '切换失败，已保持中文');
+        status.className = 'settings-hint settings-hint-error';
+      });
+    });
+    return card(tr('settings.language.title', '语言'), tr('settings.language.meta', '中文为主 · 英文可选'),
+      [row(tr('settings.language.label', '界面语言'), sel)],
+      [hint(tr('settings.language.hint', '中文是默认语言；英文为可选项，未翻译的文案自动回退中文。切换后立即生效并记住选择。')), status]);
+  }
+
   /* ===== 账户：会话状态 + 退出登录 ===== */
   function buildAccount() {
     var s = cache.session, authed = !!(s && s.authenticated === true);
@@ -207,7 +254,11 @@
   var host = null;
   var auditHandle = null;
   var auditPromise = null;
-  var TAB_CSS = '.settings-tabs{display:flex;gap:4px;margin:0 0 12px;border-bottom:1px solid var(--kore-border-1);padding:0 4px}' +
+  var SELECT_CSS = '.settings-select{min-height:36px;padding:0 var(--kore-space-2);color:var(--kore-text-1);' +
+    'background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font:inherit}' +
+    '.settings-select:focus{border-color:var(--kore-info);outline:none}' +
+    '@media (max-width:639px){.settings-select{min-height:var(--kore-touch);width:100%}}';
+  var TAB_CSS = SELECT_CSS + '.settings-tabs{display:flex;gap:4px;margin:0 0 12px;border-bottom:1px solid var(--kore-border-1);padding:0 4px}' +
     '.settings-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--kore-text-3);' +
     'padding:10px 14px;font-size:var(--kore-font-14);cursor:pointer}' +
     '.settings-tab:hover{color:var(--kore-text-1)}.settings-tab.is-active{color:var(--kore-text-1);border-bottom-color:var(--kore-info)}' +
@@ -277,6 +328,7 @@
       mountAudit(body);
     } else {
       var root = el('div', 'settings-root');
+      root.appendChild(buildLanguage());
       root.appendChild(buildAccount());
       root.appendChild(buildSecurity());
       root.appendChild(buildRuntime());

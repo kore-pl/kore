@@ -42,7 +42,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-08 | 写域不相交：同层并行任务的 `write_scopes` 不得重叠，跨角色不改他人文件 | 冲突任务回滚重派 | 派发前核对 BOARD `scope` 列 |
 | G-09 | 角色不可兼任：implementer ≠ verifier，red-team ≠ implementer | 该次验收作废 | BOARD owner 与验收报告署名 |
 | G-10 | 无联网 / 无遥测：不强制账号、无联网校验、无隐藏上报、无功能封锁 | 直接回滚 | G10 grep 出网客户端与 telemetry 关键词 |
-| G-11 | 非目标保护——**6 项明确不做**：多用户 RBAC、集群 / 多机、模板市场、厂商云存储深度集成、拖拽建站、多语言（i18n）；另不做容器编排、多租户 SaaS、移动 App、重型主题 | 需求退回提案阶段 | 提案评审对照 22 项能力域与 6 项不做清单，命中即退回 |
+| G-11 | 非目标保护——**6 项明确不做**：多用户 RBAC、集群 / 多机、模板市场、厂商云存储深度集成、拖拽建站、多语言**全量框架**（i18n；「中文为主 + 英文可选」的 UI 骨架例外，见 [ADR-0021](docs/DECISIONS/0021-i18n.md)）；另不做容器编排、多租户 SaaS、移动 App、重型主题 | 需求退回提案阶段 | 提案评审对照 22 项能力域与 6 项不做清单，命中即退回 |
 | G-12 | 提交纪律：精确 `git add <file>`，禁 `git add .`；不提交未验证或与他人未完成改动混在一起的变更 | 提交回退 | 提交前 `git status --short` 人工核对 |
 | G-13 | 仓库边界：插件代码 / 插件前端 / 插件索引不得进入 `kore` 仓库；`kore` 不得 import 任何插件仓库 | 提交拒绝，改动迁出到对应插件仓库 | `grep -rn "plugins/" internal/ cmd/` 零命中（G11）+ 仓库内无 `*/main.go` 形态插件 |
 | G-14 | 协议兼容：插件 `info.json` 必须声明 `requires_kore`；破坏性协议改动必须 `kore` 主版本递增 + ADR | 合并拒绝 | G12 比对 `requires_kore` 区间与 `kore` VERSION；ADR 编号可查；**lifecycle 解析（M1 起）**：`info.json.lifecycle` 接受 `resident` / `lazy` / `oneshot` 三值并落盘，M1 运行期只支持 `resident`，遇 `lazy` / `oneshot` 返回 `E_UNSUPPORTED`（message 写明"M2 支持"）——"字段接受但未实现"不算缺陷 |

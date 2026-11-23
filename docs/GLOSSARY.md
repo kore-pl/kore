@@ -71,7 +71,7 @@
 | 变更集 | change set | 一次跨仓库改动在 `.agents/BOARD.md` 登记为一个 id，含各仓库 commit/tag 与合并顺序 | R·X | 不是单个 PR；也不是发布批次，它只保证跨仓库改动有唯一负责人与验收证据 |
 | 版本声明 | requires_kore | `info.json` 必填的 kore 版本区间（如 `">=0.1.0 <0.2.0"`），不满足时 kore 回 `E_UNSUPPORTED` | A·R·C | 不是 `protocol`；protocol 管协议主版本，requires_kore 管内核版本区间 |
 | 里程碑 | milestone | 固定编号的交付阶段 M0 文档与骨架 → M1 Walking Skeleton → M2 插件生态 MVP → M3 生产可用 → M4 生态开放 | V·A·C | 编号固定不得新增；非目标不能塞进任何里程碑 |
-| 非目标 | non-goal | 明确不做且不受理的需求：容器编排/多租户/集群/拖拽建站/i18n/移动 App/重型主题 | V·A | 不是"以后再说"；强做要 ADR 且默认拒绝 |
+| 非目标 | non-goal | 明确不做且不受理的需求：容器编排/多租户/集群/拖拽建站/i18n 全量框架/移动 App/重型主题 | V·A | 不是"以后再说"；强做要 ADR 且默认拒绝 |
 | ADR | Architecture Decision Record | `docs/DECISIONS/<4 位序号>-<kebab-slug>.md`，记录备选、决策、后果、复审条件 | V·A·C | 不是变更日志；ADR 只记不可逆或跨模块的选择 |
 | 门禁 | gate | 可执行检查项的集合（`make gate` / `make docs-check`），不过不得合并 | V·A | 不是"建议"；门禁失败时禁止用"下次补"绕过 |
 | 蓝军 | red-team | 只出问题单、不修代码的对抗角色，专攻膨胀/越权/崩溃/资源 | V·A·C | 不是 verifier；verifier 复跑门禁，蓝军主动构造攻击 |

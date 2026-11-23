@@ -14,6 +14,10 @@
        defer 保序：shell.js（布局壳/视图路由）先于 app.js 就绪，app.js 只在登录成功后 mount。
        store.js / files.js / sites.js / tasks.js / monitor.js / settings.js / terminal.js / db.js 八个视图模块**不在此加载**：
        由 app.js 的 ensureModule 或 shell.js 的内置路由在切到对应视图时动态注入，首屏请求数与视图数无关（FRONTEND §7）。 -->
+  <!-- 语言包先于 shell：zh-CN 是默认且必载（首屏计入 gzip 预算），en-US 由 i18n.js
+       在用户切到英文时懒加载（不进首屏）。两文件合计 gzip ≤ 3 KiB，见 ADR-0021。 -->
+  <script src="/assets/i18n-zh-CN.js" defer></script>
+  <script src="/assets/i18n.js" defer></script>
   <script src="/assets/shell.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>

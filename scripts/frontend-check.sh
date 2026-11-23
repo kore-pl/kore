@@ -24,11 +24,12 @@ if [ -n "$JUNK" ]; then
 fi
 printf '[OK] dist 无 source map / .vite / 全量字体\n'
 
-# 首屏四件套：index.html + style.css + app.js + shell.js，按 gzip -9 合计。
-# shell.js 是布局壳（侧栏导航 + 视图路由），与 app.js 同批同步加载，故计入首屏；
-# store.js / monitor.js / settings.js 三个视图模块按需注入（web/app.js 的 ensureModule），
+# 首屏六件套：index.html + style.css + app.js + shell.js + i18n.js + i18n-zh-CN.js，
+# 按 gzip -9 合计。shell.js 是布局壳（侧栏导航 + 视图路由），i18n.js 与中文文案表
+# 是导航首屏渲染的输入，三者与 app.js 同批同步加载，故一并计入首屏；
+# store.js / monitor.js / settings.js 等视图模块按需注入（web/app.js 的 ensureModule），
 # 不计首屏——首屏体积不随视图数增长（FRONTEND §7：d(首屏)/d(视图数)=0）。
-FILES=("$DIST/index.html" "$DIST/style.css" "$DIST/app.js" "$DIST/shell.js")
+FILES=("$DIST/index.html" "$DIST/style.css" "$DIST/app.js" "$DIST/shell.js" "$DIST/i18n.js" "$DIST/i18n-zh-CN.js")
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     printf '[FAIL] 首屏文件缺失: %s\n' "$f"
@@ -49,4 +50,24 @@ if [ "$TOTAL" -gt "$BUDGET" ]; then
   exit 1
 fi
 printf '[OK] 首屏体积达标：%d 字节 ≤ %d 字节，余量 %d 字节\n' "$TOTAL" "$BUDGET" "$((BUDGET - TOTAL))"
+
+# i18n 增量（ADR-0021）：i18n.js + i18n-zh-CN.js 合计 gzip ≤ 3 KiB（3072 字节）。
+# 独立于 300 KiB 总预算：语言骨架不能靠总预算的余量悄悄膨胀。
+I18N_BUDGET=3072
+I18N_TOTAL=0
+for f in "$DIST/i18n.js" "$DIST/i18n-zh-CN.js"; do
+  if [ ! -f "$f" ]; then
+    printf '[FAIL] i18n 文件缺失: %s\n' "${f#$DIST/}"
+    exit 1
+  fi
+  bytes=$(gzip -9 -c "$f" | wc -c)
+  printf '[INFO] %-24s gzip -9: %6d 字节\n' "${f#$DIST/}" "$bytes"
+  I18N_TOTAL=$((I18N_TOTAL + bytes))
+done
+printf '[INFO] i18n 增量（gzip -9）: %d 字节 / 预算 %d 字节（3 KiB）\n' "$I18N_TOTAL" "$I18N_BUDGET"
+if [ "$I18N_TOTAL" -gt "$I18N_BUDGET" ]; then
+  printf '[FAIL] i18n 骨架超预算 %d 字节（ADR-0021）\n' "$((I18N_TOTAL - I18N_BUDGET))"
+  exit 1
+fi
+printf '[OK] i18n 增量达标：%d 字节 ≤ %d 字节，余量 %d 字节\n' "$I18N_TOTAL" "$I18N_BUDGET" "$((I18N_BUDGET - I18N_TOTAL))"
 exit 0

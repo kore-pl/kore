@@ -3,8 +3,8 @@
 // 只 embed dist/ 下当次构建的主壳产物：插件前端资产永不进二进制（FRONTEND §4.2）。
 // 路径不带 .. 且相对本文件目录，符合 //go:embed 的约束。
 //
-// 分层：index.html + app.js + style.css 是首屏三件套（同步加载，计入首屏 gzip 预算）；
-// shell.js 是布局壳（侧栏导航 + 视图路由，与 app.js 同批同步加载）；
+// 分层：index.html + style.css + app.js + shell.js + i18n.js + i18n-zh-CN.js 是首屏六件套
+// （同步加载，计入首屏 gzip 预算）；i18n-en-US.js 只在用户切到英文时懒加载，不进首屏；
 // store.js / files.js / sites.js / tasks.js / monitor.js / settings.js / terminal.js / db.js /
 // logs.js / process.js / ssl.js / backups.js / redis.js / firewall.js / runtimes.js / integrity.js 是视图模块，由 shell 路由在切视图时渲染
 // （terminal.js / db.js / logs.js / process.js / ssl.js / backups.js / redis.js / firewall.js / runtimes.js / integrity.js 由 shell.js 内置路由懒加载），
@@ -15,17 +15,20 @@
 // search.js 是全局搜索命令面板（首次 Ctrl/Cmd+K 或点顶栏入口才注入）；
 // audit.js 是设置页「操作审计」tab（首次切到该 tab 才注入）；
 // alerts.js 是顶栏铃铛的告警中心（首屏后懒探测 / 点铃铛才注入）。
-// 二十八个文件全部编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
+// 三十一个文件全部编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
 package web
 
 import "embed"
 
-// Dist 是主壳静态资源文件系统，包含以下二十八个精确路径：
+// Dist 是主壳静态资源文件系统，包含以下三十一个精确路径：
 //
 //	dist/index.html
 //	dist/app.js
 //	dist/style.css
 //	dist/shell.js
+//	dist/i18n.js
+//	dist/i18n-zh-CN.js
+//	dist/i18n-en-US.js
 //	dist/store.js
 //	dist/files.js
 //	dist/files-l2.js
@@ -53,5 +56,5 @@ import "embed"
 //
 // httpapi 用 embed.FS.ReadFile 按精确路径读取，不暴露子目录遍历面。
 //
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/runtimes.js dist/integrity.js dist/search.js dist/audit.js dist/alerts.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/runtimes.js dist/integrity.js dist/search.js dist/audit.js dist/alerts.js
 var Dist embed.FS

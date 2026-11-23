@@ -232,6 +232,7 @@ iframe 加载、桥握手、前缀校验、子帧渲染全部包在 `try/catch` 
 | 指标 | 预算 | 手段 |
 | --- | --- | --- |
 | 首屏 JS + CSS（gzip） | ≤ 300 KiB | 路由级 `() => import()` code split；登录页独立 chunk |
+| i18n 骨架（gzip） | ≤ 3 KiB | `i18n.js` + `i18n-zh-CN.js` 同批进首屏；`en-US` 切语言时才注入（ADR-0021） |
 | Element Plus | 按需 | `unplugin-vue-components` + `unplugin-auto-import`，禁整库 `import ElementPlus` |
 | 图标 | 逐图标编译 | `unplugin-icons` + `@iconify-json/lucide`，禁止运行时拉取图标集 |
 | CSS | 原子化 | UnoCSS preset-wind，禁止引入完整 UI 框架样式包 |
@@ -245,7 +246,7 @@ gzip -9 -c web/dist/assets/*.js web/dist/assets/*.css | wc -c   # 单文件口�
 find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c  # 合计口径
 ```
 
-合计口径 ≤ 307200 字节为通过。超预算优先删依赖与路由，不删可访问性。
+合计口径 ≤ 307200 字节为通过。i18n 两个首屏文件的 gzip 合计另有 3072 字节硬预算（`scripts/frontend-check.sh` 独立卡，不靠总预算余量）。超预算优先删依赖与路由，不删可访问性。
 
 ## 8. 开发工作流
 
@@ -254,31 +255,31 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - **mock 策略**：`web/mock/` 下按 URL 命名存放 JSON（如 `plugins.get.json`），vite 插件按 `import.meta.env.DEV` 分支挂中间件；生产构建时该分支被 tree-shake，mock 不进产物。
 - **类型来源**：API 与帧类型以 `pkg/pluginapi` 的 Go 类型为唯一真源。M1 起用 `tygo` 生成 `web/src/types/pluginapi.d.ts`，生成物入库，禁止手改；前端不从后端复制类型。
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
-- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **十六个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js` / `runtimes.js` / `integrity.js`），`make frontend` 打包二十八个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；另有八个按需子模块：`files-l2.js`（文件上传/下载/压缩/解压/改权限/移动）、`site-edit.js`（SSL/伪静态/反代/重定向/默认文档）、`config-panel.js`（日志/备份页「设置」打开的通用插件配置面板，见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)）、`db-l2.js`（数据库页的建库/删库/建用户/授权/导入导出，首次写操作或展开「用户与授权」时注入）、`monitor-cards.js`（监控页的卡片/面板/表格渲染构件，进入监控视图时才注入）、`search.js`（全局搜索命令面板：页面/已装插件/商店/操作四源，顶栏入口或 Ctrl/Cmd+K 首次唤起时注入）、`alerts.js`（顶栏铃铛的告警中心：首屏后懒探测一次、点铃铛才注入；四类来源本地聚合，不落库）与 `audit.js`（设置页「操作审计」tab，首次切到该 tab 时注入；列表/筛选/分页）。上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
+- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏六件套**（`index.html` / `style.css` / `app.js` / `shell.js` / `i18n.js` / `i18n-zh-CN.js`）+ **十六个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js` / `runtimes.js` / `integrity.js`），`make frontend` 打包三十一个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径卡首屏六件套 gzip ≤ 300 KiB 与 i18n 增量 ≤ 3 KiB；`i18n/en-US.js` 拍平为 `i18n-en-US.js`，只在切英文时注入；另有八个按需子模块：`files-l2.js`（文件上传/下载/压缩/解压/改权限/移动）、`site-edit.js`（SSL/伪静态/反代/重定向/默认文档）、`config-panel.js`（日志/备份页「设置」打开的通用插件配置面板，见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)）、`db-l2.js`（数据库页的建库/删库/建用户/授权/导入导出，首次写操作或展开「用户与授权」时注入）、`monitor-cards.js`（监控页的卡片/面板/表格渲染构件，进入监控视图时才注入）、`search.js`（全局搜索命令面板：页面/已装插件/商店/操作四源，顶栏入口或 Ctrl/Cmd+K 首次唤起时注入）、`alerts.js`（顶栏铃铛的告警中心：首屏后懒探测一次、点铃铛才注入；四类来源本地聚合，不落库）与 `audit.js`（设置页「操作审计」tab，首次切到该 tab 时注入；列表/筛选/分页）。上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
 - **视图清单**：概览（`app.js`）、软件商店（`store.js`）、已装插件（`app.js`）——商店卡片与已装插件行按索引版本呈现四态（未安装 / 已安装最新 / 可升级 `v旧 → v新` / 索引未收录），提供单个升级与「一键全部升级」汇总条（进度 N/M、失败列出）；升级走 `store/install {force:true}` 并保留配置与启用状态；文件管理（`files.js` + 懒加载 `files-l2.js`）、网站（`sites.js` + 懒加载 `site-edit.js`）、计划任务（`tasks.js`）、监控（`monitor.js`）、设置（`settings.js`）、终端（`terminal.js`）、**数据库（`db.js`）**、**日志（`logs.js`）**、**进程（`process.js`）**、**SSL 证书（`ssl.js`）**、**备份（`backups.js`）**、**Redis（`redis.js`）**、**防火墙（`firewall.js`）**、**运行环境（`runtimes.js`）**：一个页面用 tab 切换 Node.js / PHP / Python，展示版本列表（版本 / 路径 / 来源 / 是否默认）、单版本详情（Node 的 npm/V8/OpenSSL/全局包，PHP 的 ini/扩展/ini_settings，Python 的 pip/site-packages/包数/venv）、项目扫描（预设 `/var/www`、`/opt`、`/home`，每 tab 记住上次根目录）与健康检查（pass/warn/fail，fail 项显示 detail 里的修复命令）；未安装时给安装指引而不是空白页。**完整性（`integrity.js`）**：基线状态卡（未建立 → 大字「尚未建立完整性基线」+ 一句说明 + 建立基线按钮；已建立 → 建立时间 / 条目 / 合计体积 / 上次校验 + 立即校验 / 重建基线）、基线弹层（四个预设路径点击即选 + 自定义路径 + 排除规则，默认 `*.log` `*.tmp` `*/cache/*`）、校验结论（`ok=true` 绿「未检测到改动」/ 红「检测到 N 处改动」）与新增 / 删除 / 修改三张可折叠表（修改行给 `old→new` sha256 前 8 位与 changes，行内「详情」展开完整路径与权限位）、单文件校验（路径 + 期望 sha256 → `match`）；空态与 `E_NOTFOUND` 都给下一步按钮，0 条目基线显示黄底告警而不是「已建立」。数据库页打开先调 `discover.discover.services`，命中本机 MySQL/MariaDB 时显示「自动检测横幅 + 一键连接」，host/port/user 预填并标「已自动填入」，保存只填密码，随后自动验证并展示实例卡；探测不到时给安装指引与手动配置入口（`db-mysql.config.get/set` + `db-mysql.instances` / `databases` / `query` / `status`）；日志页提供来源卡、tail/关键字过滤/全文件搜索与统计条；进程页提供可排序表格、详情抽屉、进程树与二次确认的信号投递；SSL 页提供证书列表（到期天数/issuer/密钥/指纹）、真实 TLS 握手验证、自签、导入与续期，ACME 入口明确置灰；备份页提供打包、校验、恢复到空目录与删除（恢复/删除均为页面内二次确认）、定时备份（选预设或自定义 cron + 保留份数，保存时直接建内核 scheduler 的 `backup.create` + `backup.retention` 两条任务，可暂停/恢复/删除）与保留策略（列表上方汇总总份数/最早/最晚/占用，保留区块先 dry_run 预览再清理）；Redis 页同样先自动检测并支持一键连接（`redis.config.get/set`，host/port 预填，只需填密码），再提供实例可达性/版本、内存与命中率、keyspace、键扫描与按类型取值、批量删除；防火墙页提供后端/启用态/默认入站/规则表，放行/拒绝/删除统一先 `dry_run` 预览命令再确认，非 root 时降级为黄底说明且禁用真实写操作。
 
 ## 9. 构建与 embed（已落地）
 
 ```text
-web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|monitor-cards.js|settings.js|terminal.js|db.js|db-l2.js|logs.js|process.js|ssl.js|backups.js|redis.js|firewall.js|runtimes.js|integrity.js|search.js|audit.js|alerts.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
+web/index.html|app.js|style.css|shell.js|i18n.js|i18n/zh-CN.js|i18n/en-US.js|store.js|files.js|sites.js|tasks.js|monitor.js|monitor-cards.js|settings.js|terminal.js|db.js|db-l2.js|logs.js|process.js|ssl.js|backups.js|redis.js|firewall.js|runtimes.js|integrity.js|search.js|audit.js|alerts.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
 ```
 
-**状态：已落地**（M2-D 零依赖静态壳，R4 扩到二十五文件）。当前主壳前端是二十五文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
+**状态：已落地**（M2-D 零依赖静态壳，R4 扩到二十五文件，i18n 骨架后为三十一文件）。当前主壳前端是三十一文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
 
-- 构建顺序固定：`make frontend`（从 `web/` 复制二十五个产物到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐二十五个产物（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
-- **首屏口径（四件套）**：`index.html` + `style.css` + `app.js` + `shell.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这四个）。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入；`terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js` / `runtimes.js` / `integrity.js` 是 `shell.js` 内置的第 9–18 个导航项（终端、数据库、日志、进程、SSL、备份、Redis、防火墙、运行环境、完整性），同样按需注入对应 `/assets/<模块>.js`。十六个模块**都不进首屏**，首屏请求数与视图数无关；`monitor.js` 的渲染构件 `monitor-cards.js` 再晚一步——只在监控视图首次渲染时注入；`db-l2.js` 同样再晚一步——只在数据库页首次执行写操作（建库/删库/建用户/授权/导入导出）或展开「用户与授权」时注入。18 项导航按「运维 / 业务 / 资源 / 平台」分组：桌面侧栏显示组标题，手机底部固定「运维」5 个 tab、其余 13 项进「更多」抽屉并按组展示，任一页面 ≤2 次点击可达。
-- embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；**逐个精确列二十五个文件**，不用 `all:dist`（embed 必须显式列名是 Go 限制，不构成业务词表）：
+- 构建顺序固定：`make frontend`（从 `web/` 复制三十一个产物到 `web/dist/` 并卡 §7 首屏 gzip）→ `make build`（`go build ./cmd/kored`）。`make build` / `vet` / `test` 依赖 `web-dist` 目标，缺 `web/dist` 时先自动补齐三十一个产物（干净检出可直接构建）；绕过 Makefile 直接 `go build ./...` 时缺 `web/dist` 仍会因 embed 报错失败。
+- **首屏口径（六件套）**：`index.html` + `style.css` + `app.js` + `shell.js` + `i18n.js` + `i18n-zh-CN.js` 同步加载并计入首屏 gzip 预算（`scripts/frontend-check.sh` 的 `FILES` 只列这六个；其中后两个另有 ≤3 KiB 的独立硬预算，见 ADR-0021）。`i18n-en-US.js` 不进首屏——只有用户把语言切到 English 时才按需注入。`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` 六个视图模块由 `app.js` 的 `ensureModule()` 在切到对应视图时动态注入；`terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js` / `runtimes.js` / `integrity.js` 是 `shell.js` 内置的第 9–18 个导航项（终端、数据库、日志、进程、SSL、备份、Redis、防火墙、运行环境、完整性），同样按需注入对应 `/assets/<模块>.js`。十六个模块**都不进首屏**，首屏请求数与视图数无关；`monitor.js` 的渲染构件 `monitor-cards.js` 再晚一步——只在监控视图首次渲染时注入；`db-l2.js` 同样再晚一步——只在数据库页首次执行写操作（建库/删库/建用户/授权/导入导出）或展开「用户与授权」时注入。18 项导航按「运维 / 业务 / 资源 / 平台」分组：桌面侧栏显示组标题，手机底部固定「运维」5 个 tab、其余 13 项进「更多」抽屉并按组展示，任一页面 ≤2 次点击可达。
+- embed 包位于 `web/embed.go`（`package web`，module 路径 `github.com/pengtang1024/kore/web`）。`//go:embed` 不能引用父目录，故 embed 声明与 `dist/` 同处 `web/` 下；**逐个精确列三十一个文件**，不用 `all:dist`（embed 必须显式列名是 Go 限制，不构成业务词表）：
 
 ```go
 package web
 
 import "embed"
 
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/runtimes.js dist/integrity.js dist/search.js dist/audit.js dist/alerts.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/runtimes.js dist/integrity.js dist/search.js dist/audit.js dist/alerts.js
 var Dist embed.FS
 ```
 
-- 该 `//go:embed` 只覆盖主壳二十五个产物；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
+- 该 `//go:embed` 只覆盖主壳三十一个产物；插件前端资产来自运行期目录 `/var/lib/kore/plugins/<id>/<version>/web/`，由 httpapi 只读托管，**不进二进制**（见 4.2 与 [SECURITY](./SECURITY.md) 第 10 节）。
 - **静态路由（已落地，前缀化）**：`httpapi`（`internal/core/httpapi/server.go` 的 `staticRoutes()`）只注册**两条**路由，从 `web.Dist` 按精确路径读文件，不遍历、不回落：
 
 | 路由 | 资源 | Content-Type |
@@ -288,7 +289,7 @@ var Dist embed.FS
 
   **为什么前缀化（G-01）**：内核不得维护业务域名词表。若逐文件注册 `/app.js`、`/monitor.js` 等，等于把前端视图名硬编码进内核——`monitor` 正是 thin-shell 门禁的业务域词，实测会让 `make check` 第 3 段直接失败。现在内核只认识 `assets` 一条前缀 + 后缀白名单，**不认识任何具体视图名**，新增视图无需改静态路由或 httpapi Go 代码；但 Go 的 `//go:embed` 必须显式列名，新增模块仍需在 `web/embed.go` 加一行。
 
-  `/assets/{file}` 只接受单段文件名（含 `/`、`\`、`.`、`..` 一律 404）且后缀必须在白名单内，其余按未知路由处理。`index.html` 以 `/assets/style.css`、`/assets/shell.js`、`/assets/app.js` 绝对路径引用，三个路径自洽。其它任何路径（含 `/nonexistent`）由 `routes()` 的 `"/"` 兜底返回 404 E_NOTFOUND——**无 SPA 兜底**，未知路径不回落 `index.html`。
+  `/assets/{file}` 只接受单段文件名（含 `/`、`\`、`.`、`..` 一律 404）且后缀必须在白名单内，其余按未知路由处理。`index.html` 以 `/assets/style.css`、`/assets/i18n-zh-CN.js`、`/assets/i18n.js`、`/assets/shell.js`、`/assets/app.js` 绝对路径引用，路径自洽（`defer` 保序：语言包先于壳）。其它任何路径（含 `/nonexistent`）由 `routes()` 的 `"/"` 兜底返回 404 E_NOTFOUND——**无 SPA 兜底**，未知路径不回落 `index.html`。
 - **鉴权边界**：`/` 与 `/assets/` 前缀在 `middleware.go` 的 `isPublicPath` 白名单内（面板壳无敏感数据，未登录也要能加载登录界面）。白名单**只认前缀一条**、不枚举文件名；所有 `/api/v1/*` 端点仍强制会话校验，鉴权与 CSRF 逻辑不因静态托管削弱；插件资产前缀 `/plugin-assets/*` 不在白名单内。视图模块自身的数据请求走 `/api/v1/*`，未登录照样 401——放行只覆盖静态文件本体。
 - **访问方式**：kored 默认只开 UDS（`server.addr` 为空），浏览器访问需在配置里显式写 `server.addr: 127.0.0.1:8787`（MVP 只允许回环地址），然后打开 `http://127.0.0.1:8787/`。完整步骤见根 [QUICKSTART.md](../QUICKSTART.md)。
 - 单二进制 ≤ 25 MiB（含 embed 前端）是门禁级预算，前端合计体积贡献上限按 300 KiB gzip 反推。
