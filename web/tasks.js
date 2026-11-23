@@ -380,6 +380,51 @@
     S.warn.hidden = !S.warnText;
   }
 
+  // cron 表达式翻成人话：常见预设直出，看不懂就原样显示（不猜）。
+  function humanCron(expr) {
+    var text = String(expr || '').trim();
+    var known = {
+      '* * * * *': '每分钟', '0 * * * *': '每小时整点', '0 */6 * * *': '每 6 小时',
+      '0 3 * * *': '每天 03:00', '0 4 * * *': '每天 04:00',
+      '0 2 * * *': '每天 02:00', '0 0 * * *': '每天 00:00',
+      '0 3 * * 1': '每周一 03:00', '0 3 * * 0': '每周日 03:00', '0 2 * * 0': '每周日 02:00'
+    };
+    if (known[text]) return known[text];
+    var m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(text);
+    if (m) return '每天 ' + (m[2].length < 2 ? '0' + m[2] : m[2]) + ':' + (m[1].length < 2 ? '0' + m[1] : m[1]);
+    return '';
+  }
+
+  // 行内启停：cron.enable / cron.disable（不弹窗，直接写当前用户 crontab）。
+  function toggleTask(entry, button) {
+    if (S.locked) return;
+    var next = !entry.enabled;
+    var action = next ? 'cron.enable' : 'cron.disable';
+    button.disabled = true;
+    button.textContent = next ? '启用中…' : '停用中…';
+    invoke(action, { index: entry.index }).then(function (data) {
+      var enabled = data.entry && typeof data.entry.enabled === 'boolean' ? data.entry.enabled : next;
+      setStatus('第 ' + entry.index + ' 条任务已' + (enabled ? '启用' : '停用') +
+        (data.changed ? '（已写回 crontab）' : '（状态未变化）') +
+        (data.backup_path ? '；原内容已备份' : ''), 'ok');
+      showBackup(data.backup_path);
+      load();
+    }, function (err) {
+      button.disabled = false;
+      button.textContent = next ? '启用' : '停用';
+      var perm = permissionProblem(err.message);
+      setStatus((next ? '启用' : '停用') + '失败：' + err.message +
+        (perm ? '（按 RUNBOOK §5 以 root 启动 kored 后重试）' : ''), 'fail');
+    });
+  }
+
+  function chip(tone, text) {
+    var c = el('span', 'chip chip-' + tone);
+    add(c, el('span', 'dot ' + tone));
+    add(c, el('span', null, text));
+    return c;
+  }
+
   function typeBadge(type) {
     var label = type === 'http' ? 'http' : 'shell';
     return el('span', 'task-badge task-badge-' + label, label);
@@ -406,13 +451,24 @@
       index.dataset.label = '索引';
       var type = add(tr, el('td')); type.dataset.label = '类型';
       add(type, typeBadge(entry.type));
-      var schedule = add(tr, el('td', 'mono')); schedule.dataset.label = '时间表达式';
-      add(schedule, el('span', null, entry.schedule));
+      if (typeof entry.enabled === 'boolean') add(type, chip(entry.enabled ? 'ok' : 'na', entry.enabled ? '已启用' : '已停用'));
+      var schedule = add(tr, el('td')); schedule.dataset.label = '时间表达式';
+      var human = humanCron(entry.schedule);
+      if (human) add(schedule, el('span', null, human + ' '));
+      add(schedule, el('span', 'mono muted', entry.schedule));
       var command = add(tr, el('td', 'mono task-command')); command.dataset.label = '命令';
       add(command, el('span', null, entry.command));
       var comment = add(tr, el('td', 'muted')); comment.dataset.label = '备注';
       add(comment, el('span', null, entry.comment || '—'));
       var ops = add(tr, el('td', 'cell-ops')); ops.dataset.label = '操作';
+      if (typeof entry.enabled === 'boolean') {
+        var toggle = add(ops, el('button', 'btn btn-ghost task-toggle-btn', entry.enabled ? '停用' : '启用'));
+        toggle.type = 'button';
+        toggle.setAttribute('data-action', entry.enabled ? 'cron-disable' : 'cron-enable');
+        toggle.title = entry.enabled ? '停用该任务（注释掉 crontab 行，配置保留）' : '启用该任务（恢复 crontab 行）';
+        toggle.disabled = S.locked;
+        on(toggle, function () { toggleTask(entry, toggle); });
+      }
       var edit = add(ops, el('button', 'btn', '编辑')); edit.type = 'button';
       if (entry.type && entry.type !== 'shell') {
         edit.disabled = true;

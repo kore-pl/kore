@@ -43,6 +43,46 @@
       if (timer !== null) clearTimeout(timer); if (e && e.name === 'AbortError') throw new Error('请求超时（' + (TIMEOUT_MS / 1000) + ' 秒）'); throw e;
     });
   }
+  // 插件只产任务描述（created 恒 false），真正生效要 POST 到内核 scheduler（ADR-0019，插件不起 ticker）。
+  var SCHEDULER_API = '/api/v1/scheduler/tasks';
+  function postScheduler(task) {
+    var token = cookie('kore_csrf');
+    if (!token) return Promise.reject(new Error('缺少 CSRF 令牌，请刷新页面或重新登录'));
+    return fetch(SCHEDULER_API, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token },
+      body: JSON.stringify(task)
+    }).then(function (res) {
+      return res.text().then(function (raw) {
+        var data = {};
+        if (raw) { try { data = JSON.parse(raw); } catch (e) { data = {}; } }
+        if (res.ok) return data;
+        var err = new Error(data.message || ('创建定时任务失败（HTTP ' + res.status + '）'));
+        err.code = data.code || '';
+        throw err;
+      });
+    });
+  }
+  // cron 表达式翻成人话（常用预设 + 简单解析），看不懂时原样显示，不猜。
+  function humanSchedule(expr) {
+    var text = String(expr || '').trim();
+    var known = {
+      '0 4 * * *': '每天 04:00', '0 3 * * *': '每天 03:00', '0 2 * * *': '每天 02:00',
+      '0 * * * *': '每小时整点', '0 */6 * * *': '每 6 小时', '0 0 * * *': '每天 00:00',
+      '0 3 * * 0': '每周日 03:00', '0 3 * * 1': '每周一 03:00',
+      '0 3 1 * *': '每月 1 日 03:00'
+    };
+    if (known[text]) return known[text];
+    var m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(text);
+    if (m) return '每天 ' + (m[2].length < 2 ? '0' + m[2] : m[2]) + ':' + (m[1].length < 2 ? '0' + m[1] : m[1]);
+    return text ? '自定义（' + text + '）' : '—';
+  }
+  var SCHEDULE_PRESETS = [
+    { label: '每天 04:00（推荐）', cron: '0 4 * * *' },
+    { label: '每周日 03:00', cron: '0 3 * * 0' },
+    { label: '每 6 小时', cron: '0 */6 * * *' },
+    { label: '自定义', cron: '' }
+  ];
   function fmtBytes(n) {
     var v = Number(n) || 0; if (v < 1024) return v + ' B'; if (v < 1048576) return (v / 1024).toFixed(1) + ' KiB';
     return v < 1073741824 ? (v / 1048576).toFixed(1) + ' MiB' : (v / 1073741824).toFixed(2) + ' GiB';
@@ -97,6 +137,160 @@
     }, function (err) {
       if (S.destroyed) return; S.error = err.message; S.hint = err.hint || ''; if (!S.status) paintStatus();
     });
+  }
+  // ---------------- 基线多版本（baseline.list）----------------
+  function paintBaselines() {
+    var host = S.baselineHost; if (!host) return; host.textContent = '';
+    if (S.baselineError) { host.appendChild(noticeCard('基线列表读取失败', [S.baselineError], 'warn')); return; }
+    var list = S.baselines || [];
+    if (!list.length) {
+      var empty = add(host, el('div', 'empty-state int-empty'));
+      add(empty, el('p', 'int-empty-title', '还没有任何基线版本'));
+      add(empty, el('p', 'empty-state-text', '建立一次基线后，这里会按时间列出每个版本；定时扫描需要一个当前基线。'));
+      btn(empty, '建立基线', 'btn btn-primary', function () { openBaseline(false); });
+      return;
+    }
+    var table = add(host, el('table', 'int-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['版本', '建立时间', '文件', '体积', '上次校验', '状态'].forEach(function (c) { add(htr, el('th', null, c)); });
+    var tbody = add(table, el('tbody'));
+    list.forEach(function (b) {
+      var tr = add(tbody, el('tr'));
+      var idCell = add(tr, el('td', 'mono')); idCell.setAttribute('data-label', '版本');
+      add(idCell, el('span', null, short(b.id)));
+      if (b.current) add(idCell, chip('ok', '当前'));
+      add(tr, el('td', null, fmtTime(b.created_at))).setAttribute('data-label', '建立时间');
+      add(tr, el('td', null, (b.entries || 0) + ' 个')).setAttribute('data-label', '文件');
+      add(tr, el('td', null, fmtBytes(b.total_bytes))).setAttribute('data-label', '体积');
+      add(tr, el('td', null, b.last_check_at ? fmtTime(b.last_check_at) : '从未')).setAttribute('data-label', '上次校验');
+      var st = add(tr, el('td')); st.setAttribute('data-label', '状态');
+      if (b.last_check_ok === true) st.appendChild(chip('ok', '通过'));
+      else if (b.last_check_ok === false) st.appendChild(chip('fail', '有改动'));
+      else st.appendChild(chip('na', '未校验'));
+      if (b.note) { var note = add(st, el('span', 'muted', ' ' + b.note)); note.title = b.note; }
+    });
+    if (typeof S.keep === 'number' && S.keep > 0) add(host, el('p', 'field-hint', '最多保留 ' + S.keep + ' 个版本；当前版本参与定时扫描。'));
+  }
+  function loadBaselines() {
+    if (!S.baselineHost) return;
+    invoke('baseline.list', { limit: 20 }).then(function (d) {
+      if (S.destroyed) return; S.baselines = Array.isArray(d.baselines) ? d.baselines : []; S.keep = d.keep; S.baselineError = ''; paintBaselines(); paintBaselinePick();
+    }, function (err) {
+      if (S.destroyed) return; S.baselineError = err.message + (err.hint ? '（' + err.hint + '）' : ''); paintBaselines();
+    });
+  }
+  // ---------------- 定时扫描（schedule.get / set）----------------
+  function paintSchedule() {
+    var host = S.scheduleHost; if (!host) return; host.textContent = '';
+    if (S.scheduleError) { host.appendChild(noticeCard('定时扫描描述读取失败', [S.scheduleError], 'warn')); return; }
+    var records = S.schedules || [];
+    add(host, el('p', 'field-hint', '这里只展示插件给出的任务描述，不代表内核任务是否真的在跑；下方表单会把描述提交给内核调度器后才生效。'));
+    if (!records.length) {
+      var empty = add(host, el('div', 'empty-state int-empty'));
+      add(empty, el('p', 'int-empty-title', '还没有定时扫描'));
+      add(empty, el('p', 'empty-state-text', '选一个预设时间、挑好要扫描的路径，一次提交就建好；不需要手写 cron。'));
+      if (S.scheduleHint) add(empty, el('p', 'field-hint', S.scheduleHint));
+      return;
+    }
+    var table = add(host, el('table', 'int-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['任务名', '频率', '下次执行', '状态'].forEach(function (c) { add(htr, el('th', null, c)); });
+    var tbody = add(table, el('tbody'));
+    records.forEach(function (r) {
+      var task = r.recommended_task || {};
+      var tr = add(tbody, el('tr'));
+      add(tr, el('td', 'mono', r.name || task.name || '—')).setAttribute('data-label', '任务名');
+      var freq = add(tr, el('td')); freq.setAttribute('data-label', '频率');
+      add(freq, el('span', null, humanSchedule(task.schedule || '')));
+      add(tr, el('td', null, fmtTime(r.next_run_at))).setAttribute('data-label', '下次执行');
+      var st = add(tr, el('td')); st.setAttribute('data-label', '状态');
+      st.appendChild(chip(task.enabled === false ? 'na' : 'ok', task.enabled === false ? '已停用' : '已提交调度'));
+      if (r.hint) { var hint = add(st, el('span', 'muted', ' ' + r.hint)); hint.title = r.hint; }
+    });
+  }
+  function loadSchedules() {
+    if (!S.scheduleHost) return;
+    invoke('schedule.get', {}).then(function (d) {
+      if (S.destroyed) return; S.schedules = Array.isArray(d.records) ? d.records : []; S.scheduleHint = d.hint || ''; S.scheduleError = ''; paintSchedule();
+    }, function (err) {
+      if (S.destroyed) return; S.scheduleError = err.message + (err.hint ? '（' + err.hint + '）' : ''); paintSchedule();
+    });
+  }
+  function paintBaselinePick() {
+    var sel = S.scheduleBaseline; if (!sel) return;
+    var keepValue = sel.value; sel.textContent = '';
+    var auto = add(sel, el('option', null, '使用当前基线（推荐）')); auto.value = '';
+    (S.baselines || []).forEach(function (b) {
+      var opt = add(sel, el('option', null, short(b.id) + ' · ' + fmtTime(b.created_at) + (b.current ? '（当前）' : '')));
+      opt.value = b.id;
+    });
+    if (keepValue) sel.value = keepValue;
+  }
+  function buildScheduleForm(host) {
+    var panelHost = add(host, el('div', 'int-sched-form'));
+    var form = add(panelHost, el('form', 'int-inline-form'));
+    var presetField = add(form, el('label', 'int-field'));
+    add(presetField, el('span', 'int-label', '扫描频率（预设优先，不写 cron）'));
+    var preset = add(presetField, el('select', 'int-input'));
+    SCHEDULE_PRESETS.forEach(function (p, i) { var o = add(preset, el('option', null, p.label)); o.value = String(i); });
+    var customField = add(form, el('label', 'int-field')); customField.style.display = 'none';
+    add(customField, el('span', 'int-label', '自定义 cron 表达式（高级）'));
+    var custom = add(customField, el('input', 'int-input')); custom.type = 'text'; custom.placeholder = '0 4 * * *';
+    var pathField = add(form, el('label', 'int-field'));
+    add(pathField, el('span', 'int-label', '要扫描的路径（逗号或空格分隔，至少一个）'));
+    var paths = add(pathField, el('input', 'int-input')); paths.type = 'text';
+    paths.value = (S.roots && S.roots.length ? S.roots : ['/etc', '/usr/bin']).join(', ');
+    var excludeField = add(form, el('label', 'int-field'));
+    add(excludeField, el('span', 'int-label', '排除规则（可选）'));
+    var exclude = add(excludeField, el('input', 'int-input')); exclude.type = 'text'; exclude.value = DEF_EXCLUDE;
+    var baselineField = add(form, el('label', 'int-field'));
+    add(baselineField, el('span', 'int-label', '基于哪个基线（可选）'));
+    var baselineSel = add(baselineField, el('select', 'int-input')); S.scheduleBaseline = baselineSel;
+    var timeoutField = add(form, el('label', 'int-field'));
+    add(timeoutField, el('span', 'int-label', '单次扫描超时（秒，可选）'));
+    var timeout = add(timeoutField, el('input', 'int-input')); timeout.type = 'number'; timeout.min = '1'; timeout.max = '3600'; timeout.value = '1800';
+    var msg = add(form, el('div', 'int-dialog-err'));
+    var ops = add(form, el('div', 'int-dialog-ops'));
+    var submit = btn(ops, '创建定时扫描', 'btn btn-primary', submitSchedule);
+    preset.addEventListener('change', function () { customField.style.display = preset.value === String(SCHEDULE_PRESETS.length - 1) ? '' : 'none'; });
+    function submitSchedule() {
+      var chosen = SCHEDULE_PRESETS[Number(preset.value)] || SCHEDULE_PRESETS[0];
+      var cron = chosen.cron || custom.value.trim();
+      var roots = splitPaths(paths.value);
+      msg.textContent = '';
+      if (!cron) { msg.textContent = '请选择预设频率，或填写自定义 cron 表达式。'; return; }
+      if (!roots.length) { msg.textContent = '请至少填一个要扫描的路径（例如 /etc）。'; return; }
+      submit.disabled = true;
+      var params = { schedule: cron, paths: roots, exclude: splitPaths(exclude.value) };
+      if (baselineSel.value) params.baseline_id = baselineSel.value;
+      var secs = parseInt(timeout.value, 10);
+      if (!isNaN(secs) && secs >= 1 && secs <= 3600) params.timeout_s = secs;
+      invoke('schedule.set', params).then(function (r) {
+        var task = r.recommended_task || {};
+        return postScheduler(task).then(function (created) {
+          submit.disabled = false;
+          S.notice = { tone: 'ok', title: '定时扫描已提交给内核调度器', lines: [
+            '频率：' + humanSchedule(task.schedule || cron) + '；下次执行：' + fmtTime(r.next_run_at),
+            '任务：' + (task.name || '—') + (created && created.id ? '（' + created.id + '）' : '') +
+              '；插件本身不起定时器，由内核调度（G-19）'
+          ] };
+          if (r.hint) S.notice.lines.push(r.hint);
+          paintNotice(); loadSchedules(); loadBaselines();
+        });
+      }, function (err) {
+        submit.disabled = false;
+        if (err.code === 'E_NOTFOUND') {
+          msg.textContent = '还没有可用基线：请先点上方「建立基线」，再回来创建定时扫描。';
+          var go = btn(ops, '先去建立基线', 'btn', function () { openBaseline(false); });
+          go.setAttribute('data-action', 'int-go-baseline');
+          return;
+        }
+        msg.textContent = '创建失败：' + err.message + (err.hint ? '（' + err.hint + '）' : '');
+      }).catch(function (err) {
+        submit.disabled = false;
+        msg.textContent = '任务描述已生成，但提交内核调度失败：' + err.message + '；请稍后重试（不会重复建基线）。';
+      });
+    }
   }
   function closeBaseline() {
     var d = S.dialog; if (d && d.wrap && d.wrap.parentNode) d.wrap.parentNode.removeChild(d.wrap); S.dialog = null;
@@ -209,12 +403,20 @@
       busy: false, notice: null, check: null, checkError: '', checkHint: '', dialog: null, destroyed: false, roots: [] };
     ensureCss(); container.textContent = ''; var root = add(container, el('section', 'int')), head = add(root, el('header', 'view-head')); add(head, el('h2', 'view-title', '完整性校验'));
     add(head, el('p', 'view-sub', '给关键文件建一份 sha256 基线，之后随时比对新增 / 删除 / 修改；可疑文件可单独校验指纹。')); S.noticeHost = add(root, el('div', 'int-notice'));
-    var sp = panel('基线状态'), rp = panel('校验结果'), vp = panel('单文件校验'); add(root, sp.panel); add(root, rp.panel); add(root, vp.panel); btn(sp.meta, '刷新', 'btn btn-ghost', loadStatus);
+    var sp = panel('基线状态'), bp = panel('基线版本'), tp = panel('定时扫描'), rp = panel('校验结果'), vp = panel('单文件校验');
+    add(root, sp.panel); add(root, bp.panel); add(root, tp.panel); add(root, rp.panel); add(root, vp.panel);
+    btn(sp.meta, '刷新', 'btn btn-ghost', loadStatus);
+    btn(bp.meta, '刷新', 'btn btn-ghost', loadBaselines);
+    btn(tp.meta, '刷新', 'btn btn-ghost', loadSchedules);
+    S.baselineHost = add(bp.panel, el('div', 'int-baselines'));
+    S.scheduleHost = add(tp.panel, el('div', 'int-schedules'));
     S.statusHost = add(sp.panel, el('div', 'int-status')); S.resultPanel = rp.panel;
     S.resultHost = add(rp.panel, el('div', 'int-result')); var form = add(vp.panel, el('div', 'int-form'));
     S.verifyPath = add(form, el('input', 'int-input')); S.verifyPath.type = 'text'; S.verifyPath.placeholder = '/etc/nginx/nginx.conf'; S.verifySha = add(form, el('input', 'int-input'));
     S.verifySha.type = 'text'; S.verifySha.placeholder = '期望的 sha256（64 位十六进制）'; btn(form, '校验', 'btn btn-primary', verifyFile); S.verifyOut = add(vp.panel, el('div', 'int-verify-out'));
-    paintNotice(); paintStatus(); paintCheck(); loadStatus(); return { destroy: function () { S.destroyed = true; closeBaseline(); } };
+    paintNotice(); paintStatus(); paintCheck(); buildScheduleForm(tp.panel);
+    loadStatus(); loadBaselines(); loadSchedules();
+    return { destroy: function () { S.destroyed = true; closeBaseline(); } };
   }
   // 样式随视图注入：不占首屏 style.css 预算，也不与其它视图互相干扰。
   function ensureCss() {
@@ -227,7 +429,8 @@
       '.int-verdict{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--kore-border-2);font-weight:600}.int-verdict-dot{width:10px;height:10px;border-radius:50%}.int-verdict-meta{color:var(--kore-text-3);font-size:12px;font-weight:400}.int-verdict.is-ok .int-verdict-dot{background:var(--kore-success)}.int-verdict.is-ok .int-verdict-text{color:var(--kore-success)}.int-verdict.is-fail .int-verdict-dot{background:var(--kore-danger)}.int-verdict.is-fail .int-verdict-text{color:var(--kore-danger)}',
       '.int-section{border-top:1px solid var(--kore-border-2)}.int-table{table-layout:fixed}.int-table th:nth-child(1){width:34%}.int-table th:nth-child(2){width:26%}.int-table th:nth-child(3){width:12%}.int-table th:nth-child(4){width:28%}.int-sha code,.int-chg{white-space:nowrap}.int-section-head{padding:10px 16px;cursor:pointer;font-size:13px;font-weight:600}.int-table{width:100%;border-collapse:collapse;font-size:12px}.int-table th{text-align:left;padding:6px 16px;color:var(--kore-text-3);font-weight:400;border-bottom:1px solid var(--kore-border-2);white-space:nowrap}.int-table td{padding:8px 16px;vertical-align:top;border-top:1px solid var(--kore-border-2);word-break:break-all}.int-sha{display:inline-flex;align-items:center;gap:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.int-sha-old,.int-sha-arrow{color:var(--kore-text-3)}.int-sha-new{color:var(--kore-warning)}',
       '.int-chg{display:inline-block;margin-right:4px;padding:0 6px;color:var(--kore-warning);border:1px solid currentColor;border-radius:4px;font-size:11px}.int-detail summary{cursor:pointer;color:var(--kore-info);font-size:11px}.int-detail-row{display:flex;gap:6px;margin-top:4px;font-size:11px}.int-detail-key{flex:0 0 76px;color:var(--kore-text-3)}.int-detail-val{color:var(--kore-text-2);word-break:break-all}.int-form{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;padding:12px 16px}.int-verify-out:empty{display:none}.int-pre{margin:0;padding:12px 16px;color:var(--kore-text-2);font-size:12px;white-space:pre-wrap;word-break:break-all}',
-      '@media (max-width:639px){.int-presets{grid-template-columns:1fr}.int-form{grid-template-columns:1fr}' +
+      '.int-inline-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px 16px 16px}.int-inline-form .int-field{margin-top:0}.int-inline-form .int-dialog-err,.int-inline-form .int-dialog-ops{grid-column:1/-1}.int-baselines .int-table{table-layout:fixed}.int-baselines .int-table th:nth-child(1){width:15%}.int-baselines .int-table th:nth-child(2){width:17%}.int-baselines .int-table th:nth-child(3){width:7%}.int-baselines .int-table th:nth-child(4){width:9%}.int-baselines .int-table th:nth-child(5){width:18%}.int-baselines .int-table th:nth-child(6){width:34%}.int-baselines .chip,.int-schedules .chip{white-space:nowrap}.int-baselines .int-table td .muted{display:block;margin-top:2px;font-size:11px}.int-schedules .int-table th:nth-child(1){width:28%}.int-schedules .int-table th:nth-child(2){width:24%}',
+      '@media (max-width:639px){.int-presets{grid-template-columns:1fr}.int-form{grid-template-columns:1fr}.int-inline-form{grid-template-columns:1fr}' +
       '.int-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.int-table,.int-table tbody,.int-table tr{display:block;width:100%}' +
       '.int-table tr{padding:8px 0;border-top:1px solid var(--kore-border-2)}.int-table td{display:flex;gap:12px;padding:4px 16px;border:0}' +
       '.int-table td::before{content:attr(data-label);flex:0 0 72px;color:var(--kore-text-3)}}'
