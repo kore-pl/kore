@@ -100,6 +100,16 @@ web/
 
 **来源与托管链路**：插件前端在 `kore-plugin-<id>` 仓库内用任意栈（Vite 或其它）构建 → 产物以 `web/` 进包 → 安装时落到 `/var/lib/kore/plugins/<id>/<version>/web/` → 由 kore 以带版本的 `/plugin-assets/<id>@<ver>/` 路径托管（版本化是清缓存与隔离的基础）。**kore 的 `go:embed` 只含主壳前端，不含任何插件资产**：插件前端永不进主二进制，M2 不得以"省事"为由把插件前端打进 kore。
 
+### 4.2.1 实施现状：插件 UI = 主壳视图（ADR-0040 增补，2026-11-23）
+
+上面 4.1/4.2 的 iframe + `/plugin-assets/` 是**未来方案，当前未实现**，不要按它去建链。2026-11-23 核实（证据 `.agents/verify/plugin-ui-delivery.md` @ `53694c2`）：
+
+- 24 个插件仓 dist 里 `web/` 命中 **0**（打包规则只列 `info.json` + `bin/<id>` + `SHA256SUMS`，见 `kore-plugin-backup/Makefile:19`）；
+- 内核**没有** `/plugin-assets/` 路由（`handlers.go:57-64`），`web/app.js:925` 的 `frame.src` 指向不存在的路径；`httpapi/types.go:15-17` 的 `Entry`/`Styles` 无人消费；
+- 没有任何「插件 iframe 加载成功」的运行证据。
+
+**裁决**（ADR-0040）：v1.0 前不补这条链；**插件 UI = 主壳视图**——所有插件界面在 `kore/web/<id>.js` 实现，走主壳导航/权限/响应式；插件仓 `web/` 标记「未启用、勿新增」。复审条件见 [ADR-0040](DECISIONS/0040-plugin-ui-distribution.md) §3。
+
 ### 4.3 桥接口（window.kore.invoke）
 
 子帧里由主壳提供的几十行 RPC shim 暴露唯一入口 `window.kore.invoke`；插件**只调这个入口**，不接触主壳 cookie / csrf / DOM。管理端点永不对桥开放。
