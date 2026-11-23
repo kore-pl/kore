@@ -8,10 +8,28 @@ window.KORE_DOCS = [
     "status": "draft"
   },
   {
+    "title": "DESIGN-AUDIT — 18 页视觉层次审计（R7）",
+    "path": "../DESIGN-AUDIT.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
+    "title": "DESIGN-SYSTEM — 视觉层次与组件规范（v1）",
+    "path": "../DESIGN-SYSTEM.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
     "title": "FEATURE-PARITY — 对标宝塔 / 1Panel 专业版的能力矩阵",
     "path": "../FEATURE-PARITY.md",
     "category": "愿景与设计",
     "status": "draft"
+  },
+  {
+    "title": "Gitee 镜像仓库（GitHub 为主）",
+    "path": "../GITEE-MIRROR.md",
+    "category": "愿景与设计",
+    "status": "active"
   },
   {
     "title": "GLOSSARY — 术语表与命名约定",
@@ -50,14 +68,44 @@ window.KORE_DOCS = [
     "status": "draft"
   },
   {
+    "title": "插件配置契约（PLUGIN-CONFIG）",
+    "path": "../PLUGIN-CONFIG.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
+    "title": "PLUGIN-MATURITY — 插件与主壳成熟度分级 · 功能矩阵 · 改造优先级",
+    "path": "../PLUGIN-MATURITY.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
+    "title": "RELEASE — 发版规则（版本号 = 包内容的唯一标识）",
+    "path": "../RELEASE.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
     "title": "kore 路线图（ROADMAP）",
     "path": "../ROADMAP.md",
     "category": "愿景与设计",
     "status": "draft"
   },
   {
+    "title": "RUNBOOK — 发布与回滚操作手册",
+    "path": "../RUNBOOK.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
     "title": "SCENARIOS — 场景预设与首次安装",
     "path": "../SCENARIOS.md",
+    "category": "愿景与设计",
+    "status": "draft"
+  },
+  {
+    "title": "USABILITY — 易用性四原则（硬性设计约束）",
+    "path": "../USABILITY.md",
     "category": "愿景与设计",
     "status": "draft"
   },
@@ -234,5 +282,47 @@ window.KORE_DOCS = [
     "path": "../DECISIONS/0017-repo-ownership-and-module-path.md",
     "category": "决策 ADR",
     "status": "draft"
+  },
+  {
+    "title": "ADR-0018: 提权模型——插件保持低权，root 动作经内核代理执行",
+    "path": "../DECISIONS/0018-privilege-model.md",
+    "category": "决策 ADR",
+    "status": "accepted"
+  },
+  {
+    "title": "ADR-0019: 定时任务模型——单一 ticker + state.db 任务表，不引第三方调度器",
+    "path": "../DECISIONS/0019-scheduler.md",
+    "category": "决策 ADR",
+    "status": "draft"
+  },
+  {
+    "title": "ADR-0020: ACME 证书——不内置客户端，探测本机 certbot/acme.sh 且必须用户显式触发",
+    "path": "../DECISIONS/0020-acme.md",
+    "category": "决策 ADR",
+    "status": "draft"
+  },
+  {
+    "title": "ADR-0021: 以中文为默认语言的轻量 i18n——零依赖字符串表，英文可选并回退中文",
+    "path": "../DECISIONS/0021-i18n.md",
+    "category": "决策 ADR",
+    "status": "draft"
+  },
+  {
+    "title": "ADR-0022: root 动作的受控命令形状——把「命令名白名单」升级为「子命令 + 参数形状」",
+    "path": "../DECISIONS/0022-root-command-shapes.md",
+    "category": "决策 ADR",
+    "status": "accepted"
+  },
+  {
+    "title": "ADR-0023: 零侵入设计规范——删掉安装目录即等于卸载",
+    "path": "../DECISIONS/0023-zero-intrusion.md",
+    "category": "决策 ADR",
+    "status": "accepted"
+  },
+  {
+    "title": "ADR-0024: 仓库拓扑与 Gitea 权威源",
+    "path": "../DECISIONS/0024-repo-topology-and-gitea.md",
+    "category": "决策 ADR",
+    "status": "accepted"
   }
 ];
