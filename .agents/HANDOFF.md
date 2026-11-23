@@ -6,6 +6,138 @@
 **要做什么、怎么干、干到哪了、为什么这么定**。这份规范定义这四问分别由哪些文件回答，以及
 "什么才算落过文件"。
 
+## 0. 当前交接快照（2026-11-23 晚 21:45）
+
+> 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
+> 每条附命令 / `file:line` / commit；查不到的写「未确认」，不写推测。
+
+### A. 四问当前答案
+
+1. **要做什么**：M5 收口前的 v1.0 Linux GA 准备——22 能力域由 24 个插件仓提供，内核保持薄壳调度。
+   今天（2026-11-23）共 282 个提交（`git log --since="2026-11-23 00:00" --oneline | wc -l` → `282`），集中在
+   插件能力补齐、主壳视图补齐、发版入索引、内核卸载 / CLI 三个方向。
+2. **怎么干 / 事实约束**：**本机有两个 DSH 会话并行在同一 `kore` 工作树**——另一会话 agent 名 `docs-scribe`，
+   拥有 `AGENTS.md` / `docs/DECISIONS/0027-*` / `docs/FRONTEND.md` 的**图表规范条款**；本侧不得再回滚那三处
+   （依据 `.agents/JOURNAL.md` §「本轮复盘：2026-11-23」第 1、2 条）。图表口径已由用户裁定为
+   **工程判据为准、ECharts5 首选但非硬指标**，G-32 判「是否满足 `docs/FRONTEND.md` §13 十条判据」而非「是否用 ECharts」。
+3. **干到哪了**：见 B 节（发版 / 能力 / 主壳 / 内核 / 运行态 / 挂账）。
+4. **为什么这么定**：
+   - 插件 UI 不补分发链 —— `docs/DECISIONS/0040-plugin-ui-distribution.md`（accepted，2026-11-23 增补裁决）：
+     24 仓 dist 里 `web/` 命中为 0、内核无 `/plugin-assets/` 路由、无任何加载成功证据，补链约 3–5 人日，v1.0 前不补；
+     插件 UI = 主壳视图。证据 `.agents/verify/plugin-ui-delivery.md`。
+   - 升级 / 备份口径 —— `docs/OPERATIONS.md`（含实测修正，21:17 写入）。
+   - 发版窗口冻结 + tag 钉 sha —— `docs/RELEASE.md` §2.1（`kore-plugin-waf v0.4.1` tag 与资产不同树事故的机制化修正）。
+
+### B. 今天的实际状态
+
+#### B.1 发版与索引
+
+唯一事实源：`../kore-plugins/index/plugins.json`（实测 24 条，`schema_version` + `plugins[]`，文件 mtime 21:36）；
+索引仓 HEAD `80e2611`「第46把重签（waf 0.4.3 / container 0.5.2 / discover 0.3.1 / backup 0.4.2）」。
+
+| 插件 @ 索引版本 | 插件 @ 索引版本 |
+| --- | --- |
+| echo 0.1.4 | site 0.4.3 |
+| file 0.3.2 | ssl 0.6.0 |
+| integrity 0.4.0 | cron 0.5.0 |
+| ssh-guard 0.3.0 | monitor 0.3.0 |
+| logs 0.5.0 | dns 0.4.0 |
+| runtime-php 0.2.2 | runtime-node 0.2.4 |
+| runtime-python 0.3.1 | db-mysql 0.4.1 |
+| db-postgres 0.3.3 | redis 0.6.0 |
+| backup 0.4.2 | firewall 0.2.6 |
+| waf 0.4.3 | container 0.5.2 |
+| app-deploy 0.3.0 | terminal 0.2.0 |
+| process 0.3.0 | discover 0.3.1 |
+
+#### B.2 插件能力（以各仓 `CHANGELOG.md` 为准）
+
+| 能力 | 版本 | 证据（仓 / 行） |
+| --- | --- | --- |
+| `container.exec`（固定 argv、非 root 默认、超时夹取 30s、输出截断 256 KiB） | 0.5.2 | `kore-plugin-container/CHANGELOG.md:14` |
+| `process.history/trend/watchdog.suggest`（60 点环形缓冲、插件内零 ticker） | 0.3.0 | `kore-plugin-process/CHANGELOG.md:12` |
+| `ssh-guard.suggest`（只读 `system:read`，`dry_run` 恒 true） | 0.3.0 | `kore-plugin-ssh-guard/CHANGELOG.md:9` |
+| `runtime-python` venv / pip（4 方法 + kill 后重试） | 0.3.1 | `kore-plugin-runtime-python/CHANGELOG.md:7` |
+| `redis.rename` / `move` / `copy`（默认 nx 防覆盖，>8 MiB 需 confirm） | 0.6.0 | `kore-plugin-redis/CHANGELOG.md:5` |
+| `ssl.https.enforce`（期望状态下发 + 审计） | 0.6.0 | `kore-plugin-ssl/CHANGELOG.md:12` |
+| `waf` 规则 CRUD（nft 1.1.x 写后回读失败的三层兜底） | 0.4.3 | `kore-plugin-waf/CHANGELOG.md:7-10` |
+| `logs.retention.get/set`（落 `retention.json` 0600 原子写） | 0.5.0 | `kore-plugin-logs/CHANGELOG.md:12` |
+| `cron.templates`（4 模板，只读不写 crontab） | 0.5.0 | `kore-plugin-cron/CHANGELOG.md:5` |
+| `integrity` 结构化变更 + `severity` | 0.4.0 | `kore-plugin-integrity/CHANGELOG.md:13` |
+| `app-deploy.upload/upgrade/jobs`（逐条目穿越护栏 + 暂存后 rename） | 0.3.0 | `kore-plugin-app-deploy/CHANGELOG.md:5` |
+| `firewall.enable/disable`（走 ADR-0018 root-action，argv 固定） | 0.2.6 | `kore-plugin-firewall/CHANGELOG.md:7` |
+| `backup.verify`（6 项 checks，只读 `system:read`） | 0.4.2 | `kore-plugin-backup/CHANGELOG.md:5` |
+| `dns` 写路径（快照 → 原子 UPDATE → 直连校验 → journal，失败回滚） | 0.4.0 | `kore-plugin-dns/CHANGELOG.md:55`（测试证据行） |
+
+#### B.3 主壳（两个口径分开写，勿混）
+
+| 指标 | 值 | 命令 / 出处 |
+| --- | --- | --- |
+| `lazyView(` 调用点数 | **15** | `grep -c "lazyView('" web/shell.js` → `15`（`/assets/` 引用去重 18 条） |
+| 视图模块数（构建口径） | **21** | `make frontend` → 「首屏 6 件套 + 21 视图模块 + 9 按需子模块」 |
+| `web/*.js` 文件数 | **33** | `ls web/*.js \| wc -l` → `33` |
+| 首屏 gzip | **62,710 B**（预算 307,200，余量 244,490） | `make frontend` exit 0 →「首屏合计（gzip -9）: 62710 字节」 |
+| i18n 增量 gzip | **2,988 B**（预算 3,072，余量 84） | 同一次 `make frontend` |
+| 导航项 | **23** | `web/shell.js:66-69` 四组 id 合计（ops 5 + biz 5 + res 4 + platform 9） |
+
+最新两个视图：应用部署 `2450e0c`（第 21 个懒加载视图）、计划任务模板驱动 `bd7e23a`。
+`web/appdeploy.js` / `web/store.js` 当前**有未提交改动**（`git diff --stat`：+164 / −16），归属未确认。
+
+#### B.4 新增内核能力
+
+| 能力 | commit | 关键点 |
+| --- | --- | --- |
+| `DELETE /api/v1/plugins/{id}` 卸载 | `6142694` | 停进程 + 删 dist + 移除记录 + 审计；审计 fail-closed；幂等 200 + `already_absent`；路径穿越双层防护 |
+| `kored admin-password` | `e06a2fa` | 首启登录引导，替代手跑 PBKDF2 哈希（`d26f6a3` 补 `--hash` 示例 `--config`） |
+| `kored status` + 配置/状态路径统一 | `ad2d73a` | `cmd/kored/status.go:23`；CLI 与 serve 同一路径解析 + fail-closed |
+| 受控文件写原语 | `a029fae` | 白名单 / 大小 / 权限 / 软链接 / 备份 / fail-closed 审计 + G-01 精确豁免（ADR-0028 一期） |
+
+注意：`docs/DECISIONS/0028-controlled-file-write.md` 头部状态仍是 **`proposed（待裁决）`**，而实现已落 `a029fae`——
+**ADR 状态与代码事实不一致**，下一轮须裁决后改状态或回退（G-06）。
+
+#### B.5 运行态（只报告，不杀进程、不改主配置）
+
+| 对象 | 事实（21:44 读取） |
+| --- | --- |
+| 主实例 pid | `2798902`（`./bin/kored serve --config .kore-local.yaml`，启动 21:41:57） |
+| 主实例 `/proc/<pid>/exe` | 指向 `bin/kored (deleted)`，sha256 `984510ab1f4e…`（inode 已不被路径指向） |
+| 当前 `bin/kored` | sha256 `f26bbf35dcbf…`，10,240,162 B，mtime **21:42**（晚于主实例启动） |
+| `/api/v1/system/info` | 返回 `E_UNAUTHORIZED`（管理 API 需鉴权），**故主实例实际加载版本未确认** |
+| 并发隔离实例 | pid `2520580`（`/tmp/kore-t196`）、`2548624`（`/tmp/kore-cexec`）、`2779969`（`/tmp/kore-wafe2e`），均为已删除 inode；**只报告不清理** |
+
+结论：**主实例跑的是旧 inode，`bin/kored` 已被重建**；换人接手第一件事不是改代码，是确认要不要重启主实例（G-29）。
+
+#### B.6 已知挂账（今天仍未闭环）
+
+1. **插件 UI 分发链未实现**，ADR-0040 裁决 v1.0 前不补；`web/app.js` 的 `frame.src` 指向不存在路径。
+2. `kored install --scenario` **只解析不落库**：`cmd/kored/install.go:63-66` 直接返回 `E_UNSUPPORTED`；
+   **但 `--package` 会落库**（`install.go:90` 打开 state 后原子安装）
+3. **手工解包到 `state/plugins/` 不等于安装**：serve 跳过未登记目录（registry 只认 state 记录）。
+4. `size_bytes` 自指：索引记**实测值**；diff 在 −29…+32 呈稀疏混沌，不批量改 23 仓（JOURNAL §4）。
+5. `waf 0.4.3` 真机 e2e 待验（0.4.2 的 nft 1.1.x 写后回读 100% 失败已修，但 0.4.3 尚无整链真机证据）。
+6. Gitee release 只保留最新 5 个（GitHub 全量）；超出用 `scripts/gitee-release-prune.sh` 先 `--dry-run`。
+7. `web/.cache/` **未被 `.gitignore` 覆盖**：`grep -n "cache" .gitignore` 零命中，而目录存在（`ls -d web/.cache` 命中）。
+8. **ADR-0028 状态 `proposed` 与实现 `a029fae` 不一致**（见 B.4）。
+9. **工作区脏**：`web/appdeploy.js`、`web/store.js` 未提交；另有一批未跟踪证据文件与截图（`.agents/verify/`），
+   归属须先确认（并发会话 `docs-scribe` 可能持有），**不得清空或覆盖**。
+
+### C. 下一轮建议（≤5 条，按优先级）
+
+| # | 动作 | 为什么 | 验收 |
+| --- | --- | --- | --- |
+| 1 | 重启主实例，使 `bin/kored`（`f26bbf35…`）生效并复核 `/api/v1/system/info` 的 `paths.index_dir` 与商店版本 | 主实例跑已删除 inode，今天重建过多次；不重启则验收结论对不上代码 | `system/info` 可读 + `paths.index_dir == kore-plugins/index` + 商店版本 == 索引 24 条 |
+| 2 | 先确认 `web/appdeploy.js` / `web/store.js` 未提交改动的归属，再决定提交或保留 | 并发会话共享工作树，误提交会覆盖他人未完成改动（G-12 / JOURNAL §1） | `git status --short` 只剩本轮该留文件；提交首行带 `[agent:<name>]` |
+| 3 | 裁决 ADR-0028（accepted 或回退 `a029fae`），并同步 `docs/DECISIONS/0028-*` 状态 | 实现已落而裁决仍 `proposed`，是 G-06 文档/代码不一致 | ADR 头部状态与代码事实一致，`make docs-check` exit 0 |
+| 4 | `waf 0.4.3` 真机 e2e（规则 CRUD → nft 回读 → 回滚）留证据 | 0.4.2 的写后回读失败是已发版功能 100% 失败，0.4.3 只有代码级修复证据 | `.agents/verify/` 新报告含命令 + 退出码 + nft 规则回读 |
+| 5 | 补 `web/.cache/` 到 `.gitignore`（一行），并清理 3 个 `/tmp` 隔离实例 | 构建缓存目录裸露会污染 `git status`；隔离实例是今天测试残留 | `git status` 无 `.cache`；`ps` 只剩主实例 |
+
+### D. 本轮「未确认」清单
+
+- 主实例实际加载的 `kored` 版本 / API 行为：`/api/v1/system/info` 返回 `E_UNAUTHORIZED`，未取到。
+- `web/appdeploy.js` / `web/store.js` 改动的作者与会话归属：`git diff` 可见内容，但无法归因到 agent（身份统一）。
+- 各插件 `CHANGELOG.md` 条目的发布日期与 tag 对应关系：本轮只核了版本与条目，未逐仓 `git rev-parse` 对齐 tag。
+- `docs/FRONTEND.md` §13 十条判据的最新表述：属 `docs-scribe` 写域，本侧未改、未复核原文。
+
 ## 1. 总原则：文件之外无事实
 
 一句话：**会话里说过、但没落进仓库文件的结论，视为不存在。**
