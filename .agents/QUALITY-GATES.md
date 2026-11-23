@@ -4,7 +4,7 @@
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28/G-29/G-30）
+## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32）
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -37,7 +37,7 @@
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
-| G-17 | 插件仓规范（`make store-check`） | `bash scripts/store-check.sh`（无参数扫 `../kore-plugin-*`；可传目录） | 逐仓 5 项：① 三件套 `info.json` / `Makefile` 的 `dist` 目标 / `CHANGELOG.md`；② `info.json` 必填 10 字段 `id` `version` `description` `depends_on` `conflicts` `scenario_tags` `size_bytes` `requires_kore` `depth_level` `capabilities`；③ `id` 匹配 `^[a-z][a-z0-9-]*$` 且 == 目录名后缀 `kore-plugin-<id>`；④ `info.json.version` == `manifest.json.version`（manifest 存在时）；⑤ `go.mod` 无 `=> ../` / 绝对路径 `replace`（`=> ./` 放行）。输出 `[OK]`/`[FAIL]` 行 + `store-check: N pass, M fail`，缺失指名到「仓 + 文件 + 字段」 | 单跑时任一 FAIL → exit 1；`make check` 内为 **WARN 级**（见下「严重级别裁决」） | implementer 自跑 + verifier 复跑 | 检查点（M1 起） |
+| G-17 | 插件仓规范（`make store-check`） | `bash scripts/store-check.sh`（无参数扫 `../kore-plugin-*`；可传目录） | 逐仓 5 项：① 三件套 `info.json` / `Makefile` 的 `dist` 目标 / `CHANGELOG.md`；② `info.json` 必填 9 字段 `id` `version` `depends_on` `conflicts` `scenario_tags` `size_bytes` `requires_kore` `depth_level` `capabilities`（G-17 原文 5 项 + `id`/`version`（G-27 与发版一致性）+ `depth_level`（G-20）+ `capabilities`（协议 §3.1））；`description` **不在必填**——G-17 与协议 §3.1 顶层字段表均未要求，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判，全缺只 WARN；③ `id` 匹配 `^[a-z][a-z0-9-]*$` 且 == 目录名后缀 `kore-plugin-<id>`；④ `info.json.version` == `manifest.json.version`（manifest 存在时）；⑤ `go.mod` 无 `=> ../` / 绝对路径 `replace`（`=> ./` 放行）。输出 `[OK]`/`[FAIL]` 行 + `store-check: N pass, M fail`，缺失指名到「仓 + 文件 + 字段」 | 单跑时任一 FAIL → exit 1；`make check` 内为 **WARN 级**（见下「严重级别裁决」） | implementer 自跑 + verifier 复跑 | 检查点（M1 起） |
 | G-18 | 预设一致性（`make presets-check`） | `bash scripts/presets-check.sh`（无参数扫 `../kore-plugins/presets/*.json` 并对 `index/plugins.json` 解析）；`--self-test` 验解析器正反用例 | 逐 preset 4 项：① 插件 `id` 可在索引解析；② `version` 区间被索引实际版本满足——**只认** 精确 `x.y.z` / `^x.y.z` / `~x.y.z` / 比较器集合（`>=x.y.z <a.b.c`、`>`、`<=`、`=`），其余写法（`*`、`1.x`、`latest`、`>=1.0`、`||`）**必须报 FAIL，不静默跳过**；③ 常驻（索引 `lifecycle=resident` 且 `desired=enabled`）RSS 合计 ≤48 MiB 红线（超即 FAIL）、≤24 MiB 目标（超即 WARN），同时常驻 ≤3（G-03 红线），单插件包体积 ≤25 MiB（G-03 单二进制红线）；④ 失败指名到「preset + id + 区间 + 原因」 | 任一 FAIL → exit 1；`make check` 内为**阻断级** | implementer 自跑 + verifier 复跑 | 合并前（M2 起） |
 
 **判据来源**：三件套与必填字段取自 AGENTS.md G-17 原文 + 本次出口任务书；`description` 为任务书点名项——**注意** `docs/PLUGIN-PROTOCOL.md` §3.1 的 info.json 字段表**没有** `description`（9 个必填 = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`），因此 24 仓 23 仓缺该字段属**口径缺口**而非仓库腐烂；放宽或改判据需用户裁决，门禁不自行降级。
@@ -46,7 +46,7 @@
 
 | 门禁 | `make check` 段位 | 级别 | 理由 | 转阻断条件 |
 | --- | --- | --- | --- | --- |
-| `store-check` | 14/16 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状 1 pass / 23 fail，且 23 仓缺的都是同一个 `description`——立刻阻断等于让所有人的每次提交全红，而修复路径在 24 个**本任务写域之外**的插件仓（本任务明令不得改插件仓）。WARN 保证「问题每次可见 + 数量可追踪」，同时不把全组提交锁死 | 二选一后切阻断：① 用户裁决把 `description` 从必填降为可选（与协议 §3.1 对齐），或 ② 24 仓补 `description`（跨仓变更集，按 G-15 登记） |
+| `store-check` | 14/16 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状 **24 pass / 0 fail / 0 warn**。判据已与 G-17 / 协议 §3.1 对账：`description` 不在必填 9 字段内，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判、全缺只 WARN——原先「23 仓缺同一个 `description`」的阻断理由已消失，但**是否转阻断级需单独裁决**（本段不擅自升级） | 转阻断级条件：单独裁决确认后续插件仓变更不会大面积打红后切换 |
 | `presets-check` | 15/16 | **阻断** | 现状 8 pass / 0 warn / 0 fail，判据全绿；且 preset 是用户可见的装配入口，版本区间解析失败 = 装不上，属真实阻断面 | — |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
@@ -156,7 +156,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **14 段门禁**（docs / 明文凭据 / 依赖白名单 / 兼容基线 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 + 零侵入 + 插件仓九件套），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **16 段门禁**（docs-check / 依赖白名单 + 兼容基线 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -174,7 +174,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 14 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 16 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
