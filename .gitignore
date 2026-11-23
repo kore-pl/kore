@@ -11,6 +11,8 @@ coverage.*
 # ---- 前端（Vue3 + Vite + TS）----
 web/node_modules/
 web/dist/
+# 图表 chunk 构建缓存（esbuild 产物，make frontend 重建 dist 后从这里回填）
+web/.cache/
 *.local
 
 # ---- 本地状态与运行目录 ----

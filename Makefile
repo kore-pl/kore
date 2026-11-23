@@ -57,7 +57,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross compat-info vet test web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check check clean fmt
+.PHONY: help build cross compat-info vet test web-dist charts frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -68,17 +68,31 @@ help: ## 显示本帮助（默认目标）
 
 # web-dist 保证 embed 需要的 web/dist 主壳产物存在：web/dist 被 .gitignore 忽略，
 # 干净检出直接 make build / vet / test 会因 //go:embed 找不到文件而失败（实测 exit 2）。
-# 三十四个文件 = 首屏六件套（index/style/app/shell + i18n.js + i18n-zh-CN.js）+ 十九个视图模块
-# （store/files/sites/tasks/monitor/settings/terminal/db/logs/process/ssl/backups/redis/firewall/waf/dns/runtimes/integrity/container）
+# 三十七个文件 = 首屏六件套（index/style/app/shell + i18n.js + i18n-zh-CN.js）+ 二十个视图模块
+# （store/files/sites/tasks/monitor/settings/terminal/db/logs/process/ssl/backups/redis/firewall/waf/dns/runtimes/integrity/container/credentials）
 # + 八个按需子模块（files-l2 / site-edit / config-panel / monitor-cards / db-l2 / search / audit / alerts）
-# + 英文包（i18n/en-US.js，运行期按需注入，不进首屏）。
+# + 英文包（i18n/en-US.js，运行期按需注入，不进首屏）
+# + 两个图表产物（charts.js / charts-echarts.js，懒加载，不进首屏）。
 # 只在缺失或源更新时拷贝，不删目录、不跑体积门禁，开销为几次 stat。
 WEB_SRC_FILES := index.html app.js style.css shell.js i18n.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js terminal.js db.js db-l2.js logs.js process.js ssl.js backups.js redis.js firewall.js waf.js dns.js runtimes.js integrity.js container.js search.js audit.js alerts.js credentials.js
 # 语言包源码在 web/i18n/ 下，产物拍平成 web/dist/i18n-<locale>.js：
 # 内核静态路由只托管「单段文件名」（server.go handleAsset 拒绝含 / 的路径），
 # 不为了子目录去放宽内核的遍历面（ADR-0021）。
+#
+# 图表产物 web/dist/charts.js + web/dist/charts-echarts.js 同样在 embed 清单里
+# （FRONTEND §13 / ADR-0027），且必须是平铺文件名；故 web-dist 依赖 charts：
+# 干净检出直接 make build / vet / test 时也能把这两个文件补齐，否则 go:embed 直接编译失败。
 
-web-dist:
+# 图表 vendor chunk（FRONTEND §13 / ADR-0027）：esbuild 把 web/charts/echarts-entry.js
+# 树摇打包成 web/dist/charts-echarts.js（ESM + 压缩 + 无 *.map），并把 web/charts.js
+# 压成 web/dist/charts.js。幂等：源未变时脚本只从 web/.cache/charts/ 回填 dist，
+# 不启动 node/esbuild，所以挂在 web-dist 前面不会拖慢日常 make build。
+# 需要 node ≥18：首次构建按 web/package-lock.json 装 devDependencies；缺工具链时脚本
+# [FAIL] 并说明原因（不降级、不改 CDN、不静默跳过）。
+charts: ## 构建 ECharts 按需 chunk（web/dist/charts*.js；FRONTEND §13 / ADR-0027）
+	@bash scripts/build-charts.sh
+
+web-dist: charts
 	@mkdir -p web/dist; \
 	for f in $(WEB_SRC_FILES); do \
 	  if [ ! -f "web/$$f" ]; then continue; fi; \
@@ -131,7 +145,7 @@ test: web-dist ## 运行单元测试（源码未就绪时 SKIP）
 	$(GO) test -timeout 200s ./...; \
 	echo "[OK] go test 通过"
 
-frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖静态拷贝 + gzip ≤300 KiB）
+frontend: web-dist charts ## 构建前端产物并核对首屏体积（M2-D：零依赖静态拷贝 + gzip ≤300 KiB）
 	@if [ ! -f web/index.html ] || [ ! -f web/app.js ] || [ ! -f web/style.css ]; then echo "[SKIP] web/ 壳未就绪，M2 实现"; exit 0; fi; \
 	for f in $(WEB_SRC_FILES); do \
 	  if [ ! -f "web/$$f" ]; then echo "[SKIP] web/$$f 缺失（主壳产物不齐），M2 实现"; exit 0; fi; \
@@ -141,7 +155,8 @@ frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖
 	cp $(addprefix web/,$(WEB_SRC_FILES)) web/dist/; \
 	cp web/i18n/zh-CN.js web/dist/i18n-zh-CN.js; \
 	cp web/i18n/en-US.js web/dist/i18n-en-US.js; \
-	echo "[OK] 前端静态产物已打包: web/dist（35 文件，零依赖；首屏 6 件套 + 19 视图模块 + 9 按需子模块 + 英文包）"; \
+	bash scripts/build-charts.sh; \
+	echo "[OK] 前端静态产物已打包: web/dist（37 文件 = 35 静态件 + 2 图表产物；零依赖拷贝 + esbuild 图表 chunk；首屏 6 件套 + 19 视图模块 + 9 按需子模块 + 英文包 + 图表）"; \
 	bash scripts/frontend-check.sh
 
 mem: ## 采样 VmRSS：日常 5 点 ≈10s（默认）/ 收口 MEM_POINTS=60 ≈65s；含 RssAnon/RssFile 诊断（目标 8192 / 红线 16384 KiB）
@@ -408,9 +423,9 @@ uninstall: ## 卸载链（ADR-0023 阶段 B）：unit / kore-* 用户 / 账本�
 	  KORE_HOME="$(PREFIX)" $(GO) run $(CMD) uninstall $(ARGS); \
 	fi
 
-clean: ## 清理构建产物（bin/ 与 web/dist）
-	@rm -rf bin web/dist
-	@echo "[OK] 已清理: bin/ web/dist"
+clean: ## 清理构建产物（bin/ · web/dist · web/.cache 图表构建缓存）
+	@rm -rf bin web/dist web/.cache
+	@echo "[OK] 已清理: bin/ web/dist web/.cache"
 
 fmt: ## gofmt 格式化（源码未就绪时 SKIP）
 	@dirs=""; \
