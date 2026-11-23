@@ -28,7 +28,8 @@
   function fresh() {
     return { root: null, backups: [], destroyed: false, status: null, result: null, resultHost: null,
       confirm: null, confirmHost: null, confirmMsg: null, busy: false, name: null, paths: null,
-      exclude: null, compression: null, submit: null,
+      exclude: null, compression: null, submit: null, dims: null,
+      jobs: [], jobsHost: null, jobsMsg: null,
       stats: null, summaryHost: null, listHost: null, count: null,
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false };
   }
@@ -246,10 +247,12 @@
     var keep = parseInt(S.sched.keep.value, 10);
     if (isNaN(keep) || keep < 1 || keep > 100) { setNote(S.sched.msg, '保留份数必须是 1–100 的整数', 'fail'); return; }
     var paths = S.sched.paths.value.split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
-    if (!paths.length) { setNote(S.sched.msg, '请填写至少一个备份路径（每行一个）', 'fail'); return; }
+    var dims = collectDims(S.sched.dims);
+    if (!dims.length) { setNote(S.sched.msg, '请至少选择一个备份对象（站点目录 / MySQL 数据库）', 'fail'); return; }
+    if (!paths.length && dims.indexOf('site') >= 0) { setNote(S.sched.msg, '选择了站点目录时请填写至少一个备份路径（每行一个）', 'fail'); return; }
     var definitions = [
       { name: '备份 · 自动创建', plugin: 'backup', method: 'backup.create',
-        params: { name: 'auto', paths: paths, compression: 'gzip' }, schedule: cron, timeout_s: 1800 },
+        params: { name: 'auto', dimensions: dims, paths: paths, compression: 'gzip' }, schedule: cron, timeout_s: 1800 },
       { name: '备份 · 保留 ' + keep + ' 份', plugin: 'backup', method: 'backup.retention',
         params: { keep: keep }, schedule: retentionCron(cron), timeout_s: 600 }
     ];
@@ -295,6 +298,91 @@
       setNote(S.sched.msg, '已删除任务：' + t.name, 'ok'); paintTasks(); loadTasks(true);
     }, function (err) { setNote(S.sched.msg, '删除失败：' + err.message, 'fail'); paintTasks(); });
   }
+  // ---- 备份对象维度（USABILITY：预设优先，默认全选常用项） ----
+  var DIM_LABELS = { site: '站点目录', db: 'MySQL 数据库' };
+  function dimsBox(defaults, target) {
+    var box = el('div', 'bak-dims');
+    Object.keys(DIM_LABELS).forEach(function (key) {
+      var label = add(box, el('label', 'bak-dim'));
+      var cb = add(label, el('input'));
+      cb.type = 'checkbox'; cb.value = key; cb.checked = defaults.indexOf(key) >= 0;
+      add(label, el('span', null, DIM_LABELS[key]));
+      if (target) target[key] = cb;
+    });
+    return box;
+  }
+  function collectDims(box) {
+    var out = [];
+    if (!box) return out;
+    box.querySelectorAll('input[type=checkbox]').forEach(function (cb) { if (cb.checked) out.push(cb.value); });
+    return out;
+  }
+
+  // ---- 下载（download 分块 → Blob，同 logs/files 通道） ----
+  function downloadBackup(b) {
+    setStatus('正在准备下载 ' + b.id + '…');
+    var chunks = [], offset = 0;
+    function step() {
+      invoke('backup.download', { id: b.id, inline: true, offset: offset }).then(function (d) {
+        if (d.data_base64) chunks.push(d.data_base64);
+        if (!d.eof && typeof d.next_offset === 'number' && d.next_offset > offset) {
+          offset = d.next_offset; step(); return;
+        }
+        if (!chunks.length) { setStatus('下载失败：服务端未返回数据', 'fail'); return; }
+        var raw = atob(chunks.join('')), bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        var url = URL.createObjectURL(new Blob([bytes], { type: d.content_type || 'application/gzip' }));
+        var a = document.createElement('a');
+        a.href = url; a.download = d.filename || (b.id + '.tar.gz'); a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        setStatus('已开始下载 ' + a.download + '（' + fmtSize(d.size_bytes || bytes.length) + '）', 'ok');
+      }, function (err) { setStatus('下载失败：' + err.message, 'fail'); });
+    }
+    step();
+  }
+
+  // ---- 最近作业（backup.jobs；空态引导到定时备份） ----
+  function loadJobs(quiet) {
+    invoke('backup.jobs', { limit: 8 }).then(function (data) {
+      if (S.destroyed) return;
+      S.jobs = data.jobs || []; paintJobs();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.jobs = []; if (!quiet) setNote(S.jobsMsg, '作业记录读取失败：' + err.message, 'fail');
+      paintJobs();
+    });
+  }
+  function paintJobs() {
+    if (!S.jobsHost) return;
+    S.jobsHost.textContent = '';
+    if (!S.jobs.length) {
+      var empty = add(S.jobsHost, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-text', '还没有备份作业。创建一次备份，或保存定时备份让它自动执行。'));
+      var guide = button(empty, '创建定时备份', 'btn', function () {
+        if (S.sched.host) S.sched.host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (S.sched.paths) S.sched.paths.focus();
+      });
+      guide.type = 'button';
+      return;
+    }
+    var scroll = add(S.jobsHost, el('div', 'bak-table-host'));
+    var table = add(scroll, el('table', 'bak-table')); table.setAttribute('aria-label', '最近备份作业');
+    var htr = add(add(table, 'thead') || table.appendChild(el('thead')), el('tr'));
+    ['状态', '名称', '维度', '开始时间', '条目', '大小', '错误'].forEach(function (label) { add(htr, el('th', null, label)); });
+    var body = add(table, el('tbody'));
+    S.jobs.forEach(function (job) {
+      var tr = add(body, el('tr'));
+      var st = add(tr, el('td')); st.appendChild(chip(job.status === 'succeeded' ? 'ok' : (job.status === 'failed' ? 'fail' : 'na'), job.status || '—'));
+      add(tr, el('td', null, job.name || '—'));
+      add(tr, el('td', null, (job.dimensions || []).join(' + ') || '—'));
+      add(tr, el('td', null, fmtTime(job.started_at)));
+      add(tr, el('td', null, typeof job.entries === 'number' ? job.entries : '—'));
+      add(tr, el('td', null, fmtSize(job.bytes || 0)));
+      add(tr, el('td', 'bak-job-error', job.error || '—'));
+    });
+  }
+
   // ---- 保留信息 / 保留策略 ----
   function loadStats() {
     invoke('backup.stats', {}).then(function (data) {
@@ -389,6 +477,7 @@
       var state = add(tr, el('td')); state.dataset.label = '状态';
       state.appendChild(b.corrupted ? chip('fail', 'corrupted') : chip('ok', '正常'));
       var ops = add(tr, el('td', 'cell-ops bak-ops')); ops.dataset.label = '操作';
+      button(ops, '下载', 'btn-ghost', function () { downloadBackup(b); });
       button(ops, '校验', 'btn-ghost', function () { verify(b); });
       button(ops, '恢复', 'btn-ghost', function () { openConfirm('restore', b); });
       button(ops, '删除', 'btn-ghost bak-danger', function () { openConfirm('delete', b); });
@@ -520,11 +609,13 @@
       .filter(function (s) { return s; });
     var exclude = S.exclude.value.split(/[\n,]/).map(function (s) { return s.trim(); })
       .filter(function (s) { return s; });
+    var dims = collectDims(S.dims);
     if (!name) { setStatus('请填写备份名称', 'fail'); return; }
-    if (!paths.length) { setStatus('请至少填写一个备份路径（每行一个）', 'fail'); return; }
+    if (!dims.length) { setStatus('请至少选择一个备份对象（站点目录 / MySQL 数据库）', 'fail'); return; }
+    if (!paths.length && dims.indexOf('site') >= 0) { setStatus('选择了站点目录时请至少填写一个路径（每行一个）', 'fail'); return; }
     S.busy = true; S.submit.disabled = true;
-    setStatus('正在打包 ' + name + '（' + paths.length + ' 个路径，' + S.compression.value + '）…');
-    invoke('backup.create', { name: name, paths: paths, exclude: exclude, compression: S.compression.value })
+    setStatus('正在打包 ' + name + '（' + dims.join(' + ') + '，' + S.compression.value + '）…');
+    invoke('backup.create', { name: name, dimensions: dims, paths: paths, exclude: exclude, compression: S.compression.value })
       .then(function (data) {
         S.busy = false; S.submit.disabled = false;
         S.result = { kind: 'create', id: data.id, data: data }; paintResult();
@@ -565,6 +656,9 @@
       '.bak-ret-head.ok{color:var(--kore-success);}',
       '.bak-ret-list{margin:0;padding-left:var(--kore-space-6);color:var(--kore-text-2);}',
       '.bak-ret-note{margin:var(--kore-space-2) 0 0;color:var(--kore-text-3);}',
+      '.bak-dims{display:flex;flex-wrap:wrap;gap:var(--kore-space-3);padding:var(--kore-space-2) 0;}',
+      '.bak-dim{display:inline-flex;align-items:center;gap:6px;min-height:44px;font-size:var(--kore-font-13);}',
+      '.bak-job-error{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--kore-text-3);}',
       '@media (min-width:640px){.bak-sched-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);} .bak-sched-grid .span2{grid-column:1 / -1;}}',
       '@media (max-width:639px){.bak-task-table{min-width:640px;}}'
     ].join(''));
@@ -586,6 +680,8 @@
     S.name = input('text', 'span2', 'site-20261122'); field(form, '名称', S.name, 'span2');
     S.paths = textarea(4, '/var/www/site\n/etc/kore'); field(form, '路径列表（每行一个）', S.paths, 'span2');
     S.exclude = input('text', 'span2', '*.log, node_modules（可选，glob）'); field(form, '排除 glob（可选）', S.exclude, 'span2');
+    S.dims = dimsBox(['site', 'db']);
+    field(form, '备份对象', S.dims, 'span2');
     S.compression = el('select', 'field-input');
     [['gzip', 'gzip 压缩'], ['none', '不压缩（tar）']].forEach(function (o) {
       var opt = el('option', null, o[1]); opt.value = o[0]; S.compression.appendChild(opt);
@@ -610,6 +706,8 @@
     field(sForm, '保留份数（1–100）', S.sched.keep);
     S.sched.paths = textarea(2, '/var/www');
     field(sForm, '定时备份的路径（每行一个）', S.sched.paths, 'span2');
+    S.sched.dims = dimsBox(['site', 'db']);
+    field(sForm, '备份对象', S.sched.dims, 'span2');
     add(sForm, el('p', 'field-hint span2', '保存会创建两条任务：到点打包 + 1 分钟后按保留份数清理；重复保存会替换本页创建的任务。路径必须在「设置」的允许根路径之下。'));
     S.sched.save = add(sForm, el('button', 'btn btn-primary', '保存定时备份')); S.sched.save.type = 'submit';
     sForm.addEventListener('submit', saveSchedule);
@@ -619,6 +717,11 @@
     S.sched.msg = add(sched, el('p', 'bak-sched-msg muted'));
     S.sched.listHost = add(sched, el('div', 'bak-sched-list'));
     S.sched.count = sched.querySelector('.panel-head').appendChild(el('span', 'panel-meta', ''));
+
+    S.sched.host = sched;
+    var jobs = panel(root, '最近作业', '定时 / 手动备份的执行进度');
+    S.jobsMsg = add(jobs, el('p', 'bak-sched-msg muted'));
+    S.jobsHost = add(jobs, el('div', 'bak-jobs'));
 
     var ret = panel(root, '保留策略', '只删本插件创建、且不是最新一份的旧备份');
     var rForm = add(ret, el('form', 'bak-sched-grid'));
@@ -648,7 +751,7 @@
     injectCSS();
     var root = add(container, el('section', 'backups'));
     build(root);
-    loadList(false); loadStats(); loadTasks(true);
+    loadList(false); loadStats(); loadTasks(true); loadJobs(true);
     return { destroy: function () { S.destroyed = true; } };
   }
   window.KoreBackup = { render: render };
