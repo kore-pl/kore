@@ -38,6 +38,10 @@ type daemon struct {
 	// uninstaller 是插件卸载实现（装配层注入，见 serve_plugin_uninstall.go）；
 	// nil 表示未装配，DELETE /plugins/{id} 回 E_UNSUPPORTED 而不是假装成功。
 	uninstaller func(ctx context.Context, id string) (httpapi.UninstallOutcome, error)
+
+	// selfUpdate 是内核自升级实现（装配层注入，见 serve_upgrade.go）；
+	// nil 表示未装配，self-upgrade 端点回 E_UNSUPPORTED 而不是假装成功。
+	selfUpdate *selfUpdater
 }
 
 // newDaemon 构造后端。

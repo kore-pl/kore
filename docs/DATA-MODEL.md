@@ -251,7 +251,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `subject` | string | `admin`（管理动作，如 enable / disable）、`system`（自动事件，如 crash / restart、证书续期）或调用方 subject（`capability.denied`） |
-| `action` | string | `login.success` `login.failed` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `capability.denied` `invoke.<plugin>.<method>` `invoke.burst` `config.reload` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
+| `action` | string | `login.success` `login.failed` `plugin.install` `plugin.enable` `plugin.disable` `plugin.upgrade` `plugin.uninstall` `plugin.uninstall_purge` `plugin.crash` `plugin.retry` `root.action` `capability.denied` `invoke.<plugin>.<method>` `invoke.burst` `config.reload` `upgrade.start` `upgrade.result` `backup`（`plugin.retry` = 失败后重新拉起，即提案四事件中的 restart；薄壳门禁禁止 `restart` 整词进可执行代码，取语义等价词并留痕） |
 | `plugin` | string | 涉及插件时填写，否则空 |
 | `target` | string | 动作目标（如 `invoke` 时的 `<plugin>.<verb>`、状态值），否则空 |
 | `result` | string | `ok` / `denied`（权限/限流拒绝）/ `error` |
@@ -286,13 +286,15 @@ kored db dump --bucket meta                            # 核对 schema_version
 
 ## 11. 生命周期清理
 
-不创建后台定时器：清理只在**启动时**与**写路径惰性触发**（距上次清理 > 6 小时）执行，与「默认零后台定时器」约束一致。
+**设计意图**：不创建后台定时器，清理只在**启动时**与**写路径惰性触发**（距上次清理 > 6 小时）执行，与「默认零后台定时器」约束一致。
+
+**实现现状（2026-11-23 核实）**：上述自动清理**尚未实现**——`tasks` bucket 只有建库定义、无读写方（`internal/core/store/store.go:49`、`:60`），`audit` 只有读取路径（`internal/core/store/audit.go:155` 的 `ForEach`）、无按龄删除；全仓无保留期常量与惰性清理触发器。因此下表 `tasks` / `audit` 两行的保留窗口是**目标**而非现状，落地前需手工清理或后续实现（G-06：不保留没人实现的承诺）。
 
 | 数据 | 规则 | 触发点 |
 | --- | --- | --- |
-| `tasks` | 保留 30 天，按 ULID 前缀范围扫描删除 | 启动 + 每次任务状态写入前检查 |
+| `tasks` | **目标**保留 30 天；**当前未实现**（bucket 无写入方、无按龄删除） | 无（需手工/后续实现） |
 | `sessions` | 过期不主动删除，仅读时判定失效（`expires_at < now` 或越过 `created+30d` 均拒绝）；删除只发生在登出 / 吊销 / 改口令 | 读时（无启动清扫、无惰性清理） |
-| `audit` | 保留 90 天，按纳秒前缀范围删除 | 启动 + 每次审计写入前检查 |
+| `audit` | **目标**保留 90 天；**当前未实现**（只有 `ForEach` 读取，无按龄删除） | 无（需手工/后续实现） |
 | 旧插件版本 | 保留当前 + 上一版本 | 升级成功后同步清理 |
 | 插件日志 | 轮转 10 MiB × 2 | 写入路径 |
 | bbolt 空闲页 | 卸载/升级后 `db.View(tx.WriteTo)` 或下次启动 compaction 不自动做；体积异常时 `kored db compact` 手动执行 | 手动 |

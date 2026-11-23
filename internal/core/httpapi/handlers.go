@@ -54,6 +54,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /-/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/v1/system/info", s.handleSystemInfo)
 	s.mux.HandleFunc("GET /api/v1/system/metrics", s.handleSystemMetrics)
+	// 内核自升级（ADR-0042）：状态 / 发起 / 进度 / 回滚；需 system:admin + confirm。
+	s.mux.HandleFunc("GET "+selfUpdatePath, s.handleUpgradeStatus)
+	s.mux.HandleFunc("POST "+selfUpdatePath, s.handleUpgradeStart)
+	s.mux.HandleFunc("GET "+selfUpdateJobsPath+"/{id}", s.handleUpgradeJob)
+	s.mux.HandleFunc("POST "+selfUpdateRollback, s.handleUpgradeRollback)
 	s.mux.HandleFunc("GET "+pluginsPath, s.handlePlugins)
 	s.mux.HandleFunc("GET "+pluginsPath+"/{id}", s.handlePluginDetail)
 	s.mux.HandleFunc("POST "+pluginsPath, s.handleUnsupported)

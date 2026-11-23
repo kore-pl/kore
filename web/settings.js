@@ -12,7 +12,10 @@
   var EP = {
     info: '/api/v1/system/info',
     session: '/api/v1/auth/session',
-    logout: '/api/v1/auth/logout'
+    logout: '/api/v1/auth/logout',
+    upgrade: '/api/v1/system/upgrade',
+    upgradeJob: '/api/v1/system/upgrade/jobs/',
+    upgradeRollback: '/api/v1/system/upgrade/rollback'
   };
   var TIMEOUT = 5000;
   // 资源预算（MiB）：展示常量，来源 AGENTS.md G-03 与 docs/DECISIONS/0016；改预算必须同步本表。
@@ -209,6 +212,161 @@
     return box;
   }
 
+  /* ===== 内核自升级：当前版本 / 可选目标 / 二次确认 / 进度 / 结果 / 回滚 =====
+     端点：GET|POST /api/v1/system/upgrade、GET /api/v1/system/upgrade/jobs/{id}、
+     POST /api/v1/system/upgrade/rollback。长动作返回 202 + job，前端按需轮询
+     job（≤15 次、1s 间隔）——服务端不推送、不起定时器（G-19），进程重启后
+     以状态端点里的 upgrade 标记（pending → success）为最终真相。 */
+  function buildUpgrade() {
+    var box = el('section', 'panel panel-wide');
+    var head = el('div', 'panel-head');
+    head.appendChild(el('span', 'panel-title', tr('settings.upgrade.title', '升级内核')));
+    head.appendChild(el('span', 'panel-meta', '校验来源 · 原子替换 · 可回滚'));
+    box.appendChild(head);
+    var body = el('div', 'settings-upgrade');
+    var statusLine = el('div', 'settings-hint', '正在读取当前版本…');
+    var detail = el('div', 'settings-hint');
+    var marker = el('div', 'settings-hint');
+    body.appendChild(statusLine); body.appendChild(detail); body.appendChild(marker);
+
+    var form = el('div', 'settings-upgrade-form');
+    var pathLabel = el('label', 'settings-hint', '新二进制本机路径（绝对路径；不接受 URL）');
+    pathLabel.setAttribute('for', 'kore-upgrade-path');
+    var path = el('input', 'settings-select');
+    path.id = 'kore-upgrade-path'; path.type = 'text'; path.placeholder = '/var/lib/kore/incoming/kored';
+    path.autocomplete = 'off';
+    var shaLabel = el('label', 'settings-hint', '期望 sha256（64 位十六进制；不符时目标文件零改动）');
+    shaLabel.setAttribute('for', 'kore-upgrade-sha');
+    var sha = el('input', 'settings-select');
+    sha.id = 'kore-upgrade-sha'; sha.type = 'text'; sha.placeholder = '例如 3f7a…（64 位）';
+    sha.autocomplete = 'off';
+    var confirmWrap = el('label', 'settings-hint');
+    var confirm = el('input');
+    confirm.type = 'checkbox'; confirm.id = 'kore-upgrade-confirm';
+    confirmWrap.appendChild(confirm);
+    confirmWrap.appendChild(document.createTextNode(' 我了解升级会重启内核，短暂中断面板访问'));
+    form.appendChild(pathLabel); form.appendChild(path);
+    form.appendChild(shaLabel); form.appendChild(sha);
+    form.appendChild(confirmWrap);
+
+    var ops = el('div', 'settings-actions');
+    var go = el('button', 'btn', tr('settings.upgrade.start', '校验并升级'));
+    go.type = 'button'; go.disabled = true;
+    var rollback = el('button', 'btn settings-logout', tr('settings.upgrade.rollback', '回滚到上一版本'));
+    rollback.type = 'button'; rollback.disabled = true;
+    var progress = el('div', 'settings-hint');
+    progress.id = 'kore-upgrade-progress';
+    progress.setAttribute('role', 'status');
+    ops.appendChild(go); ops.appendChild(rollback);
+    body.appendChild(form); body.appendChild(ops); body.appendChild(progress);
+    box.appendChild(body);
+
+    var state = { canUpgrade: false, canRollback: false, busy: false };
+
+    function setProgress(text, tone) {
+      progress.textContent = text || '';
+      progress.className = 'settings-hint' + (tone === 'err' ? ' settings-hint-error' : tone === 'ok' ? ' settings-hint-ok' : '');
+    }
+    function fmtSHA(v) {
+      if (!v) return '—';
+      return v.slice(0, 12) + '…' + v.slice(-8);
+    }
+    function applyStatus(data) {
+      if (!data) { statusLine.textContent = '升级状态读取失败，请刷新重试'; return; }
+      state.canUpgrade = data.can_upgrade === true;
+      state.canRollback = data.can_rollback === true;
+      var cur = data.current || {};
+      statusLine.textContent = '当前内核版本 ' + (cache.info && cache.info.version ? cache.info.version : '—') +
+        ' · sha256 ' + fmtSHA(cur.sha256) + ' · ' + (cur.path || '—');
+      var prev = data.previous;
+      detail.textContent = prev
+        ? '可回滚目标：' + prev.path + '（sha256 ' + fmtSHA(prev.sha256) + '）'
+        : '暂无可回滚目标（首次升级后自动保留 .prev）';
+      if (data.marker) {
+        marker.textContent = '最近一次升级：' + data.marker.state + ' · ' + (data.marker.to_sha256 || '').slice(0, 12) +
+          '… · ' + (data.marker.updated_at || '');
+      } else {
+        marker.textContent = '本机尚未执行过内核升级';
+      }
+      if (!state.canUpgrade) {
+        go.disabled = true;
+        setProgress(data.reason || '当前运行身份无法升级内核', 'err');
+      }
+      rollback.disabled = !state.canRollback || state.busy;
+      if (data.marker && data.marker.state === 'success') setProgress('新版本已生效（标记 success）', 'ok');
+    }
+    function refresh() {
+      return request(EP.upgrade).then(function (res) {
+        if (res.ok) { applyStatus(res.data); return res.data; }
+        applyStatus(null);
+        return null;
+      }, function () { applyStatus(null); return null; });
+    }
+    function post(url, body) {
+      var token = readCookie('kore_csrf');
+      if (!token) { setProgress('缺少 CSRF 令牌，请刷新页面后重试', 'err'); return Promise.reject(new Error('no csrf')); }
+      return request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Kore-CSRF': token },
+        body: JSON.stringify(body)
+      }, 15000);
+    }
+    function poll(jobId, attempt) {
+      if (attempt > 15) { setProgress('任务仍在执行或内核已重启；请稍后刷新状态查看结果', ''); return; }
+      request(EP.upgradeJob + jobId, null, 5000).then(function (res) {
+        if (res.status === 401 || res.status === 404) {
+          // 进程重启会丢失内存 job：以持久标记为准。
+          setProgress('内核正在重启，等待新版本生效…', '');
+          window.setTimeout(function () { refresh(); }, 2000);
+          return;
+        }
+        var job = res.data || {};
+        if (job.state === 'success') {
+          setProgress(job.message || '升级完成', 'ok'); refresh(); return;
+        }
+        if (job.state === 'failed') {
+          setProgress((job.error_code ? job.error_code + '：' : '') + (job.message || '升级失败') +
+            (job.output ? '\n' + job.output : ''), 'err'); state.busy = false; go.disabled = !state.canUpgrade; rollback.disabled = !state.canRollback; refresh(); return;
+        }
+        setProgress((job.message || '处理中') + '…', '');
+        window.setTimeout(function () { poll(jobId, attempt + 1); }, 1000);
+      }, function () {
+        window.setTimeout(function () { poll(jobId, attempt + 1); }, 1000);
+      });
+    }
+    go.addEventListener('click', function () {
+      if (!confirm.checked) { setProgress('请先勾选确认：升级会重启内核', 'err'); return; }
+      state.busy = true; go.disabled = true; rollback.disabled = true;
+      setProgress('已提交：正在校验 sha256 并原子替换…', '');
+      post(EP.upgrade, { source_path: path.value.trim(), sha256: sha.value.trim(), confirm: true })
+        .then(function (res) {
+          if (res.status === 202 && res.data && res.data.id) { applyStatus(null); poll(res.data.id, 0); return; }
+          var data = res.data || {};
+          setProgress((data.code ? data.code + '：' : '') + (data.message || ('发起失败（HTTP ' + res.status + '）')), 'err');
+          state.busy = false; go.disabled = !state.canUpgrade; rollback.disabled = !state.canRollback;
+        }, function (err) {
+          setProgress('网络请求失败：' + (err && err.message ? err.message : '请重试'), 'err');
+          state.busy = false; go.disabled = !state.canUpgrade; rollback.disabled = !state.canRollback;
+        });
+    });
+    rollback.addEventListener('click', function () {
+      if (!window.confirm('回滚会用上一版本二进制替换当前内核并重启，确定继续？')) return;
+      state.busy = true; go.disabled = true; rollback.disabled = true;
+      setProgress('已提交回滚：正在校验 .prev 并替换…', '');
+      post(EP.upgradeRollback, { confirm: true }).then(function (res) {
+        if (res.status === 202 && res.data && res.data.id) { poll(res.data.id, 0); return; }
+        var data = res.data || {};
+        setProgress((data.code ? data.code + '：' : '') + (data.message || ('回滚失败（HTTP ' + res.status + '）')), 'err');
+        state.busy = false; go.disabled = !state.canUpgrade; rollback.disabled = !state.canRollback;
+      }, function (err) {
+        setProgress('网络请求失败：' + (err && err.message ? err.message : '请重试'), 'err');
+        state.busy = false; go.disabled = !state.canUpgrade; rollback.disabled = !state.canRollback;
+      });
+    });
+    refresh();
+    return box;
+  }
+
   /* ===== 关于：版本 / 协议 / 许可 / 仓库 / 统计 ===== */
   function buildAbout() {
     var info = cache.info || {};
@@ -319,7 +477,12 @@
     '.settings-dialog-title{margin:0 0 8px;font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1)}' +
     '.settings-dialog-hint{margin:0 0 12px;color:var(--kore-text-2);font-size:var(--kore-font-13);line-height:1.5}' +
     '.settings-dialog-ops{display:flex;justify-content:flex-end;gap:8px}' +
-    '@media (max-width:639px){.settings-dialog-ops .btn{min-height:var(--kore-touch);flex:1 1 auto}}';
+    '@media (max-width:639px){.settings-dialog-ops .btn{min-height:var(--kore-touch);flex:1 1 auto}}' +
+    '.settings-upgrade{display:flex;flex-direction:column;gap:8px;padding:12px 14px}' +
+    '.settings-upgrade-form{display:flex;flex-direction:column;gap:4px}' +
+    '.settings-upgrade-form .settings-select{width:100%;box-sizing:border-box}' +
+    '.settings-upgrade-form input[type=checkbox]{width:20px;height:20px;accent-color:var(--kore-info)}' +
+    '.settings-hint-ok{color:var(--kore-success)}';
   function ensureTabCss() {
     if (document.getElementById('kore-settings-tabs-css')) return;
     var s = el('style'); s.id = 'kore-settings-tabs-css'; s.textContent = TAB_CSS; document.head.appendChild(s);
@@ -422,6 +585,7 @@
       root.appendChild(buildLanguage());
       root.appendChild(buildAccountSecurity());
       root.appendChild(buildRuntime());
+      root.appendChild(buildUpgrade());
       root.appendChild(buildAbout());
       if (cache.error) root.insertBefore(el('div', 'settings-hint settings-hint-error', cache.error), root.firstChild);
       body.appendChild(root);

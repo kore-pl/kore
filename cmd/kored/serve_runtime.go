@@ -14,9 +14,9 @@ import (
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/bus"
-	"github.com/pengtang1024/kore/internal/core/httpapi"
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
 	"github.com/pengtang1024/kore/internal/core/credential"
+	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/scheduler"
@@ -146,6 +146,9 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc.backend.uninstaller = func(ctx context.Context, id string) (httpapi.UninstallOutcome, error) {
 		return svc.uninstallPlugin(ctx, cfg, id)
 	}
+	// 自升级能力：同样走可选接口（httpapi.SelfUpdater），复用 cmd/kored/upgrade.go
+	// 的校验/原子替换/回滚/finalize 语义，只多一层 HTTP 暴露与 fail-closed 审计。
+	svc.backend.selfUpdate = newSelfUpdater(db, app, cfg)
 	// 调度器必须在 backend 之后装配：Invoker 就是 daemon.Invoke（oneshot 调用面）。
 	sched, err := scheduler.New(scheduler.Options{
 		Store: db, Invoker: svc.backend, Logger: slog.Default(), Builtin: svc.builtinTask,
