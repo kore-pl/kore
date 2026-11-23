@@ -41,15 +41,21 @@
     // Redis：堆叠数据块（顶面菱形 + 两道层线，20×20、currentColor、stroke-width 1.5）
     redis: ['M4 6.5 10 3l6 3.5-6 3.5z', 'M4 10l6 3.5L16 10', 'M4 13.5 10 17l6-3.5'],
     // 防火墙：盾牌 + 对勾（20×20、currentColor、stroke-width 1.5）
-    firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4']
+    firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4'],
+    // 运行环境：三层堆叠（Node / PHP / Python 共用一页切换，20×20、currentColor、stroke-width 1.5）
+    runtimes: ['M10 3 4 6l6 3 6-3z', 'M4 10l6 3 6-3', 'M4 14l6 3 6-3'],
+    // 完整性：双层盾牌 + 对勾（内层轮廓把它与单盾的 firewall 区分开，20×20、currentColor、stroke-width 1.5）
+    integrity: ['M10 2.6l5.6 2.1v5.2c0 3.5-2.3 6-5.6 6.9-3.3-.9-5.6-3.4-5.6-6.9V4.7z',
+      'M10 4.9l3.5 1.3v3.7c0 2.1-1.4 3.7-3.5 4.3-2.1-.6-3.5-2.2-3.5-4.3V6.2z',
+      'M8.4 9.6l1.3 1.3 2.2-2.4']
   };
-  // 导航按使用频率分四组（16 项）：运维是日常入口，常驻手机底部 5 个 tab；
-  // 其余 11 项进「更多」抽屉并按组展示，组标题不增加点击层级（仍 ≤2 次点击）。
+  // 导航按使用频率分四组：运维是日常入口，常驻手机底部 5 个 tab；
+  // 其余项进「更多」抽屉并按组展示，组标题不增加点击层级（仍 ≤2 次点击）。
   var NAV_GROUPS = [
     { title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
-    { title: '业务', ids: ['sites', 'db', 'redis', 'tasks'] },
+    { title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
     { title: '资源', ids: ['files', 'backup', 'ssl'] },
-    { title: '平台', ids: ['store', 'plugins', 'firewall', 'settings'] }
+    { title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'settings'] }
   ];
   function groupTitle(id) {
     for (var i = 0; i < NAV_GROUPS.length; i++) {
@@ -498,7 +504,7 @@
       items.push(r);
     }
     var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false,
-      hasRedis = false, hasFirewall = false;
+      hasRedis = false, hasFirewall = false, hasRuntimes = false, hasIntegrity = false;
     for (var t = 0; t < items.length; t++) {
       if (items[t].id === 'terminal') hasTerminal = true;
       if (items[t].id === 'db') hasDb = true;
@@ -508,6 +514,8 @@
       if (items[t].id === 'backup') hasBackup = true;
       if (items[t].id === 'redis') hasRedis = true;
       if (items[t].id === 'firewall') hasFirewall = true;
+      if (items[t].id === 'runtimes') hasRuntimes = true;
+      if (items[t].id === 'integrity') hasIntegrity = true;
     }
     if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', '终端') });
     if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', '数据库') });
@@ -517,6 +525,8 @@
     if (!hasBackup) items.push({ id: 'backup', label: '备份', render: lazyView('KoreBackup', '/assets/backups.js', '备份') });
     if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'Redis') });
     if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', '防火墙') });
+    if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', '运行环境') });
+    if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', '完整性') });
     items = orderRoutes(items);
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
