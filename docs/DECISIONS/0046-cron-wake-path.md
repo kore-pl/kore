@@ -118,7 +118,7 @@ CSRF：CLI 走 UDS 时无浏览器可达性，`internal/core/httpapi/middleware.
 ## 6. 风险与已知缺口
 
 1. **crontab 行钉死绝对路径**：`wrapper.go:31-38` 写的是 `<state>/plugins/cron/<version>/...`（本地实存 0.2.0–0.4.1 多个版本目录）。升级后旧条目继续跑**旧版本**（静默）；旧版本目录当前无清理逻辑（`internal/core/installer/layout.go:66-105` 只处理同版本强制重装的暂存 / 删除）。属 B2 未覆盖的独立缺陷，建议单开卡。
-2. **执行环境不透明**：shell / http 任务以**插件用户**身份执行（插件用户是 nologin 系统账户，`internal/core/supervisor/demote.go:51`、`internal/platform/linux_identity.go:22-23`），不是提交任务的用户；UI 未提示。
+2. **执行环境不透明**：shell / http 任务以**插件进程身份**执行——root 内核下降权到 nologin 系统账户 `kore-<id>`（`internal/core/supervisor/demote.go:51-52`、`internal/platform/linux_identity.go:22-23`）；非 root portable 实例不降权、即 kored 运行用户（`demote.go:66` 返回 `Demoted=false` + Reason）。两种情况都不是提交任务的用户；UI 未提示。
 3. **`cron` 写 crontab 但不落 `changes.jsonl`**：ADR-0023 §3.5 类别 3 要求有清单（`0023:110`），`:158` 已把它登记为缺口 #3。
 4. 未确认（只读复核无法判定）：以 nologin 系统账户执行 `crontab -` 是否会被宿主 PAM / `cron.allow` 拒绝——需真机（隔离实例 + 插件用户）验证。若被拒，shell / http 类型会返回 `E_NO_PERMISSION`（`kore-plugin-cron/internal/croncore/errors.go:8-9`），不会静默。
 

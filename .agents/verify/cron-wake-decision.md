@@ -104,7 +104,7 @@ ADR-0019 把「外部触发器（用户 cron 调 HTTP）」列为**可选增强*
 ## 5. 顺带发现（owner 视角，均未修复）
 
 1. **crontab 行钉死绝对路径**：`wrapper.go:31-38` 写 `<state>/plugins/cron/<version>/...`；本地实存 0.2.0–0.4.1 多版本目录，升级后旧条目继续跑**旧版本**（静默）。`internal/core/installer/layout.go:66-105` 只处理同版本强制重装的暂存 / 删除，无旧版本清理。→ 建议单开卡（B2 不覆盖）。
-2. **执行环境不透明**：shell/http 以**插件用户**（nologin 系统账户，`supervisor/demote.go:51`、`platform/linux_identity.go:22-23`）身份执行，不是提交者；UI 未提示。
+2. **执行环境不透明**：shell/http 以**插件进程身份**执行——root 内核下降权到 nologin 系统账户 `kore-<id>`（`supervisor/demote.go:51-52`、`platform/linux_identity.go:22-23`）；非 root portable 不降权、即 kored 运行用户（`demote.go:66` 返回 `Demoted=false` + Reason）。都不是提交者，UI 未提示。
 3. **crontab 写入缺 ADR-0023 §3.5 类别 3 的 `changes.jsonl` 清单**（`0023:110`，缺口登记 `:158`）——G-31 合规缺口，与本裁定独立。
 4. **未确认**：nologin 系统账户执行 `crontab -` 是否被宿主 PAM / `cron.allow` 拒绝。需真机（隔离实例 + 插件用户）验证；若被拒，shell/http 返回 `E_NO_PERMISSION`（`croncore/errors.go:8-9`），不静默。
 
