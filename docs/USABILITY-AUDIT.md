@@ -62,7 +62,7 @@ grep -nE 'min-height: *(2[0-9]|3[0-9]|4[0-3])px|height: *(2[0-9]|3[0-9]|4[0-3])p
 - `web/tasks.js:148`：`'当前无法读取系统计划任务：' + S.lockReason + '。需要 root 权限（kored 需以 root 运行）。 '`
 - `web/tasks.js:424`：`(perm ? '（按 RUNBOOK §5 以 root 启动 kored 后重试）' : '')`
 - 违反：原则 4（错误提示给「怎么办」；不得裸露内部术语）。
-- 建议：统一错误组件给「复制命令」按钮（`sudo systemctl restart kore`）+ 一句白话原因；隐藏 `kored`/RUNBOOK 字面量到 `title` 或折叠区。
+- 建议：统一错误组件给「复制命令」按钮（`systemctl restart kore`——系统服务形态下内核即 root，运行期不带 sudo）+ 一句白话原因；隐藏 `kored`/RUNBOOK 字面量到 `title` 或折叠区。
 
 ### P1（8 条，明显困惑）
 

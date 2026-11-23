@@ -38,7 +38,7 @@ root-action 通道以 uid=0 执行 argv（[ADR-0018](DECISIONS/0018-privilege-mo
 | G1 | ssh-guard | 写 `/etc/ssh/sshd_config.d/kore.conf` drop-in | `../kore-plugin-ssh-guard/suggest.go:20`、`:140` | **B**（ADR-0028） | **P0** |
 | G2 | ssh-guard | `sshd -t` 校验配置 | `../kore-plugin-ssh-guard/suggest.go:103`、`:14-15`；`rootpolicy.go` 无 `sshd` 键 | **A** | **P0** |
 | G3 | ssh-guard | `systemctl reload ssh`（发行版差异 ssh/sshd） | `../kore-plugin-ssh-guard/logsource.go:118-121`；`rootpolicy.go` systemctl 仅只读 | **A** | **P0** |
-| G4 | dns | `rndc reload [zone]` | `../kore-plugin-dns/internal/dnsop/write_engine.go:374-392`（现降级为 E_NEED_ROOT + 手抄 `sudo rndc reload`） | **A** | P1 |
+| G4 | dns | `rndc reload [zone]` | `../kore-plugin-dns/internal/dnsop/write_engine.go:374-392`（现降级为 E_NEED_ROOT + 手工执行 `rndc reload`）——该能力应由插件经**内核提权通道**完成；当前仍需手工执行属**已知缺口**，见 [ADR-0042](DECISIONS/0042-privilege-without-prompt.md) | **A** | P1 |
 | G5 | dns | 用 TSIG 密钥文件跑 `nsupdate -k` | `../kore-plugin-dns/internal/dnsop/nsupdate.go:235`、`config.go:46`、`validate.go:90-94` | **B**（[ADR-0026](DECISIONS/0026-credential-transport.md) 凭据传递，非形状） | P1 |
 | G6 | firewall | `ufw delete <规则号>`（`numbered` 列表里的序号） | `rootpolicy.go` `shapeUFWTarget`（纯数字按端口校验，序号被当端口） | **A** | P2 |
 | G7 | container | `docker start/stop/restart <ref>` | `rootpolicy.go` docker 段注释「start/stop/restart 待有真实消费者」 | **A** | P1 |

@@ -374,7 +374,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 - **等价于什么**：该服务用户可**免口令**、以**任意 uid（含 uid=0）**启动/终止 `kore-root-*` 前缀的 transient unit。这本身是提权，不是"配置小改"。
 - **与 ADR-0018 的关系**：授权发生点从「每次操作弹框」前移到「安装时一次性显式执行脚本」；授权范围由 unit 名前缀白名单收敛；执行面不变（仍是内核代理 + 固定 argv + 审计 fail-closed）。
 - **审计**：unit 名携带插件 id + 动作 id（`kore-root-<plugin>-<action>-<rand8>`），`journalctl -u <unit>` 看 stdout/stderr，`journalctl _COMM=systemd-run` / `polkitd` 看发起者与授权结果，kored 的 `root.action` 审计（`actor/plugin_id/action_id/unit/decision/exit_code`）看业务侧；三方可对上。
-- **撤销**：`sudo bash scripts/install-polkit-rule.sh --remove`（幂等），polkitd 监听规则目录自动重载；`--dry-run` / `--check` 可非 root 只读校验（`--check` 用假 polkit 沙箱跑 13 条断言）。
+- **撤销**：`bash scripts/install-polkit-rule.sh --remove`（幂等；须在已有 root 上下文的系统服务 / 安装期执行——普通用户 shell 会权限不足，这是降级路径 A 的**已知缺口**，见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)），polkitd 监听规则目录自动重载；`--dry-run` / `--check` 可非 root 只读校验（`--check` 用假 polkit 沙箱跑 13 条断言）。
 - **最小权限的边界**：仍默认拒绝同用户对其他 unit（`nginx.service`、`kore.service`）的任何 manage-units 操作；`disable`/`mask`/`edit`/`set-property` 等危险 verb 不放行；`unit` 名带 shell 注入字符不匹配正则即拒。
 - **与 G-11「多用户 RBAC 不做」的关系**：本条**不是** RBAC。`subject.user` 是安装时钉死的单个服务身份，没有角色、没有按用户分权、没有授权表；它只回答"本机这台 kore 的服务用户能否免口令执行自己的 root-action 白名单"，与"多用户各自权限"无关。多用户 RBAC 仍明确不做。
 

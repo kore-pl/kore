@@ -276,3 +276,6 @@ v0.x 实现后的验收：firewall 在非 root 下 `available=false` + `E_NEED_R
 - [PLUGIN-PROTOCOL.md](../PLUGIN-PROTOCOL.md) §3.1 `info.json` 字段（`requires_root` / `root_actions` 增补落点）
 - [ADR-0013](./0013-extreme-resource-frugality.md)（薄壳 / 零额外常驻组件）
 - [ADR-0016](./0016-resource-budget-final.md)（预算红线：提权执行器不得引入常驻进程）
+
+## 实施注记（2026-11-23）
+本 ADR 的「root 动作经内核代理」在落地形态上已确定为：kored 以系统级 root 服务运行（见 [0042](0042-privilege-without-prompt.md)），运行期**不经过任何 polkit 授权判定**；本文档中提及 `sudo` 的历史示例仅适用于「非 root 裸跑」这一降级形态。

@@ -386,8 +386,8 @@
 | E_INTERNAL | 500 | 内核自身错误（bbolt 写失败、序列化失败） | 不重试，上报并查内核日志 |
 | E_UNSUPPORTED | 501 | 协议主版本不符、能力未实现、平台不支持 cgroup | 升级内核或插件；不重试 |
 | E_RATELIMIT | 429 | 触发限流（登录、oneshot 并发队列满） | 按 `Retry-After` 退避后重试 |
-| E_NEED_ROOT | 403 | 动作需要宿主 root，但 kored 非 root 启动 | 按 `hint` 以 sudo/systemd 启动 kored；不重试同一请求 |
-| E_NO_SYSTEMD | 501 | 提权通道依赖 systemd-run，当前环境无 systemd | 换支持 systemd 的环境，或按 `hint` 配置 sudoers 降级；不重试 |
+| E_NEED_ROOT | 403 | 动作需要宿主 root，但 kored 非 root 启动 | 按 `hint` 以**系统服务形态**运行 kored（内核即 root，见 ADR-0042）；不要用 sudo 包装单次请求；不重试 |
+| E_NO_SYSTEMD | 501 | 提权通道依赖 systemd-run，当前环境无 systemd | 换支持 systemd 的环境；无 systemd 时该能力显式不可用（`available=false`），不引导 sudoers 降级；不重试 |
 
 路由层因插件 `degraded` 主动拒绝时返回 503 + `E_UPSTREAM`（`detail.retry_after_s`）：502 表示调用已发出后失败，503 表示未发出即拒绝，调用方按同一 code 处理。
 

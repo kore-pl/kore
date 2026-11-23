@@ -21,19 +21,25 @@
 # 0) 记录当前版本（回滚需要）
 <install>/bin/kored version            # 或 kored --version
 
-# 1) 停服务（systemd 形态）
-sudo systemctl stop kore.service       # portable 前台：停掉 kored serve 进程即可
+# 1) 校验新包（只校验、不改动任何文件：sha256 不符时目标二进制一个字节都不动）
+kored upgrade --bin ./kored-new --sha256 <hex> --dry-run
 
 # 2) 备份（见 §2；至少 state.db + config + 已装插件）
-# 3) 用新二进制替换，保留旧二进制用于回滚
-sudo cp <install>/bin/kored <install>/bin/kored.bak-$(date +%Y%m%d)
-sudo install -m 0755 ./kored-new <install>/bin/kored   # fhs 为 /usr/local/bin/kored
+# 3) 升级：内核自校验 → 原子替换（旧二进制保留为 <bin>.prev）→ 提交自重启
+kored upgrade --bin ./kored-new --sha256 <hex>
 
-# 4) 启动并验证
-sudo systemctl start kore.service
+# 4) 复核生效
+kored upgrade --verify
 curl -fsS http://127.0.0.1:8787/-/healthz && echo OK
 <install>/bin/kored version
+
+# 回滚：用 <bin>.prev 切回（替换前的二进制存回 .prev，可再次切回）
+kored upgrade --rollback
 ```
+
+> **运行期不需要 sudo——权限由服务形态决定，不是由命令自己提权。** 系统服务形态（`/etc/systemd/system/kore.service`，`User=root`，[ADR-0042](DECISIONS/0042-privilege-without-prompt.md)）下内核本身就是 root，`kored upgrade` 由服务进程执行：校验、原子替换、自重启全程零口令。它不是给普通用户 shell 直接跑的——普通用户 shell 里执行会打印「需以系统服务身份运行」并返回退出码 **6**，那不是权限坏了：这台机器还处于「非 root 裸跑」降级形态，改装为系统服务即可（RUNBOOK §5.1）。
+>
+> **整条链路上唯一的一次 sudo 是安装**：`sudo bash scripts/install-system-service.sh --install-root <install>`（装二进制 / 写 unit / enable，**仅安装这一次**）。装完之后的升级、重启、卸载一律不再经过 sudo。
 
 ### 1.2 需要重启吗？配置/state 兼容吗？
 
@@ -91,7 +97,8 @@ systemctl stop kore.service 2>/dev/null || true
 # 2) 重建安装根并解包（保持原路径，配置里的绝对路径才不会失配）
 mkdir -p <install>
 tar -xzf /path/to/kore-backup-YYYYMMDD.tgz -C <install>
-sudo chown -R <运行用户>:<运行组> <install>/data <install>/config   # fhs 形态
+# 属主：系统服务形态由内核（root）解包，属主天然是 root；portable 用户级实例用当前用户解包即可
+# 不需要额外改属主；若这一步报权限不足，说明当前形态与数据属主不一致，先按 RUNBOOK §5.1 改装为系统服务
 
 # 3) 启动
 systemctl start kore.service
