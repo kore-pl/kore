@@ -21,6 +21,7 @@
     'nav.firewall': '防火墙',
     'nav.runtimes': '运行环境',
     'nav.integrity': '完整性',
+    'nav.container': '容器',
     'nav.group.ops': '运维',
     'nav.group.biz': '业务',
     'nav.group.res': '资源',

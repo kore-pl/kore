@@ -381,7 +381,7 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	staticFile(w, staticDistRoot+name, contentType)
 }
 
-// staticFile 从 embed.FS 读取精确路径并写出；embed 编译期已保证首屏三件套存在。
+// staticFile 从 embed.FS 读取精确路径并写出；embed 编译期已保证首屏静态资源存在。
 // 运行期读取失败按"资源不存在"处理并回 404 E_NOTFOUND（不是 500）：
 // 视图模块缺失属于部署不完整，语义上就是该 URL 不存在，不该伪装成服务端故障。
 func staticFile(w http.ResponseWriter, path, contentType string) {

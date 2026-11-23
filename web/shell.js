@@ -44,6 +44,8 @@
     firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4'],
     // 运行环境：三层堆叠（Node / PHP / Python 共用一页切换，20×20、currentColor、stroke-width 1.5）
     runtimes: ['M10 3 4 6l6 3 6-3z', 'M4 10l6 3 6-3', 'M4 14l6 3 6-3'],
+    // 容器：集装箱外框 + 两道竖筋（20×20、currentColor、stroke-width 1.5）
+    container: ['M3 5h14v10H3z', 'M7 5v10', 'M13 5v10'],
     // 完整性：双层盾牌 + 对勾（内层轮廓把它与单盾的 firewall 区分开，20×20、currentColor、stroke-width 1.5）
     integrity: ['M10 2.6l5.6 2.1v5.2c0 3.5-2.3 6-5.6 6.9-3.3-.9-5.6-3.4-5.6-6.9V4.7z',
       'M10 4.9l3.5 1.3v3.7c0 2.1-1.4 3.7-3.5 4.3-2.1-.6-3.5-2.2-3.5-4.3V6.2z',
@@ -55,7 +57,7 @@
   var NAV_GROUPS = [
     { key: 'nav.group.ops', title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
     { key: 'nav.group.biz', title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
-    { key: 'nav.group.res', title: '资源', ids: ['files', 'backup', 'ssl'] },
+    { key: 'nav.group.res', title: '资源', ids: ['files', 'backup', 'ssl', 'container'] },
     { key: 'nav.group.platform', title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'settings'] }
   ];
   var OTHER_GROUP = { key: 'nav.group.other', title: '其他' };
@@ -561,7 +563,7 @@
       items.push(r);
     }
     var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false,
-      hasRedis = false, hasFirewall = false, hasRuntimes = false, hasIntegrity = false;
+      hasRedis = false, hasFirewall = false, hasRuntimes = false, hasIntegrity = false, hasContainer = false;
     for (var t = 0; t < items.length; t++) {
       if (items[t].id === 'terminal') hasTerminal = true;
       if (items[t].id === 'db') hasDb = true;
@@ -573,6 +575,7 @@
       if (items[t].id === 'firewall') hasFirewall = true;
       if (items[t].id === 'runtimes') hasRuntimes = true;
       if (items[t].id === 'integrity') hasIntegrity = true;
+      if (items[t].id === 'container') hasContainer = true;
     }
     if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端') });
     if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', 'nav.db', '数据库') });
@@ -584,6 +587,7 @@
     if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', 'nav.firewall', '防火墙') });
     if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境') });
     if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', 'nav.integrity', '完整性') });
+    if (!hasContainer) items.push({ id: 'container', label: '容器', render: lazyView('KoreContainer', '/assets/container.js', 'nav.container', '容器') });
     items = orderRoutes(items);
     var host = document.getElementById('app');
     if (!items.length || !host) return null;

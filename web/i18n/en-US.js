@@ -21,6 +21,7 @@
     'nav.firewall': 'Firewall',
     'nav.runtimes': 'Runtimes',
     'nav.integrity': 'Integrity',
+    'nav.container': 'Containers',
     'nav.group.ops': 'Operations',
     'nav.group.biz': 'Services',
     'nav.group.res': 'Resources',
