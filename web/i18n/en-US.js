@@ -21,6 +21,7 @@
     'nav.firewall': 'Firewall',
     'nav.waf': 'Web Firewall',
     'nav.dns': 'DNS',
+    'nav.sshguard': 'SSH Guard',
     'nav.runtimes': 'Runtimes',
     'nav.integrity': 'Integrity',
     'nav.container': 'Containers',
