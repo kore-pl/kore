@@ -81,6 +81,7 @@ bash scripts/plugin-oss-check.sh
 - 格式：`type(scope): 中文描述`，type ∈ `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore` / `build`。
 - scope 用模块名，如 `core/supervisor`、`docs`、`agents`。
 - **精确 `git add <file>`，禁止 `git add .` / `git add -A`**；提交前 `git status --short` 人工核对。
+- **构建缓存与产物不入库**：`web/dist/`、`web/.cache/`（如 `web/.cache/charts/*.js`）、`bin/`、`*.test`、`*-raw.json` 这类生成物一律由 `.gitignore` 拦截，随 `git add .` 混入即回退；发现新的生成物先补忽略规则（`git check-ignore -v <path>` 验证命中）再提交，不要先提交后补规则。
 - 不提交未验证改动；门禁没过就报告阻塞，不"先提交再说"。
 - 一个自洽的检查点就提交，不攒到最后。
 

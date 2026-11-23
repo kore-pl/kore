@@ -11,6 +11,8 @@ coverage.*
 # ---- 前端（Vue3 + Vite + TS）----
 web/node_modules/
 web/dist/
+# 前端构建缓存（如 charts 产物缓存：web/.cache/charts/*.js），生成物不入库
+web/.cache/
 *.local
 
 # ---- 本地状态与运行目录 ----
