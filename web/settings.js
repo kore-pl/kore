@@ -1,6 +1,8 @@
 /* kore 设置视图 —— 零框架、零 CDN、零外部资源；对外只暴露 window.KoreSettings.render(container)。
    数据只来自已存在端点（会话、系统信息、退出）；没端点的能力一律标「待支持」，不伪造；
    写请求统一带 X-Kore-CSRF 双提交头。界面不展示接口路径与文档章节，只给用户能读懂的一句话。
+   退出下沉（DESIGN-AUDIT P0-1 / DESIGN-SYSTEM C10 三级）：全站唯一退出入口在本页
+   「账户与安全」区块内，红字 + 确认弹层「确定退出 Kore 控制台？」，顶栏不再提供退出。
    本文件不自行挂载、不改 index.html：壳在「设置」被激活时调 render(container)。
    调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
    一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。 */
@@ -144,28 +146,15 @@
       [hint(tr('settings.language.hint', '中文是默认语言；英文为可选项，未翻译的文案自动回退中文。切换后立即生效并记住选择。')), status]);
   }
 
-  /* ===== 账户：会话状态 + 退出登录 ===== */
-  function buildAccount() {
+  /* ===== 账户与安全：会话状态 + CSRF 只读展示 + 退出登录（全站唯一入口，三级·二次确认） =====
+     C10：退出不可逆 → 三级（设置子项），红字 + 确认弹层；顶栏不再有退出（app.js）。 */
+  function buildAccountSecurity() {
     var s = cache.session, authed = !!(s && s.authenticated === true);
+    var csrf = readCookie('kore_csrf');
     var rows = [
       row('会话状态', flag(authed ? '会话有效' : (s ? '会话无效' : '会话状态未知（读取中或失败）'), authed ? 'ok' : 'warn')),
       row('认证主体', 'admin · 单管理员内核'),
-      row('过期时刻', ro(fmtExpiry(s && s.expires_at)))
-    ];
-    var actions = el('div', 'settings-actions');
-    var out = el('button', 'btn btn-primary', '退出登录');
-    out.type = 'button';
-    out.setAttribute('data-kore-action', 'logout');
-    out.addEventListener('click', function () { logout(out); });
-    actions.appendChild(out);
-    actions.appendChild(el('span', 'settings-hint', '退出后会清除本机会话并回到登录页'));
-    return card('账户', '会话', rows, [actions]);
-  }
-
-  /* ===== 安全：CSRF 只读展示 + 缺失端点明确禁用 ===== */
-  function buildSecurity() {
-    var csrf = readCookie('kore_csrf');
-    var rows = [
+      row('过期时刻', ro(fmtExpiry(s && s.expires_at))),
       row('CSRF 机制', '写操作需要页面内令牌校验，防止跨站伪造请求'),
       row('kore_csrf cookie', flag(csrf ? '存在（只读展示，前端不可改写）' : '缺失（写请求会被 401 拒绝）', csrf ? 'ok' : 'warn')),
       row('会话 cookie', '登录凭证保存在浏览器 Cookie 中，页面脚本不可读取'),
@@ -178,10 +167,17 @@
     pw.setAttribute('aria-describedby', 'kore-pw-missing');
     actions.appendChild(pw);
     actions.appendChild(el('span', 'tag tag-muted', '待支持'));
-    var note = el('div', 'settings-hint');
-    note.id = 'kore-pw-missing';
-    note.textContent = '当前版本暂不支持在线修改口令；如需更换，请编辑配置文件后重启内核。';
-    return card('安全', 'CSRF · 会话', rows, [actions, note]);
+    var out = el('button', 'btn settings-logout', '退出登录');
+    out.type = 'button';
+    out.id = 'kore-settings-logout';
+    out.setAttribute('data-kore-action', 'logout');
+    out.addEventListener('click', function () { openLogoutConfirm(out); });
+    actions.appendChild(out);
+    actions.appendChild(el('span', 'settings-hint', '退出后会清除本机会话并回到登录页'));
+    var pwNote = el('div', 'settings-hint');
+    pwNote.id = 'kore-pw-missing';
+    pwNote.textContent = '当前版本暂不支持在线修改口令；如需更换，请编辑配置文件后重启内核。';
+    return card('账户与安全', '会话 · CSRF', rows, [actions, pwNote]);
   }
 
   /* ===== 运行参数：只读预算表 + 当前生效值 ===== */
@@ -231,7 +227,54 @@
     ], null, true);
   }
 
-  /* ===== 退出登录：成功后回登录页，失败也不把用户困在面板里 ===== */
+  /* ===== 退出登录：先确认（弹层「确定退出 Kore 控制台？」），成功后回登录页，
+     失败也不把用户困在面板里。Esc / 点遮罩 / 取消都只关弹层，不退出。 ===== */
+  var logoutDialog = null;
+  function openLogoutConfirm(trigger) {
+    closeLogoutConfirm();
+    var wrap = el('div', 'settings-backdrop');
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.setAttribute('aria-label', '退出确认');
+    var box = el('section', 'settings-dialog');
+    box.setAttribute('aria-describedby', 'kore-logout-confirm-hint');
+    box.appendChild(el('h3', 'settings-dialog-title', '确定退出 Kore 控制台？'));
+    var hintP = el('p', 'settings-dialog-hint', '退出后将清除本机会话并回到登录页；未提交的表单内容不会保留。');
+    hintP.id = 'kore-logout-confirm-hint';
+    box.appendChild(hintP);
+    var ops = el('div', 'settings-dialog-ops');
+    var cancel = el('button', 'btn', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeLogoutConfirm);
+    var ok = el('button', 'btn settings-logout', '确定退出');
+    ok.type = 'button';
+    ok.addEventListener('click', function () {
+      closeLogoutConfirm();
+      logout(trigger);
+    });
+    ops.appendChild(cancel);
+    ops.appendChild(ok);
+    box.appendChild(ops);
+    wrap.appendChild(box);
+    wrap.addEventListener('click', function (ev) {
+      if (ev.target === wrap) closeLogoutConfirm();
+    });
+    document.body.appendChild(wrap);
+    logoutDialog = { wrap: wrap, trigger: trigger, esc: function (ev) {
+      if (ev.key === 'Escape') closeLogoutConfirm();
+    } };
+    document.addEventListener('keydown', logoutDialog.esc);
+    ok.focus();
+  }
+  function closeLogoutConfirm() {
+    if (!logoutDialog) return;
+    if (logoutDialog.esc) document.removeEventListener('keydown', logoutDialog.esc);
+    if (logoutDialog.wrap && logoutDialog.wrap.parentNode) {
+      logoutDialog.wrap.parentNode.removeChild(logoutDialog.wrap);
+    }
+    if (logoutDialog.trigger && logoutDialog.trigger.isConnected) logoutDialog.trigger.focus();
+    logoutDialog = null;
+  }
   function logout(btn) {
     var csrf = readCookie('kore_csrf');
     var headers = { 'Content-Type': 'application/json' };
@@ -262,7 +305,19 @@
     '.settings-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--kore-text-3);' +
     'padding:10px 14px;font-size:var(--kore-font-14);cursor:pointer}' +
     '.settings-tab:hover{color:var(--kore-text-1)}.settings-tab.is-active{color:var(--kore-text-1);border-bottom-color:var(--kore-info)}' +
-    '.settings-page{display:block}@media (max-width:639px){.settings-tab{min-height:var(--kore-touch);flex:1 1 auto}}';
+    '.settings-page{display:block}@media (max-width:639px){.settings-tab{min-height:var(--kore-touch);flex:1 1 auto}}' +
+    // 退出下沉：红字按钮（danger 只给不可逆操作）+ 确认弹层（C10 三级）。
+    '.settings-logout{color:var(--kore-danger);border-color:var(--kore-danger)}' +
+    '.settings-logout:hover{color:var(--kore-danger);border-color:var(--kore-danger);background:var(--kore-bg-2)}' +
+    '.settings-logout:focus-visible{outline:2px solid var(--kore-danger);outline-offset:2px}' +
+    '.settings-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;' +
+    'padding:16px;background:var(--kore-overlay)}' +
+    '.settings-dialog{width:100%;max-width:420px;padding:16px;background:var(--kore-bg-1);' +
+    'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container);box-shadow:var(--kore-shadow)}' +
+    '.settings-dialog-title{margin:0 0 8px;font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1)}' +
+    '.settings-dialog-hint{margin:0 0 12px;color:var(--kore-text-2);font-size:var(--kore-font-13);line-height:1.5}' +
+    '.settings-dialog-ops{display:flex;justify-content:flex-end;gap:8px}' +
+    '@media (max-width:639px){.settings-dialog-ops .btn{min-height:var(--kore-touch);flex:1 1 auto}}';
   function ensureTabCss() {
     if (document.getElementById('kore-settings-tabs-css')) return;
     var s = el('style'); s.id = 'kore-settings-tabs-css'; s.textContent = TAB_CSS; document.head.appendChild(s);
@@ -329,8 +384,7 @@
     } else {
       var root = el('div', 'settings-root');
       root.appendChild(buildLanguage());
-      root.appendChild(buildAccount());
-      root.appendChild(buildSecurity());
+      root.appendChild(buildAccountSecurity());
       root.appendChild(buildRuntime());
       root.appendChild(buildAbout());
       if (cache.error) root.insertBefore(el('div', 'settings-hint settings-hint-error', cache.error), root.firstChild);

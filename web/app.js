@@ -1,10 +1,14 @@
 /* kore 主壳前端 —— 原生 JS，零依赖。
    启动先探测 GET /api/v1/system/info，按三态分流（绝不把 401 误判成"后端未连接"）：
-     200 → 已登录，渲染控制台（系统信息 + 插件表格 + 启停/调用）
+     200 → 已登录，渲染控制台（概览指标卡 + 插件表格 + 启停/调用）
      401 → 渲染登录表单（口令 → POST /api/v1/auth/login，错误逐类显示，不吞错）
      网络错误 / 超时 → 才显示"后端未连接"降级横幅
    写请求（POST）一律带 X-Kore-CSRF 双提交头；cookie 缺失时先 GET 一次探测触发重新下发，
    仍缺失则明确提示刷新，不静默失败。状态一律「点 + 文本」双通道（FRONTEND §6 红线 9）。
+   退出下沉（DESIGN-AUDIT P0-1 / C10 三级）：顶栏不再放「退出」，只有「设置」图标入口，
+   退出登录唯一入口在 设置 → 账户与安全（settings.js，二次确认）。
+   概览重排（DESIGN-AUDIT P0-3 / DESIGN-SYSTEM C4）：四张指标卡（32px Display 大数字 +
+   迷你进度条 + 状态点）→ 服务/插件两张状态卡 → 告警摘要 → 折叠的系统信息键值。
    插件 UI 走独立 origin iframe + postMessage 桥（裁决40/41），不进主壳 realm。 */
 (function () {
   'use strict';
@@ -16,8 +20,7 @@
     health: '/-/healthz',
     info: '/api/v1/system/info',
     plugins: '/api/v1/plugins',
-    login: '/api/v1/auth/login',
-    logout: '/api/v1/auth/logout'
+    login: '/api/v1/auth/login'
   };
   var REQUEST_TIMEOUT_MS = 5000;
   var LOGIN_TIMEOUT_MS = 8000;
@@ -35,6 +38,13 @@
   };
   // 一键升级的运行态：放模块级，跨重绘保留（重绘只换 DOM，不丢进度）。
   var upgradeBatch = { running: false, done: 0, total: 0, failed: [], message: '' };
+  // 概览数据缓存：跨重绘保留（loadOverview 异步回填后原位更新，不整页重绘）。
+  // sys=null 表示尚未采样；svc 各键 null 表示该来源读取失败或插件未启用（诚实降级，不编 0）。
+  var ov = {
+    sys: null, sysSrc: '', sysReason: '',
+    svc: { sites: null, ssl: null, db: null },
+    alerts: null, alertBusy: false
+  };
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -329,8 +339,29 @@
 
   /* ===================== 控制台视图 ===================== */
 
-  // 品牌只在侧栏出现一次；顶栏在壳内只承担状态与退出（withBrand 仅给无壳的降级页用）。
+  // 品牌只在侧栏出现一次；顶栏在壳内只承担状态与设置入口（withBrand 仅给无壳的降级页用）。
+  // 退出登录不在顶栏（C10 一级不得放不可逆操作）：唯一入口在 设置 → 账户与安全（二次确认）。
+  var TOPBAR_ICON = ['M3 6h14', 'M3 10h14', 'M3 14h14', 'M7 4v4', 'M13 8v4', 'M9 12v4'];
+  function iconSvg(paths) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.6');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (var i = 0; i < paths.length; i++) {
+      var path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', paths[i]);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
   function renderTopbar(withBrand) {
+    ensureAppCss();
     var bar = el('header', 'topbar');
     if (withBrand) {
       var brand = el('div', 'brand');
@@ -348,10 +379,21 @@
     conn.appendChild(el('span', 'conn-label', '系统信息'));
 
     if (state.authed) {
-      var out = el('button', 'btn btn-ghost', '退出');
-      out.type = 'button';
-      out.addEventListener('click', logout);
-      conn.appendChild(out);
+      // 设置入口（一级 · 可逆）：顶栏 → 设置 → 账户与安全 → 退出，2 次点击仍可达退出。
+      var set = el('button', 'topbar-settings');
+      set.type = 'button';
+      set.id = 'kore-topbar-settings';
+      set.setAttribute('aria-label', '设置');
+      set.title = '设置';
+      set.appendChild(iconSvg(TOPBAR_ICON));
+      set.addEventListener('click', function () {
+        if (window.KoreShell && typeof window.KoreShell.navigate === 'function') {
+          window.KoreShell.navigate('settings');
+        } else {
+          window.location.hash = '#/settings';
+        }
+      });
+      conn.appendChild(set);
     }
 
     bar.appendChild(conn);
@@ -675,13 +717,19 @@
     });
   }
 
-  // 静默刷新系统信息（常驻数/重启计数），只替换信息面板，不动其它节点。
+  // 静默刷新系统信息（常驻数/重启计数），只重绘概览（或降级页的信息面板），不动其它节点。
   function refreshInfo() {
     request(ENDPOINTS.info).then(function (res) {
       if (!res.ok) return;
       state.info = res.data || {};
-      var old = document.getElementById('kore-info-panel');
-      if (old) replaceNode(old, renderInfoPanel());
+      var overview = document.getElementById('kore-overview');
+      if (overview && overview.isConnected) {
+        overview.textContent = '';
+        buildOverviewInto(overview);
+        return;
+      }
+      var legacy = document.getElementById('kore-info-panel');
+      if (legacy) replaceNode(legacy, renderInfoPanel());
     }, function () { /* 静默：失败不打断当前视图，下次操作或「重新检测」会重试 */ });
   }
 
@@ -1163,14 +1211,6 @@
     content.appendChild(box);
   }
 
-  function logout() {
-    // logout 在 CSRF 豁免名单内（幂等会话终止）；失败也回登录页，别把用户困在面板里。
-    request(ENDPOINTS.logout, { method: 'POST' }).then(
-      function () { resetAndStart(); },
-      function () { resetAndStart(); }
-    );
-  }
-
   function resetAndStart() {
     state.authed = false;
     state.info = null;
@@ -1275,47 +1315,491 @@
     box.appendChild(bar);
   }
 
-  function pluginSummaryPanel() {
+  // 样式随视图注入（integrity.js 先例）：顶栏设置入口 + 概览卡片样式不进 style.css，
+  // 不占首屏预算；--kore-font-32（C1 Display 档）由 style.css 令牌表统一提供。
+  function ensureAppCss() {
+    if (document.getElementById('kore-app-css')) return;
+    var CSS = [
+      '.topbar-settings{display:inline-flex;align-items:center;justify-content:center;min-width:32px;min-height:32px;' +
+        'padding:0 6px;border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);' +
+        'background:var(--kore-bg-2);color:var(--kore-text-2);cursor:pointer;font:inherit}' +
+        '.topbar-settings:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+        '.topbar-settings:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}' +
+        '@media (max-width:639px){.topbar-settings{min-width:var(--kore-touch);min-height:var(--kore-touch)}}',
+      '.ov-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-3);' +
+        'margin-bottom:var(--kore-space-4)}',
+      '.ov-note{margin:0 0 var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-3);' +
+        'color:var(--kore-warning);background:var(--kore-warning-bg);border:1px solid var(--kore-warning);' +
+        'border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);word-break:break-word}',
+      '.ov-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kore-space-3);' +
+        'margin-bottom:var(--kore-space-6)}',
+      '.ov-card{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-4);' +
+        'background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container);min-width:0}',
+      '.ov-card-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-2)}',
+      '.ov-card-title{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.ov-value{display:flex;align-items:baseline;gap:var(--kore-space-1)}',
+      '.ov-num{font-size:var(--kore-font-32);font-weight:600;line-height:1.1;' +
+        'font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
+      '.ov-unit{font-size:var(--kore-font-12);color:var(--kore-text-3)}',
+      '.ov-bar{height:4px;border-radius:2px;background:var(--kore-bg-2);overflow:hidden}',
+      '.ov-bar-fill{height:100%;border-radius:2px;background:var(--kore-success)}',
+      '.ov-tone-warn{background:var(--kore-warning)}',
+      '.ov-tone-fail{background:var(--kore-danger)}',
+      '.ov-caption{margin:0;color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.5;' +
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ov-status{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--kore-space-3);' +
+        'margin-bottom:var(--kore-space-6)}',
+      '.ov-panel .panel-head{padding:var(--kore-space-3) var(--kore-space-4) 0}',
+      '.ov-panel-body{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) var(--kore-space-4)}',
+      '.ov-row{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-3);min-height:24px}',
+      '.ov-row-label{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.ov-row-value{display:inline-flex;align-items:center;gap:var(--kore-space-2)}',
+      '.ov-row-num{font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1);' +
+        'font-variant-numeric:tabular-nums}',
+      '.ov-alert-panel{margin-bottom:var(--kore-space-4)}',
+      '.ov-alert-body{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) var(--kore-space-4)}',
+      '.ov-alert{display:flex;gap:var(--kore-space-3);padding:var(--kore-space-2) var(--kore-space-3);' +
+        'background:var(--kore-bg-2);border:1px solid var(--kore-border-1);border-left:4px solid var(--kore-text-3);' +
+        'border-radius:var(--kore-radius-control)}',
+      '.ov-alert.is-critical{border-left-color:var(--kore-danger)}',
+      '.ov-alert.is-warning{border-left-color:var(--kore-warning)}',
+      '.ov-alert.is-info{border-left-color:var(--kore-info)}',
+      '.ov-alert-main{flex:1;min-width:0}',
+      '.ov-alert-line{display:flex;align-items:baseline;gap:var(--kore-space-2);flex-wrap:wrap}',
+      '.ov-alert-sev{font-size:var(--kore-font-12);font-weight:600;color:var(--kore-text-2)}',
+      '.ov-alert-sev.is-critical{color:var(--kore-danger)}',
+      '.ov-alert-sev.is-warning{color:var(--kore-warning)}',
+      '.ov-alert-what{font-weight:600;overflow-wrap:anywhere}',
+      '.ov-alert-time{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.ov-alert-ok{display:flex;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-1) 0}',
+      '.ov-alert-ok span:last-child{margin-left:auto}',
+      '.ov-sysinfo{margin-bottom:var(--kore-space-4);background:var(--kore-bg-1);' +
+        'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container)}',
+      '.ov-sysinfo>summary{cursor:pointer;padding:var(--kore-space-3) var(--kore-space-4);' +
+        'color:var(--kore-text-2);font-size:var(--kore-font-13)}',
+      '.ov-sysinfo>summary:hover{color:var(--kore-text-1)}',
+      '.ov-sysinfo .rows{margin:0 var(--kore-space-4) var(--kore-space-3)}',
+      '.ov-sysinfo .ov-caption{padding:0 var(--kore-space-4) var(--kore-space-3)}',
+      '@media (max-width:1024px){.ov-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+      '@media (max-width:639px){.ov-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--kore-space-2)}' +
+        '.ov-status{grid-template-columns:1fr;gap:var(--kore-space-2)}' +
+        '.ov-card{padding:var(--kore-space-3)}' +
+        '.ov-head{flex-wrap:wrap}}'
+    ].join('');
+    var style = el('style', null, CSS);
+    style.id = 'kore-app-css';
+    document.head.appendChild(style);
+  }
+
+  /* ===================== 概览重排（DESIGN-AUDIT P0-3 · DESIGN-SYSTEM C1/C4/C7/C8/C10） =====================     顶层设计：首屏 1 秒内先看到 4 个 32px 大数字（指标卡），其次状态点（服务/插件卡），
+     最后才是说明文字（折叠的系统信息 + 告警摘要）。键值表不再平铺 12 行同字号。
+     数据来源（每个视图一次，不轮询，G-19）：
+       monitor.system（插件）→ 不可用时降级 /api/v1/system/metrics（内核采样，monitor.js 同口径）
+       site.list / ssl.list / discover.services → 服务卡计数（插件缺席显示「未启用」，不编 0）
+       audit（5 分钟窗口）+ state.plugins + state.info → 告警摘要（阈值与 alerts.js 同一本账）
+     样式随视图注入（integrity.js 先例）：不进 style.css、不占首屏预算。 */
+  var OV_INVOKE = {
+    system: '/api/v1/invoke/monitor/monitor.system',
+    sites: '/api/v1/invoke/site/site.list',
+    ssl: '/api/v1/invoke/ssl/ssl.list',
+    discover: '/api/v1/invoke/discover/discover.services'
+  };
+  var OV_METRICS = '/api/v1/system/metrics';
+  var OV_AUDIT = '/api/v1/audit';
+  var OV_ALERT_WINDOW_MS = 5 * 60 * 1000;
+  var OV_DENIED_BURST = 5;
+  var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '能力校验被拒绝' };
+  var OV_SEV_TEXT = { critical: '严重', warning: '警告', info: '提示' };
+
+  function ovNum(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+  function ovTone(pct) {
+    var n = ovNum(pct);
+    if (n === null) return 'na';
+    return n >= 90 ? 'fail' : n >= 80 ? 'warn' : 'ok';
+  }
+  function ovChip(toneName, text, title) {
+    var chip = el('span', 'chip chip-' + toneName);
+    chip.appendChild(el('span', 'dot ' + (toneName === 'na' ? '' : toneName)));
+    chip.appendChild(el('span', null, text));
+    if (title) { chip.title = title; chip.setAttribute('aria-label', text + '（' + title + '）'); }
+    return chip;
+  }
+  function ovBar(pct, toneName, label) {
+    var v = Math.max(0, Math.min(100, ovNum(pct) === null ? 0 : pct));
+    var bar = el('div', 'ov-bar');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.setAttribute('aria-valuenow', String(Math.round(v)));
+    bar.setAttribute('aria-label', label);
+    var fill = el('div', 'ov-bar-fill ov-tone-' + toneName);
+    fill.style.width = v.toFixed(1) + '%';
+    bar.appendChild(fill);
+    return bar;
+  }
+  function ovMetricCard(title, num, unit, toneName, chipText, chipTitle, barPct, caption) {
+    var card = el('section', 'ov-card');
+    var head = el('div', 'ov-card-head');
+    head.appendChild(el('span', 'ov-card-title', title));
+    if (chipText) head.appendChild(ovChip(toneName, chipText, chipTitle));
+    card.appendChild(head);
+    var val = el('div', 'ov-value');
+    val.appendChild(el('span', 'ov-num', num));
+    if (unit) val.appendChild(el('span', 'ov-unit', unit));
+    card.appendChild(val);
+    if (barPct !== null && barPct !== undefined) {
+      card.appendChild(ovBar(barPct, toneName, title + '占用 ' +
+        (ovNum(barPct) === null ? '—' : barPct.toFixed(1)) + '%'));
+    }
+    card.appendChild(el('p', 'ov-caption', caption));
+    return card;
+  }
+
+  // 指标卡数据：插件成功 → 全量；失败 → 内核 metrics 降级（缺内存占比，如实标注）。
+  function ovFetchSystem() {
+    return writeJson(OV_INVOKE.system, {}).then(function (res) {
+      if (res.ok && res.data && res.data.cpu) {
+        ov.sysSrc = 'plugin'; ov.sysReason = '';
+        ov.sys = res.data;
+        return;
+      }
+      return ovFetchKernelMetrics(res.ok ? 'monitor 插件未返回系统数据' : 'monitor 插件不可用（HTTP ' + res.status + '）');
+    }, function () {
+      return ovFetchKernelMetrics('monitor 插件请求失败');
+    });
+  }
+  function ovFetchKernelMetrics(reason) {
+    return request(OV_METRICS).then(function (res) {
+      ov.sysSrc = res.ok ? 'kernel' : 'none';
+      ov.sysReason = reason;
+      ov.sys = res.ok ? res.data : null;
+    }, function () {
+      ov.sysSrc = 'none'; ov.sysReason = reason; ov.sys = null;
+    });
+  }
+  // invoke 统一口径：成功回 data，失败/超时/插件未装 → null（视图层显示「未启用」，不编 0）。
+  function ovFetchInvoke(url) {
+    return writeJson(url, {}).then(function (res) {
+      return res.ok ? res.data : null;
+    }, function () { return null; });
+  }
+  function ovLoadServices() {
+    return Promise.all([
+      ovFetchInvoke(OV_INVOKE.sites),
+      ovFetchInvoke(OV_INVOKE.ssl),
+      ovFetchInvoke(OV_INVOKE.discover)
+    ]).then(function (out) {
+      ov.svc.sites = out[0] && Array.isArray(out[0].sites) ? out[0].sites : null;
+      ov.svc.ssl = out[1] && Array.isArray(out[1].certs) ? out[1].certs : null;
+      var db = null;
+      if (Array.isArray(out[2])) {
+        for (var i = 0; i < out[2].length; i++) {
+          var s = out[2][i];
+          if (s && (s.id === 'mysql' || s.id === 'mariadb') && s.found && s.running) { db = s; break; }
+        }
+      }
+      ov.svc.db = db;
+    });
+  }
+
+  // 告警摘要：阈值与 alerts.js 同一本账（审计 denied 激增/高危、插件 failed/反复重启、
+  // 槽位满、内核降级告警）；只读 audit/plugins/info，不落库、不轮询（G-19）。
+  function ovCollectAlerts() {
+    ov.alertBusy = true;
+    paintOvAlerts();
+    var since = new Date(Date.now() - OV_ALERT_WINDOW_MS).toISOString();
+    var tasks = [
+      request(OV_AUDIT + '?since=' + encodeURIComponent(since) + '&order=desc&limit=200')
+        .then(function (res) { return res; }, function () { return null; })
+    ];
+    return Promise.all(tasks).then(function (out) {
+      var alerts = [];
+      var res = out[0];
+      var denied = res && res.ok && res.data && Array.isArray(res.data.records)
+        ? res.data.records.filter(function (r) { return r.result === 'denied'; }) : [];
+      if (denied.length > OV_DENIED_BURST) {
+        alerts.push({ severity: 'warning', title: '近期有 ' + denied.length + ' 次被拒绝的操作',
+          time: denied[0].at || '' });
+      }
+      Object.keys(OV_HIGH_RISK).forEach(function (action) {
+        var hits = denied.filter(function (r) { return r.action === action; });
+        if (hits.length) {
+          alerts.push({ severity: 'critical', title: OV_HIGH_RISK[action] + '（' + hits.length + ' 次）',
+            time: hits[0].at || '' });
+        }
+      });
+      (state.plugins || []).forEach(function (p) {
+        if (!p || !p.id) return;
+        var name = p.name || p.id;
+        if (p.state === 'failed') {
+          alerts.push({ severity: 'critical', title: '插件 ' + name + ' 运行失败', time: '' });
+        } else if (Number(p.restarts) > 3) {
+          alerts.push({ severity: 'warning', title: '插件 ' + name + ' 反复重启（' + p.restarts + ' 次）', time: '' });
+        }
+      });
+      var info = state.info || {};
+      var sup = info.supervisor && typeof info.supervisor === 'object' ? info.supervisor : {};
+      if (Number(sup.resident) >= 3) {
+        alerts.push({ severity: 'warning', title: '常驻槽位已满（' + Number(sup.resident) + ' / 3）', time: '' });
+      }
+      if (Array.isArray(info.warnings) && info.warnings.length) {
+        alerts.push({ severity: 'warning', title: '部分隔离能力不可用，资源限额以观测模式运行', time: '' });
+      }
+      var rank = { critical: 0, warning: 1, info: 2 };
+      alerts.sort(function (a, b) { return rank[a.severity] - rank[b.severity]; });
+      ov.alerts = alerts;
+      ov.alertBusy = false;
+      paintOvAlerts();
+    });
+  }
+
+  function ovFmtClock(iso) {
+    var d = iso ? new Date(iso) : new Date();
+    if (isNaN(d.getTime())) return '—';
+    function p(n) { return n < 10 ? '0' + n : String(n); }
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  function paintOvMetrics(host) {
+    if (!host || !host.isConnected) return;
+    host.textContent = '';
+    var sys = ov.sys, src = ov.sysSrc;
+    var cpu = (sys && sys.cpu) || {}, mem = (sys && sys.memory) || {},
+      load = (sys && sys.load) || {}, disks = (sys && Array.isArray(sys.disks)) ? sys.disks : [];
+    var root = null;
+    for (var i = 0; i < disks.length; i++) {
+      if (disks[i] && disks[i].mount === '/') { root = disks[i]; break; }
+    }
+    var cpuPct = ovNum(cpu.usage_percent), memPct = ovNum(mem.used_percent);
+    var load1 = ovNum(load.load1), cores = ovNum(cpu.cores);
+    var diskPct = ovNum(root && root.used_percent);
+    var loadTone = 'na';
+    if (load1 !== null && cores) loadTone = load1 > cores * 2 ? 'fail' : load1 > cores ? 'warn' : 'ok';
+    var cards = [
+      ovMetricCard('CPU', cpuPct === null ? '—' : cpuPct.toFixed(1), '%', ovTone(cpuPct),
+        cpuPct === null ? '' : (cpuPct >= 90 ? '过高' : cpuPct >= 80 ? '偏高' : '正常'),
+        cpuPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', cpuPct,
+        cores ? cores + ' 核 · 采样 ' + (ovNum(cpu.sample_interval_ms) || '—') + ' ms' : '总使用率'),
+      ovMetricCard('内存', memPct === null ? '—' : memPct.toFixed(1), '%', ovTone(memPct),
+        memPct === null ? '' : (memPct >= 90 ? '过高' : memPct >= 80 ? '偏高' : '正常'),
+        memPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', memPct,
+        memPct === null ? '内核指标不含内存占比，需 monitor 插件'
+          : (mem.used_human || '—') + ' / ' + (mem.total_human || '—')),
+      ovMetricCard('磁盘 /', diskPct === null ? '—' : diskPct.toFixed(1), '%', ovTone(diskPct),
+        diskPct === null ? '' : (diskPct >= 90 ? '过高' : diskPct >= 80 ? '偏高' : '正常'),
+        diskPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', diskPct,
+        root ? (root.used_human || '—') + ' / ' + (root.total_human || '—')
+          : (src === 'kernel' && ovNum(sys && sys.disk_used_kib) !== null
+            ? '内核汇总 ' + ((sys.disk_used_kib / 1048576).toFixed(1)) + ' / ' +
+              ((sys.disk_total_kib / 1048576).toFixed(1)) + ' GiB'
+            : '未读取到根分区')),
+      ovMetricCard('负载', load1 === null ? '—' : load1.toFixed(2), '', loadTone,
+        load1 === null || !cores ? '' : (load1 > cores * 2 ? '过高' : load1 > cores ? '偏高' : '正常'),
+        load1 === null ? '' : '对照核数：1× 核数内正常、1–2× 偏高、>2× 过高',
+        load1 !== null && cores ? (load1 / cores) * 100 : null,
+        '5 分钟 ' + (ovNum(load.load5) === null ? '—' : load.load5.toFixed(2)) +
+        ' · 15 分钟 ' + (ovNum(load.load15) === null ? '—' : load.load15.toFixed(2)))
+    ];
+    for (var c = 0; c < cards.length; c++) host.appendChild(cards[c]);
+    if (src === 'kernel' || src === 'none') {
+      var note = document.getElementById('kore-ov-note');
+      if (note && note.isConnected) {
+        note.hidden = false;
+        note.textContent = 'monitor 插件未启用，指标为内核采样降级值（不含内存占比）。' +
+          (ov.sysReason ? '原因：' + ov.sysReason : '');
+      }
+    }
+  }
+
+  function ovCountRow(label, toneName, valueText) {
+    var rowEl = el('div', 'ov-row');
+    rowEl.appendChild(el('span', 'ov-row-label', label));
+    var val = el('span', 'ov-row-value');
+    val.appendChild(el('span', 'dot ' + (toneName === 'na' ? '' : toneName)));
+    val.appendChild(el('span', 'ov-row-num', valueText));
+    rowEl.appendChild(val);
+    return rowEl;
+  }
+  function paintOvStatus(host) {
+    if (!host || !host.isConnected) return;
+    host.textContent = '';
+    // 服务卡：站点 / 证书 / 数据库——[色点]+[数字]，句子进 title。
+    var svc = el('section', 'panel ov-panel');
+    var svcHead = el('div', 'panel-head');
+    svcHead.appendChild(el('span', 'panel-title', '服务'));
+    svc.appendChild(svcHead);
+    var svcBody = el('div', 'ov-panel-body');
+    var sites = ov.svc.sites, certs = ov.svc.ssl;
+    svcBody.appendChild(ovCountRow('站点', sites === null ? 'na' : (sites.length ? 'ok' : 'na'),
+      sites === null ? '未启用' : String(sites.length)));
+    svcBody.appendChild(ovCountRow('证书', certs === null ? 'na' : (certs.length ? 'ok' : 'na'),
+      certs === null ? '未启用' : String(certs.length)));
+    var db = ov.svc.db;
+    svcBody.appendChild(ovCountRow('数据库', db ? 'ok' : 'na', db
+      ? (String(db.id) === 'mariadb' ? 'MariaDB 运行中' : 'MySQL 运行中')
+      : '未检测到'));
+    svc.appendChild(svcBody);
+    host.appendChild(svc);
+
+    // 插件卡：计数口径与 pluginCounts / 已装插件页同一本账；常驻槽位来自 system/info.supervisor。
     var c = pluginCounts();
-    var box = el('section', 'panel');
-    var head = el('div', 'panel-head');
-    head.appendChild(el('span', 'panel-title', '插件概览'));
-    box.appendChild(head);
-    if (!state.plugins.length) {
-      // 零插件时不再展示四行全 0 的表格：给一句人话 + 一个可点的下一步。
-      box.appendChild(emptyState('还没有安装插件', 'store', '去软件商店'));
-      return box;
+    var sup = (state.info && state.info.supervisor) || {};
+    var plug = el('section', 'panel ov-panel');
+    var plugHead = el('div', 'panel-head');
+    plugHead.appendChild(el('span', 'panel-title', '插件'));
+    plug.appendChild(plugHead);
+    var plugBody = el('div', 'ov-panel-body');
+    plugBody.appendChild(ovCountRow('已装', '', String(c.total)));
+    plugBody.appendChild(ovCountRow('运行', c.running ? 'ok' : 'na', String(c.running)));
+    plugBody.appendChild(ovCountRow('空闲', c.idle ? 'ok' : 'na', String(c.idle)));
+    plugBody.appendChild(ovCountRow('已停用', 'na', String(c.disabled)));
+    if (c.failed) plugBody.appendChild(ovCountRow('异常', 'fail', String(c.failed)));
+    var resident = ovNum(sup.resident), residentMax = ovNum(sup.resident_max);
+    var slotText = resident === null ? '常驻 —' : '常驻 ' + resident + ' / ' +
+      (residentMax === null ? '3' : residentMax);
+    var lazySlots = ovNum(sup.lazy_slots);
+    if (lazySlots !== null) slotText += ' · lazy 可用 ' + lazySlots;
+    plugBody.appendChild(el('p', 'ov-caption', slotText));
+    plug.appendChild(plugBody);
+    host.appendChild(plug);
+  }
+
+  function paintOvAlerts() {
+    var host = document.getElementById('kore-ov-alert-body');
+    if (!host || !host.isConnected) return;
+    host.textContent = '';
+    if (ov.alertBusy || ov.alerts === null) {
+      host.appendChild(el('p', 'ov-caption', '正在检查最近 5 分钟的告警…'));
+      return;
+    }
+    if (!ov.alerts.length) {
+      var ok = el('div', 'ov-alert-ok');
+      ok.appendChild(el('span', 'dot ok'));
+      ok.appendChild(el('span', null, '一切正常'));
+      ok.appendChild(el('span', 'ov-caption', '检查于 ' + ovFmtClock('')));
+      host.appendChild(ok);
+      return;
+    }
+    var top = ov.alerts.slice(0, 3);
+    for (var i = 0; i < top.length; i++) {
+      var a = top[i];
+      var item = el('div', 'ov-alert is-' + a.severity);
+      var main = el('div', 'ov-alert-main');
+      var line = el('div', 'ov-alert-line');
+      line.appendChild(el('span', 'ov-alert-sev is-' + a.severity, OV_SEV_TEXT[a.severity] || '提示'));
+      line.appendChild(el('span', 'ov-alert-what', a.title));
+      if (a.time) line.appendChild(el('span', 'ov-alert-time', ovFmtClock(a.time)));
+      main.appendChild(line);
+      item.appendChild(main);
+      host.appendChild(item);
+    }
+    if (ov.alerts.length > 3) {
+      host.appendChild(el('p', 'ov-caption', '还有 ' + (ov.alerts.length - 3) + ' 条未展示'));
+    }
+  }
+
+  function openAlertCenter() {
+    ensureModule('/assets/alerts.js', 'KoreAlerts').then(function (mod) {
+      if (typeof mod.open === 'function') mod.open();
+    }, function (err) {
+      state.notice = '告警中心不可用：' + (err && err.message ? err.message : '模块加载失败');
+      var overview = document.getElementById('kore-overview');
+      if (overview && overview.isConnected) {
+        var bar = noticeBar(state.notice);
+        overview.parentNode.insertBefore(bar, overview);
+      }
+    });
+  }
+
+  // 剩余键值收进折叠区（C4：主体连续纯文字 ≤3 行 → 超出转表格并折叠）。
+  function buildOvSysDetails() {
+    var data = state.info || {};
+    var sup = data.supervisor && typeof data.supervisor === 'object' ? data.supervisor : {};
+    var details = el('details', 'ov-sysinfo');
+    details.id = 'kore-ov-sysinfo';
+    var summary = el('summary', null, '系统信息');
+    summary.setAttribute('aria-label', '展开系统信息（版本、平台、cgroup 模式等只读键值）');
+    details.appendChild(summary);
+    var rows = [
+      row('版本', data.version || '—'),
+      row('常驻插件', residentText(sup)),
+      row('插件总数', fmtInt(state.plugins.length)),
+      row('平台', [data.os, data.arch].filter(Boolean).join(' · ') || '—'),
+      row('cgroup', data.cgroup_mode || '—')
+    ];
+    if (Array.isArray(data.warnings) && data.warnings.length) {
+      rows.push(row('降级告警', humanWarnings(data)));
     }
     var table = el('table', 'rows');
-    table.appendChild(row('已安装', fmtInt(c.total)));
-    table.appendChild(row('已启用', fmtInt(c.enabled)));
-    table.appendChild(row('运行中', fmtInt(c.running)));
-    table.appendChild(row('空闲', fmtInt(c.idle)));
-    table.appendChild(row('已停用', fmtInt(c.disabled)));
-    table.appendChild(row('异常', fmtInt(c.failed)));
-    box.appendChild(table);
-    var hint = el('p', 'panel-meta', '空闲 = 已启用的 lazy 插件按需启动、空闲时退出以省资源，属正常行为。');
-    hint.id = 'kore-plugin-state-hint';
-    box.appendChild(hint);
-    var meta = el('div', 'panel-meta actions');
-    var more = el('button', 'btn', '查看全部插件');
+    for (var i = 0; i < rows.length; i++) table.appendChild(rows[i]);
+    details.appendChild(table);
+    var restarts = typeof sup.restarts === 'number' && isFinite(sup.restarts) ? sup.restarts : 0;
+    if (restarts > 0) {
+      var note = el('p', 'ov-caption', '累计重启 ' + restarts + ' 次（历史累计，不代表当前抖动）');
+      details.appendChild(note);
+    }
+    return details;
+  }
+
+  function buildOverviewInto(root) {
+    ensureAppCss();
+    var head = el('div', 'ov-head');
+    var headTitle = el('h2', 'view-title', '概览');
+    head.appendChild(headTitle);
+    var refresh = el('button', 'btn btn-ghost', '重新检测');
+    refresh.type = 'button';
+    refresh.addEventListener('click', start);
+    head.appendChild(refresh);
+    root.appendChild(head);
+
+    var note = el('p', 'ov-note');
+    note.id = 'kore-ov-note';
+    note.hidden = true;
+    note.setAttribute('role', 'status');
+    root.appendChild(note);
+
+    var metrics = el('div', 'ov-metrics');
+    metrics.id = 'kore-ov-metrics';
+    root.appendChild(metrics);
+    paintOvMetrics(metrics);
+
+    var status = el('div', 'ov-status');
+    status.id = 'kore-ov-status';
+    root.appendChild(status);
+    paintOvStatus(status);
+
+    var alertPanel = el('section', 'panel ov-alert-panel');
+    alertPanel.id = 'kore-ov-alerts';
+    var alertHead = el('div', 'panel-head');
+    alertHead.appendChild(el('span', 'panel-title', '最近告警'));
+    var more = el('button', 'btn btn-ghost', '查看全部');
     more.type = 'button';
-    more.addEventListener('click', function () { window.KoreShell.navigate('plugins'); });
-    meta.appendChild(more);
-    box.appendChild(meta);
-    return box;
+    more.addEventListener('click', openAlertCenter);
+    alertHead.appendChild(more);
+    alertPanel.appendChild(alertHead);
+    var alertBody = el('div', 'ov-alert-body');
+    alertBody.id = 'kore-ov-alert-body';
+    alertPanel.appendChild(alertBody);
+    root.appendChild(alertPanel);
+    paintOvAlerts();
+
+    root.appendChild(buildOvSysDetails());
+  }
+
+  // 数据装载：每个来源独立降级，任何一个失败不拖垮整页；回填后原位重绘对应区块。
+  function loadOverview() {
+    ovFetchSystem().then(function () { paintOvMetrics(document.getElementById('kore-ov-metrics')); });
+    ovLoadServices().then(function () { paintOvStatus(document.getElementById('kore-ov-status')); });
+    ovCollectAlerts();
   }
 
   function renderDashboardView(box) {
     viewNotice(box);
-    box.appendChild(renderInfoPanel());
-    box.appendChild(pluginSummaryPanel());
-    var meta = el('div', 'panel-meta actions');
-    var retry = el('button', 'btn', '重新检测');
-    retry.type = 'button';
-    retry.addEventListener('click', start);
-    meta.appendChild(retry);
-    box.appendChild(meta);
+    var root = el('div', 'ov');
+    root.id = 'kore-overview';
+    buildOverviewInto(root);
+    box.appendChild(root);
+    loadOverview();
   }
 
   function renderPluginsView(box) {
