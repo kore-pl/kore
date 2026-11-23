@@ -1,5 +1,17 @@
 > 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M2
-> ADR 状态: accepted · 日期: 2026-11-23 · 决策者: lead · 关联: ../FRONTEND.md §13、./0016-resource-budget-final.md、./0021-i18n.md
+> ADR 状态: **proposed（2026-11-23 驳回，未生效）** · 日期: 2026-11-23 · 决策者: lead（**驳回**：与用户硬约束「不引入框架、不放宽首屏预算」冲突；任务卡明确要求「不引第三方库」；未经 lead 裁决不得写成 accepted） · 关联: ../FRONTEND.md §13、./0016-resource-budget-final.md、./0021-i18n.md
+
+## 裁决记录（2026-11-23 lead）
+
+**状态：驳回，未生效。** 现状是**自研 SVG**（`web/monitor.js` 的 `chartInto` 等既有实现，零依赖、无 vendor chunk）；ECharts 仅作为**候选**保留在本文档，供将来讨论，**不是当前决策**。
+
+若将来真要引入第三方图表运行时，必须同时满足：
+
+1. **用户明确同意**（不是 lead、不是实现者自行判断）；
+2. **另开 ADR**，先论证「继续自研 SVG 为什么不够」（列出具体图表、代码量/回归面、性能实测），并把"继续自研"作为正式被否决选项；
+3. **首屏与二进制预算实测不变**（首屏 ≤300 KiB gzip、单二进制 ≤25 MiB），且产物无 `*.map`、不新增 `node_modules`/打包器依赖。
+
+本次写入 `accepted` 属越权（写域只有 `web/monitor.js` / `web/monitor-cards.js`，且未经 lead 裁决）；回滚记录见 `.agents/LOG/DECISIONS.md` 第 51 条。下文 §决策与 §十条条文仅作候选方案留档，**不得据此实施**。
 
 # ADR-0027: 引入 ECharts 5 作为「零依赖静态产物」形态的例外——按需 ESM + 懒加载 vendor chunk
 
