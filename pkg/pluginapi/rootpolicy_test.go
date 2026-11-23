@@ -66,11 +66,6 @@ func TestRootArgvLegalShapes(t *testing.T) {
 			"counter", "drop"},
 		{"nft", "add", "rule", "inet", "kore_waf", "input", "tcp", "dport", "{", "80,", "443",
 			"}", "ct", "count", "over", "200", "counter", "drop"},
-		{"ipset", "create", "kore_banned4", "hash:ip", "family", "inet"},
-		{"ipset", "add", "kore_banned4", "203.0.113.7"},
-		{"ipset", "add", "kore_banned4", "203.0.113.7", "timeout", "3600"},
-		{"ipset", "del", "kore_banned4", "203.0.113.7"},
-		{"ipset", "list", "kore_banned4"},
 		{"resolvectl", "status"},
 		{"resolvectl", "query", "example.com"},
 		{"resolvectl", "query", "example.com", "AAAA"},
@@ -111,7 +106,9 @@ func TestRootArgvRejectsUnknownOrUnshaped(t *testing.T) {
 		{"不在受控形状内", []string{"iptables", "-A", "INPUT", "-j", "DROP"}},
 		{"不在受控形状内", []string{"crontab", "-r"}},
 		{"不在受控形状内", []string{"docker", "run", "--privileged", "alpine"}},
-		{"不在受控形状内", []string{"ipset", "flush"}},
+		// ipset 按裁决不进表：整条命令都不可达（不是"子命令未锁定"，是"没有这个命令"）。
+		{"不在受控命令白名单", []string{"ipset", "create", "kore_banned4", "hash:ip", "family", "inet"}},
+		{"不在受控命令白名单", []string{"ipset", "list", "kore_banned4"}},
 		{"不在受控形状内", []string{"resolvectl", "set-dns", "eth0", "1.1.1.1"}},
 		{"不在受控形状内", []string{"unbound-control", "set_option", "verbosity:1"}},
 	}

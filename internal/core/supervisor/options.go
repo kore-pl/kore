@@ -47,6 +47,11 @@ type Options struct {
 	// Auditor 是审计出口（M3-C）；nil 表示不审计。由装配层注入 store 实现，
 	// supervisor 只依赖该单方法接口，不 import config/store（G-01）。
 	Auditor Auditor
+	// Identity 是插件低权身份的解析/创建/应用（ADR-0018）；nil 用宿主实现。
+	// 平台专有 API 全部收在 internal/platform（G-16）。
+	Identity platform.Identity
+	// Access 是降权所需的属主与可穿越权限；nil 用宿主实现。
+	Access platform.Access
 	// Logger 可空，默认 slog.Default()。
 	Logger *slog.Logger
 }
@@ -77,5 +82,11 @@ func (o *Options) withDefaults() {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if o.Identity == nil {
+		o.Identity = platform.SystemIdentity()
+	}
+	if o.Access == nil {
+		o.Access = platform.SystemAccess()
 	}
 }

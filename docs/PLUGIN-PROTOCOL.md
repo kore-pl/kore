@@ -142,7 +142,7 @@
 | description | string | 否 | ≤200 字符；启用/升级确认时展示 |
 | irreversible | bool | 否 | `true` 时必须携带一次性 `confirm` 令牌（见 §3.1.4） |
 
-**受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `ipset` `resolvectl` `unbound-control` `dig` `fail2ban-client`。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
+**受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `resolvectl` `unbound-control` `dig` `fail2ban-client`（13 个）。**未使用的命令不进表**：每多一个命令就多一条被误用路径，`ipset` 因无消费者已被移除（ADR-0022）。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
 
 #### 3.1.3.1 形状校验（两层）
 
@@ -152,7 +152,7 @@
 其余硬规则：
 
 - **绝对路径不绕过形状**，且目录必须在上面的系统二进制目录内——插件不能把自己写的可执行文件声明成 `/tmp/x/nft`。
-- **`kore_` 命名空间**：`nft` 表名、`ipset` 集合名必须 `kore_` 前缀；不许操作宿主的 `filter` / `nat` 等表。
+- **`kore_` 命名空间**：`nft` 表名（以及将来任何集合后端）必须 `kore_` 前缀；不许操作宿主的 `filter` / `nat` 等表。
 - **批处理**：一条动作可含多条语句（独立 `;` 元素分隔，≤8 句，花括号内的 `;` 不切分），**只有最后一条语句可带追加参数**。
 - **表达式字符集**：`nft` 表达式 token 禁 `;`、引号、反引号、`$`、空白、换行，首字符不得是 `-`（挡住 `-f <脚本>`）；允许 `|` `&` `{}` `()` 是因为 nft 表达式需要，且 argv 不经 shell。
 - **只读优先**：`iptables` / `systemctl` / `docker` / `crontab` 目前只开放只读子命令；`chmod` 只允许三位八进制（**无 setuid/setgid/sticky**）且路径限定 kore 自有目录。写操作要等真实消费者出现再按形状补齐并更新 ADR-0022。

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/pengtang1024/kore/internal/platform"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -40,12 +41,17 @@ func (m *Manager) start(ctx context.Context, inst *instance) error {
 // startOnce 是冷启动主体：bind → exec → hello 握手，失败走 failStart 收尾。
 func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 	inst.beginStart()
-	listener, err := m.listen(inst)
+	// 降权在 bind / exec 之前完成：用户不存在即本次启动失败（G-16 禁止静默降级）。
+	acct, err := m.prepareDemotion(inst)
+	if err != nil {
+		return m.failStart(inst, err)
+	}
+	listener, err := m.listen(inst, acct)
 	if err != nil {
 		return m.failStart(inst, err)
 	}
 	inst.attachListener(listener)
-	if err := m.spawn(inst); err != nil {
+	if err := m.spawn(inst, acct); err != nil {
 		return m.failStart(inst, err)
 	}
 	conn, err := m.handshake(ctx, inst)
@@ -58,8 +64,11 @@ func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 	return nil
 }
 
-// spawn 以当前用户 exec 插件二进制，注入 5 个唯一环境变量（CORE §4.1，禁止别名）。
-func (m *Manager) spawn(inst *instance) error {
+// spawn 以插件低权身份 exec 插件二进制，注入 5 个唯一环境变量（CORE §4.1，禁止别名）。
+//
+// acct 为零值表示未启用降权（kored 非 root 的显式降级形态）；非零值时必须由
+// 平台层写入 SysProcAttr.Credential，写入失败即拒绝启动（不允许退回同 uid）。
+func (m *Manager) spawn(inst *instance, acct platform.Account) error {
 	stateDir := filepath.Dir(inst.manifest.Dir)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return errf(pluginapi.E_INTERNAL, "创建插件状态目录 %s 失败：%v", stateDir, err)
@@ -79,8 +88,17 @@ func (m *Manager) spawn(inst *instance) error {
 	cmd.Dir = stateDir
 	cmd.Env = append(os.Environ(), m.pluginEnv(inst, stateDir, token)...)
 	cmd.Stdout, cmd.Stderr = writer, writer
+	if acct.UID > 0 {
+		if err := m.identity.Apply(cmd, acct); err != nil {
+			return errf(pluginapi.E_INTERNAL, "设置插件 %s 的低权身份 %s 失败：%v", inst.manifest.ID, describeAccount(acct), err)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return errf(pluginapi.E_UPSTREAM, "拉起插件 %s 失败：%v", inst.manifest.ID, err)
+	}
+	if acct.UID > 0 {
+		m.logger.Info("以低权身份拉起插件进程", "plugin_id", inst.manifest.ID,
+			"pid", cmd.Process.Pid, "user", describeAccount(acct))
 	}
 	inst.setToken(token)
 	inst.attachProcess(cmd)

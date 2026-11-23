@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/platform"
 )
 
 // State 是插件运行状态（M1 覆盖 resident 的四态 + 失败态）。
@@ -32,10 +33,12 @@ type instance struct {
 	manifest *registry.Manifest
 	socket   string
 
-	mu       sync.Mutex
-	state    State
-	cmd      *exec.Cmd
-	token    string // 本进程的 KORE_PLUGIN_TOKEN（root-action 通道鉴权用）
+	mu    sync.Mutex
+	state State
+	cmd   *exec.Cmd
+	token string // 本进程的 KORE_PLUGIN_TOKEN（root-action 通道鉴权用）
+	// account 是本次启动解析出的低权身份；零值表示未启用降权（非 root 内核）。
+	account  platform.Account
 	conn     net.Conn
 	listener net.Listener
 	restarts int
@@ -96,6 +99,20 @@ func (i *instance) clearToken() {
 	i.mu.Lock()
 	i.token = ""
 	i.mu.Unlock()
+}
+
+// setAccount 记录本次启动解析出的低权身份（零值表示未降权）。
+func (i *instance) setAccount(acct platform.Account) {
+	i.mu.Lock()
+	i.account = acct
+	i.mu.Unlock()
+}
+
+// accountValue 读本次启动的低权身份；UID<=0 表示未启用降权。
+func (i *instance) accountValue() platform.Account {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.account
 }
 
 // tokenValue 读当前 token（未运行时为空）。

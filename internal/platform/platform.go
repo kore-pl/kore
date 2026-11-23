@@ -1,14 +1,17 @@
 // Package platform 收口 kore 的全部平台专有代码。
 //
-// 五个接口（paths / service / signals / resource / transport）各自不超过 3 个方法，
-// 内核只通过本包接触 syscall、os/signal、cgroup 与 AF_UNIX；Linux 实现见 linux.go，
-// 非 Linux 仅保留返回 ErrUnsupported 的编译桩（见 stub.go）。
+// 五个运行期接口（paths / service / signals / resource / transport）各自不超过 3 个
+// 方法，另有插件低权身份用的 identity（4 个方法）与 access（2 个方法）；
+// 内核只通过本包接触 syscall、os/signal、os/user、cgroup 与 AF_UNIX；Linux 实现见
+// linux.go，非 Linux 仅保留返回 ErrUnsupported 的编译桩（见 stub.go）。
 package platform
 
 import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
 )
 
 // 平台层错误分类，调用方用 errors.Is 判定后映射退出码。
@@ -17,6 +20,8 @@ var (
 	ErrUnsupported = errors.New("platform: 当前平台未提供实现")
 	// ErrUnsupportedFS 表示状态目录落在不受支持的文件系统（网络盘 / 用户态盘）。
 	ErrUnsupportedFS = errors.New("platform: 状态目录文件系统不受支持")
+	// ErrAccount 表示插件低权系统账户不可用（不存在且无法创建 / 创建工具缺失）。
+	ErrAccount = errors.New("platform: 插件系统账户不可用")
 )
 
 // DirKind 标识 kore 的四类运行期目录。
@@ -143,6 +148,51 @@ type Transport interface {
 	// PeerCred 读取对端凭据。
 	PeerCred(conn net.Conn) (Cred, error)
 }
+
+// Account 是一个本地系统账户的 uid/gid 视图（插件低权身份的载体）。
+type Account struct {
+	// Name 账户名（Linux 为 kore-<id>）。
+	Name string
+	// UID 用户 id；负数表示未知（非 Linux）。
+	UID int
+	// GID 主组 id；负数表示未知（非 Linux）。
+	GID int
+}
+
+// Identity 收口「插件进程以哪个 uid/gid 运行」的全部平台专有操作。
+//
+// Linux 实现见 linux.go（系统账户 + SysProcAttr.Credential）；非 Linux 返回
+// ErrUnsupported，调用方按 Tier B 降级矩阵显式声明（同用户运行，不伪放假降权）。
+// 内核只通过本接口接触 os/user 与 syscall，G-16：平台专有 API 不得进 internal/core。
+type Identity interface {
+	// Current 返回当前进程账户；非 Linux 返回 ErrUnsupported。
+	Current() (Account, error)
+	// Lookup 查询账户；不存在时返回 ok=false（不视为错误）。
+	Lookup(name string) (Account, bool, error)
+	// Ensure 确保系统账户存在（仅 root 可用）：不存在则创建无 home、
+	// nologin shell、独立主组的系统账户；创建失败返回 ErrAccount 包装错误。
+	Ensure(name string) (Account, error)
+	// Apply 把子进程身份写入 cmd（Linux 设置 SysProcAttr.Credential 并清空
+	// 继承的补充组）；失败表示无法安全降权，调用方必须拒绝启动进程。
+	Apply(cmd *exec.Cmd, acct Account) error
+}
+
+// Access 是插件降权所需的最小文件权限操作：属主与「可穿越」位。
+//
+// 只暴露两项能力（不提供任意 chmod 包装）：调用方无法借此放宽到 0777，
+// 可穿越只补 o+x，不补读位与列举位。
+type Access interface {
+	// Own 把 path 属主改为 acct 并设置 mode；非 root 时只设置 mode。
+	Own(path string, acct Account, mode os.FileMode) error
+	// Traversable 给目录补「他人可穿越」位（o+x），保持不可列举。
+	Traversable(path string) error
+}
+
+// SystemIdentity 返回宿主 Identity 实现（装配层未显式注入时的默认值）。
+func SystemIdentity() Identity { return systemIdentity() }
+
+// SystemAccess 返回宿主 Access 实现（装配层未显式注入时的默认值）。
+func SystemAccess() Access { return systemAccess() }
 
 // Platform 聚合五接口，由 New 按构建目标返回。
 type Platform struct {

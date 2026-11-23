@@ -15,7 +15,7 @@ ADR-0018 的提权通道（`systemd-run --uid=0` 执行插件声明的固定 arg
 | 参数形状不限 | `nft add rule … counter drop`、`chmod 4755 <路径>` 都是「白名单命令 + 危险参数」 | 锁死宿主网络、把插件二进制变成 setuid 后门 |
 | **绝对路径直通** | `validateArgv0` 对绝对路径只做「规范化、非根」检查，**不要求命令在表内** | 插件把自己写的可执行文件放进 `/tmp` 或 state 目录，声明 `/tmp/x/nft`：形状全部通过，实际执行的是攻击者的二进制 |
 
-R5-1 之后要接的真实后端（waf 的 `nft` / `ipset`、dns 的 `resolvectl` / `unbound-control` / `dig`）全都要经这条通道，所以必须先补边界，而不是先把命令塞进白名单。同一轮里还发现一个已上线的具体反例：`kore-plugin-waf@0.2.0` 的 `modsec-set-mode` 声明 `["/bin/sed","-i.bak"]` + 追加「表达式 + 文件路径」——`sed` 不在白名单（靠绝对路径直通进来），语义上等于**以 root 写任意文件**，审计只能记「跑了个 sed」，看不出改了什么。
+R5-1 之后要接的真实后端（waf 的 `nft`、dns 的 `resolvectl` / `unbound-control` / `dig`）全都要经这条通道，所以必须先补边界，而不是先把命令塞进白名单。同一轮里还发现一个已上线的具体反例：`kore-plugin-waf@0.2.0` 的 `modsec-set-mode` 声明 `["/bin/sed","-i.bak"]` + 追加「表达式 + 文件路径」——`sed` 不在白名单（靠绝对路径直通进来），语义上等于**以 root 写任意文件**，审计只能记「跑了个 sed」，看不出改了什么。
 
 ## 决策
 
@@ -29,7 +29,6 @@ R5-1 之后要接的真实后端（waf 的 `nft` / `ipset`、dns 的 `resolvectl
 5. **写操作只保留有真实消费者且语义可界定的子集**：
    - `ufw`：`status*` / `show added|raw` / `--version` / `reload` 只读或幂等；`allow` / `deny` / `delete` 的目标只能是端口、端口/协议、端口列表或应用配置名；
    - `nft`：表名必须 `kore_` 前缀（kore 自有命名空间），集合/链名限定语法，表达式 token 禁 `;`、引号、反引号、`$`、空白、换行，首字符不得是 `-`（挡掉 `-f <脚本>`）；
-   - `ipset`：集合名必须 `kore_` 前缀，只允许 `create` / `add` / `del` / `test` / `list` / `destroy` 的固定形状；
    - `iptables` / `systemctl` / `docker` / `crontab`：**只读**（`-S`/`-L`、`is-active`/`status`/`show`/`cat`、`ps`/`inspect`/`logs`/`stats`、`-l`）——写规则、重启单元、`docker run|exec`、写 crontab 等于通用提权或 DoS，等有真实消费者时再按形状补齐并更新本 ADR；
    - `chmod` / `chown`：只允许三位八进制（**挡住 setuid/setgid/sticky 位**，`4755` 是四位，直接拒绝）且路径限定 `/etc/kore`、`/var/lib/kore`、`/var/log/kore`、`/run/kore`；
    - `resolvectl` / `unbound-control` / `dig`：只读查询 + 缓存刷新（`flush-caches` / `flush_zone` / `flush_bogus`），不提供 `set-dns`、`set_option`、`-f` 等改配置或读文件的入口；
@@ -47,6 +46,7 @@ R5-1 之后要接的真实后端（waf 的 `nft` / `ipset`、dns 的 `resolvectl
 | 让插件写脚本文件、动作只跑 `nft -f <固定路径>` | 脚本内容不受内核形状约束，审计只记「读了一个文件」；且**插件写文件本身就需要写权限**（降权后更不可行，见 ADR-0018 实现计划第 3 条） |
 | 保留 `chmod 4755` 之类的「有需要再用」 | 四位八进制的最小合法用途也要 setuid，等于把提权通道变成后门工厂 |
 | 用 shell 包装脚本（`sh -c`）承载批处理 | 等于放行任意 argv，回到 ADR-0018 明确否决的形态 |
+| 把 `ipset` 一并加入表（任务初版要求） | **未使用的特权面**：waf 只用 nft 集合，ipset 零收益却多一条被误用/被利用的路径。按 G-22「设计层优先」——减少特权面优于保留未来可能性；将来真做 ipset 后端时再加条目并补隔离环境验证（lead 裁决，2026-11-23） |
 | 靠 sudoers `NOPASSWD` 降级替代形状校验 | 那是另一条提权路径（ADR-0018 已列为降级方案，不是本 ADR 的替代） |
 
 ## 后果
@@ -55,11 +55,13 @@ R5-1 之后要接的真实后端（waf 的 `nft` / `ipset`、dns 的 `resolvectl
 - **SDK 滞后**：形状表在 `pkg/pluginapi`。插件要用公开 SDK 做 schema 自检，需要 `pkg/pluginapi` 发布含本 ADR 的版本（v0.1.3+）；在此之前，插件侧自检遇到「命令不在白名单」应显式 skip 并注明需要的内核/SDK 版本，不得手写一份宽松 schema。
 - **审计可读性提升**：审计里的 argv 就是「要执行的完整语句」（nft 批处理可见规则原文），不再出现 `sed -i <表达式>` 这种不可判读的写操作。
 - **后续扩展成本**：新增命令/子命令要改形状表 + 协议文档 + 本 ADR 的表格，属于安全边界变更，必须走 ADR。`nft add rule` 的表达式仍是「单 token 字符集」级约束（允许 `|`、`&`、`{}` 是因为 nft 表达式需要且 argv 不经 shell），**规则文本的安全门是「启用插件时用户确认清单」**，这一点必须写进插件上架评审。
+- **ipset 不进表**：`ipset` 未安装、无消费者，已从形状表移除（13 个命令）。它的形状（`kore_` 前缀集合名 + `create/add/del/test/list/destroy`）不再被认可，`ipset …` 一律 `E_INVALID`（"不在受控命令白名单内"）。
 - **未覆盖**：形状校验只约束「命令怎么被调用」，不约束「调用后宿主状态」——`nft add rule … drop` 仍能锁死宿主（这是 WAF 的正当能力，也是风险）。隔离验证与回滚要求见 `.agents/verify/r5-2-waf-nft.md`。
 
 ## 复审条件
 
 - 出现需要写操作的第 4 个命令（例如 `systemctl restart` 的真实消费者），或需要放宽 `kore_` 命名空间；
+- 真的落地 ipset 后端（必须自带 ipset 的隔离环境验证，并按本 ADR 补形状与测试）；
 - `nft` 表达式 token 形状被绕过（例如 nft 新版本引入新的读文件/执行语法）；
 - 插件 SDK 提供等价（更严格）的声明期校验能力，可把形状表下移到 SDK 单点实现；
 - 降权（ADR-0018 实现计划第 3 条）落地后，插件不再以 root 运行——届时仍需本 ADR 的形状表（通道的另一端仍是 uid=0）。

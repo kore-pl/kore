@@ -218,22 +218,6 @@ var RootCommandPolicies = map[string]CommandPolicy{
 	// 一条动作可含多条语句（独立 `;` 元素分隔，≤8 句），只有最后一句可带追加参数。
 	"nft": {MaxStatements: maxNftStatements, FlattenArgs: true, Patterns: nftPatterns()},
 
-	// ipset：与 nft 同级的旧式集合后端；创建/增删/查询锁到固定形状。
-	"ipset": {Patterns: []CommandPattern{
-		{Tokens: []TokenSpec{lit("create"), shp(shapeIPSetName), shp(shapeIPSetType), lit("family"), shp(shapeIPSetFamily)},
-			Note: "创建集合"},
-		{Tokens: []TokenSpec{lit("create"), shp(shapeIPSetName), shp(shapeIPSetType), lit("family"), shp(shapeIPSetFamily),
-			lit("timeout"), shp(shapeTimeoutSeconds)}, Note: "创建带超时的集合"},
-		{Tokens: []TokenSpec{lit("add"), shp(shapeIPSetName), shp(shapeIPOrCIDR)}, Note: "加入元素"},
-		{Tokens: []TokenSpec{lit("add"), shp(shapeIPSetName), shp(shapeIPOrCIDR), lit("timeout"), shp(shapeTimeoutSeconds)},
-			Note: "加入带超时的元素"},
-		{Tokens: []TokenSpec{lit("del"), shp(shapeIPSetName), shp(shapeIPOrCIDR)}, Note: "删除元素"},
-		{Tokens: []TokenSpec{lit("test"), shp(shapeIPSetName), shp(shapeIPOrCIDR)}, Note: "测试元素"},
-		{Tokens: []TokenSpec{lit("list"), shp(shapeIPSetName)}, Note: "列出集合"},
-		{Tokens: []TokenSpec{lit("-t"), lit("list"), shp(shapeIPSetName)}, Note: "列出集合（带超时）"},
-		{Tokens: []TokenSpec{lit("destroy"), shp(shapeIPSetName)}, Note: "销毁集合（不可回滚）"},
-	}},
-
 	// resolvectl：只读查询 + 缓存刷新；不改 resolv.conf / 不改每链路 DNS。
 	"resolvectl": {Patterns: []CommandPattern{
 		{Tokens: []TokenSpec{lit("status")}, Note: "解析器状态"},
@@ -441,22 +425,6 @@ var shapeNftExpr = ArgShape{Name: "nft-expr-token",
 // shapeNftTimeout 是 nft 集合元素超时（1s..999999d）。
 var shapeNftTimeout = ArgShape{Name: "nft-timeout",
 	Pattern: regexp.MustCompile(`^[1-9][0-9]{0,5}(?:s|m|h|d)$`)}
-
-// shapeIPSetName 是 ipset 集合名（必须 kore_ 前缀）。
-var shapeIPSetName = ArgShape{Name: "kore-ipset-name",
-	Pattern: regexp.MustCompile(`^kore_[a-z0-9_]{1,24}$`)}
-
-// shapeIPSetType 是允许的 ipset 类型。
-var shapeIPSetType = ArgShape{Name: "ipset-type",
-	Pattern: regexp.MustCompile(`^(?:hash:ip|hash:net)$`)}
-
-// shapeIPSetFamily 是 ipset 地址族。
-var shapeIPSetFamily = ArgShape{Name: "ipset-family",
-	Pattern: regexp.MustCompile(`^(?:inet|inet6)$`)}
-
-// shapeTimeoutSeconds 是整数秒超时。
-var shapeTimeoutSeconds = ArgShape{Name: "timeout-seconds",
-	Pattern: regexp.MustCompile(`^[1-9][0-9]{0,6}$`)}
 
 // shapeIfaceName 是网络接口名。
 var shapeIfaceName = ArgShape{Name: "iface-name",

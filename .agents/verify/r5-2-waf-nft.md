@@ -7,8 +7,8 @@
 
 | 项 | 结论 |
 | --- | --- |
-| allowlist 升级 | 从「命令名集合」升级为「命令 + 语句形状 + 追加参数形状」三层，唯一实现 `pkg/pluginapi/rootpolicy.go`；14 个命令、每条都有形状，**没有一条是"命令名放行"** |
-| 新增命令 | `nft` `ipset` `resolvectl` `unbound-control` `dig` `fail2ban-client`（后者是 ssh-guard 0.2.x 既有声明的必需品） |
+| allowlist 升级 | 从「命令名集合」升级为「命令 + 语句形状 + 追加参数形状」三层，唯一实现 `pkg/pluginapi/rootpolicy.go`；**13 个命令**、每条都有形状，**没有一条是"命令名放行"** |
+| 新增命令 | `nft` `resolvectl` `unbound-control` `dig` `fail2ban-client`（后者是 ssh-guard 0.2.x 既有声明的必需品）。`ipset` 初版曾加入，**按 lead 裁决已移除**（插件只用 nft；未使用的特权面一律不开，见 §8.1） |
 | 绝对路径洞 | 已堵：argv[0] 是绝对路径时目录必须落在系统二进制目录（`/bin` `/sbin` `/usr/bin` `/usr/sbin` `/usr/local/bin` `/usr/local/sbin`），basename 仍须有形状 |
 | **sed 处置** | **删除**：waf 不再有 `modsec-set-mode`，通道里**没有任何任意文件写入口**（详见 §5） |
 | waf 数据面 | 真实 `nft`：`table inet kore_waf` + `banned4/banned6` 集合 + input base chain + 基础防护 4 条规则；`observe|enforce|off` 可切；新增 `waf.ban/unban/bans` |
@@ -22,7 +22,7 @@
 | --- | --- |
 | 宿主 | Ubuntu 26.04.1 / kernel 见 `uname -r` / Wayland |
 | nft | `nftables v1.1.6 (Commodore Bullmoose #7)`，`/usr/sbin/nft` |
-| ipset | **未安装**（`ipset: 未找到命令`）→ ipset 后端本轮未实现（见 §8） |
+| ipset | **未安装**（`ipset: 未找到命令`）→ 按裁决已从形状表移除（见 §8.1） |
 | 本会话身份 | 非 root（uid 1000）；`sudo -n` 被 `NoNewPrivs:1` 拒绝；宿主 root 读取走 `systemd-run --user`（NoNewPrivs=0）内的 `sudo -n`（R5-1 已验证的同一手法） |
 | 宿主防火墙 | **ufw 不活动；宿主已有 libvirt 的 nft 规则**（`table inet libvirt_network` 等）→ 任何验证必须在独立 netns 内做，并前后比对宿主 sha256 |
 
@@ -36,7 +36,7 @@
 | `TokenSpec` | `pkg/pluginapi/rootpolicy.go:74` | 声明 argv 某一位：`Literal` 逐字相等 或 `Shape` 匹配 |
 | `CommandPattern` | `pkg/pluginapi/rootpolicy.go:106` | 一条语句形状：`Tokens`（声明部分逐位）+ `Tail`（追加参数逐位）+ `TailRepeat` |
 | `CommandPolicy` | `pkg/pluginapi/rootpolicy.go:118` | 一个命令的全部形状 + `MaxStatements` + `FlattenArgs` |
-| `RootCommandPolicies` | `pkg/pluginapi/rootpolicy.go:135` | 14 个命令的形状表（唯一实现） |
+| `RootCommandPolicies` | `pkg/pluginapi/rootpolicy.go:135` | 13 个命令的形状表（唯一实现） |
 | `nftPatterns()` | `pkg/pluginapi/rootpolicy.go:292` | nft 语句形状（含 `add rule` 1..28 个表达式 token） |
 | `ValidateRootArgv` | `pkg/pluginapi/rootpolicy.go:528` | 声明层校验（registry 启用 + `privilege.ValidateAction` 都走它） |
 | `ValidateRootAppendedArgv` | `pkg/pluginapi/rootpolicy.go:536` | 声明+追加合并校验（**执行期**，`internal/core/privilege/service.go:163` 调用） |
@@ -59,7 +59,6 @@
 | `chown` | `user[:group] <kore 路径>` | 同上路径约束 |
 | `docker` | `ps` `ps -a` `inspect` `logs` `stats --no-stream` `images` `version` `info` | **只读**；`run/exec/start/stop/restart` 未放行 |
 | `nft` | `add table` / `add set` / `add chain` / `flush chain` / `delete table` / `add rule` / `add|delete element` / `list` | 表名必须 `^kore_[a-z0-9_]{1,24}$`；族限 inet/ip/ip6/arp/bridge；集合类型/标志/钩子/优先级/策略枚举；**表达式 token 禁 `;`、引号、反引号、`$`、空白、换行，首字符不得 `-`**（挡 `-f`）；≤8 条语句，仅末句可带追加参数 |
-| `ipset` | `create` / `add` / `del` / `test` / `list` / `destroy` | 集合名 `kore_` 前缀；类型限 `hash:ip`/`hash:net`；族限 inet/inet6；元素限 IP/CIDR |
 | `resolvectl` | `status` / `statistics` / `query` / `resolve` / `flush-caches` / `dns` / `domain` | 无 `set-dns` / `revert` 等改配置入口 |
 | `unbound-control` | `status` / `stats` / `stats_noreset` / `list_forwards` / `list_local_zones` / `get_option` / `flush_zone` / `flush_bogus` / `flush_negative` | 无 `set_option` / `local_data` 等写入口 |
 | `dig` | `[name] [type] [+option]` / `@server name [type] [option]` | 查询名/类型/@server/`+选项` 全锁形状；`-f` `-k` 等开关不可达 |
@@ -70,7 +69,7 @@
 1. **声明层**：整条 argv 必须逐位命中某个语句形状；
 2. **执行层**：追加参数只能落在命中形状的 `Tail` 上（`privilege/service.go:163`），`Tail` 为空即禁止追加；
 3. **绝对路径限目录**：`/tmp/x/nft`、插件 state 目录里的 `nft` 一律拒绝（否则形状全过、执行的是攻击者二进制）；
-4. **命名空间**：nft 表 / ipset 集合必须 `kore_` 前缀，插件不可能改宿主的 `filter`/`nat`。
+4. **命名空间**：nft 表必须 `kore_` 前缀，插件不可能改宿主的 `filter`/`nat`。
 
 ## 3. 注入面用例清单与结果
 
@@ -98,7 +97,7 @@
 | 系统路径改写 | `chmod 777 /etc/passwd` / `chown root:root /usr/bin/sudo` | 拒绝（kore 路径） |
 | 绝对路径逃逸 | `/tmp/payload/nft list ruleset`、`/var/lib/kore/plugins/waf/nft …` | 拒绝（目录白名单） |
 | 路径穿越 | `/usr/bin/../bin/nft …` | 拒绝（非规范化） |
-| 子命令越界 | `ufw enable` / `nginx -s stop` / `systemctl restart sshd` / `iptables -A INPUT -j DROP` / `crontab -r` / `docker run --privileged` / `ipset flush` / `resolvectl set-dns` / `unbound-control set_option` | 全部拒绝 |
+| 子命令越界 | `ufw enable` / `nginx -s stop` / `systemctl restart sshd` / `iptables -A INPUT -j DROP` / `crontab -r` / `docker run --privileged` / `ipset create …`（命令已移除，整条不可达）/ `resolvectl set-dns` / `unbound-control set_option` | 全部拒绝 |
 | 空/超长 | `{}`、`nft ""`、200 字符表名、300 字符追加参数、5 个追加参数 | 拒绝 |
 | 执行期注入（privilege） | 5 类追加注入 → `E_INVALID` 且 **runner 调用 0 次**、写 1 条 deny 审计 | 拒绝 |
 
@@ -277,8 +276,7 @@ $ GOWORK=off go test -count=1 -timeout 200s ./...     exit 0（main / wafop / pl
 
 ## 8. 未证明项与需裁决项
 
-1. **ipset 后端未实现**：本机无 `ipset` 二进制。形状表已按 `create/add/del/test/list/destroy` 放开（任务要求），但插件只用 nft。
-   裁决点：要么后续补 ipset 后端（需先有带 ipset 的隔离环境做同样验证），要么把 `ipset` 从形状表移除（减少未使用的特权面）。
+1. **ipset 已按裁决移除**（命令数 14 → 13）：插件只用 nft 集合，ipset 是零收益的未使用特权面；按 G-22「设计层优先」减少特权面优于保留未来可能性。移除范围：形状表、ADR-0022（决策点/被否决选项/后果/复审条件）、协议文档、测试（`ipset …` 现在断言为「不在受控命令白名单」）。将来真做 ipset 后端时再加条目，并自带 ipset 隔离环境验证。
 2. **未在真 root kored 下一体化跑通**：本会话非 root，插件侧 nft 命令真实性由 netns 证明、内核侧通道成功路径由 `internal/core/privilege` 的 root 集成测试覆盖（需 root 才执行，否则 skip）。二者拼起来才等于端到端；同一进程链的端到端需真 root 环境补验。
 3. **SDK 版本门槛**：形状表在 `pkg/pluginapi`，插件钉 v0.1.2 → 插件侧 schema 自检显式 skip（打印「需要 pluginapi ≥ v0.1.3」）。需要 SDK 发 v0.1.3（`pkg/pluginapi/v0.1.3` tag）后把 waf 的 `require` 升上去，自检即自动启用。**本轮未发 SDK tag**（不在本任务写域，需 lead 裁决优先级）。
 4. **nft 版本兼容**：只实测 1.1.6。老版本缺 `meter`/`ct count` 时按 `E_UNSUPPORTED` + 原始 stderr 降级（未逐版本实测）。

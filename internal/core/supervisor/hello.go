@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/platform"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -130,18 +131,39 @@ func (m *Manager) checkHello(conn net.Conn, inst *instance, req *pluginapi.Reque
 			return errf(pluginapi.E_UNAUTHORIZED, "hello 声明的 capability %q 超出清单范围", capability)
 		}
 	}
-	return m.checkPeer(conn, p.PID)
+	return m.checkPeer(conn, inst, p.PID)
 }
 
-// checkPeer 用 SO_PEERCRED 交叉校验 hello 里的 pid；凭据不可用时 WARN 降级（Tier B）。
-func (m *Manager) checkPeer(conn net.Conn, pid int) error {
+// checkPeer 用 SO_PEERCRED 交叉校验 hello 里的 pid（以及降权后的 uid）。
+//
+// 降权生效时校验必须成功：uid 不符即拒绝（socket 已被 chown 到该 uid，正常情况下
+// 只可能是监听路径被替换 / 权限被放宽）。未降权（非 root 内核 / 无凭据的 Tier B）
+// 时按原口径 WARN 跳过，不阻断——这是显式降级，不是静默通过。
+func (m *Manager) checkPeer(conn net.Conn, inst *instance, pid int) error {
 	cred, err := m.opts.Transport.PeerCred(conn)
+	acct := inst.accountValue()
 	if err != nil {
-		m.logger.Warn("对端凭据不可用，跳过 hello pid 校验", "err", err)
+		if acct.UID > 0 {
+			return errf(pluginapi.E_UNAUTHORIZED,
+				"插件 %s 已降权到 %s，但对端凭据不可用（%v），拒绝进入 ready", inst.manifest.ID, describeAccount(acct), err)
+		}
+		m.logger.Warn("对端凭据不可用，跳过 hello pid 校验", "plugin_id", inst.manifest.ID, "err", err)
 		return nil
 	}
+	if verr := verifyPeer(cred, acct, pid); verr != nil {
+		return verr
+	}
+	return nil
+}
+
+// verifyPeer 是凭据校验的纯函数：pid 必须一致；降权时 uid 也必须一致。
+func verifyPeer(cred platform.Cred, acct platform.Account, pid int) error {
 	if int(cred.PID) != pid {
 		return errf(pluginapi.E_UNAUTHORIZED, "hello.pid=%d 与对端 pid=%d 不一致", pid, cred.PID)
+	}
+	if acct.UID > 0 && int(cred.UID) != acct.UID {
+		return errf(pluginapi.E_UNAUTHORIZED,
+			"hello 对端 uid=%d 与插件低权身份 %s(uid=%d) 不一致", cred.UID, acct.Name, acct.UID)
 	}
 	return nil
 }

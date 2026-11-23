@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/platform"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -38,8 +39,14 @@ const (
 
 // Manager 是插件进程监督器；并发安全，状态变更加锁，冷启动由每插件闸门串行。
 type Manager struct {
-	opts    Options
-	logger  *slog.Logger
+	opts     Options
+	logger   *slog.Logger
+	identity platform.Identity
+	access   platform.Access
+	// demote 表示插件进程必须降到 kore-<id>：kored 以 root 启动时为 true。
+	// 非 root（开发 / 预览 / 容器）是 ADR-0018 的显式降级形态：插件与内核同 uid，
+	// 需要 root 的动作只能走 root-action 通道（禁止假装已经降权）。
+	demote  bool
 	mu      sync.Mutex
 	plugins map[string]*instance
 	gates   map[string]*gate
@@ -60,11 +67,26 @@ func New(opts Options) (*Manager, error) {
 		opts.Logger.Warn("槽位保护已关闭：resident_max 等于 max_slots，lazy 可能被 resident 饿死",
 			"resident_max", opts.ResidentMax, "max_slots", opts.MaxSlots)
 	}
+	demote := false
+	switch current, err := opts.Identity.Current(); {
+	case err != nil:
+		// 非 Linux（Tier B）或无法判定身份：显式降级，不阻断启动（SECURITY §6.3）。
+		opts.Logger.Warn("无法读取进程身份，插件降权不可用（显式降级为同用户运行）", "err", err)
+	case current.UID == 0:
+		demote = true
+		opts.Logger.Info("插件进程降权已启用：插件将以 kore-<id> 运行", "kernel_uid", current.UID)
+	default:
+		opts.Logger.Warn("kored 非 root：插件降权未生效（插件与内核同 uid）；需要 root 的动作只能走 root-action 通道",
+			"uid", current.UID)
+	}
 	return &Manager{
-		opts:    opts,
-		logger:  opts.Logger,
-		plugins: make(map[string]*instance),
-		gates:   make(map[string]*gate),
+		opts:     opts,
+		logger:   opts.Logger,
+		identity: opts.Identity,
+		access:   opts.Access,
+		demote:   demote,
+		plugins:  make(map[string]*instance),
+		gates:    make(map[string]*gate),
 	}, nil
 }
 

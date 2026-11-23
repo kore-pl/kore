@@ -132,10 +132,10 @@
 
 ## 6. 插件隔离
 
-- **系统用户**：每个插件一个 `kore-<id>`（`useradd --system --no-create-home --shell /usr/sbin/nologin`），不与其它插件共享 uid。
-- **目录权限**：`/var/lib/kore/plugins/<id>` 属 `kore-<id>:kore-<id>`，**0750**；`/run/kore` 为 `0700 root:root`；插件 socket `/run/kore/plugins/<id>.sock` 由主壳创建后属 `kore-<id>`、**0600**。
+- **系统用户**：每个插件一个 `kore-<id>`，不与其它插件共享 uid。`kored` 以 root 启动时**按需创建**（该插件第一次启动前）：`useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin --user-group kore-<id>`（不传 `-m`，默认不建 home；固定候选路径、不查 `PATH`；无 `useradd` 时回退 Debian `adduser`）。用户建不出来 → **该插件启动失败**（`E_INTERNAL` + 人话提示），不退回同 uid。`kored` 非 root 时是**显式降级形态**：插件与内核同 uid（WARN + 本节 §15 标注），需要 root 的动作只能走 root-action 通道。
+- **目录权限**：`/var/lib/kore/plugins/<id>`（`KORE_STATE_DIR`）属 `kore-<id>:kore-<id>`、**0700**（不为可写放宽到 0777）；状态根与运行根（`/var/lib/kore`、`/run/kore` 及其 `plugins` 子目录）为 root:root **0701**（只补 o+x：可穿越、不可列举）；`<id>/<version>` 版本树由安装器落位、属主 root，**补 o+rx** 让插件能 exec 自己的二进制（属主与写权限不动）；插件 socket `/run/kore/plugins/<id>.sock` 由主壳创建后 `chown kore-<id>`、**0600**。
 - **cgroup v2**：`/sys/fs/cgroup/kore/<id>.slice`；控制文件 `memory.max` / `memory.high` / `memory.swap.max` / `cpu.max` / `pids.max` 的取值与默认值以 [RESOURCE-MODEL](./RESOURCE-MODEL.md) 为唯一真源，本文件不复制数值。安全含义：supervisor 在拉起前按 `resources` 声明与全局上限**取小值**后写入，插件无法自报放大；超限分别表现为 OOM kill、限流、fork 失败。oneshot 进程退出后 RSS 计 0。
-- **进程属性**：`cmd.Env` 只传 `KORE_PLUGIN_ID` / `KORE_PLUGIN_SOCK` / `KORE_PLUGIN_TOKEN` / `KORE_STATE_DIR` / `KORE_LOG_DIR`；stdin 关闭；stdout/stderr 重定向到 `/var/log/kore/plugins/<id>.log`。
+- **进程属性**：环境 = 内核进程环境（运维经 env 注入插件配置类变量，见 RUNBOOK）覆盖以 5 个唯一变量 `KORE_PLUGIN_ID` / `KORE_PLUGIN_SOCK` / `KORE_PLUGIN_TOKEN` / `KORE_STATE_DIR` / `KORE_LOG_DIR`；降权时另覆写 `HOME=<KORE_STATE_DIR>` / `USER` / `LOGNAME` 为插件身份（避免插件读写 `/root` 得到难归因的 EACCES）。stdin 关闭；stdout/stderr 重定向到 `/var/log/kore/plugins/<id>.log`。
 
 ### 6.1 明确不做 seccomp / namespace
 
@@ -288,12 +288,47 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 两条不变式贯穿所有阶段：主壳是唯一裁决点；任何"方便"的改动不得让插件获得跨信任边界的能力。
 
-## 15. 提权模型（ADR-0018）
+## 15. 提权模型（ADR-0018；插件降权 2026-11-23 已实现）
 
-需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，插件自身永不获得 root。方案对比、分阶段路径与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)。
+需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，插件自身永不获得 root。方案对比、实现选择、被否决方案与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)；真机证据（命令 + 退出码 + 原始输出）见 [r5-plugin-demotion](../.agents/verify/r5-plugin-demotion.md)。
 
+### 15.1 已实现（不再是"承诺"）
+
+- **进程身份**：root 内核下，supervisor 在 bind / exec **之前**解析（必要时按需创建）`kore-<id>`；`exec.Cmd.SysProcAttr.Credential` 写入 uid/gid，并**显式把补充组收为仅目标 gid**（否则子进程继承 root 的 `docker` / `sudo` 等组 = 换 uid 不换实质）。用户建不出来 / chown 失败 / Credential 写入失败 → **本次启动失败**（`E_INTERNAL` + 可操作提示），绝不退回同 uid。
+- **socket 与身份校验**：插件 socket 由主壳 listen 后 `chown kore-<id>`、`0600`；hello 阶段用 `SO_PEERCRED` 校验 `pid` 且（降权时）`uid == kore-<id>`，不符即拒绝进入 ready。凭据不可用而处于降权状态时 **fail-closed**。
+- **目录收口**：`KORE_STATE_DIR`（`<pluginDir>/<id>`）`0700 kore-<id>`；状态根/运行根 `0701 root:root`（只补 o+x，可穿越不可列举）；版本树补 `o+rx` 让插件能 exec 自己的二进制（属主与写权限不动）。详见 §6。
+- **非 root 内核是显式降级**：启动时 WARN「插件降权未生效（插件与内核同 uid）」，插件仍需 root 的动作只能返回 `E_NEED_ROOT`，管理面经 root-action 通道执行。
 - **降级必须显式**：非 root / 无 systemd / polkit 拒绝时，插件返回 `available=false` + `E_NEED_ROOT`（无 systemd 为 `E_NO_SYSTEMD`）+ 可操作 `hint`；禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
 - **审计 fail-closed**：每次提权（含被拒绝的）写 `root.action`；字段 `actor / plugin_id / action_id / argv（脱敏）/ unit / decision(allow|deny) / deny_reason / exit_code / dur_ms`（时间在 bbolt 键里，字典序即时间序）。实现顺序：**执行前**先写一条 `phase=begin` 的 allow 记录，写失败即返回 `E_INTERNAL` 且不拉起 unit；执行后补一条 `phase=end` 携带 `exit_code/dur_ms`。审计未装配按失败处理（不允许"没装配就不审计"）。
 - **不可回滚动作**（防火墙 / IP 与路由 / 服务重启 / 包卸载 / 删备份 / 容器删除）需一次性 `confirm` 令牌二次确认：`GET .../confirm-token` 只允许管理会话签发（插件 bearer 不得自签），令牌 5 分钟有效、绑定 `plugin_id + action_id`、单次核销、进程重启即失效。一次一确认，不批量静默执行。
 - **调用方边界**：管理会话需 `system:admin`；插件经 `KORE_PLUGIN_TOKEN` bearer 只能调用**自己**声明的动作，且该插件必须已获 `system:admin`；插件 token 只在进程存活期有效（spawn 注入、退出即清），比较用常量时间。插件永远不会拿到 root，也不会执行 sudo/setuid。
-- **当前漂移（不掩盖）**：本文 §2 / §6 描述的"主壳 root、插件 `kore-<id>`"尚未实现——实测 kored 与插件同为 uid 1000，`internal/core/supervisor/start.go:80` 继承启动用户身份；以 ADR-0018 的分阶段路径为准，落地时同步本节。
+
+### 15.2 降级矩阵（低权下逐能力核对；完整表见 ADR-0018「实现记录」）
+
+| 插件 | 动作 | 低权可用性 | 失效时的正确行为 | 证据 |
+| --- | --- | --- | --- | --- |
+| echo / monitor | 协议握手、`/proc` `/sys` 只读 | **可用** | — | 实测 |
+| logs | 读 world-readable 文件 | **可用** | `0640 root:adm` 的 `/var/log/syslog` → 权限错误 + hint，不得返回空列表冒充"没有日志" | 实测 |
+| terminal | PTY + 登录 shell | **可用**，shell 即插件 uid | `sudo` / `ufw` / `nft` 全部被拒（exit 1）；UI 必须显示会话身份 | 实测 |
+| firewall | 读状态（经通道）、写规则 | 读经管理会话通道 **可用**；插件自连通道被 `kore.sock 0600` 阻断 | `available=false` + `E_NEED_ROOT` + hint；不可回滚动作另需 confirm | 实测 |
+| process / file | `/proc` 读、允许根内读写 | 读可用；kill 仅同 uid、越权路径按 DAC 拒绝 | `E_NEED_ROOT` / `E_ACCESS` + hint | 代码审阅（未装） |
+| site | 写 `/etc/nginx` + reload | **不可用** | `E_ACCESS` / `E_NEED_ROOT` + hint；需声明 `root_actions` 或改插件自有前缀 | 代码审阅（未装） |
+| container | `docker.sock` | **不可用**（不在 docker 组） | `E_NEED_ROOT` + hint；**禁止**把插件加进 docker 组（等价 root） | 实测（插件 shell） |
+| waf / dns / runtime-* | 改系统配置 / 装包 | **不可用** | `E_NEED_ROOT` + hint，待声明 `root_actions` | 设计推演（未验证） |
+
+> 硬约束：**禁止**为了"都能用"把插件加入 sudoers、给 `CAP_SYS_ADMIN`、或把目录放宽成 0777——那等于换皮不换实质。
+
+### 15.3 已知阻断：插件 → 内核的 bearer 通道与 §7 的 socket 口径冲突
+
+§7 规定 `/run/kore/kore.sock` 为 `root:root 0600`、"只有 root 可直连"，但本节的"插件 bearer 调 root-action"要求插件能连它。降权后实测：`kore-firewall` 连该 UDS 得 `connect: permission denied`，`firewall.status` 显式退化为 `E_NEED_ROOT`；在隔离实例中把该 socket 临时 `chmod 0666` 后同一调用 `available=true / exit_code=0`（随后回滚 `0600`），证明**代码路径可用、唯一阻断点是 socket 权限**。
+
+**裁决（2026-11-23，lead）**：新增**独立通道 socket**（方案①）——独立 socket + `0660 root:kore` + 组内各 `kore-<id>` + `SO_PEERCRED` 同时校验 uid 与 pid；**不放宽** `kore.sock`（否决方案②：所有 kore 组进程可连管理面，爆炸半径过大），**也不接受**"只由管理会话发起"（否决方案③：插件自主 root 动作会彻底不可用，waf/dns 自动响应报废）。该实现留待下一轮落地（本轮先固化插件降权）。
+
+### 15.4 未证明项（明确列出，不得当成已通过）
+
+1. **macOS / Windows（Tier B）**：非 Linux 只有 `ErrUnsupported` 桩，插件仍与内核同用户；§6.3「macOS 独立 uid」仍是目标。
+2. **无 `useradd` / `adduser` 的发行版**（部分 Alpine / busybox）：按需建用户只有固定候选路径 + Debian `adduser` 回退，**未实测**。
+3. **SELinux / AppArmor enforcing 宿主**：`Credential` + `chown` + o+x 全链路未在 enforcing 下实测。
+4. **版本树世界可读（已知约束）**：为让插件 exec 自己的二进制，`<id>/<version>` 目录与可执行文件补了 `o+rx`，即**所有本地用户可读**。当前包内只有二进制与 `info.json`，可接受；**触发条件**：一旦插件包内含证书 / 私钥 / 口令等敏感材料，必须改为按包属主可读（`0700 kore-<id>`，或安装期按清单 chown 到插件用户），否则等于把敏感材料暴露给所有本地用户。
+5. **插件可写自己的状态目录**（含版本子目录的父目录）：能破坏/替换自己的版本目录，只影响自身可用性，不构成提权；未做防篡改。
+6. **root ↔ 非 root 切换**：先以 root 运行（目录已 chown 给 `kore-<id>`）再以非 root 运行会因目录不可进入而启动失败；未做自动回切，仅保证错误可见。

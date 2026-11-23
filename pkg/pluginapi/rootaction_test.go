@@ -406,11 +406,13 @@ func TestRootActionsFromInfoJSON(t *testing.T) {
 // TestRootCommandAllowlist 锁定协议常量与文档（PLUGIN-PROTOCOL §3.1.3）一致；
 // 增删命令属协议变更，必须走 ADR + 文档同步。
 func TestRootCommandAllowlist(t *testing.T) {
-	// ADR-0022：白名单从「命令名」升级为「命令 + 子命令 + 参数形状」，nft / ipset
-	// 与 dns 组（resolvectl / unbound-control / dig）由此加入；fail2ban-client 是
-	// 现有 ssh-guard 0.2.x 声明所必需（形状锁到 status/banip/unbanip）。
+	// ADR-0022：白名单从「命令名」升级为「命令 + 子命令 + 参数形状」，nft 与 dns 组
+	// （resolvectl / unbound-control / dig）由此加入；fail2ban-client 是现有
+	// ssh-guard 0.2.x 声明所必需（形状锁到 status/banip/unbanip）。
+	// `ipset` 按 lead 裁决**不进表**：插件只用 nft，未使用的特权面一律不开
+	// （见 ADR-0022「被否决的选项」与 .agents/LOG/DECISIONS.md 同日条目）。
 	want := []string{"chmod", "chown", "crontab", "dig", "docker", "fail2ban-client",
-		"ipset", "iptables", "nginx", "nft", "resolvectl", "systemctl", "ufw", "unbound-control"}
+		"iptables", "nginx", "nft", "resolvectl", "systemctl", "ufw", "unbound-control"}
 	if len(pluginapi.RootCommandAllowlist) != len(want) {
 		t.Fatalf("白名单数量 = %d，期望 %d", len(pluginapi.RootCommandAllowlist), len(want))
 	}
