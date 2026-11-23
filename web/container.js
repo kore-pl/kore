@@ -33,10 +33,29 @@
     '.ctr-field input{min-height:var(--kore-touch)}}' +
     // 抽屉/遮罩/确认层都靠 hidden 属性开关，而 .ctr-drawer 与 .kore-modal 自带 display:flex——
     // 不补 [hidden]{display:none}，hidden 会被作者样式压掉，弹层常驻并挡住整页点击（P0）。
-    '.ctr-drawer[hidden],.ctr-mask[hidden],.ctr-confirm[hidden]{display:none}';
+    '.ctr-drawer[hidden],.ctr-mask[hidden],.ctr-confirm[hidden]{display:none}' +
+    '.ctr-exec{margin-top:14px;border-top:1px solid var(--kore-border-1);padding-top:10px}' +
+    '.ctr-exec-warn{margin:0 0 6px;font-size:var(--kore-font-12);color:var(--kore-danger);line-height:1.6}' +
+    '.ctr-exec-hint{margin:0 0 6px;font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.6}' +
+    '.ctr-exec-cmd{width:100%;box-sizing:border-box;min-height:96px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:var(--kore-font-13);padding:8px 10px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-0);color:var(--kore-text-1);resize:vertical}' +
+    '.ctr-exec-opts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:flex-end}' +
+    '.ctr-exec-opts .ctr-field{flex:1;min-width:150px;display:flex;flex-direction:column;gap:4px}' +
+    '.ctr-exec-opts .ctr-field input,.ctr-exec-opts .ctr-field select{min-height:36px}' +
+    '.ctr-exec-check{display:flex;align-items:center;gap:6px;font-size:var(--kore-font-13);margin-top:8px;min-height:44px}' +
+    '.ctr-exec-check[hidden]{display:none}' +
+    '.ctr-exec-actions{display:flex;gap:8px;margin-top:8px}' +
+    '.ctr-exec-result{margin-top:10px;border:1px solid var(--kore-border-1);border-radius:6px;padding:10px;background:var(--kore-bg-0)}' +
+    '.ctr-exec-result[hidden]{display:none}' +
+    '.ctr-exec-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:var(--kore-font-12);margin-bottom:8px}' +
+    '.ctr-exec-out-label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:var(--kore-font-12);color:var(--kore-text-2);margin:6px 0 4px}' +
+    '.ctr-exec-out{margin:0 0 6px;padding:8px 10px;border-radius:4px;background:var(--kore-bg-0);border:1px solid var(--kore-border-1);white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:var(--kore-font-12);max-height:260px;overflow:auto}' +
+    '@media (max-width:640px){.ctr-exec-opts{flex-direction:column;align-items:stretch}' +
+    '.ctr-exec-opts .ctr-field{min-width:0}.ctr-exec-actions{flex-direction:column}' +
+    '.ctr-exec-actions .btn{min-height:44px;width:100%}.ctr-exec-out-label .btn{min-height:44px}}';
   function fresh() {
     return { items: [], all: false, loadError: '', shown: PAGE, destroyed: false, stats: {}, statsBusy: false,
-      drawer: null, drawerEl: null, drawerId: '', drawerData: null, drawerError: '', since: '', sinceInput: null, confirm: null, notice: '' };
+      drawer: null, drawerEl: null, drawerId: '', drawerData: null, drawerError: '', since: '', sinceInput: null, confirm: null, notice: '',
+      execFor: '', exec: { cmd: '', workdir: '', user: '', confirm: false, busy: false, result: null, error: '' } };
   }
   var S = fresh();
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined && text !== null) n.textContent = String(text); return n; }
@@ -243,6 +262,110 @@
     add(dl, el('dt', null, '挂载 / 卷（' + mounts.length + '）'));
     if (!mounts.length) add(dl, el('dd', null, '无挂载'));
     else mounts.forEach(function (m) { add(dl, el('dd', 'mono', (m.type === 'volume' ? '卷 ' : '绑定 ') + m.source + ' → ' + m.destination + (m.rw ? '（读写）' : '（只读）'))); });
+    paintExecSection(host);
+  }
+  // ---------- 执行命令（container.exec：argv 数组、固定 argv 不经 shell） ----------
+  function isRootUserValue(v) {
+    var parts = String(v || '').trim().toLowerCase().split(':');
+    for (var i = 0; i < parts.length; i++) if (parts[i] === 'root' || parts[i] === '0') return true;
+    return false;
+  }
+  // 错误翻人话：拒绝清单命中（后端 E_INVALID + 「被拒绝：」）→ 安全策略拒绝且不建议重试；
+  // root 未确认 → 引导勾确认框；E_UNSUPPORTED 在本方法语境是 docker CLI 缺失 → 走安装指引。
+  function execErrorText(err) {
+    var code = err && err.code ? err.code : '';
+    var msg = String(err && err.message ? err.message : err || '').replace(/^E_[A-Z_]+[:：]\s*/, '');
+    if (/被拒绝：/.test(msg)) return '该命令被安全策略拒绝：' + msg + '。这是策略拦截而非临时故障，请换一种方式完成，不需要重试。';
+    if (code === 'E_INVALID' && /confirm|root/i.test(msg)) return '以 root 执行需要先勾选「我确认以 root 执行」：' + msg;
+    if (code === 'E_INVALID') return '参数有误：' + msg;
+    if (code === 'E_UNSUPPORTED') return '无法执行（' + msg + '）。' + hintFor(err && err.message ? err.message : '');
+    return msg;
+  }
+  function copyExecText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(function () {});
+  }
+  function paintExecSection(host) {
+    if (S.execFor !== S.drawerId) { // 换容器即重置表单，避免上一个容器的输入残留
+      S.execFor = S.drawerId;
+      S.exec = { cmd: '', workdir: '', user: '', confirm: false, busy: false, result: null, error: '' };
+    }
+    var st = S.exec;
+    var sec = add(host, el('section', 'ctr-exec'));
+    add(sec, el('p', 'ctr-exec-warn', '在这里执行的命令会以容器内身份运行，可能修改容器内容。'));
+    add(sec, el('p', 'ctr-exec-hint', '每个参数一行，不经过 shell：没有管道、&&、重定向；第一行是程序名，后续每行是它的参数。'));
+    var cmd = add(sec, el('textarea', 'ctr-exec-cmd'));
+    cmd.value = st.cmd; cmd.placeholder = 'ls\n-l\n/var/log';
+    cmd.setAttribute('aria-label', '命令参数，每行一个');
+    var opts = add(sec, el('div', 'ctr-exec-opts'));
+    var wdF = add(opts, el('label', 'ctr-field')); add(wdF, el('span', null, '工作目录（可选）'));
+    var wd = add(wdF, el('input')); wd.value = st.workdir; wd.placeholder = '留空 = 容器默认目录';
+    var uF = add(opts, el('label', 'ctr-field')); add(uF, el('span', null, '容器内身份'));
+    var uSel = add(uF, el('select'));
+    [['', '默认（容器内非 root）'], ['root', 'root（需确认）'], ['__custom', '自定义…']].forEach(function (o) {
+      var op = el('option', null, o[1]); op.value = o[0]; uSel.appendChild(op);
+    });
+    uSel.value = st.user === 'root' ? 'root' : (st.user ? '__custom' : '');
+    var uInput = add(uF, el('input')); uInput.placeholder = '如 nginx 或 1000:1000';
+    uInput.hidden = uSel.value !== '__custom'; uInput.value = uSel.value === '__custom' ? st.user : '';
+    function currentUser() { return uSel.value === '__custom' ? uInput.value.trim() : uSel.value; }
+    var chk = add(sec, el('label', 'ctr-exec-check'));
+    var chkIn = add(chk, el('input')); chkIn.type = 'checkbox'; chkIn.checked = st.confirm;
+    add(chk, el('span', null, '我确认以 root 执行'));
+    var acts = add(sec, el('div', 'ctr-exec-actions'));
+    var run = add(acts, el('button', 'btn btn-primary', '执行命令')); run.type = 'button';
+    var msg = add(sec, el('div', 'kore-modal-msg')); msg.setAttribute('role', 'alert');
+    var out = add(sec, el('div', 'ctr-exec-result')); out.hidden = true;
+    function syncExec() {
+      var root = isRootUserValue(currentUser());
+      chk.hidden = !root;
+      if (!root && chkIn.checked) { chkIn.checked = false; st.confirm = false; }
+      run.disabled = st.busy || cmd.value.trim() === '' || (root && !chkIn.checked);
+      run.textContent = st.busy ? '执行中…' : '执行命令';
+    }
+    cmd.addEventListener('input', function () { st.cmd = cmd.value; syncExec(); });
+    wd.addEventListener('input', function () { st.workdir = wd.value; });
+    uSel.addEventListener('change', function () { uInput.hidden = uSel.value !== '__custom'; st.user = currentUser(); syncExec(); });
+    uInput.addEventListener('input', function () { st.user = currentUser(); syncExec(); });
+    chkIn.addEventListener('change', function () { st.confirm = chkIn.checked; syncExec(); });
+    function renderResult() {
+      out.textContent = '';
+      if (st.error) { add(out, noticeBox(st.error)); out.hidden = false; return; } // 策略拒绝不提供「重试」按钮
+      var r = st.result;
+      if (!r) { out.hidden = true; return; }
+      var meta = add(out, el('div', 'ctr-exec-meta'));
+      meta.appendChild(el('span', 'chip chip-' + (r.exit_code === 0 ? 'ok' : 'fail'), '退出码 ' + r.exit_code));
+      if (r.timed_out) meta.appendChild(el('span', 'chip chip-warn', '超时已终止（后端上限 30 秒）'));
+      if (typeof r.duration_ms === 'number') meta.appendChild(el('span', 'muted', (r.duration_ms / 1000).toFixed(1) + ' 秒'));
+      if (r.stdout_truncated || r.stderr_truncated) {
+        meta.appendChild(el('span', 'chip chip-warn', '输出已截断'));
+        add(out, el('p', 'ctr-exec-hint', '输出过大已截断，建议缩小范围（加 head/tail 或减少输出行数）后再看。'));
+      }
+      [['标准输出 stdout', r.stdout], ['标准错误 stderr', r.stderr]].forEach(function (pair) {
+        var head = add(out, el('div', 'ctr-exec-out-label')); add(head, el('span', null, pair[0]));
+        add(head, smallBtn('复制', function () { copyExecText(pair[1] || ''); }));
+        add(out, el('pre', 'ctr-exec-out', pair[1] || '（空）'));
+      });
+      out.hidden = false;
+    }
+    on(run, function () {
+      var argv = cmd.value.split('\n').map(function (t) { return t.replace(/\r$/, '').trim(); })
+        .filter(function (t) { return t !== ''; });
+      if (!argv.length) return;
+      var params = { id: S.drawerId, cmd: argv };
+      if (st.workdir.trim()) params.workdir = st.workdir.trim();
+      var user = currentUser();
+      if (user) params.user = user;
+      if (isRootUserValue(user)) params.confirm = true; // 对应后端 root 需 confirm:true
+      st.busy = true; st.result = null; st.error = ''; msg.textContent = '';
+      syncExec();
+      invoke('container.exec', params).then(function (d) {
+        st.busy = false; st.result = d; st.error = ''; renderResult();
+      }, function (err) {
+        st.busy = false; st.result = null; st.error = execErrorText(err); renderResult();
+      }).then(function () { syncExec(); });
+    });
+    renderResult();
+    syncExec();
   }
   function askConfirm(action, c) {
     S.confirm = { action: action, id: c.id, name: c.name || c.id };
