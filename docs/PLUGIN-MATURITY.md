@@ -173,30 +173,30 @@
 
 | 仓库 | 方法数 | 方法名 | 一句话职责 |
 | --- | --- | --- | --- |
-| `app-deploy` | 8 | deploy / deployFromArtifact / jobs / list / remove / templates / upgrade / upload | 内置 4 模板经 docker 真部署、记录、回滚 |
+| `app-deploy` | 8 | deploy / deployFromArtifact / jobs / list / remove / templates / upgrade / upload | 内置 4 模板经 docker 真部署、记录、回滚；0.3.0 起用户应用包 `upload` / `upgrade` + `jobs` 作业 |
 | `backup` | 11 | create / delete / download / jobs / list / restore / retention / schedule.get / schedule.set / stats / verify | 真实 tar.gz 打包/恢复/校验；保留策略、下载、作业进度、定时任务描述、站点/库维度 |
 | `container` | 13 | exec / health / images / inspect / list / logs / pull / restart / rmi / start / stats / stop / update | 真实 docker CLI 列表、详情、日志、生命周期、统计；镜像拉取/删除、更新与健康检查；**`exec` 0.5.0 已实现**（一次性命令），`shell` / `attach` 属**刻意不做**（`deniedMethods`，交互式归 terminal） |
 | `cron` | 10 | add / batch / disable / enable / list / logs / remove / replace / run / templates | crontab 读写 + 三类任务 + 执行日志 + 立即执行 + 启停 |
-| `db-mysql` | 13 | changePassword / createDatabase / createUser / databases / dropDatabase / dropUser / export / grant / import / instances / query / slowlog / status | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 |
+| `db-mysql` | 13 | changePassword / createDatabase / createUser / databases / dropDatabase / dropUser / export / grant / import / instances / query / slowlog / status | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 + 改密（`changePassword`）与慢查询（`slowlog`） |
 | `db-postgres` | 11（另 config.get/set） | changePassword / createDatabase / createUser / databases / dropDatabase / dropUser / grant / instances / query / slowlog / status | psql/docker exec 真连接；建库/删库/用户/授权/改密；只读 SQL 白名单 |
 | `discover` | 3 | ports / services / summary | 本机服务、监听端口、安装建议；服务端版本可探 |
-| `dns` | 11（另 config.get/set） | addRecord / deleteRecord / query / record.add / record.delete / records / record.update / reload / status / updateRecord / zones | 四引擎探测、区域与记录解析、真实查询（只读） |
+| `dns` | 11（另 config.get/set） | addRecord / deleteRecord / query / record.add / record.delete / records / record.update / reload / status / updateRecord / zones | 四引擎探测、区域与记录解析、真实查询；0.4.0 起含记录写路径（`record.*` / `reload`） |
 | `echo` | 5 | crash / echo / ping / slow / timeout | 验证件：协议回环、超时、崩溃重启计数 |
 | `file` | 23 | batch / chmod / compress / copy / delete / download / extract / list / mkdir / move / read / readRange / rename / search / stat / trash.list / trash.purge / trash.restore / upload / uploadChunk / uploadStatus / write / writeRange | 配置根内真实文件操作；回收站、批量、搜索；19 条方法级 capability |
 | `firewall` | 7 | allowPort / deleteRule / denyPort / disable / enable / rules / status | 真实 ufw/iptables 状态、规则、放行/拒绝/删除；root 走内核通道 |
 | `integrity` | 8 | baseline / baseline.list / check / restore / status / verify_file / schedule.set / schedule.get | 真实 sha256 基线、比对、单文件校验；基线多版本列表；基线 0600 原子写 |
-| `logs` | 13（另 config.get/set） | aggregate / clean / clean.restore / download / follow / retention.get / retention.set / rotate / search / sources / stats / tail / usage | 白名单日志源、尾读、搜索、统计、导出、实时跟踪、切割 |
+| `logs` | 13（另 config.get/set） | aggregate / clean / clean.restore / download / follow / retention.get / retention.set / rotate / search / sources / stats / tail / usage | 白名单日志源、尾读、搜索、统计、导出、实时跟踪、切割、清理、聚合、保留策略 |
 | `monitor` | 4 | disks / processes / system / temperature | 真实 `/proc` 采集；结果体含 history 环形缓冲与 alerts 阈值，零 ticker |
 | `process` | 9 | detail / history / kill / list / ports / renice / tree / trend / watchdog.suggest | 真实 procfs + 保护名单；kill/renice 为 `proc:write` |
-| `redis` | 19（另 config.get/set） | bgsave / copy / delete / expire / get / info / instances / keyInfo / keys / memory / move / persist / persistence / rename / serverConfig.get / serverConfig.set / set / slowlog / ttl | 注册表 `methodTable`（14 动词）+ 点分方法（2）；真实 RESP；危险命令拒绝表 |
+| `redis` | 19（另 config.get/set） | bgsave / copy / delete / expire / get / info / instances / keyInfo / keys / memory / move / persist / persistence / rename / serverConfig.get / serverConfig.set / set / slowlog / ttl | 注册表 `methodTable`（17 动词）+ 点分方法（2）；真实 RESP；危险命令拒绝表 |
 | `runtime-node` | 5 | doctor / info / paths / projects / versions | 真实探测 Node 版本、详情、项目扫描、健康检查、路径元信息 |
 | `runtime-php` | 5 | doctor / info / paths / projects / versions | 真实检测 PHP CLI、ini/扩展、项目、健康检查、路径元信息 |
-| `runtime-python` | 9 | doctor / info / paths / pip.install / pip.list / projects / venv.create / venv.list / versions | 真实检测 Python、pip/site-packages、项目、健康检查 |
+| `runtime-python` | 9 | doctor / info / paths / pip.install / pip.list / projects / venv.create / venv.list / versions | 真实检测 Python、pip/site-packages、项目、健康检查；0.3.0 起建 venv 与 pip 安装 |
 | `site` | 20（另 config.get/set） | bindSSL / clearPassword / clone / create / delete / disable / enable / get / getRewrite / list / setIndex / setPassword / setProxy / setRedirect / setRewrite / status / traffic / unbindSSL / unsetProxy / unsetRedirect | 真实写 nginx vhost + test/reload，含容器 nginx；目录三态 |
-| `ssh-guard` | 7（另 config.get/set） | attempts / ban.add / ban.list / ban.remove / bans / status / suggest | 日志解析 + 防护源检测 + 封禁清单；封禁写当前只声明不执行 |
+| `ssh-guard` | 7（另 config.get/set） | attempts / ban.add / ban.list / ban.remove / bans / status / suggest | 日志解析 + 防护源检测 + 封禁清单；`ban.add`/`ban.remove` 经 root-action 通道执行（`methods.go:63`），`suggest` 只出建议态 |
 | `ssl` | 20 | acme.auto / acme.builtin.issue / acme.builtin.renew / acme.builtin.status / acme.issue / acme.status / bind.list / bind.remove / bind.set / expiring / https.enforce / https.status / https.unenforce / import / issue / list / renew / renew.set / selfsign / verify | 证书落盘与 x509/TLS；到期聚合、续期任务、ACME 探测/显式调用；站点归属登记与 HTTPS 状态 |
 | `terminal` | 9 | attach / close / create / history / history.clear / list / read / resize / write | 真实 PTY；历史落盘、重连游标（attach + read.cursor） |
-| `waf` | 10（+`blockLog` 别名） | ban / bans / blockLog / logs / rule.add / rule.remove / rules / rule.toggle / status / toggle / unban | nft 数据面 + 封禁集合 + 模式切换；7 条方法级 capability |
+| `waf` | 10（+`blockLog` 别名） | ban / bans / blockLog / logs / rule.add / rule.remove / rules / rule.toggle / status / toggle / unban | nft 数据面 + 封禁集合 + 模式切换 + 规则增删；12 条 capability（10 业务 + config 2） |
 
 **证据复现命令**（任何人可重跑核对；一律读 HEAD，避免并发工作树干扰）：
 
