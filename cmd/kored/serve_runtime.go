@@ -150,6 +150,8 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc.backend.uninstaller = func(ctx context.Context, id string) (httpapi.UninstallOutcome, error) {
 		return svc.uninstallPlugin(ctx, cfg, id)
 	}
+	// 升级后置动作补跑入口：禁用态升级的标记在 Enable 成功后由 consumePostUpgrade 消费。
+	svc.backend.postUpgrade = svc.runPostUpgrade
 	// 自升级能力：同样走可选接口（httpapi.SelfUpdater），复用 cmd/kored/upgrade.go
 	// 的校验/原子替换/回滚/finalize 语义，只多一层 HTTP 暴露与 fail-closed 审计。
 	svc.backend.selfUpdate = newSelfUpdater(db, app, cfg)
@@ -237,6 +239,9 @@ func (s *service) restoreEnabled() {
 //  3. 从状态库（已装真源）取该 id 的**新版本**，从磁盘重新装载 info.json；
 //  4. Add（首次）或 Replace（已有同 id）登记，替换旧版本视图；
 //  5. 按持久化 desired_state 决定是否重新拉起，返回 reloaded / restarted；
+//     禁用态升级不拉起、不执行后置动作，只落「待补跑」标记（版本号），
+//     由下一次 Enable 成功后补跑（daemon.consumePostUpgrade）——两个诉求同时满足：
+//     不违背禁用意图，且启用后不会带着未迁移的旧外部引用上线；
 //     任一步失败返回 failed + 原始错误（HTTP 层显式 500，不假装成功）。
 //
 // 该函数是 store/install 的唯一重载入口；其他调用方（未来的 upgrade/repair）
@@ -282,6 +287,11 @@ func (s *service) reloadOne(id string) (string, error) {
 	}
 
 	// 4) 首次安装走 Add，同 id 升级/重装走 Replace（覆盖旧 manifest）。
+	// 先快照旧版本：Replace 之后 catalog 只剩新版本，「本次是否升级」就无从判断。
+	previousVersion := ""
+	if previous, exists := s.catalog.Manifest(id); exists {
+		previousVersion = previous.Version
+	}
 	if _, exists := s.catalog.Manifest(id); exists {
 		err = s.catalog.Replace(manifest)
 	} else {
@@ -303,12 +313,22 @@ func (s *service) reloadOne(id string) (string, error) {
 		if disableErr := s.catalog.Disable(id); disableErr != nil {
 			return reloadFailed, disableErr
 		}
+		// 禁用态升级的两难：升级当下拉起插件（bus.Call 会冷启）违背用户禁用意图，
+		// 但不迁移就让插件启用后继续引用旧二进制（cron 的 crontab 条目是真实案例）。
+		// 折中：现在不拉起、不执行，只把「哪个版本待补跑」落库，由下一次 Enable 消费。
+		// 只有「版本确实变化」才记标记——首次安装/同版本重装不是升级，不误跑。
+		if previousVersion != "" && previousVersion != ref.Version {
+			s.deferPostUpgrade(id, ref.Version)
+		}
 		slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRegistered)
 		return reloadRegistered, nil
 	}
 	if err := s.catalog.Enable(id); err != nil {
 		return reloadFailed, fmt.Errorf("重载后启用插件 %s 失败: %w", id, err)
 	}
+	// 本条路径会直接执行后置动作，先清掉可能残留的待补跑标记，
+	// 避免 backend.Enable 内的消费逻辑重复执行一次迁移。
+	s.clearPostUpgradePending(id)
 	ctx, cancel := context.WithTimeout(context.Background(), restoreTimeout)
 	defer cancel()
 	if err := s.backend.Enable(ctx, id); err != nil {
@@ -319,6 +339,31 @@ func (s *service) reloadOne(id string) (string, error) {
 	s.runPostUpgrade(id, manifest.PostUpgrade)
 	slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRestarted)
 	return reloadRestarted, nil
+}
+
+// deferPostUpgrade 记录「禁用态升级」的待补跑标记（值 = 升级到的版本）。
+//
+// 升级当下绝不拉起插件（用户禁用即不想它运行；拉起会占槽位并写 plugin.enable 审计），
+// 所以只落标记；真正执行由下一次 Enable 成功后的 daemon.consumePostUpgrade 完成。
+func (s *service) deferPostUpgrade(id, version string) {
+	if _, _, _, err := s.backend.update(id, func(state *persistedState, _ supervisor.View, _ bool) {
+		state.PostUpgradePending = version
+	}); err != nil {
+		slog.Warn("记录升级后置动作待补跑标记失败（升级已生效，动作需在启用后人工重放）",
+			"plugin_id", id, "version", version, "err", err)
+		return
+	}
+	slog.Info("插件在禁用态升级：升级后置动作推迟到启用时执行",
+		"plugin_id", id, "version", version)
+}
+
+// clearPostUpgradePending 清除待补跑标记；写失败只 WARN，不阻断重载。
+func (s *service) clearPostUpgradePending(id string) {
+	if _, _, _, err := s.backend.update(id, func(state *persistedState, _ supervisor.View, _ bool) {
+		state.PostUpgradePending = ""
+	}); err != nil {
+		slog.Warn("清除升级后置动作待补跑标记失败", "plugin_id", id, "err", err)
+	}
 }
 
 // runPostUpgrade 执行清单声明的升级后置动作。

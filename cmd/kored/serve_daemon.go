@@ -43,6 +43,10 @@ type daemon struct {
 	// selfUpdate 是内核自升级实现（装配层注入，见 serve_upgrade.go）；
 	// nil 表示未装配，self-upgrade 端点回 E_UNSUPPORTED 而不是假装成功。
 	selfUpdate *selfUpdater
+
+	// postUpgrade 是升级后置动作的执行入口（装配层注入 service.runPostUpgrade）。
+	// 只由 consumePostUpgrade 在有「禁用态升级」标记时调用；nil 表示未装配（只清标记不执行）。
+	postUpgrade func(id, method string)
 }
 
 // newDaemon 构造后端。

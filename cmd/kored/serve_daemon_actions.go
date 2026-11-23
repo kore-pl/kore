@@ -29,7 +29,49 @@ func (d *daemon) Enable(ctx context.Context, id string) error {
 		return err
 	}
 	d.refresh(id, string(supervisor.StateReady))
+	// 消费「禁用态升级」留下的待补跑标记：插件现在已启用，迁移必须补上，
+	// 否则启用后仍引用旧版本二进制（cron 的 crontab 条目是真实案例）。
+	d.consumePostUpgrade(id)
 	return nil
+}
+
+// consumePostUpgrade 消费「禁用态升级」留下的待补跑标记：启用成功后补跑一次声明动作。
+//
+// 两个诉求同时满足：
+//   - 不违背禁用意图：升级当下不拉起插件、不执行动作，只落标记（见 reloadOne 的
+//     disabled 分支与 service.deferPostUpgrade）；
+//   - 启用后状态正确：用户显式 Enable 是「我愿意它运行」的表达，此时补跑迁移，
+//     插件不会带着旧外部引用上线。
+//
+// 标记只由「版本变化 + desired=disabled + 清单声明 post_upgrade」产生，因此从未
+// 升级过的插件启用时不会误跑。先清标记再调用：失败不阻断启用（与重载路径同口径
+// WARN + 告警，禁止静默），但也不在每次启用时反复重试轰炸；插件自身的启动期兜底
+// 或人工重放是失败后的兜底路径。
+func (d *daemon) consumePostUpgrade(id string) {
+	state, found, err := d.states.load(id)
+	if err != nil {
+		slog.Warn("读取升级后置动作待补跑标记失败", "plugin_id", id, "err", err)
+		return
+	}
+	if !found || state.PostUpgradePending == "" {
+		return
+	}
+	if _, _, _, err := d.update(id, func(state *persistedState, _ supervisor.View, _ bool) {
+		state.PostUpgradePending = ""
+	}); err != nil {
+		slog.Warn("清除升级后置动作待补跑标记失败，跳过本次补跑以避免重复执行",
+			"plugin_id", id, "err", err)
+		return
+	}
+	manifest, ok := d.catalog.Manifest(id)
+	if !ok || manifest.PostUpgrade == "" {
+		return
+	}
+	slog.Info("启用时补跑升级后置动作（禁用态升级的迁移不能丢）",
+		"plugin_id", id, "upgraded_to", state.PostUpgradePending, "method", manifest.PostUpgrade)
+	if d.postUpgrade != nil {
+		d.postUpgrade(id, manifest.PostUpgrade)
+	}
 }
 
 // Disable 先停进程再退回 installed；两步都幂等。

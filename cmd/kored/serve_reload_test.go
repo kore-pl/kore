@@ -222,3 +222,181 @@ func TestReloadOneRunsDeclaredPostUpgrade(t *testing.T) {
 		t.Fatalf("升级后置动作未被调用（lazy 插件升级后仍停在旧状态）: %v", err)
 	}
 }
+
+// postUpgradeMarkerPath 返回测试插件升级后置动作的探针文件路径：插件进程工作目录
+// 是 <plugin_root>/<id>（见 supervisor.spawn 的 cmd.Dir）。
+func postUpgradeMarkerPath(stateDir, id string) string {
+	return filepath.Join(stateDir, "plugins", id, "post_upgrade_ran")
+}
+
+// pendingPostUpgradeVersion 读取 plugin_state 里「待补跑」标记的版本值；空串表示无标记。
+//
+// 刻意按原始 JSON 读取（不依赖装配层结构体字段），让本断言在修复前也能编译并失败，
+// 而不是靠编译错误「证明」缺口存在。
+func pendingPostUpgradeVersion(t *testing.T, db *store.Store, id string) string {
+	t.Helper()
+	var record struct {
+		PostUpgradePending string `json:"post_upgrade_pending"`
+	}
+	if err := db.View(func(tx *store.Tx) error {
+		value, err := tx.Get(bucketPluginState, id)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(value, &record)
+	}); err != nil {
+		t.Fatalf("读取 plugin_state 失败: %v", err)
+	}
+	return record.PostUpgradePending
+}
+
+// upgradeSpec 返回同 id 的升级包（默认从 0.1.0 升到 0.2.0，并声明升级后置动作）。
+func upgradeSpec(id string) pluginSpec {
+	return pluginSpec{
+		ID: id, Lifecycle: "resident", Version: "0.2.0",
+		PostUpgrade: id + ".postupgrade",
+	}
+}
+
+// TestDisabledUpgradeDefersPostUpgrade 断言「禁用态升级」不违背禁用意图：
+// 升级当下不拉起插件进程、不执行声明动作，只在状态库留下「待补跑」标记。
+//
+// 反例：修复前该测试 FAIL——标记字段不存在。
+func TestDisabledUpgradeDefersPostUpgrade(t *testing.T) {
+	stateDir := t.TempDir()
+	logger := discardLogger()
+	installSpecs(t, stateDir, logger, []pluginSpec{{ID: "echo", Lifecycle: "resident"}})
+	cfg := testConfig(stateDir)
+	app := newPlatform(t, cfg)
+	db := openState(t, stateDir, logger)
+	svc, code := buildService(cfg, app, db)
+	if code != exitOK {
+		t.Fatalf("装配 service 失败，退出码 %d", code)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = svc.manager.Stop(ctx, "echo")
+	})
+
+	// 前置：用户从未启用过该插件（desired=disabled）。
+	if result, err := svc.reloadOne("echo"); err != nil || result != reloadRegistered {
+		t.Fatalf("初始重载结果 = %q err=%v，期望 %q", result, err, reloadRegistered)
+	}
+	if state, found, err := svc.states.load("echo"); err != nil || !found || state.Desired != desiredDisabled {
+		t.Fatalf("前置失败：期望 desired=disabled，实际 found=%v state=%+v err=%v", found, state, err)
+	}
+
+	// 升级到 0.2.0（声明 post_upgrade），插件仍处于禁用态。
+	if _, err := newTestInstaller(t, stateDir, db, false).Install(buildPackage(t, upgradeSpec("echo"))); err != nil {
+		t.Fatalf("安装 0.2.0 失败: %v", err)
+	}
+	result, err := svc.reloadOne("echo")
+	if err != nil {
+		t.Fatalf("禁用态升级重载失败: %v", err)
+	}
+	if result != reloadRegistered {
+		t.Fatalf("禁用态升级重载结果 = %q，期望 %q", result, reloadRegistered)
+	}
+
+	// 断言 1：升级当下不拉起插件进程（尊重禁用意图）。
+	if view, ok := svc.manager.Snapshot("echo"); ok && view.PID != 0 {
+		t.Fatalf("禁用态升级不应拉起插件进程，实际 state=%s pid=%d", view.State, view.PID)
+	}
+	// 断言 2：升级当下不执行声明动作。
+	if _, statErr := os.Stat(postUpgradeMarkerPath(stateDir, "echo")); statErr == nil {
+		t.Fatal("禁用态升级不应执行升级后置动作（探针文件已存在）")
+	}
+	// 断言 3：待补跑标记落库，供后续 Enable 消费。
+	if got := pendingPostUpgradeVersion(t, db, "echo"); got != "0.2.0" {
+		t.Fatalf("待补跑标记 = %q，期望 %q（禁用态升级必须记下待迁移版本）", got, "0.2.0")
+	}
+}
+
+// TestEnableConsumesDeferredPostUpgrade 断言「禁用态升级 → 启用」闭环：
+// 启用成功后补跑一次声明动作，并清空待补跑标记。
+//
+// 反例：修复前该测试 FAIL——Enable 路径没有消费逻辑，探针文件不会出现。
+func TestEnableConsumesDeferredPostUpgrade(t *testing.T) {
+	stateDir := t.TempDir()
+	logger := discardLogger()
+	// lazy 与 cron 同形态：Enable 本身不拉起进程，钩子必须由内核主动调用。
+	installSpecs(t, stateDir, logger, []pluginSpec{{ID: "echo", Lifecycle: "lazy"}})
+	cfg := testConfig(stateDir)
+	app := newPlatform(t, cfg)
+	db := openState(t, stateDir, logger)
+	svc, code := buildService(cfg, app, db)
+	if code != exitOK {
+		t.Fatalf("装配 service 失败，退出码 %d", code)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = svc.manager.Stop(ctx, "echo")
+	})
+
+	if _, err := svc.reloadOne("echo"); err != nil {
+		t.Fatalf("初始重载失败: %v", err)
+	}
+	spec := pluginSpec{ID: "echo", Lifecycle: "lazy", Version: "0.2.0", PostUpgrade: "echo.postupgrade"}
+	if _, err := newTestInstaller(t, stateDir, db, false).Install(buildPackage(t, spec)); err != nil {
+		t.Fatalf("安装 0.2.0 失败: %v", err)
+	}
+	if result, err := svc.reloadOne("echo"); err != nil || result != reloadRegistered {
+		t.Fatalf("禁用态升级重载结果 = %q err=%v", result, err)
+	}
+	marker := postUpgradeMarkerPath(stateDir, "echo")
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("禁用态升级不应执行升级后置动作")
+	}
+	if view, ok := svc.manager.Snapshot("echo"); ok && view.PID != 0 {
+		t.Fatalf("禁用态升级不应拉起插件进程，实际 pid=%d", view.PID)
+	}
+
+	// 用户重新启用：内核必须补跑一次升级后置动作。
+	if err := svc.backend.Enable(context.Background(), "echo"); err != nil {
+		t.Fatalf("启用 echo 失败: %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("启用后未补跑升级后置动作（禁用态升级的迁移被永久丢失）: %v", statErr)
+	}
+	if got := pendingPostUpgradeVersion(t, db, "echo"); got != "" {
+		t.Fatalf("补跑后待补跑标记应清空，实际 %q", got)
+	}
+}
+
+// TestEnableWithoutUpgradeDoesNotRunPostUpgrade 断言「从未升级过」的禁用插件启用时
+// 不误跑升级后置动作：首次安装不是升级，没有待补跑标记。
+func TestEnableWithoutUpgradeDoesNotRunPostUpgrade(t *testing.T) {
+	stateDir := t.TempDir()
+	logger := discardLogger()
+	installSpecs(t, stateDir, logger, []pluginSpec{
+		{ID: "echo", Lifecycle: "resident", PostUpgrade: "echo.postupgrade"},
+	})
+	cfg := testConfig(stateDir)
+	app := newPlatform(t, cfg)
+	db := openState(t, stateDir, logger)
+	svc, code := buildService(cfg, app, db)
+	if code != exitOK {
+		t.Fatalf("装配 service 失败，退出码 %d", code)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = svc.manager.Stop(ctx, "echo")
+	})
+
+	// 首次安装（无旧版本）后的禁用态重载不是升级。
+	if result, err := svc.reloadOne("echo"); err != nil || result != reloadRegistered {
+		t.Fatalf("首次安装重载结果 = %q err=%v", result, err)
+	}
+	if got := pendingPostUpgradeVersion(t, db, "echo"); got != "" {
+		t.Fatalf("首次安装不应留下待补跑标记，实际 %q", got)
+	}
+	if err := svc.backend.Enable(context.Background(), "echo"); err != nil {
+		t.Fatalf("启用 echo 失败: %v", err)
+	}
+	if _, statErr := os.Stat(postUpgradeMarkerPath(stateDir, "echo")); statErr == nil {
+		t.Fatal("从未升级过的插件启用时不应执行升级后置动作")
+	}
+}

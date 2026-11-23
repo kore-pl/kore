@@ -32,6 +32,10 @@ type persistedState struct {
 	Actual string `json:"actual"`
 	// Restarts 重启计数。
 	Restarts int `json:"restarts"`
+	// PostUpgradePending 是「禁用态升级」留下的待补跑标记：值为升级到的版本。
+	// 非空表示该版本声明的 post_upgrade 尚未执行，下一次 Enable 成功后补跑并清空
+	// （见 daemon.consumePostUpgrade）。首次安装与从未升级的插件恒为空，不会误跑。
+	PostUpgradePending string `json:"post_upgrade_pending,omitempty"`
 	// UpdatedAt 最近一次写入时间（RFC3339）。
 	UpdatedAt string `json:"updated_at"`
 }
