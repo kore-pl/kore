@@ -58,6 +58,7 @@
 | idle_timeout_s | int | 否 | `60` | 仅 `lifecycle=lazy` 生效，范围 60–1800；其它 lifecycle 传值忽略并 WARN |
 | entry | string | 是 | — | 相对包根的可执行路径，固定 `bin/<id>` |
 | capabilities | string[] | 是 | — | 两层：6 个特权能力 + 插件自有 `<id>:<action>`（见 §3.1.2）；**非空：至少 1 项、上限 16 项** |
+| method_capabilities | map<string,string> | 否 | 无 | 方法级能力覆盖：键为完整方法名 `<id>.<action>`（action 可点分，如 `db-mysql.config.get`），值为 6 项特权能力之一；未声明的方法回退 `capabilities`（见 §3.1.2.1）；上限 64 条 |
 | resources.memory_mb | int | 是 | — | 4–12（常驻与活跃 lazy 上限 12，见 RESOURCE-MODEL） |
 | resources.cpu_quota | string | 是 | — | `"10%"`–`"100%"`，映射 `cpu.max` |
 | resources.pids_max | int | 是 | — | 16–512 |
@@ -79,7 +80,7 @@
 - 失败行为：不匹配 → 拒绝安装/加载并回 `E_UNSUPPORTED`，`message` 同时带 kore 版本、`requires_kore`、`<id>@<version>`。
 - `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。
 - 与 `protocol` 的关系：`protocol` 是协议主版本、`requires_kore` 是内核版本区间，两者都要过；`protocol` 不变而 `requires_kore` 收窄是合法发布。REPOS 版本矩阵（0.2.x → `">=0.1.0 <0.3.0"`、1.0.x → `">=0.1.0 <2.0.0"`）符合上述规则。
-- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；另有 ADR-0018 增补的 2 个可选字段 `requires_root`（缺省 `false`）与 `root_actions`（缺省 `[]`）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys` 与 `validateRootActions`。
+- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；另有 ADR-0018 增补的 2 个可选字段 `requires_root`（缺省 `false`）与 `root_actions`（缺省 `[]`），以及方法级能力字段 `method_capabilities`（缺省无，见 §3.1.2.1）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys` 与 `validateRootActions` / `validateMethodCapabilities`。
 
 ### 3.1.1 依赖解析（安装时）
 
@@ -94,7 +95,7 @@
 
 **校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
 
-**调用时校验（内核强制）**：`POST /api/v1/invoke/{plugin}/{method}` 在转发前，内核先验会话，再按目标插件 `info.json` 声明的 `capabilities` 判定本次调用是否放行。规则**只看能力字符串的宿主前缀与动作级，不维护「方法 → 业务能力」映射表**（G-01）：
+**调用时校验（内核强制）**：`POST /api/v1/invoke/{plugin}/{method}` 在转发前，内核先验会话，再按目标插件 `info.json` 声明判定本次调用是否放行——**先查方法级 `method_capabilities`（命中即单独生效），未命中回退插件级 `capabilities`（多项取最高要求）**。规则**只看能力字符串的宿主前缀与动作级，不维护「方法 → 业务能力」映射表**（G-01）：
 
 | 声明内容 | 判定 | 说明 |
 | --- | --- | --- |
@@ -106,6 +107,28 @@
 同一插件声明多项时取最高要求（未知宿主动作 > 写/管理 > 只读 > 无要求）。拒绝 → `403 E_UNAUTHORIZED`（message 写明「该方法需要 `<capability>` 权限」）并写审计 `capability.denied`（subject / 插件 id / 方法 / 原因，`result=denied`）。未声明任何能力 → 不需特权。**当前单管理员模式**：`kore_session` 未携带 capability 字段，有效会话按 6 项全权处理，检查在生产路径恒通过（首次检查打一次 WARN 说明降级）；多用户接入后由装配层注入 capability 解析器即生效。
 
 **设计理由**：内核不得维护业务域名词表——只认识 6 个宿主级特权能力 + 通用语法，其余归插件自治；新增插件永远不需要改内核。
+
+#### 3.1.2.1 方法级能力（method_capabilities，可选）
+
+插件级 `capabilities` 无法区分「同一个插件里的只读方法与写方法」：声明 `system:admin` 的插件，其 `instances` / `query` 等只读方法也会被当成管理类，授权过严、审计爆炸。`method_capabilities` 把粒度下沉到方法，内核仍只做能力字符串比较（G-01）：
+
+```json
+"capabilities": ["system:admin"],
+"method_capabilities": {
+  "db-mysql.instances": "system:read",
+  "db-mysql.databases": "system:read",
+  "db-mysql.config.get": "system:read",
+  "db-mysql.createDatabase": "system:admin"
+}
+```
+
+- **键**：协议完整方法名 `<id>.<action>`；`<id>` 必须等于插件自身 `info.json.id`（防越权声明他人方法），`<action>` 匹配 `^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`（小写字母开头，允许点分如 `config.get`，不含连字符/下划线）。
+- **值**：只能是 6 项特权能力之一；插件自有 `<id>:<action>` 不得作为方法级值（内核不解释其语义）。
+- **数量与重复**：上限 64 条；重复键直接拒绝（标准库对重复键是「后者覆盖」，对权限声明等价于静默提权/降权，必须 fail-closed）。
+- **失败行为**：任一校验失败 → 插件加载失败，回 `E_INVALID`，`message` 带出错的方法名或能力名（安装、enable、热重载共用同一校验）。
+- **回退语义**：未在该表声明的方法沿用插件级 `capabilities`（向后兼容；旧插件不写该字段行为完全不变）。命中方法级时**只按该条能力判定**，不与插件级多项取最高混算。
+- **审计口径**：按**最终生效能力**判定——只有 `write` / `admin` 类才写 `invoke.<plugin>.<method>`；最终为 `*:read` 的方法不写（`audit.invoke_all=true` 时仍全量审计）。方法级能力让「同一插件只读方法不审计、写方法审计」成为协议能力，而不是内核业务词表。
+- **诚实披露**：当前单管理员模式下会话恒持 6 项全权，授权侧检查在单用户生产路径恒通过；方法级能力此时**只在审计侧实际生效**。多用户接入并注入 capability 解析器后，方法级授权同时在授权侧生效。
 
 ### 3.1.3 root_actions（提权动作清单，ADR-0018）
 

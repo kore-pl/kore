@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,7 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 		// store plugins bucket 的 capabilities 与 manifest 同源（installer.record 落库），
 		// 这里取内存中已登记清单，避免每次列表请求都读 bbolt（G-13 薄壳边界）。
 		GrantedCapabilities: append([]string(nil), manifest.Capabilities...),
+		MethodCapabilities:  maps.Clone(manifest.MethodCapabilities),
 		RequiresRoot:        manifest.RequiresRoot,
 		RootActions:         append([]pluginapi.RootAction(nil), manifest.RootActions...),
 	}
@@ -112,6 +114,19 @@ func (d *daemon) PluginCapabilities(_ context.Context, id string) ([]string, boo
 		return nil, false, nil
 	}
 	return append([]string(nil), manifest.Capabilities...), true, nil
+}
+
+// PluginMethodCapabilities 实现 httpapi.PluginMethodCapabilityLookup：只读内存清单的
+// method_capabilities（完整方法名 → 6 项特权能力之一），不解释语义（G-01）。
+//
+// 与 PluginCapabilities 同一数据源（Manifest），返回副本避免调用方改到登记表；
+// 方法级优先级与回退逻辑由 httpapi 判定，装配层只交原始声明。
+func (d *daemon) PluginMethodCapabilities(_ context.Context, id string) (map[string]string, bool, error) {
+	manifest, ok := d.catalog.Manifest(id)
+	if !ok {
+		return nil, false, nil
+	}
+	return maps.Clone(manifest.MethodCapabilities), true, nil
 }
 
 // RootAction 实现 httpapi.RootActionLookup：按 id 从已登记清单查 root 动作。

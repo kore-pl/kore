@@ -55,6 +55,9 @@ type PluginStatus struct {
 	Web *PluginWeb `json:"web,omitempty"`
 	// GrantedCapabilities 已授予能力集（来源 manifest capabilities / plugins bucket capabilities）。
 	GrantedCapabilities []string `json:"granted_capabilities,omitempty"`
+	// MethodCapabilities 方法级能力覆盖（来源 manifest method_capabilities）；nil 表示未声明。
+	// 键为完整方法名 `<id>.<action>`，值为 6 项特权能力之一。
+	MethodCapabilities map[string]string `json:"method_capabilities,omitempty"`
 	// RequiresRoot 声明插件是否需要宿主 root 权限（ADR-0018）。
 	RequiresRoot bool `json:"requires_root,omitempty"`
 	// RootActions 是插件声明的固定 argv 提权动作（启用确认与 UI 展示用）。
@@ -106,6 +109,16 @@ type RootActionLookup interface {
 type PluginCapabilityLookup interface {
 	// PluginCapabilities 返回目标插件声明的能力集；未安装返回 known=false。
 	PluginCapabilities(ctx context.Context, id string) ([]string, bool, error)
+}
+
+// PluginMethodCapabilityLookup 是装配层可选实现的「方法级能力」只读查询。
+//
+// 返回 info.json 的 method_capabilities 原样（完整方法名 → 6 项特权能力之一）；
+// 插件未安装时第二返回值为 false。实现方只读内存清单，不解释能力语义（G-01）。
+// 未实现时 httpapi 回退 Backend.Plugin 的 PluginStatus.MethodCapabilities。
+type PluginMethodCapabilityLookup interface {
+	// PluginMethodCapabilities 返回目标插件的方法级能力表；未安装返回 known=false。
+	PluginMethodCapabilities(ctx context.Context, id string) (map[string]string, bool, error)
 }
 
 // Backend 是 httpapi 对装配层（cmd/kored）的最小依赖。

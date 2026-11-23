@@ -15,8 +15,9 @@ import (
 // capDeclBackend 是能力校验测试后端：按插件 id 返回清单声明的能力集，并记录真实 invoke。
 // 只实现 Backend（不实现 PluginCapabilityLookup），用于覆盖 httpapi 的回退读法。
 type capDeclBackend struct {
-	caps    map[string][]string
-	invoked []string
+	caps       map[string][]string
+	methodCaps map[string]map[string]string
+	invoked    []string
 }
 
 func (b *capDeclBackend) Plugins(_ context.Context) ([]PluginStatus, error) { return nil, nil }
@@ -28,7 +29,7 @@ func (b *capDeclBackend) Plugin(_ context.Context, id string) (PluginStatus, boo
 	}
 	return PluginStatus{
 		ID: id, State: "ready", Desired: "enabled", Enabled: true,
-		GrantedCapabilities: caps,
+		GrantedCapabilities: caps, MethodCapabilities: b.methodCaps[id],
 	}, true, nil
 }
 

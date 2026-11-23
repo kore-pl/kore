@@ -3,6 +3,7 @@ package registry
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -27,6 +28,8 @@ const (
 	maxIdleSec = 1800
 	// maxCapabilities 是单插件能力声明数量上限。
 	maxCapabilities = 16
+	// maxMethodCapabilities 是方法级能力覆盖条数上限（防清单膨胀）。
+	maxMethodCapabilities = 64
 	// maxRootActions 是单个插件 root_actions 条目上限（协议常量）。
 	maxRootActions = 16
 )
@@ -47,6 +50,9 @@ var (
 	}
 	// capabilityPattern 是能力项语法：<域>:<动作>，两段均为小写短横线标识符。
 	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`)
+	// methodActionPattern 是方法级能力键的动作段语法：单段动词或点分多段（如
+	// createDatabase / config.get）；域由插件 id 单独比对，不进本正则。
+	methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
 	// eventNamePattern 是 event 触发的匹配名语法：<域>.<事件>，如 cert.renew_due。
 	eventNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`)
 	// invokeNamePattern 是 invoke 触发的匹配名语法：允许单段动词（如 run）
@@ -65,6 +71,7 @@ func (m *Manifest) validate() error {
 	for _, check := range []func() error{
 		m.validateIdentity,
 		m.validateRuntime,
+		m.validateMethodCapabilities,
 		m.validateResources,
 		m.validateTriggers,
 		m.validateExtras,
@@ -142,6 +149,50 @@ func (m *Manifest) validateCapabilities() error {
 		if domain != m.ID {
 			return errf(pluginapi.E_INVALID,
 				"capability=%q 的能力域 %q 必须等于插件 id %q，或使用 6 项特权能力", capability, domain, m.ID)
+		}
+	}
+	return nil
+}
+
+// validateMethodCapabilities 校验方法级能力覆盖（method_capabilities，可选字段）。
+//
+// 规则（fail-closed，任一不合即整份清单加载失败）：
+//   - 条数 ≤ maxMethodCapabilities；
+//   - 键必须是插件自身域：`<info.json.id>.<action>`，域不等于自身 id 视为越权声明；
+//   - 动作段匹配 methodActionPattern（小写字母开头，可点分，如 config.get）；
+//   - 值只能是 6 项特权能力之一——插件自有 `<id>:<action>` 不在此表（内核不解释其语义）。
+//
+// 未声明的方法不在本函数校验范围：运行期回退插件级 capabilities（向后兼容）。
+func (m *Manifest) validateMethodCapabilities() error {
+	if len(m.MethodCapabilities) == 0 {
+		return nil
+	}
+	if len(m.MethodCapabilities) > maxMethodCapabilities {
+		return errf(pluginapi.E_INVALID, "method_capabilities 最多 %d 条，当前 %d",
+			maxMethodCapabilities, len(m.MethodCapabilities))
+	}
+	prefix := m.ID + "."
+	methods := make([]string, 0, len(m.MethodCapabilities))
+	for method := range m.MethodCapabilities {
+		methods = append(methods, method)
+	}
+	sort.Strings(methods) // 固定错误顺序：map 遍历随机，门禁与回显需要可复现
+	for _, method := range methods {
+		capability := m.MethodCapabilities[method]
+		action, ok := strings.CutPrefix(method, prefix)
+		if !ok || action == "" {
+			return errf(pluginapi.E_INVALID,
+				"method_capabilities 的键 %q 必须以插件自身 id 为域（应为 %s<action>）", method, prefix)
+		}
+		if !methodActionPattern.MatchString(action) {
+			return errf(pluginapi.E_INVALID,
+				"method_capabilities 的键 %q 动作段 %q 非法：应为小写字母开头的点分标识符（如 config.get）",
+				method, action)
+		}
+		if _, ok := privilegedCapabilities[capability]; !ok {
+			return errf(pluginapi.E_INVALID,
+				"method_capabilities[%q]=%q 必须是 6 项特权能力之一（system:read|system:admin|net:read|net:write|proc:read|proc:write）",
+				method, capability)
 		}
 	}
 	return nil

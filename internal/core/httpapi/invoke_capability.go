@@ -84,13 +84,14 @@ func hostCapabilityAction(capability string) (action string, isHost bool) {
 type invokeAuth struct {
 	// subject 是调用方会话 subject；未装配鉴权时为空。
 	subject string
-	// needAdmin 为 true 表示该方法按插件能力声明需要 admin（写/管理类），
-	// 也是"默认写审计"的判据。
+	// needAdmin 为 true 表示该方法按**最终生效能力**需要 admin（写/管理类），
+	// 也是"默认写审计"的判据：方法级 read 覆盖后不再审计。
 	needAdmin bool
 }
 
 // authorizeInvoke 是 /api/v1/invoke 的目标操作鉴权：先验会话，再按目标插件声明的
-// 能力做调用校验（docs/PLUGIN-PROTOCOL §3.1.2「调用校验」）。
+// 能力做调用校验（docs/PLUGIN-PROTOCOL §3.1.2「调用校验」）。方法级
+// method_capabilities[<id>.<action>] 优先，未声明回退插件级 capabilities。
 //
 // 失败口径：
 //   - 未登录 / 会话无 subject → 401 E_UNAUTHORIZED；
@@ -116,7 +117,7 @@ func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) (invoke
 		s.warnCapabilityDegraded()
 	}
 	plugin, method := r.PathValue("plugin"), r.PathValue("method")
-	declared, known, err := s.pluginDeclaredCapabilities(r.Context(), plugin)
+	requirement, known, err := s.effectiveInvokeRequirement(r.Context(), plugin, method)
 	if err != nil {
 		slog.Error("读取插件能力声明失败", "plugin", plugin, "err", err)
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "读取插件能力声明失败", plugin)
@@ -126,7 +127,6 @@ func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) (invoke
 		// 插件不存在：不在鉴权层伪造 404，交给 Invoke 统一返回 E_NOTFOUND（无执行面）。
 		return invokeAuth{subject: subject}, true
 	}
-	requirement := requiredInvokeCapability(declared)
 	result := invokeAuth{subject: subject, needAdmin: requirement.needAdmin}
 	if requirement.unsupported {
 		s.auditDenied(subject, plugin, method, "插件声明了内核不支持的特权能力 "+requirement.name)
@@ -144,26 +144,80 @@ func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) (invoke
 	return result, true
 }
 
-// pluginDeclaredCapabilities 读取目标插件清单声明的能力集。
+// pluginCapabilityDeclaration 是目标插件的完整能力声明（插件级 + 方法级）。
+type pluginCapabilityDeclaration struct {
+	// pluginLevel 是插件级 capabilities（未声明方法级时回退到这里）。
+	pluginLevel []string
+	// methodLevel 是 method_capabilities（完整方法名 → 6 项特权能力之一）；nil 表示未声明。
+	methodLevel map[string]string
+	// known 为 false 表示插件不存在（由 Invoke 统一返回 E_NOTFOUND）。
+	known bool
+}
+
+// effectiveInvokeRequirement 解析本次 invoke 的最终生效能力要求。
 //
-// 首选装配层可选实现 PluginCapabilityLookup（直接读 Manifest.Capabilities，无副作用）；
-// 未实现时回退到 Backend.Plugin 的 GrantedCapabilities（与 info.json 同源）。
+// 取用顺序（PLUGIN-PROTOCOL §3.1.2）：
+//  1. method_capabilities[<id>.<action>] 命中 → 只按该能力判定；
+//  2. 未命中 → 回退插件级 capabilities（向后兼容，取最高要求）；
+//
+// 内核只比较能力字符串，不维护「方法 → 业务能力」映射表（G-01）。路径方法段可能是
+// 裸动作（instances）或完整限定名（db-mysql.instances），统一归一成完整方法名再查表。
+func (s *Server) effectiveInvokeRequirement(ctx context.Context, plugin, method string) (invokeCapRequirement, bool, error) {
+	declaration, err := s.pluginCapabilityDeclaration(ctx, plugin)
+	if err != nil {
+		return invokeCapRequirement{}, false, err
+	}
+	if !declaration.known {
+		return invokeCapRequirement{}, false, nil
+	}
+	if capability, ok := declaration.methodLevel[fullMethodName(plugin, method)]; ok {
+		return requiredInvokeCapability([]string{capability}), true, nil
+	}
+	return requiredInvokeCapability(declaration.pluginLevel), true, nil
+}
+
+// fullMethodName 把路径中的方法段归一为协议完整方法名 `<plugin-id>.<action>`。
+func fullMethodName(plugin, method string) string {
+	if strings.HasPrefix(method, plugin+".") {
+		return method
+	}
+	return plugin + "." + method
+}
+
+// pluginCapabilityDeclaration 读取目标插件的能力声明（插件级 + 方法级）。
+//
+// 首选装配层可选实现：PluginCapabilityLookup（插件级）与 PluginMethodCapabilityLookup
+// （方法级），只读内存清单、无副作用；两者都未实现时回退 Backend.Plugin 的
+// GrantedCapabilities + MethodCapabilities（与 info.json 同源）。
 // 本层不读插件目录、不 import registry 内部实现（G-01）。
-func (s *Server) pluginDeclaredCapabilities(ctx context.Context, id string) ([]string, bool, error) {
+func (s *Server) pluginCapabilityDeclaration(ctx context.Context, id string) (pluginCapabilityDeclaration, error) {
 	if s.opts.Backend == nil || id == "" {
-		return nil, false, nil
+		return pluginCapabilityDeclaration{}, nil
 	}
 	if lookup, ok := s.opts.Backend.(PluginCapabilityLookup); ok {
-		return lookup.PluginCapabilities(ctx, id)
+		pluginLevel, known, err := lookup.PluginCapabilities(ctx, id)
+		if err != nil || !known {
+			return pluginCapabilityDeclaration{}, err
+		}
+		declaration := pluginCapabilityDeclaration{pluginLevel: pluginLevel, known: true}
+		if methodLookup, ok := s.opts.Backend.(PluginMethodCapabilityLookup); ok {
+			methodLevel, _, err := methodLookup.PluginMethodCapabilities(ctx, id)
+			if err != nil {
+				return pluginCapabilityDeclaration{}, err
+			}
+			declaration.methodLevel = methodLevel
+		}
+		return declaration, nil
 	}
 	status, known, err := s.opts.Backend.Plugin(ctx, id)
-	if err != nil {
-		return nil, false, err
+	if err != nil || !known {
+		return pluginCapabilityDeclaration{}, err
 	}
-	if !known {
-		return nil, false, nil
-	}
-	return status.GrantedCapabilities, true, nil
+	return pluginCapabilityDeclaration{
+		pluginLevel: status.GrantedCapabilities,
+		methodLevel: status.MethodCapabilities,
+		known:       true,
+	}, nil
 }
 
 // warnCapabilityDegraded 在未注入 CapabilityResolver（session 无 capability 字段）时

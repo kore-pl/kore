@@ -6,6 +6,7 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -49,6 +50,56 @@ type Web struct {
 	Styles []string `json:"styles,omitempty"`
 }
 
+// MethodCapabilities 是 info.json 的 method_capabilities 段：完整方法名 → 宿主特权能力。
+//
+// 键是协议完整方法名（`<id>.<action>`，action 允许点分如 `config.get`），值是 6 项
+// 特权能力之一；未声明的方法回退插件级 capabilities（向后兼容）。内核只读这张表做
+// 字符串比较，不解释业务语义（G-01）。
+//
+// 自定义 UnmarshalJSON 拒绝重复键：标准库对重复键是"后者覆盖"，对权限声明等价于
+// 静默提权/降权，必须 fail-closed。
+type MethodCapabilities map[string]string
+
+// UnmarshalJSON 解析方法级能力表：只接受 JSON 对象，键必须唯一。
+func (m *MethodCapabilities) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		*m = nil
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '{' {
+		return fmt.Errorf("method_capabilities 必须是 JSON 对象")
+	}
+	declared := MethodCapabilities{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("method_capabilities 的键必须是字符串")
+		}
+		if _, exists := declared[key]; exists {
+			return fmt.Errorf("method_capabilities 含重复键 %q", key)
+		}
+		var capability string
+		if err := decoder.Decode(&capability); err != nil {
+			return err
+		}
+		declared[key] = capability
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	*m = declared
+	return nil
+}
+
 // Manifest 是 info.json 的内存表示：9 个必填字段 + 3 个可选字段（见 requiredKeys）。
 type Manifest struct {
 	// ID 插件 id（同时决定 socket、目录与二进制名）。
@@ -65,6 +116,9 @@ type Manifest struct {
 	Entry string `json:"entry"`
 	// Capabilities 能力声明，必须是 8 项白名单的子集；空数组合法。
 	Capabilities []string `json:"capabilities"`
+	// MethodCapabilities 方法级能力覆盖（可选）：完整方法名 `<id>.<action>` → 6 项特权能力之一。
+	// 声明了的方法优先于 Capabilities 生效；未声明的方法回退 Capabilities（向后兼容）。
+	MethodCapabilities MethodCapabilities `json:"method_capabilities,omitempty"`
 	// Resources 资源预算。
 	Resources Resources `json:"resources"`
 	// RequiresKore 内核版本区间（如 ">=0.1.0 <0.2.0"），M1 只校验存在性。

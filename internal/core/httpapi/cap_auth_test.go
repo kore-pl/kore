@@ -58,9 +58,16 @@ func capHash(t *testing.T) string {
 }
 
 // capSetup 组装带真实 auth 的服务器并登录取 session cookie。
-// resolver 为 nil 时用默认 admin 全权；auditor 可注入以断言审计。
+// resolver 为 nil 时用默认 admin 全权；auditor 可注入以断言 capability.denied。
 func capSetup(t *testing.T, resolver CapabilityResolver, auditor CapabilityAuditor,
 	backend Backend) (*httptest.Server, string) {
+	t.Helper()
+	return capSetupWithRecorder(t, resolver, auditor, backend, nil)
+}
+
+// capSetupWithRecorder 在 capSetup 之上注入 HTTP 审计出口（invoke.* 断言用）。
+func capSetupWithRecorder(t *testing.T, resolver CapabilityResolver, auditor CapabilityAuditor,
+	backend Backend, recorder AuditRecorder) (*httptest.Server, string) {
 	t.Helper()
 	db, err := store.Open(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -70,7 +77,7 @@ func capSetup(t *testing.T, resolver CapabilityResolver, auditor CapabilityAudit
 	srv := New(Options{
 		Version: "0.1.0-cap", Report: envprobe.Report{OS: "linux", Arch: "amd64"},
 		Backend: backend, Auth: auth.NewManager(db, capHash(t), 0, false),
-		CapabilityResolver: resolver, CapabilityAuditor: auditor,
+		CapabilityResolver: resolver, CapabilityAuditor: auditor, AuditRecorder: recorder,
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,

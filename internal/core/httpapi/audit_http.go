@@ -123,9 +123,9 @@ func (s *Server) recordLoginFailed(r *http.Request, subject, reason string) {
 
 // recordInvokeAudit 记录一次方法调用审计（只写操作 + 可选全量 + 突发合并）。
 //
-// 审计口径与授权口径一致：auth.needAdmin 为真（该方法按插件能力声明需要 admin，
-// 即写/管理类）才审计；只声明 system:read 的插件属只读类，默认不审计。
-// audit.invoke_all=true 时全量审计（调试用）。
+// 审计口径与授权口径一致：auth.needAdmin 为真（该方法按**最终生效能力**需要 admin，
+// 即写/管理类）才审计；最终生效能力是只读（方法级 method_capabilities 覆盖或插件级
+// 只声明 *:read）时不审计。audit.invoke_all=true 时全量审计（调试用）。
 func (s *Server) recordInvokeAudit(plugin, method string, auth invokeAuth, cost time.Duration, invokeErr error) {
 	if s.auditRecorder == nil {
 		return
