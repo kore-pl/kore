@@ -5,8 +5,13 @@
    - 行配色：按行首级别 ERROR/WARN/INFO/DEBUG 着色 + 左侧 2px 色条（样式随视图注入本文件，不进 style.css）；
    - 搜索：输入即搜（防抖 300ms），logs.search query 字面匹配，命中词 <mark> 高亮 + 「命中 N 行 / 共 M 行」；
    - 级别筛选：ALL / ERROR / WARN / INFO 四个 chip（客户端过滤）；
-   - 跟随：用户主动开关（默认关）——开启后每 3s 带 position 增量 tail，最多保留 500 行，关闭即停；
-     用户主动行为，非轮询默认态；document.hidden 时暂停。
+   - 跟随：用户主动开关（默认关）——开启后每 3s 用 logs.follow 的游标（cursor）增量读取，
+     只回新增完整行、最多保留 500 行；服务端重置（轮转/截断）时重新对齐。用户主动行为，非轮询默认态；
+     document.hidden 时暂停。
+   - 切割：logs.rotate（confirm=true）把当前文件重命名为同目录带时间戳文件，只保留最近 5 份；
+     破坏性操作，先弹确认并说明「写入进程需重载后才会写回原路径」。
+   - 设置：logs.config.get 读取表单 schema 与当前来源，logs.config.set 保存（每行「名称=绝对路径」或
+     「名称=journal」），保存即生效、无需重启；来源白名单仍由插件侧校验。
    - 下载：logs.download 导出 <state>/exports/<source>-<ts>.log 并以 Blob 触发浏览器下载（同 file.download 通道）。
    安全口径：日志正文一律 textContent / createTextNode，不拼 HTML、不 innerHTML；
    界面只显示来源名与文件名，绝不渲染宿主绝对路径。 */
@@ -41,13 +46,21 @@
     'color:var(--kore-text-2);background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:999px;font:inherit;font-size:var(--kore-font-12);cursor:pointer;}' +
     '.logs-switch[aria-checked="true"]{color:var(--kore-text-1);border-color:var(--kore-ok,var(--kore-info));background:var(--kore-bg-2);}' +
     '.logs-switch .dot{flex:none;}' +
-    '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}}';
+    '.logs-config-mask{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);padding:var(--kore-space-3);}' +
+    '.logs-config{width:min(560px,100%);max-height:86vh;overflow:auto;background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);padding:var(--kore-space-3) var(--kore-space-4);}' +
+    '.logs-config h3{margin:0 0 var(--kore-space-1);font-size:var(--kore-font-14);}' +
+    '.logs-config .logs-config-help{margin:0 0 var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.5;}' +
+    '.logs-config textarea{width:100%;min-height:132px;resize:vertical;padding:var(--kore-space-2);color:var(--kore-text-1);background:var(--kore-bg-0);' +
+    'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);}' +
+    '.logs-config-actions{display:flex;justify-content:flex-end;gap:var(--kore-space-2);margin-top:var(--kore-space-3);}' +
+    '.logs-config-meta{margin-top:var(--kore-space-1);color:var(--kore-text-3);font-size:var(--kore-font-12);}' +
+    '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}.logs-config-actions .btn{min-height:44px;}}';
 
   function fresh() {
     return { root: null, sources: [], selected: '', lines: 200, query: '', mode: 'tail',
-      entries: [], matches: [], total: 0, position: 0,
+      entries: [], matches: [], total: 0, position: 0, cursor: '',
       stats: null, count: 0, scanned: 0, truncated: false, lineTruncated: false,
-      levelFilter: '', follow: false, followTimer: null, followBusy: false,
+      levelFilter: '', follow: false, followTimer: null, followBusy: false, configOpen: false,
       searchTimer: null, notice: '', error: '', busy: false, destroyed: false };
   }
   var S = fresh();
@@ -121,12 +134,14 @@
   }
   function stopFollow() {
     S.follow = false;
+    S.cursor = '';
     if (S.followTimer !== null) { clearInterval(S.followTimer); S.followTimer = null; }
     if (S.followBtn) S.followBtn.setAttribute('aria-checked', 'false');
   }
   function startFollow() {
     if (S.mode !== 'tail') { S.query = ''; S.searchInput.value = ''; }
     S.follow = true;
+    S.cursor = '';
     if (S.followBtn) S.followBtn.setAttribute('aria-checked', 'true');
     followTick();
     S.followTimer = setInterval(followTick, FOLLOW_INTERVAL_MS);
@@ -136,23 +151,32 @@
     if (!S.selected) return;
     startFollow(); paintFoot();
   }
-  /* 增量拉取：带 position 只取新行；隐藏页签与在途请求时跳过本轮，不堆积。 */
+  /* 增量拉取：用 logs.follow 的服务端游标（cursor），只回新增完整行、不重不漏；
+     首次调用只建立游标（空 cursor 返回当前尾部窗口，不回填以免重复渲染），
+     reset=true 表示文件轮转/截断，用服务端窗口重新对齐。隐藏页签与在途请求时跳过本轮。 */
   function followTick() {
     if (!S.follow || S.destroyed || S.followBusy || document.hidden || !S.selected) return;
     var name = S.selected;
+    var boot = !S.cursor;
     S.followBusy = true;
-    invoke('logs.tail', { source: name, lines: S.lines, position: S.position }).then(function (d) {
+    var params = { source: name, max_lines: FOLLOW_MAX_LINES };
+    if (S.cursor) params.cursor = S.cursor;
+    invoke('logs.follow', params).then(function (d) {
       S.followBusy = false;
       if (S.destroyed || !S.follow || S.selected !== name) return;
+      S.cursor = d.cursor || '';
+      S.position = d.position || 0;
       var freshEntries = d.entries || [];
-      if (freshEntries.length) {
-        if (!d.position) { S.entries = freshEntries; }
-        else { S.entries = S.entries.concat(freshEntries).slice(-FOLLOW_MAX_LINES); }
-        paintOutput();
+      if (d.reset) {
+        S.entries = freshEntries.slice(-FOLLOW_MAX_LINES);
+        S.notice = '日志已轮转或被截断，已重新对齐到最新内容';
+      } else if (!boot && freshEntries.length) {
+        S.entries = S.entries.concat(freshEntries).slice(-FOLLOW_MAX_LINES);
+      } else if (boot && !S.entries.length && freshEntries.length) {
+        S.entries = freshEntries.slice(-FOLLOW_MAX_LINES);
       }
-      S.position = d.position || S.position;
       S.count = S.entries.length;
-      paintFoot();
+      paintOutput(); paintNotices(); paintFoot();
     }, function (err) {
       S.followBusy = false;
       if (S.destroyed || !S.follow || S.selected !== name) return;
@@ -261,7 +285,7 @@
       return;
     }
     S.foot.textContent = '显示 ' + S.count + ' 行' +
-      (S.follow ? ' · 跟随中（每 ' + (FOLLOW_INTERVAL_MS / 1000) + 's，position ' + fmtInt(S.position) + '）' : '') +
+      (S.follow ? ' · 跟随中（每 ' + (FOLLOW_INTERVAL_MS / 1000) + 's，游标增量）' : '') +
       ' · 扫描 ' + fmtSize(S.scanned);
   }
   function paintNotices() {
@@ -425,14 +449,84 @@
       paintNotices(); paintFoot();
     });
   }
+  function configSourceText(source) {
+    if (source === 'file') return '来源：已保存的插件配置（config.json）';
+    if (source === 'env') return '来源：环境变量 KORE_LOGS_SOURCES（保存后将以配置面板为准）';
+    return '来源：尚未配置（保存后立即生效，无需重启）';
+  }
+  function closeConfig(mask) {
+    S.configOpen = false;
+    if (mask && mask.parentNode) mask.parentNode.removeChild(mask);
+  }
+  /* 日志设置：logs.config.get 取 schema/当前值，logs.config.set 保存；每行「名称=绝对路径」或「名称=journal」。 */
   function openConfig() {
-    if (!S.root) return;
-    if (!window.KoreShell || typeof window.KoreShell.openConfig !== 'function') {
-      S.error = '配置面板未加载，请刷新页面后重试'; paintNotices(); return;
-    }
-    window.KoreShell.openConfig(S.root, 'logs', {
-      title: '日志设置',
-      onSaved: function () { stopFollow(); S.selected = ''; loadSources(); }
+    if (!S.root || S.configOpen) return;
+    S.configOpen = true; S.error = '';
+    invoke('logs.config.get', {}).then(function (d) {
+      if (S.destroyed) { S.configOpen = false; return; }
+      var field = (d.schema && d.schema.fields && d.schema.fields[0]) || {};
+      var values = (d.values && d.values.sources) || [];
+      var mask = el('div', 'logs-config-mask');
+      mask.setAttribute('role', 'dialog');
+      mask.setAttribute('aria-modal', 'true');
+      mask.setAttribute('aria-label', '日志设置');
+      var dialog = add(mask, el('div', 'logs-config'));
+      add(dialog, el('h3', null, '日志设置'));
+      add(dialog, el('p', 'logs-config-help', field.help ||
+        '每行一条 <名称>=<绝对路径>，或 <名称>=journal；例：syslog=/var/log/syslog、journal=journal'));
+      var area = add(dialog, el('textarea'));
+      area.value = values.join('\n');
+      area.setAttribute('aria-label', '日志来源列表');
+      area.placeholder = 'syslog=/var/log/syslog';
+      add(dialog, el('div', 'logs-config-meta', configSourceText(d.source)));
+      var actions = add(dialog, el('div', 'logs-config-actions'));
+      var cancel = add(actions, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
+      var save = add(actions, el('button', 'btn', '保存并生效')); save.type = 'button';
+      on(cancel, function () { closeConfig(mask); });
+      on(save, function () {
+        var lines = String(area.value || '').split('\n').map(function (x) { return x.trim(); })
+          .filter(function (x) { return x !== ''; });
+        save.disabled = true; save.textContent = '保存中…';
+        invoke('logs.config.set', { values: { sources: lines } }).then(function () {
+          closeConfig(mask);
+          stopFollow(); S.selected = ''; S.cursor = '';
+          S.notice = '已保存并生效'; paintNotices();
+          loadSources();
+        }, function (err) {
+          save.disabled = false; save.textContent = '保存并生效';
+          S.error = '保存失败：' + err.message; paintNotices();
+        });
+      });
+      document.body.appendChild(mask);
+      area.focus();
+    }, function (err) {
+      S.configOpen = false;
+      S.error = '设置读取失败：' + err.message; paintNotices();
+    });
+  }
+  /* 切割：logs.rotate（破坏性）——先确认，保留最近 5 份；写明写入进程需重载。 */
+  function rotateSource() {
+    var name = S.selected;
+    if (!name || S.busy) return;
+    var ok = window.confirm('切割「' + name + '」的日志文件？\n\n' +
+      '会把当前文件重命名为同目录下的时间戳文件，并只保留最近 5 份切割文件。\n' +
+      '正在写入该文件的进程需要重载/重启后才会写回原路径。');
+    if (!ok) return;
+    S.busy = true; S.error = ''; S.notice = '';
+    paintNotices(); paintFoot();
+    invoke('logs.rotate', { source: name, confirm: true, keep: 5 }).then(function (d) {
+      if (S.destroyed || S.selected !== name) return;
+      S.busy = false;
+      var base = String(d.rotated_to || '').split('/').pop();
+      S.notice = '已切割为 ' + (base || d.file || '新文件') +
+        (d.removed && d.removed.length ? '，清理 ' + d.removed.length + ' 份旧切割文件' : '');
+      paintNotices(); paintFoot();
+      loadSources(); loadStats(); loadTail();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.busy = false;
+      S.error = '切割失败：' + err.message;
+      paintNotices(); paintFoot();
     });
   }
   function build(root) {
@@ -484,6 +578,11 @@
     S.downloadBtn.type = 'button';
     S.downloadBtn.setAttribute('aria-label', '导出日志片段并下载');
     on(S.downloadBtn, downloadLog);
+    S.rotateBtn = add(tools, el('button', 'btn btn-ghost', '✂ 切割'));
+    S.rotateBtn.type = 'button';
+    S.rotateBtn.title = '把当前日志文件重命名为时间戳文件并保留最近 5 份（需确认）';
+    S.rotateBtn.setAttribute('aria-label', '切割当前日志文件');
+    on(S.rotateBtn, rotateSource);
     var refresh = add(tools, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
     S.statHost = add(viewPanel, el('div', 'logs-stats'));
     S.noticeHost = add(viewPanel, el('div', 'logs-notices'));
@@ -514,6 +613,9 @@
     return { destroy: function () {
       S.destroyed = true;
       stopFollow(); stopSearchTimer();
+      var mask = document.querySelector('.logs-config-mask');
+      if (mask && mask.parentNode) mask.parentNode.removeChild(mask);
+      S.configOpen = false;
     } };
   }
   window.KoreLogs = { render: render };
