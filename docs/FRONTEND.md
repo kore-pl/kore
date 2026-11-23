@@ -345,16 +345,38 @@ var Dist embed.FS
 
 > 判定：任一条不满足，UI 交付不得声明完成；G-28 的双端截图必须能证明首屏默认态（原则 1）、字段已自动填（原则 2）与空态按钮（原则 4）。
 
-## 13. 自研 SVG 图表约定
+## 13. 图表工程规范
 
-**前提**：主壳是零依赖静态产物（无打包器、无 `node_modules`，`web/*.js` 直接 `go:embed`）。图表一律**自研 SVG**，**不引入任何第三方图表库**（ECharts / D3 / Chart.js 等均不引入）。[ADR-0027](./DECISIONS/0027-echarts-chart-standard.md) 现为 **proposed（已驳回）**，只记录候选方案，不生效；将来若要引入第三方运行时，须用户明确同意 + 另开 ADR 论证「继续自研为什么不够」 + 首屏 ≤300 KiB gzip 与单二进制 ≤25 MiB 实测不变。
+**前提**：图表是**非首屏能力**。ECharts 5 以「按需 ESM + 懒加载 vendor chunk」引入，是本仓「零依赖静态产物」形态的**唯一例外**（取舍、被否决选项与复审条件见 [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)）。首屏六件套不变，`d(首屏)/d(图表数)=0`。
 
-| # | 约定 | 可判定判据（违反即返工） |
+**契约文件（命名固定，由实现方落地）**：
+
+| 文件 | 角色 | 约束 |
 | --- | --- | --- |
-| 1 | **单图实例控制**：同一图表容器同一时刻只挂一个 SVG 根；重绘先清空/替换，禁止追加叠加 | 容器 `querySelectorAll('svg').length ≤ 1`；重绘路径先清空 |
-| 2 | **销毁**：视图 teardown / 切 Tab 必须移除图表节点、解绑事件、清空引用；禁止只 `display:none` 或只 detach | teardown 路径可见移除 + 解绑调用；无全局残留数组 |
-| 3 | **resize 统一 100ms 防抖**：由单一入口（`web/monitor.js` 的共享 resize）绑定，页面不各自绑定 | `grep -rn "addEventListener('resize'" web/` 仅命中该入口 |
-| 4 | **单序列数据点 ≤ 1000**：超出由后端预聚合或前端抽样（LTTB/等距），不得直绘全量 | 序列点数 ≤1000，或显式声明已聚合 |
-| 5 | **迷你卡不建坐标系**：高度 ≤64px、只有走势无坐标轴的小卡用 DOM/CSS 进度条或轻量 canvas | 迷你卡路径不出现坐标轴/刻度/SVG 坐标系 |
+| `web/charts.js` | 运行时封装（ESM） | 导出 `loadEcharts` / `createLineChart` / `disposeChart` / `disposeAll` + 实例计数；页面与视图只经它建图 |
+| `web/charts/echarts-entry.js` | ECharts 唯一入口 | 只显式 import 用到的图表 / 组件 / 渲染器（允许 `echarts/core` / `echarts/charts` / `echarts/components` / `echarts/renderers` 子路径） |
+| `scripts/build-charts.sh` + `make charts` | 构建 | 产出 `web/dist/charts.js` 与 `web/dist/charts-echarts.js` |
+| `web/dist/charts*.js` | 产物 | **平铺**（静态路由 `/assets/{file}` 只接受单段文件名）；禁 `*.map`；不进首屏预算 |
 
-口径：本节是**实现约定**，不是对第三方库的授权；任何新增图表运行时依赖按 G-02（依赖白名单）与上述前提退回。
+十条细则均为**验收条文**，判据可复跑/可回读，**违反即返工**：
+
+| # | 条文 | 可判定判据（违反即返工） |
+| --- | --- | --- |
+| 1 | **按需 ESM，禁全量导入**：只经 `web/charts/echarts-entry.js` 显式 import；页面不得直接 import ECharts | `grep -rn "from 'echarts'\|echarts/index\|echarts/dist" web/` 零命中（全量包 / 入口总表 / 预构建 dist 一律禁）；`grep -rn "from 'echarts/" web/` 只允许命中 `web/charts/echarts-entry.js`；其它文件直引即返工 |
+| 2 | **单页独立实例 ≤ 12 个**（秒级刷新场景）；超出必须用 Tab / 折叠拆分，不得靠调参硬扛 | 运行时实例计数（`web/charts.js` 暴露）在图表页满载时 ≤ 12；超限即返工，且返工方式是改页面结构，不是上调上限或关动画 |
+| 3 | **迷你趋势卡片不用 ECharts**：概览页指标卡的微型走势（单序列、无坐标轴、无 tooltip）用轻量 canvas 或现有 DOM 进度条 | 指标卡渲染路径不得出现 `createLineChart` / `echarts.init`；出现即返工 |
+| 4 | **时序折线**：Canvas 渲染器 + LTTB 采样 + `lazyUpdate: true` + 关闭动画（`animation: false`） | 折线初始化含 `{ renderer: 'canvas', lazyUpdate: true }` 且配置 `animation: false`；> 1000 点未采样即返工（采样兜底也必须可见） |
+| 5 | **静态饼图**：SVG 渲染器 | `echarts.init(el, null, { renderer: 'svg' })`；无性能理由却用 Canvas 画饼图即返工 |
+| 6 | **销毁**：组件卸载、切 Tab 必须 `dispose` 并置空引用；禁只移除 DOM 不 dispose | 视图 teardown 路径可见 `disposeChart` / `disposeAll` 调用且实例计数回落；只 `removeChild` / `innerHTML=''` / 仅置 `display:none` 即返工 |
+| 7 | **resize 统一 100ms 防抖**：由 `web/charts.js` 单点绑定，不逐图各自绑定 | `grep -rn "addEventListener('resize'\|onresize\|ResizeObserver" web/` 只允许命中 `web/charts.js`；页面 / 视图级 resize 监听即返工 |
+| 8 | **精简配置**：不需要的坐标轴、`tooltip`、高亮（`emphasis`）、标记点（`markPoint`）全部显式关闭 | 每份图表配置里上述项为 `show: false` 或不存在（时序图只保留必要坐标轴）；保留默认开启项即返工 |
+| 9 | **单图数据 ≤ 1000 点**：超出由后端预聚合，前端只做兜底截断 / 抽样 | 后端返回点数 ≤ 1000（或显式声明已聚合）；前端 `series.data.length > 1000` 仍未采样即返工 |
+| 10 | **验收口径**：满载（12 图）持续秒级刷新不卡顿、内存可回落、无泄漏 | 实现方须给：PC + 手机截图（G-28）、满载刷新 ≥ 10 分钟的 Performance 记录（帧率无持续下降、内存无持续上升）、dispose 后实例计数回 0；缺任一项即返工 |
+
+**与既有门禁的关系**：
+
+- **§7 首屏预算**：图表产物不列入首屏 `FILES`，300 KiB gzip 不因图表数增长；新增图表文件只要被误加进首屏口径即判 G-03 阻断级失败。预算口径的复核命令仍按 §7，图表体积另行按 §9 记录。
+- **§9 构建清单**：`make charts` 产物平铺进 `web/dist`，是否进 `web/embed.go` 显式清单由实现方按 §13 落定；纳入后单二进制 ≤ 25 MiB 门禁不变，`*.map` 仍禁，复核命令见 §9。
+- **G-03**：首屏 gzip 与单二进制两条硬红线都不得因图表放宽；图表只允许"懒加载后按需占体积"。
+- **G-06**：图表契约命名、产物路径、构建目标或渲染器口径一变，必须同轮同步本节的表与 §7/§9 的对应句子，并更新 ADR-0027；文档与实现不一致不得合入。
+- **G-28**：图表页属用户界面交付，双端截图与产品定位自评照旧，截图必须包含真实图表实例（不能只截空容器或用设计稿替代）。
