@@ -1802,10 +1802,28 @@
     loadOverview();
   }
 
+  // 进入视图时轻量补拉一次插件列表：安装后缓存会 stale，但只做「进入 + 手动刷新」，
+  // 不引入任何轮询/定时器（G-19）；数据未变不重绘，避免打断当前视图。
+  var pluginsRefreshing = false;
+  function refreshPluginsView() {
+    if (pluginsRefreshing || !state.authed) return;
+    pluginsRefreshing = true;
+    request(ENDPOINTS.plugins).then(function (res) {
+      pluginsRefreshing = false;
+      if (res.status === 401) { state.authed = false; renderLogin('会话已过期，请重新登录'); return; }
+      if (!res.ok || !res.data) return;
+      var next = Array.isArray(res.data.plugins) ? res.data.plugins : [];
+      if (JSON.stringify(next) === JSON.stringify(state.plugins)) return;
+      state.plugins = next;
+      renderDashboard();
+    }, function () { pluginsRefreshing = false; });
+  }
+
   function renderPluginsView(box) {
     viewNotice(box);
     box.appendChild(renderPluginsPanel());
     renderPluginUis(box, { status: 'fulfilled', value: { plugins: state.plugins } });
+    refreshPluginsView();
   }
 
   var SHELL_ROUTES = [
