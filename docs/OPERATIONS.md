@@ -39,7 +39,8 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo OK
 
 - **需要重启**：二进制替换后旧进程仍是旧代码，必须停→换→起。
 - **state 兼容**：见 §0.1。同一 `SchemaVersion` 内升级（补 bucket / 加索引）**无需迁移、直接读**；跨 `SchemaVersion` 的升级在**本仓库当前没有迁移器**——若未来版本 bump 了 `SchemaVersion`，旧库仍会被接受（`schema < 内核`），但新代码若依赖新字段需自行回填（届时必须有迁移 ADR/脚本，当前不存在）。
-- **反向降级**：旧二进制读新库是否安全，取决于新版本是否 bump 了 `SchemaVersion`；**注意 `prepare()` 不会把旧库的 `meta.schema_version` 改写成新值**（`store.go:150-164` 只在缺失时写入），因此「库的 schema 数字」不等于「最后写入它的内核版本」——回滚前请同时回滚 §2 的整库备份，不要只换二进制。
+- **反向降级**：旧二进制读新库是否安全，取决于新版本是否 bump 了 `SchemaVersion`、以及是否写入了旧代码不认识的数据语义。**注意 `prepare()` 不会把旧库的 `meta.schema_version` 改写成新值**（`store.go:150-164` 只在缺失时写入），因此「库的 schema 数字」不等于「最后写入它的内核版本」。
+- **实测修正（2026-11-23）**：同 `SchemaVersion`（当前 =1）的两个二进制之间，**只换二进制、不换库**的降级实测是**可用**的（`GET /-/healthz` 200、原口令登录 200、插件与 enabled 状态、scheduler 任务全部保留）。所以「回滚必须整库回滚」这句对**同 schema、无破坏性数据变更**的版本对**过强**；正确表述是：整库回滚是跨 `SchemaVersion` / 有数据语义变更时的**唯一安全做法**，同 schema 小版本可只换二进制，但**仍建议**保留并把「降级前整库备份」作为回滚手段——因为 schema 数字不能证明库是哪个版本写的。
 
 ### 1.3 升级前检查清单
 
@@ -105,7 +106,27 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo restored_ok
 5. 抽查一个插件核心方法（`POST /api/v1/invoke/file/...` 或 `monitor/system`）→ 200。
 6. `kored audit --since <备份前时间>` → 历史审计仍在。
 
-## 3. 实测记录（2026-11-23，/tmp/kore-ops，port 18897）
+## 3. 实测记录
+
+### 3.0 二进制升级 / 降级演练（2026-11-23，/tmp/kore-upgrade，port 18888）
+
+两个二进制都由 `git archive` + `make build BIN=<tmp>` 构建（**未覆盖仓库 `bin/kored`**）：
+
+| 角色 | commit | 体积 |
+| --- | --- | --- |
+| old | `a960749` | 9,789,602 B |
+| new | `HEAD`（fbfa2f3） | 10,117,282 B |
+
+初始状态（old 二进制起实例）：file 0.3.1 / cron 0.4.1 均 `enabled=true`，scheduler 任务 `upgrade-drill` 启用。
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 升级 | 停 unit → `tar -C <install> -czf pre.tgz config data` → `cp kored-new bin/kored` → 起 | `healthz=200 login=200 plugins=[('cron','0.4.1',True),('file','0.3.1',True)] tasks=[('upgrade-drill',True)]`；`POST /invoke/cron/cron.list` 带 `X-Kore-CSRF` → 200 `{"entries":[],"count":0}` |
+| 降级（只换二进制、**保持新库**） | 停 unit → `cp kored-old bin/kored` → 起 | **同样全部通过**（healthz/login/plugins/tasks 一致）——见 §1.2 的修正结论 |
+
+> 注意：`POST /api/v1/invoke/...` 是写请求，**必须带 `X-Kore-CSRF`**（值取登录后 `kore_csrf` cookie），否则 401；`OPERATIONS.md` 早期只写了 healthz，验收 invoke 时补上此头。
+
+### 3.1 备份/恢复演练（2026-11-23，/tmp/kore-ops，port 18897）
 
 | 步骤 | 命令/动作 | 结果 |
 | --- | --- | --- |
