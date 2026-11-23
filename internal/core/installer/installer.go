@@ -86,6 +86,12 @@ type Result struct {
 	Dir string
 	// SHA256 是安装时自算的包 sha256（不采信包内声明）。
 	SHA256 string
+	// PostUpgradePending 是本次安装落下的「升级后置动作待补跑」版本；空表示无标记。
+	//
+	// 非空说明新版本已落位、但清单声明的 post_upgrade 尚未执行（离线 CLI 安装没有
+	// 热重载入口可调）。消费方是既有机制：下次 serve 启动恢复 desired=enabled 时、
+	// 或用户 Enable 该插件时补跑一次并清空（plugin_state.post_upgrade_pending）。
+	PostUpgradePending string
 }
 
 // ensureRoot 确保插件根目录存在且为 0755（可穿越、可列举）。

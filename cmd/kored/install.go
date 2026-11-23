@@ -125,6 +125,13 @@ func runPackageInstall(opts installOptions, stdout, stderr io.Writer) int {
 		return installExitCode(err)
 	}
 	fmt.Fprintf(stdout, "installed %s %s\n", result.ID, result.Version)
+	// 离线升级不经过 reloadOne（serve 停止时 CLI 独占 state.db），post_upgrade 无法当场执行：
+	// 明确告知用户它已被登记、由谁在什么时候补跑，避免「装完以为迁移完」。
+	if result.PostUpgradePending != "" {
+		fmt.Fprintf(stdout, "post_upgrade 待补跑: %s 已升级到 %s，但升级后置动作尚未执行（离线安装无热重载入口）\n",
+			result.ID, result.PostUpgradePending)
+		fmt.Fprintln(stdout, "  下次 serve 启动时若该插件为启用态会自动补跑；禁用态则在下次启用该插件时补跑")
+	}
 	return exitOK
 }
 

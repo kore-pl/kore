@@ -259,3 +259,61 @@ func TestPreviousVersionReadsInstalledRecord(t *testing.T) {
 		t.Fatalf("安装后 previous_version = %q err=%v，期望 0.1.0", v, err)
 	}
 }
+
+// TestUpgradeRecordsPostUpgradePending 覆盖「离线 CLI 升级不经过 reloadOne」的缺口：
+// serve 停止时 install 独占 state.db，没有任何热重载入口能调 post_upgrade，
+// 安装器必须在落库时写下 post_upgrade_pending，作为下次 serve 启动/Enable 的补跑凭据。
+//
+// 反例自证：改前待补跑标记为空、Result.PostUpgradePending 为空，本测试 FAIL。
+func TestUpgradeRecordsPostUpgradePending(t *testing.T) {
+	hook := map[string]any{"post_upgrade": "site.postupgrade"}
+	upgraded := map[string]any{"version": "0.2.0", "post_upgrade": "site.postupgrade"}
+	f := newFixture(t, installer.Limits{})
+	if _, err := f.inst.Install(writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", validEntries(t, hook))); err != nil {
+		t.Fatalf("首次安装应成功: %v", err)
+	}
+	// 首次安装不是升级：即使声明了 post_upgrade 也不留标记（否则启用即误跑）。
+	if got := f.pluginState(t, "site")["post_upgrade_pending"]; got != nil {
+		t.Fatalf("首次安装不应写待补跑标记，实际 %v", got)
+	}
+	result, err := f.inst.Install(writePackage(t, t.TempDir(), "site-0.2.0.tar.gz", validEntries(t, upgraded)))
+	if err != nil {
+		t.Fatalf("离线升级安装应成功: %v", err)
+	}
+	if result.PostUpgradePending != "0.2.0" {
+		t.Fatalf("离线升级结果应报告待补跑版本 0.2.0，实际 %q", result.PostUpgradePending)
+	}
+	state := f.pluginState(t, "site")
+	if got := state["post_upgrade_pending"]; got != "0.2.0" {
+		t.Fatalf("离线升级后未记录待补跑标记: got=%v（state=%v）", got, state)
+	}
+	// 标记必须与「已装版本」一致：serve 启动后按该版本消费，错版本等于迁移到一半。
+	if rec := f.pluginRecord(t, "site"); rec["version"] != "0.2.0" {
+		t.Fatalf("plugins 记录版本未更新: got=%v want=0.2.0", rec["version"])
+	}
+}
+
+// TestPostUpgradePendingNotWrittenWithoutUpgradeOrHook 钉住标记的两个反例边界：
+// 未声明 post_upgrade 的升级没有动作可跑，同版本强制重装不是升级——都不该写标记。
+func TestPostUpgradePendingNotWrittenWithoutUpgradeOrHook(t *testing.T) {
+	f := newFixture(t, installer.Limits{})
+	if _, err := f.inst.Install(writePackage(t, t.TempDir(), "site-0.1.0.tar.gz", validEntries(t, nil))); err != nil {
+		t.Fatalf("首次安装应成功: %v", err)
+	}
+	// 升级但新清单没声明 post_upgrade：无动作可跑，不写标记。
+	result, err := f.inst.Install(writePackage(t, t.TempDir(), "site-0.2.0.tar.gz",
+		validEntries(t, map[string]any{"version": "0.2.0"})))
+	if err != nil {
+		t.Fatalf("升级安装应成功: %v", err)
+	}
+	if result.PostUpgradePending != "" {
+		t.Fatalf("未声明 post_upgrade 时不应报告待补跑，实际 %q", result.PostUpgradePending)
+	}
+	state := f.pluginState(t, "site")
+	if got := state["post_upgrade_pending"]; got != nil {
+		t.Fatalf("未声明 post_upgrade 的升级不应写标记，实际 %v（state=%v）", got, state)
+	}
+	if got := state["desired"]; got != "disabled" {
+		t.Fatalf("首次安装后升级应保持 disabled，实际 %v", got)
+	}
+}

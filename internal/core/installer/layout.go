@@ -81,16 +81,20 @@ func (in *Installer) commit(staging string, manifest *registry.Manifest, sum str
 		}
 		prevCurrent = ""
 	}
-	if err := in.record(manifest, sum); err != nil {
+	pending, recordErr := in.record(manifest, sum)
+	if recordErr != nil {
 		if rmErr := os.RemoveAll(final); rmErr != nil {
 			in.logger.Error("回滚已落位目录失败，需人工清理", "dir", final, "err", rmErr)
 		}
 		in.restoreStash(final, stash)
 		in.restoreCurrentLink(final, prevCurrent)
-		return nil, err
+		return nil, recordErr
 	}
 	in.dropStash(stash)
-	return &Result{ID: manifest.ID, Version: manifest.Version, Dir: final, SHA256: sum}, nil
+	return &Result{
+		ID: manifest.ID, Version: manifest.Version, Dir: final, SHA256: sum,
+		PostUpgradePending: pending,
+	}, nil
 }
 
 // stashTarget 处理目标版本目录已存在的情况：非 Force 返回 ErrConflict，

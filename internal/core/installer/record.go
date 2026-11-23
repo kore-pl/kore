@@ -18,6 +18,9 @@ const (
 	stateActual       = "stopped"
 	sourceManual      = "manual"
 	storeVisibility   = "public"
+	// postUpgradePendingField 是 plugin_state 里「升级后置动作待补跑」的字段名
+	// （装配层 daemon.consumePostUpgrade 消费，记录形状见 DATA-MODEL §5）。
+	postUpgradePendingField = "post_upgrade_pending"
 )
 
 // pluginRecord 是 plugins bucket 的值（字段集见 DATA-MODEL §5）。
@@ -80,14 +83,22 @@ type stateRecord struct {
 // 升级/重装（同 id 已有记录）保留原有 desired 状态：热升级后 reloadOne 依据
 // desired=enabled 自动拉起新版本；actual 统一先记 stopped，待重载后回写真实状态。
 // 首次安装仍写 desired=disabled。
-func (in *Installer) record(manifest *registry.Manifest, sum string) error {
+//
+// 返回值是本次落下的「升级后置动作待补跑」版本（空表示没写标记）。只有安装器同时
+// 知道「旧版本 → 新版本」与「新清单声明了 post_upgrade」，所以离线 CLI 升级
+// （serve 停止、不经过 reloadOne，没有第二条热重载入口）只能在这里留下补跑凭据：
+// 不写就再没有任何进程知道这个版本的动作还没跑，下次 serve 启动只会拉起新二进制，
+// crontab 一类旧外部引用无人迁移。在线商店安装同样经过本函数，但 reloadOne 会在
+// 拉起后直接执行或清理该标记，不会重复跑。
+func (in *Installer) record(manifest *registry.Manifest, sum string) (string, error) {
 	if in.store == nil {
-		return wrap(ErrStore, "状态库句柄为空")
+		return "", wrap(ErrStore, "状态库句柄为空")
 	}
 	previous, previousDesired, previousGrant, err := in.previous(manifest.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
+	pending := postUpgradePending(previous, manifest)
 	grant, changed, added := nextGrant(previousGrant, manifest.Capabilities, manifest.Version, time.Now().UTC())
 	if changed && len(added) > 0 {
 		// 升级新增能力：默认放行（不阻断升级/启用），但必须留下可核对记录并告警。
@@ -118,7 +129,7 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 		PrevVersion:         previous,
 	})
 	if err != nil {
-		return wrap(ErrStore, "序列化插件记录失败：%v", err)
+		return "", wrap(ErrStore, "序列化插件记录失败：%v", err)
 	}
 	desired := stateDesired
 	if previousDesired == "enabled" {
@@ -126,13 +137,13 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	}
 	err = in.store.Update(func(tx *store.Tx) error {
 		// 读改写而非整体覆盖：stateRecord 只认识安装器负责的字段，直接覆盖会把
-		// 装配层写入的 post_upgrade_pending（禁用态升级的唯一凭据）、restarts 以及
-		// 未来版本追加的未知字段一起抹掉——同版本强制重装即可触发，迁移永久丢失。
+		// 装配层/安装器写入的 post_upgrade_pending（升级迁移的唯一凭据）、restarts
+		// 以及未来版本追加的未知字段一起抹掉——同版本强制重装即可触发，迁移永久丢失。
 		existing, getErr := tx.Get(bucketPluginState, manifest.ID)
 		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
 			return getErr
 		}
-		stateRaw, mergeErr := mergeStateRecord(existing, desired, stateActual, now)
+		stateRaw, mergeErr := mergeStateRecord(existing, desired, stateActual, now, pending)
 		if mergeErr != nil {
 			return mergeErr
 		}
@@ -142,9 +153,25 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 		return tx.Put(bucketPluginState, manifest.ID, stateRaw)
 	})
 	if err != nil {
-		return wrap(ErrStore, "写入插件记录失败：%v", err)
+		return "", wrap(ErrStore, "写入插件记录失败：%v", err)
 	}
-	return nil
+	return pending, nil
+}
+
+// postUpgradePending 判定本次安装是否必须记「升级后置动作待补跑」标记，返回待跑版本。
+//
+// 只有「从某个旧版本升上来」且新清单声明了 post_upgrade 才记：
+//   - 首次安装（previous 为空）不是升级，不写（否则启用即误跑迁移）；
+//   - 同版本强制重装不是升级，不写——也不能清掉既有标记；
+//   - 未声明 post_upgrade 的插件没有动作可跑，不写。
+//
+// 判据只用安装器已经知道的三个事实（旧版本、新版本、新清单声明），不引入
+// 「上次钩子版本」这类新持久字段：消费方是既有 post_upgrade_pending 机制。
+func postUpgradePending(previous string, manifest *registry.Manifest) string {
+	if previous == "" || previous == manifest.Version || manifest.PostUpgrade == "" {
+		return ""
+	}
+	return manifest.Version
 }
 
 // PreviousVersion 读取 plugins bucket 里该插件当前记录的版本；未安装返回空串。
@@ -178,12 +205,15 @@ func PreviousVersion(p Persister, id string) (string, error) {
 }
 
 // mergeStateRecord 在既有 plugin_state 值上只覆盖安装器负责的字段
-// （desired / actual / updated_at），其余字段原样保留。
+// （desired / actual / updated_at，以及非空时的 post_upgrade_pending），其余字段原样保留。
 //
 // 保留范围包括装配层写入的 post_upgrade_pending / restarts，以及未来版本追加、
 // 本包尚不认识的字段——「整体覆盖」会静默丢数据，而这份记录是跨层共用的。
 // 解析放在一处收口：只做 JSON 对象级合并，不解释未知字段的语义。
-func mergeStateRecord(existing []byte, desired, actual, updatedAt string) ([]byte, error) {
+//
+// pending 为空时**不覆盖**既有标记：同版本强制重装不是升级，清掉标记等于让
+// 已经推迟的迁移永久丢失（a3dbdbb 修过的 P0）。
+func mergeStateRecord(existing []byte, desired, actual, updatedAt, pending string) ([]byte, error) {
 	fields := make(map[string]json.RawMessage)
 	if len(existing) > 0 {
 		if err := json.Unmarshal(existing, &fields); err != nil {
@@ -209,6 +239,13 @@ func mergeStateRecord(existing []byte, desired, actual, updatedAt string) ([]byt
 	// 已存在时不重置（重启计数属运行期事实，重装不应清零）。
 	if _, ok := fields["restarts"]; !ok {
 		fields["restarts"] = json.RawMessage("0")
+	}
+	if pending != "" {
+		raw, err := json.Marshal(pending)
+		if err != nil {
+			return nil, err
+		}
+		fields[postUpgradePendingField] = raw
 	}
 	return json.Marshal(fields)
 }
