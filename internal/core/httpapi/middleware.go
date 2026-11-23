@@ -233,8 +233,9 @@ func (s *Server) sessionFrom(r *http.Request) (auth.Session, error) {
 	return s.auth.Validate(cookie.Value)
 }
 
-// authenticate 校验会话并做滑动续期（ADR-0041）：剩余 < 24h 时写回过期时刻并
-// 重发 Set-Cookie，面板连续使用就不会被 12h/7d 的固定过期踢下线。
+// authenticate 校验会话并做滑动续期（ADR-0041）：剩余 < min(24h, TTL/2) 时写回
+// 过期时刻并重发 Set-Cookie，面板连续使用就不会被 12h/7d 的固定过期踢下线；
+// 阈值与 TTL 挂钩（12h 实例 6h、1h 实例 30m），不会每次鉴权都写盘。
 // 续期失败只记 WARN、不拒绝请求——鉴权已通过，不能因写库抖动把用户挡在外面。
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (auth.Session, error) {
 	cookie, err := r.Cookie(auth.CookieName)

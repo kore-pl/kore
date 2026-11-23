@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/store"
@@ -26,9 +27,10 @@ const (
 	// AbsoluteTTL 是会话绝对上限：30 天。滑动只能在这个窗口内往后推，
 	// 到点必须重新登录，不允许"只要一直用就永不过期"。
 	AbsoluteTTL = 30 * 24 * time.Hour
-	// slideThreshold 是滑动续期阈值：剩余寿命 < 24h 时写回 expiry 并重发 cookie。
-	// 不在每个请求都写 bbolt（一次请求一次 fsync 是写放大），阈值内最多写一次。
-	slideThreshold = 24 * time.Hour
+	// slideRenewCap 是滑动续期阈值的历史上限：24h。剩余寿命 < 阈值时写回 expiry
+	// 并重发 cookie；每次续期都写一次 bbolt（一次 fsync），所以阈值不能是 0，
+	// 否则退化成每个请求都写盘。
+	slideRenewCap = 24 * time.Hour
 	// passwordFingerprintKey 是口令指纹在 sessions bucket 内的保留键
 	// （不是 token：token 键恒为 64 位 sha256 hex）。用于启动时判断"口令是否被改过"。
 	passwordFingerprintKey = "password-fingerprint"
@@ -50,6 +52,8 @@ type Manager struct {
 	passwordHash string
 	ttl          time.Duration
 	secure       bool
+	// slideWrites 记录 Slide 实际写库次数；仅供测试观测写放大，生产路径不读。
+	slideWrites atomic.Int64
 }
 
 // NewManager 构造会话管理器；ttl<=0 时取 DefaultTTL。
@@ -153,16 +157,18 @@ func parseSessionValue(raw string, ttl time.Duration) (time.Time, time.Time, boo
 	return expiry, time.Unix(0, createdNano).UTC(), true
 }
 
-// Slide 做滑动续期：剩余寿命 < 24h 时把过期时刻推到 now+TTL（不超过绝对上限）。
-// 返回续期后的会话与是否发生续期；调用方据此后重发 Set-Cookie。
-// 已到绝对上限、或续期后并不更晚（ttl 很短）时返回 renewed=false，不写库。
+// Slide 做滑动续期：剩余寿命 < slideThresholdFor(TTL) 时把过期时刻推到
+// now+TTL（不超过绝对上限），返回续期后的会话与是否发生续期；调用方据此后
+// 重发 Set-Cookie。已到绝对上限、或续期后并不更晚（ttl 很短）时返回
+// renewed=false，不写库。
 func (m *Manager) Slide(sess Session) (Session, bool, error) {
 	now := time.Now().UTC()
 	hard := sess.CreatedAt.Add(AbsoluteTTL)
 	if !now.Before(hard) {
 		return sess, false, nil
 	}
-	if sess.ExpiresAt.Sub(now) >= slideThreshold {
+	threshold := slideThresholdFor(m.ttl)
+	if sess.ExpiresAt.Sub(now) >= threshold {
 		return sess, false, nil
 	}
 	next := now.Add(m.ttl)
@@ -175,8 +181,32 @@ func (m *Manager) Slide(sess Session) (Session, bool, error) {
 	if err := m.writeExpiry(sess.TokenHash, next, sess.CreatedAt); err != nil {
 		return sess, false, fmt.Errorf("会话续期写库失败: %w", err)
 	}
+	m.slideWrites.Add(1)
 	return Session{TokenHash: sess.TokenHash, ExpiresAt: next, CreatedAt: sess.CreatedAt}, true, nil
 }
+
+// slideThresholdFor 返回给定 TTL 下的滑动续期阈值：min(24h, ttl/2)。
+//
+// 固定 24h 只在 TTL >= 48h 时成立（默认 7d 仍保持"每天最多写一次"，与 ADR-0041
+// 一致）。一旦 TTL 被配置得比 48h 更短（例如面板推荐的 12h），"剩余寿命 < 24h"
+// 永远为真，阈值退化成"每次鉴权都写一次 bbolt"——每次请求一次 fsync 的写放大。
+// 取 ttl/2 后，同一会话相邻两次续期至少间隔 ttl/2：
+//
+//	ttl=7d  → 24h（与旧固定阈值行为一致）
+//	ttl=12h → 6h（每天最多 2 次写盘）
+//	ttl=1h  → 30m
+//
+// 到期失效与 created+30d 绝对上限都不受阈值影响（Validate 独立判定）。
+func slideThresholdFor(ttl time.Duration) time.Duration {
+	half := ttl / 2
+	if half <= 0 || half > slideRenewCap {
+		return slideRenewCap
+	}
+	return half
+}
+
+// slideWriteCount 返回 Slide 实际写库次数（测试观测写放大用）。
+func (m *Manager) slideWriteCount() int64 { return m.slideWrites.Load() }
 
 // Revoke 删除会话；key 不存在时幂等成功。
 func (m *Manager) Revoke(token string) error {

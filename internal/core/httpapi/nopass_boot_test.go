@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"net"
@@ -9,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,9 +129,24 @@ func TestLoopbackKeepsCSRFUDSExempt(t *testing.T) {
 	}
 }
 
-// TestSessionSlideRenewsCookie 覆盖滑动续期：剩余 <24h 时重发 Set-Cookie。
+// TestSessionSlideRenewsCookie 覆盖滑动续期的新阈值语义 min(24h, TTL/2)：
+// 1h TTL 的阈值是 30m——新签发会话剩余 ~1h，不得每次鉴权都重发 Set-Cookie
+// （那等于每个请求写一次 bbolt）；剩余跌破 30m 后才重发，Max-Age 仍按 TTL。
+// 旧断言锁定的是"1h < 24h → 每次都续期"，即写放大本身，故按新语义重写。
 func TestSessionSlideRenewsCookie(t *testing.T) {
-	srv := newLocalTestServer(t, time.Hour) // 1h < 24h 阈值 → 每次鉴权都续期
+	const ttl = time.Hour
+	db, err := store.Open(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("打开状态库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	srv := New(Options{
+		Auth:       auth.NewManager(db, hashForLocalTest(t), ttl, false),
+		Backend:    auditTestBackend{},
+		Version:    "0.1.0-nopass",
+		SocketPath: filepath.Join(t.TempDir(), "kore.sock"),
+	}, localTestTransport{})
+
 	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
 		strings.NewReader(`{"password":"`+localTestPassword+`"}`))
 	login.RemoteAddr = "203.0.113.9:5555"
@@ -138,27 +156,60 @@ func TestSessionSlideRenewsCookie(t *testing.T) {
 		t.Fatalf("登录应成功，实际 %d %s", rec.Code, rec.Body.String())
 	}
 	var token string
+	var loginCookie *http.Cookie
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == auth.CookieName {
-			token = c.Value
+			token, loginCookie = c.Value, c
 		}
 	}
-	if token == "" {
+	if token == "" || loginCookie == nil {
 		t.Fatal("登录未下发会话 cookie")
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
-	req.RemoteAddr = "203.0.113.9:5555"
-	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
-	rec2 := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec2, req)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("带 cookie 请求应 200，实际 %d", rec2.Code)
+	// 登录 cookie 仍按其 TTL 下发，不随阈值改动。
+	if loginCookie.MaxAge != int(ttl.Seconds()) {
+		t.Fatalf("登录 cookie Max-Age 应为 %d，实际 %d", int(ttl.Seconds()), loginCookie.MaxAge)
 	}
-	var renewed *http.Cookie
-	for _, c := range rec2.Result().Cookies() {
-		if c.Name == auth.CookieName {
-			renewed = c
+
+	// 带 cookie 的鉴权请求。
+	authGet := func() (*httptest.ResponseRecorder, *http.Cookie) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+		r := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(r, req)
+		var got *http.Cookie
+		for _, c := range r.Result().Cookies() {
+			if c.Name == auth.CookieName {
+				got = c
+			}
 		}
+		return r, got
+	}
+
+	// 新会话剩余 ~1h >= 30m 阈值：连续 3 次鉴权都不得重发 Set-Cookie（不写库）。
+	for i := 0; i < 3; i++ {
+		r, renewed := authGet()
+		if r.Code != http.StatusOK {
+			t.Fatalf("第 %d 次带 cookie 请求应 200，实际 %d", i, r.Code)
+		}
+		if renewed != nil {
+			t.Fatalf("第 %d 次鉴权剩余未跌破阈值却重发了 Set-Cookie（短 TTL 写放大）", i)
+		}
+	}
+
+	// 把存储里的 expiry 改到剩余 10m（< 30m 阈值），模拟"已经用了一阵"。
+	// 会话仍未过期，故下一次鉴权必须续期并重发 cookie。
+	now := time.Now().UTC()
+	sum := sha256.Sum256([]byte(token))
+	key := hex.EncodeToString(sum[:])
+	value := strconv.FormatInt(now.Add(10*time.Minute).UnixNano(), 10) + " " +
+		strconv.FormatInt(now.Add(-50*time.Minute).UnixNano(), 10)
+	if err := db.Update(func(tx *store.Tx) error { return tx.Put("sessions", key, []byte(value)) }); err != nil {
+		t.Fatalf("改写会话失败: %v", err)
+	}
+	r, renewed := authGet()
+	if r.Code != http.StatusOK {
+		t.Fatalf("剩余 10m 的会话应仍有效，实际 %d", r.Code)
 	}
 	if renewed == nil {
 		t.Fatal("剩余寿命低于阈值时应重发 Set-Cookie（滑动续期）")
@@ -166,8 +217,8 @@ func TestSessionSlideRenewsCookie(t *testing.T) {
 	if renewed.Value != token {
 		t.Fatal("续期不得更换 token")
 	}
-	if renewed.MaxAge != int(time.Hour.Seconds()) {
-		t.Fatalf("续期 cookie Max-Age 应为 %d，实际 %d", int(time.Hour.Seconds()), renewed.MaxAge)
+	if renewed.MaxAge != int(ttl.Seconds()) {
+		t.Fatalf("续期 cookie Max-Age 应为 %d，实际 %d", int(ttl.Seconds()), renewed.MaxAge)
 	}
 }
 
