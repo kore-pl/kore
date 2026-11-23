@@ -1,5 +1,10 @@
 package httpapi
 
+// 文件名保留说明（不改名）：nopass 指 ADR-0041 时期的「本机通道免密登录」，
+// 该机制已被 ADR-0043 删除；本文件现在锁定的恰是它的反面——UDS / loopback /
+// 远程未登录一律 401，登录一次后所有操作（含 root 特权动作）免密。
+// 保留旧文件名是为了让历史提交与 ADR 证据里的测试名引用仍可追溯，
+// 改名会让证据链断在这里。
 import (
 	"context"
 	"crypto/sha256"
@@ -21,8 +26,12 @@ import (
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
-// localTestTransport 是测试用 Transport：PeerCred 一律回本进程 uid/pid，
-// 使 UDS 免密的"属主即管理员"分支可被测（真实机测由 curl --unix-socket 覆盖）。
+// localTestTransport 是测试用 Transport：PeerCred 固定返回合规的 UDS 对端凭据
+// （uid = 本进程 uid，pid 硬编码 1，本机通道判定只比对 uid），让真实 UDS 连接
+// 通过 local_access.go 的「uid == socket 属主 / root」检查，从而走通本机通道
+// 识别路径（UDS 的 CSRF 令牌引导与 CSRF 豁免都依赖这一步）。
+// 该凭据不产生任何身份：ADR-0043 之后 /api/v1/* 一律会话校验，未登录仍 401
+// （见 TestLocalChannelsRequireSession）。
 type localTestTransport struct{}
 
 func (localTestTransport) Listen(path string) (net.Listener, error) { return net.Listen("unix", path) }

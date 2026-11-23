@@ -263,8 +263,10 @@ func readStrictBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
-// selfUpdateActor 是审计主体：单管理员内核固定 admin；本机免密通道不改变主体，
-// 只影响认证方式（中间件层已保证 UDS/loopback 的信任边界）。
+// selfUpdateActor 是审计主体：单管理员内核固定 admin。ADR-0043 之后本机通道
+// （UDS/loopback）不是认证来源，也不存在「中间件保证的信任边界」：withAuth 对
+// 全部 /api/v1/* 一律会话校验，本机通道只剩 CSRF 令牌引导与 UDS 的 CSRF 豁免
+// 两项非认证用途，都不改变请求主体。
 func selfUpdateActor(_ *http.Request) string { return "admin" }
 
 // writeUpgradeFailure 把自升级错误映射成状态码与错误码。
