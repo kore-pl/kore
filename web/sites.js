@@ -49,6 +49,8 @@
   function invoke(method, params) { return request('site', method, params); }
   // SSL 证书列表属于 ssl 插件，不能走 site 的限定名（域与插件不一致会 E_INVALID）。
   function invokeSSL(method, params) { return request('ssl', method, params); }
+  // invokePlugin 供跨插件只读探测使用（例如 runtime-php.versions）；只读方法，失败一律降级。
+  function invokePlugin(plugin, method, params) { return request(plugin, method, params); }
   function errText(err) {
     var text = err && err.message ? String(err.message) : '未知错误';
     if (err && err.detail && text.indexOf(err.detail) < 0) text += '（' + err.detail + '）';
@@ -63,6 +65,9 @@
     if (/upstream/.test(msg)) return '反代只接受 http://host:port，不支持 https 或带路径的地址。';
     if (/template/.test(msg)) return '伪静态只支持 none / wordpress / laravel / thinkphp / discuz / nextjs。';
     if (/from_path|to_url|code/.test(msg)) return '重定向只允许 / 开头的来源路径与 http(s):// 或站内 / 目标，code 为 301/302。';
+    if (/docker|container/.test(msg)) return '容器模式需要填运行中的容器名，并确认 conf.d 已挂载到宿主目录；不确定就先用默认的自动检测模式。';
+    if (/nginx_mode|host_conf_dir|docker_conf_dir/.test(msg)) return '连接配置决定插件去哪里读写 nginx 片段；改错会让站点操作失败，保存前请对照宿主的 nginx 配置。';
+    if (/认证|E_UNAUTHORIZED/.test(msg)) return '当前会话没有该操作权限：请用管理员账号登录后重试。';
     return '';
   }
   function chip(tone, text) {
@@ -210,7 +215,8 @@
   }
   function moduleCtx(domain, isEditor) {
     return {
-      domain: domain || '', invoke: invoke, invokeSSL: invokeSSL, ui: { el: el, add: add, on: on },
+      domain: domain || '', invoke: invoke, invokeSSL: invokeSSL, invokePlugin: invokePlugin,
+      ui: { el: el, add: add, on: on },
       errText: errText, hintFor: hintFor, setStatus: setStatus,
       after: isEditor
         ? function (msg) {
@@ -248,6 +254,135 @@
       add(host, el('div', 'site-result-error', '配置编辑器加载失败：' + errText(err)));
     });
   }
+  // ---------------- 运行状态（site.status）----------------
+  // 三态口径：presence 用 present/absent/unknown 表达；unknown 是「查不到」，
+  // 不等于「不存在」，必须显示原因而不是让人以为目录丢了、进而误删站点。
+  function dirStateText(state) {
+    if (state === 'present') return '存在';
+    if (state === 'absent') return '不存在';
+    if (state === 'unknown') return '未知（查不到，不等于不存在）';
+    return '—';
+  }
+  function paintStatus(host, data) {
+    if (!host) return;
+    host.textContent = '';
+    var box = add(host, el('div', 'site-status-box'));
+    var table = add(box, el('table', 'rows'));
+    table.appendChild(row('配置片段', flag(data.conf_exists, false, '存在', '缺失')));
+    table.appendChild(row('配置校验', flag(data.test_passed, data.test_skipped, '通过', '失败', data.test_output)));
+    var dirCell = el('span', 'site-state');
+    var tone = data.site_dir_state === 'present' ? 'ok' : data.site_dir_state === 'absent' ? 'fail' : 'na';
+    dirCell.appendChild(chip(tone, dirStateText(data.site_dir_state)));
+    if (data.site_dir_reason) {
+      var why = add(dirCell, el('span', 'muted', '：' + summarize(data.site_dir_reason)));
+      why.title = data.site_dir_reason;
+    }
+    table.appendChild(row('站点目录', dirCell));
+    table.appendChild(row('已加载', flag(data.loaded, !data.load_checked, '已加载', '未加载')));
+    table.appendChild(row('托管状态', data.managed ? '由本插件托管' : '不在插件清单（外部配置）'));
+    table.appendChild(row('命令通道', (data.nginx_mode || '—') + (data.nginx_reason ? '（' + data.nginx_reason + '）' : '')));
+    if (data.test_output && !data.test_passed) {
+      var out = add(box, el('p', 'row-note-fail site-test-brief', summarize(data.test_output)));
+      out.title = data.test_output;
+    }
+  }
+  function loadStatus(domain, host) {
+    if (!host) return;
+    host.textContent = '';
+    add(host, el('p', 'muted', '正在检查 ' + domain + ' 的实际运行状态…'));
+    invoke('site.status', { domain: domain }).then(function (data) {
+      paintStatus(host, data);
+    }, function (err) {
+      host.textContent = '';
+      add(host, el('div', 'site-result-error', '状态检查失败：' + errText(err) +
+        (hintFor('site.status', err) ? ' ' + hintFor('site.status', err) : '')));
+    });
+  }
+  // ---------------- 连接配置（site.config.get / set）----------------
+  function paintConfig(host, data) {
+    host.textContent = '';
+    if (!data || !data.schema) {
+      add(host, el('div', 'site-result-error', '连接配置返回为空：请升级站点插件后重试。'));
+      return;
+    }
+    var panel = add(host, el('section', 'panel'));
+    var head = add(panel, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', data.schema.title || '站点服务连接配置'));
+    var sourceText = { file: '配置文件', env: '环境变量', default: '默认值' }[data.source] || data.source || '';
+    add(head, el('span', 'panel-meta', sourceText ? '当前来源：' + sourceText : ''));
+    add(panel, el('p', 'field-hint', '决定插件去哪里读写 nginx 片段、以及用哪套命令校验/reload。保存后立即生效；不确定就用默认值。'));
+    var form = add(panel, el('form', 'site-form'));
+    var inputs = {};
+    var values = data.values || {};
+    (data.schema.fields || []).forEach(function (f) {
+      var box = add(form, el('label', 'field'));
+      add(box, el('span', 'field-label', f.label + (f.required ? '' : '（可选）')));
+      var input;
+      if (f.type === 'select' && Array.isArray(f.options)) {
+        input = add(box, el('select', 'field-input'));
+        f.options.forEach(function (optValue) {
+          var opt = add(input, el('option', null, optValue));
+          opt.value = optValue;
+        });
+      } else if (f.type === 'bool') {
+        input = add(box, el('input', 'files-checkbox'));
+        input.type = 'checkbox';
+      } else {
+        input = add(box, el('input', 'field-input'));
+        input.type = f.type === 'int' ? 'number' : 'text';
+        if (f.min !== undefined) input.min = f.min;
+        if (f.max !== undefined) input.max = f.max;
+        if (f.placeholder) input.placeholder = f.placeholder;
+      }
+      var current = values[f.key];
+      if (current === undefined || current === null) {
+        try { current = JSON.parse(f.default); } catch (e) { current = ''; }
+      }
+      if (f.type === 'bool') input.checked = !!current;
+      else input.value = current === undefined || current === null ? '' : String(current);
+      if (f.help) add(box, el('p', 'field-hint', f.help));
+      inputs[f.key] = { field: f, node: input };
+    });
+    var ops = add(form, el('div', 'site-edit-ops'));
+    var save = add(ops, el('button', 'btn btn-primary', '保存连接配置'));
+    save.type = 'submit';
+    var msg = add(panel, el('div', 'site-status muted'));
+    msg.setAttribute('role', 'status');
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var out = {};
+      Object.keys(inputs).forEach(function (key) {
+        var item = inputs[key], f = item.field;
+        if (f.type === 'bool') out[key] = !!item.node.checked;
+        else if (f.type === 'int') { var n = parseInt(item.node.value, 10); out[key] = isNaN(n) ? 0 : n; }
+        else out[key] = item.node.value.trim();
+      });
+      save.disabled = true;
+      invoke('site.config.set', { values: out }).then(function (r) {
+        save.disabled = false;
+        var warn = Array.isArray(r.warnings) && r.warnings.length ? '；提示：' + r.warnings.join('；') : '';
+        msg.textContent = '已保存并生效（applied=' + r.applied + '，需要重启=' + r.restart_required + '）' + warn;
+        msg.className = 'site-status row-note-ok';
+      }, function (err) {
+        save.disabled = false;
+        msg.textContent = '保存失败：' + errText(err) + (hintFor('site.config.set', err) ? ' ' + hintFor('site.config.set', err) : '');
+        msg.className = 'site-status row-note-fail';
+      });
+    });
+  }
+  function loadConfig(host) {
+    if (!host) return;
+    host.textContent = '';
+    add(host, el('p', 'muted', '正在读取连接配置…'));
+    invoke('site.config.get', {}).then(function (data) {
+      paintConfig(host, data);
+    }, function (err) {
+      host.textContent = '';
+      add(host, el('div', 'site-result-error', '连接配置读取失败：' + errText(err) +
+        (hintFor('site.config.get', err) ? ' ' + hintFor('site.config.get', err) : '') +
+        '（插件未启用或版本过旧时会出现）'));
+    });
+  }
   function paintDetail() {
     if (!S.detailHost) return;
     var d = S.detail;
@@ -282,6 +417,18 @@
     table.appendChild(row('vhost 路径', el('span', 'mono', d.vhost_path || '—')));
     table.appendChild(row('在插件清单内', d.managed ? '是' : '否'));
     table.appendChild(row('站点目录', d.site_dir_exists ? '存在' : '缺失或未创建'));
+    if (d.site_dir_state && d.site_dir_state !== 'present') {
+      table.appendChild(row('目录判定', dirStateText(d.site_dir_state) + (d.site_dir_reason ? '（' + d.site_dir_reason + '）' : '')));
+    }
+    var statusPanel = add(box, el('section', 'panel site-edit-section'));
+    var statusHead = add(statusPanel, el('div', 'panel-head'));
+    add(statusHead, el('span', 'panel-title', '运行状态'));
+    add(statusHead, el('span', 'panel-meta', '配置 / 校验 / 目录 / 加载'));
+    var recheck = add(statusHead, el('button', 'btn btn-ghost', '重新检查'));
+    recheck.type = 'button';
+    var statusHost = add(statusPanel, el('div', 'site-status-host'));
+    on(recheck, function () { loadStatus(d.domain, statusHost); });
+    loadStatus(d.domain, statusHost);
     S.editHost = add(box, el('div', 'site-edit-host'));
     loadEditor(d);
   }
@@ -291,7 +438,13 @@
     if (S.listMeta) S.listMeta.textContent = S.sites.length ? '共 ' + S.sites.length + ' 个站点' : '';
     if (!S.sites.length) {
       var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '还没有站点；用上方向导创建第一个站点'));
+      add(empty, el('p', 'empty-state-text', '还没有站点：用上面的建站向导创建第一个站点，向导会自动填好根目录。'));
+      var cta = add(empty, el('button', 'btn btn-primary', '创建第一个站点'));
+      cta.type = 'button';
+      on(cta, function () {
+        var input = document.querySelector('[data-field="domain"]');
+        if (input) { input.focus(); input.scrollIntoView({ block: 'center' }); }
+      });
       return;
     }
     var table = add(S.listHost, el('table', 'sites-table'));
@@ -329,6 +482,24 @@
         toggle.setAttribute('data-action', site.enabled ? 'site-disable' : 'site-enable');
         on(toggle, function () { toggleSite(site); });
       }
+      var check = add(ops, el('button', 'btn btn-ghost', '状态')); check.type = 'button';
+      check.setAttribute('data-action', 'site-status');
+      var live = add(state, el('div', 'site-live-status muted'));
+      on(check, function () {
+        live.textContent = '检查中…';
+        live.className = 'site-live-status muted';
+        invoke('site.status', { domain: site.domain }).then(function (d) {
+          live.textContent = '';
+          live.className = 'site-live-status';
+          live.appendChild(flag(d.test_passed, d.test_skipped, '配置通过', '配置失败', d.test_output));
+          live.appendChild(chip(d.site_dir_state === 'present' ? 'ok' : d.site_dir_state === 'absent' ? 'fail' : 'na',
+            '目录' + dirStateText(d.site_dir_state)));
+          live.appendChild(flag(d.loaded, !d.load_checked, '已加载', '未加载'));
+        }, function (err) {
+          live.textContent = '检查失败：' + errText(err);
+          live.className = 'site-live-status row-note-fail';
+        });
+      });
       var del = add(ops, el('button', 'btn btn-ghost sites-del', '删除')); del.type = 'button';
       del.setAttribute('data-action', 'site-delete');
       on(del, function () { removeSite(site.domain); });
@@ -348,6 +519,19 @@
     add(head, el('p', 'view-sub', '向导一次收齐域名、根目录、SSL 与伪静态；点域名查看完整配置并继续管理。'));
     S.resultHost = add(root, el('div', 'site-result-host'));
     S.wizardHost = add(root, el('div', 'site-wizard-host'));
+    S.configHost = add(root, el('div', 'site-config-host'));
+    S.configHost.hidden = true;
+    var cfgToggle = add(head, el('button', 'btn btn-ghost', '连接配置'));
+    cfgToggle.type = 'button';
+    cfgToggle.setAttribute('data-action', 'site-config');
+    on(cfgToggle, function () {
+      S.configHost.hidden = !S.configHost.hidden;
+      cfgToggle.textContent = S.configHost.hidden ? '连接配置' : '收起连接配置';
+      if (!S.configHost.hidden && !S.configHost.dataset.loaded) {
+        S.configHost.dataset.loaded = '1';
+        loadConfig(S.configHost);
+      }
+    });
     S.status = add(root, el('div', 'site-status muted'));
     S.status.setAttribute('role', 'status');
     var listPanel = add(root, el('section', 'panel'));
