@@ -44,17 +44,17 @@
 
 ### 2.2 `internal/core/store`
 
-- **职责**：打开/关闭 bbolt（`0600`、`Timeout=1s`），定义 9 个 bucket：`meta`（schema 版本、安装时间、kore 版本）、`plugins`（清单与安装元数据）、`plugin_state`（desired/actual 状态与重启计数）、`tasks`（任务索引，原始输出落 `/var/lib/kore/tasks/`）、`sessions`（会话哈希→过期时间）、`audit`（审计，保留 90 天）、`scheduler_tasks` / `scheduler_runs`（ADR-0019 定时任务与最近 100 条执行记录）、`alerts`（告警中心，顶层桶内嵌套子桶 `events`；保留最近 500 条、同 title+source 5 分钟内合并 count+1、`seen` 已读标记；字段表见 [DATA-MODEL.md](./DATA-MODEL.md) §5）。`scheduler_*` 与 `alerts` 均属 schema v1 的**追加** bucket，旧二进制忽略、不升版本。单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`（不建 `users`）。提供 `View`/`Update` 事务封装与错误分类。
+- **职责**：打开/关闭 bbolt（`0600`、`Timeout=1s`），定义 9 个 bucket：`meta`（schema 版本、安装时间、kore 版本）、`plugins`（清单与安装元数据）、`plugin_state`（desired/actual 状态与重启计数）、`tasks`（任务索引，原始输出落 `/var/lib/kore/tasks/`）、`sessions`（会话哈希→`expiry created` 纳秒戳；另存 `password-fingerprint` 保留键，见 §2.3）、`audit`（审计，保留 90 天）、`scheduler_tasks` / `scheduler_runs`（ADR-0019 定时任务与最近 100 条执行记录）、`alerts`（告警中心，顶层桶内嵌套子桶 `events`；保留最近 500 条、同 title+source 5 分钟内合并 count+1、`seen` 已读标记；字段表见 [DATA-MODEL.md](./DATA-MODEL.md) §5）。`scheduler_*` 与 `alerts` 均属 schema v1 的**追加** bucket，旧二进制忽略、不升版本。单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`（不建 `users`）。提供 `View`/`Update` 事务封装与错误分类。
 - **输入输出**：输入 `path=/var/lib/kore/state.db` 与 bucket/key/value；输出类型化错误：`ErrNotFound`、`ErrConflict`、`ErrCorrupt`、`ErrSchemaTooNew`。值大小上限 1 MiB，超限直接拒绝（大对象是设计错误）。
 - **失败模式与处理**：文件锁被占/损坏 → 退出码 4，日志给损坏页偏移与"从 `state.db.bak` 恢复"指引；schema 版本高于二进制 → 退出码 4（拒绝降级写）；磁盘满 → 事务回滚，返回 `E_INTERNAL` 且 `message` 写明"磁盘空间不足"；事务超过 500 ms → WARN（长事务是设计味道）。
 - **明确不做什么**：不暴露 SQL/查询语言；不存业务数据；不做跨 bucket 长事务；不做自动修复（损坏只报告，不猜）；不缓存热数据（bbolt 自身 mmap 即缓存）。
 
 ### 2.3 `internal/core/auth`
 
-- **职责**：单用户口令校验、会话签发/校验/吊销、登录限速。口令哈希用标准库 `crypto/pbkdf2`（PBKDF2-HMAC-SHA256，迭代 600000，salt 16 B，key 32 B），存储格式 `pbkdf2-sha256$600000$<salt-b64>$<hash-b64>`；口令来源是配置 `auth.admin_password_hash`（无用户表，见 §2.2 store）。会话 token 32 B 随机（`crypto/rand`），`sessions` 的 key 为 token 的 `sha256`（64 位小写 hex），明文 token 不落库；Cookie 名 `kore_session`，`HttpOnly`、`SameSite=Strict`、`Path=/`、HTTPS 下 `Secure`；TTL 12 h，剩余 < 2 h 时滑动续期。登录成功时同时下发两个 cookie：`kore_session`（HttpOnly、SameSite=Strict）与 `kore_csrf`（32 B 随机，`crypto/rand` base64url；`SameSite=Strict`；**不设 HttpOnly**——前端需读取后回填 `X-Kore-CSRF` 头，这正是双提交的机制；不设 Path 限制）；登出与 session 过期时一并失效。`kore_csrf` 与 `kore_session` 绑定同一会话记录，校验时用常量时间比较。
+- **职责**：单用户口令校验、会话签发/校验/吊销、登录限速。口令哈希用标准库 `crypto/pbkdf2`（PBKDF2-HMAC-SHA256，迭代 600000，salt 16 B，key 32 B），存储格式 `pbkdf2-sha256$600000$<salt-b64>$<hash-b64>`；口令来源是配置 `auth.admin_password_hash`（无用户表，见 §2.2 store）。会话 token 32 B 随机（`crypto/rand`），`sessions` 的 key 为 token 的 `sha256`（64 位小写 hex），明文 token 不落库；Cookie 名 `kore_session`，`HttpOnly`、`SameSite=Strict`、`Path=/`、HTTPS 下 `Secure`；**会话 TTL 默认 168 h（7 天）**（`auth.session_ttl` 可配置，取值 1m–720h，显式配置优先）；**滑动续期阈值 = `min(24h, ttl/2)`**（7 天实例 24 h、12 h 实例 6 h、1 h 实例 30 m）——只有剩余寿命低于阈值才把 `expires_at` 推到 `now + ttl` 并重发 `Set-Cookie`，相邻两次续期至少间隔 `ttl/2`，因此不会每次鉴权都写 bbolt（消除写放大）；**绝对上限 30 天**（`created + 30d`，滑动不得越过，到点必须重新登录）；**改口令 → 全局吊销所有会话**（启动时比对 `sha256(admin_password_hash)` 指纹，变化即 `RevokeAll`）。登录成功时同时下发两个 cookie：`kore_session`（HttpOnly、SameSite=Strict）与 `kore_csrf`（32 B 随机，`crypto/rand` base64url；`SameSite=Strict`；**不设 HttpOnly**——前端需读取后回填 `X-Kore-CSRF` 头，这正是双提交的机制；不设 Path 限制）；登出与 session 过期时一并失效。`kore_csrf` 与 `kore_session` 绑定同一会话记录，校验时用常量时间比较。
 - **输入输出**：`POST /api/v1/auth/login {username,password}` → `Set-Cookie` + `{username,expiresAt}`；`POST /api/v1/auth/logout` → 删会话 + 清 Cookie；`GET /api/v1/self` → 当前用户；中间件输入 Cookie，输出 `Session` 或 `401`。
 - **登录限速（`ratelimit.go`）**：纯内存滑动窗口计数器，口径取 `security.login_rate_limit`（默认 **60 s 窗口内失败 5 次即锁 300 s**）。`Allow(key)` 在口令校验**之前**判定，锁定期内连正确口令也回 429 `E_RATELIMIT` + `Retry-After`（秒，向上取整、最小 1）；口令错记 `RecordFailure`，登录成功 `RecordSuccess` 清零。单管理员体系下 key 固定 `"admin"` 构成**全局桶**（接口保留 key 参数，供后续 per-IP 分桶），不做 per-IP 桶——UDS 下 `RemoteAddr` 恒为 local，per-IP 桶等同于全局桶，多一层无收益。**零 ticker / 零 AfterFunc / 零后台 goroutine**（G-19）：过期条目在 `Allow`/`Record*` 调用路径上按次数惰性清理。**状态只在进程内存，重启清零**（不持久化；持久化限速状态排在 M3）。`security.login_rate_limit.*` 属 SIGHUP 热更白名单，重载后调 `Server.ApplyLoginPolicy` 立刻生效，**已累计的窗口计数与进行中的锁定不变**，只影响之后的判定与新锁定。
-- **失败模式与处理**：口令错 → 401 `E_UNAUTHORIZED`，响应耗时恒定在 150–250 ms（防时序侧信道）；超限 → 429 `E_RATELIMIT`，`Retry-After` 给剩余秒数；会话过期 → 401 且清 Cookie；store 不可用 → 500 `E_INTERNAL`；`auth.admin_password_hash` 为空 → 首启 bootstrap：用 `crypto/rand` 生成 24 字符口令（base32 字母表剔除 `0/O/1/I`），写回 PBKDF2 哈希并置 `auth.initialized=true`，明文口令**只打印到 stderr/tty 一次**（不进日志文件，日志只记 `auth.admin_initialized`）；生成失败、配置文件不可写，或 `auth.initialized=true` 但哈希为空 → 退出码 2（不降级为空口令启动）。
+- **失败模式与处理**：口令错 → 401 `E_UNAUTHORIZED`，响应耗时恒定在 150–250 ms（防时序侧信道）；超限 → 429 `E_RATELIMIT`，`Retry-After` 给剩余秒数；会话过期 → 401 `E_UNAUTHORIZED`（服务端不回写清 Cookie，旧 token 已失效，携带它的请求一律 401）；store 不可用 → 500 `E_INTERNAL`；`auth.admin_password_hash` 为空 → 首启 bootstrap：用 `crypto/rand` 生成 24 字符口令（base32 字母表剔除 `0/O/1/I`），写回 PBKDF2 哈希并置 `auth.initialized=true`，明文口令**只打印到 stderr/tty 一次**（不进日志文件，日志只记 `auth.admin_initialized`）；生成失败、配置文件不可写，或 `auth.initialized=true` 但哈希为空 → 退出码 2（不降级为空口令启动）。
 - **明确不做什么**：不做多用户/注册/找回密码/2FA/RBAC；不做 JWT（避免密钥轮换与吊销难题）；不引入 `golang.org/x/crypto`（bcrypt/argon2 破依赖白名单）；不把会话放进程内存（重启即全员掉线不可接受）。
 
 ### 2.4 `internal/core/httpapi`
@@ -240,8 +240,8 @@ ftruncate(fd,0); write(fd, "<pid>\n")
 | --- | --- | --- |
 | `log.level` | 是 | 下一条日志即生效 |
 | `log.rotate.max_size_mb`、`log.rotate.max_backups` | 是 | 下一次写入/轮转生效 |
-| `auth.session_ttl` | 是 | 只影响新会话与后续续期判断 |
-| `auth.admin_password_hash` | 是 | 只影响新登录，**既有会话不失效**；如需强制全部下线必须重启内核（改哈希不吊销会话） |
+| `auth.session_ttl` | 否 | 当前实现未接热更：SIGHUP 只替换配置快照，`auth.Manager` 的 TTL 在启动装配时拷贝（`serve_runtime.go` 构造后无 setter），改后需重启内核才生效——新会话签发与续期判断都按旧值 |
+| `auth.admin_password_hash` | 否 | 哈希只在启动装配时读取（SIGHUP 只更新配置快照，运行中的校验仍按旧口令）；**重启时比对 `password-fingerprint`，哈希变了就 `RevokeAll` 吊销全部旧会话**——改口令 = 全局下线，无需手工 kick |
 | `security.login_rate_limit.attempts`、`.window`、`.lock` | 是 | 只影响新计数与新锁定 |
 | `audit.invoke_all` | 是 | 下一次 invoke 审计生效（只影响写审计范围，不影响授权） |
 | `resources.defaults.memory_mb`、`.cpu_quota`、`.pids_max` | 是 | 只对之后拉起的插件生效；已运行进程的 cgroup 不改 |

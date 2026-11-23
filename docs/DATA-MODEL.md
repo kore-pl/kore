@@ -41,7 +41,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `server.socket` | string | `/run/kore/kore.sock` | 主壳 UDS 路径，父目录启动时创建（0700） |
 | `server.tls` | bool | `false` | MVP 固定 off；置 true 启动拒绝并提示走反向代理 |
 | `auth.admin_password_hash` | string | `""` | 空 = 首次启动生成 24 字符随机口令、写回哈希并置 `auth.initialized=true`；非空必须是 §3.3 的 PBKDF2 存储串 |
-| `auth.session_ttl` | duration | `12h` | 1m–720h；滑动过期（每次鉴权刷新 `expires_at`） |
+| `auth.session_ttl` | duration | `168h`（7 天） | 1m–720h；未显式配置时 168h。**滑动续期阈值 = `min(24h, ttl/2)`**（7 天→24h、12h→6h、1h→30m）：仅当剩余寿命低于阈值才把 `expires_at` 推到 `now+ttl` 并重发 cookie（相邻续期至少间隔 `ttl/2`，避免每次鉴权写盘）；**绝对上限 30 天**（`created+30d`，续期不得越过）；改后需重启内核生效（SIGHUP 不热更） |
 | `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` = TLS 或回环 Host 时给会话 cookie 加 `Secure`，否则不加并 WARN |
 | `auth.initialized` | bool | `false` | 首次生成口令后由内核置 `true`；`true` 时启动不再打印临时口令。重置 = 人工置 `false` 并清空 `auth.admin_password_hash`；`initialized=true` 但哈希为空视为不一致，拒绝启动 |
 | `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `state.db`、`plugins/`、`tasks/` |
@@ -83,7 +83,7 @@ server:
 auth:
   # PBKDF2-HMAC-SHA256：600000 次迭代、16B salt、32B key，原始 base64（无填充）
   admin_password_hash: "pbkdf2-sha256$600000$c2FsdHNhbHRzYWx0c2FsdA$0V9k..."
-  session_ttl: "12h"            # 滑动过期：每次鉴权刷新，超过 12h 未活动即删
+  session_ttl: "168h"           # 显式示例；省略时默认 168h（7 天）。滑动阈值 min(24h, ttl/2)，绝对上限 30 天
   cookie_secure: "auto"         # auto|true|false：TLS 或回环时自动加 Secure
   initialized: false            # 首次生成口令后内核置 true，二次启动不再打印
 
@@ -152,13 +152,13 @@ cert_renew:                     # 迁移为 scheduler 内置任务，默认关�
 
 数据库：`/var/lib/kore/state.db`，`bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1*time.Second, NoSync: false})`；**锁用 bbolt 内置 flock（`LOCK_EX|LOCK_NB` + `Timeout=1s`），另写 `state.lock` 记录 pid；`internal/core` 不直接调 `syscall`（G-16：平台专有 `syscall` 收在 `internal/platform`）**；page size 4096。键为 UTF-8 字符串（时间序靠可排序编码），值为 JSON 对象（UTF-8，无缩进）；单值上限 1 MiB，超限视为设计错误。MVP 不建 `users` bucket（单管理员来自 config）；`tasks` bucket 只存索引，原始输出落 `/var/lib/kore/tasks/`（保留 7 天），两处口径共同构成任务记录。
 
-| bucket | key 编码 | value JSON schema | 清理策略 |
+| bucket | key 编码 | value 编码 / JSON schema | 清理策略 |
 | --- | --- | --- | --- |
 | `meta` | 固定字符串：`schema_version` `installed_at` `kore_version` `last_backup_at` `preset_snapshot_version` `store_last_refresh_at` | `{"schema_version":1}` / `{"ts":"..."}` / `{"version":"0.1.0"}` / `{"preset_snapshot_version":"2026-11-21.1"}` / `{"ts":"..."}`（上次显式刷新时间，不是出站心跳） | 永不清理 |
 | `plugins` | 插件 id（如 `site`） | `{id,name,version,lifecycle:"resident"\|"lazy"\|"oneshot",idle_timeout_s,protocol,requires_kore,capabilities[],triggers[],resources{memory_mb,cpu_quota,pids_max},installed_at,package_sha256,signed,source:"store"\|"local"\|"embedded"\|"manual",scenario_id,depends_on[],size_bytes,store_visibility,prev_version}` | 卸载即删；保留 `prev_version` 供回滚；索引仓库用同一 `requires_kore` 做兼容过滤；`scenario_id` 记录首次安装来源预设，手动安装为空 |
 | `plugin_state` | 插件 id | `{desired:"enabled"\|"disabled",actual:"ready"\|"degraded"\|"failed"\|"stopped"\|"idle",restarts,restart_window_start,last_error,last_active_at,last_upgrade_at,updated_at}` | 卸载即删 |
 | `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 保留 30 天（启动时 + 惰性触发） |
-| `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次） | `{subject:"admin",created_at,last_seen_at,expires_at}`；`expires_at` = 最近一次鉴权 + `session_ttl`（12h 滑动） | 过期即删（读时判断 + 惰性清理） |
+| `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次）；另有保留键 `password-fingerprint`（值为 `sha256(admin_password_hash)` 的 hex） | 非 JSON：`"<expiryUnixNano> <createdUnixNano>"`（空格分隔的十进制纳秒；旧格式只有单个 expiry，读取时按当前 TTL 反推 created）。`expires_at` = 签发/续期时 `now + session_ttl`，且不超过 `created + 30d`；仅当剩余寿命 < `min(24h, ttl/2)` 才在鉴权时写回并重发 cookie | 读时判定过期（`Validate` 拒绝）；删除发生在登出 / 吊销 / 改口令，无后台清理任务 |
 | `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | 保留 90 天 |
 | `scheduler_tasks` | 任务 id（`tsk-<16 hex>`；内置任务 `builtin-cert-renew`） | `{id,name,plugin,method,params,schedule,interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count,created_at}`（`schedule` 为 5 段 cron 表达式）（ADR-0019；`params` 是插件方法参数原始 JSON，属 G-24 受控例外） | 删除任务即删；内置任务随 `cert_renew.enabled` 启停 |
 | `scheduler_runs` | `%020d-<task-id>-%06d`（unix 纳秒 + 序号），字典序 = 时间序 | `{task_id,started_at,finished_at,status:"ok"\|"failed"\|"timeout"\|"skipped"\|"missed",error,dur_ms}` | 保留最近 100 条（写入时裁剪） |
@@ -182,7 +182,7 @@ cert_renew:                     # 迁移为 scheduler 内置任务，默认关�
 
 lazy 插件的 `actual:"idle"` 与 `last_active_at` 必须落盘：主壳重启后按 `last_active_at` 恢复「最久未用先降级」的配额判定，不允许重启后把全部 lazy 一次性拉起。
 
-sessions 只存 token 的 SHA-256 与时间戳：DB 文件泄露时攻击者拿到的是哈希，不能直接复用会话；token 明文只出现在登录响应里，服务端不落盘。
+sessions 只存 token 的 SHA-256 与时间戳（另有口令指纹键，见 §5）：DB 文件泄露时攻击者拿到的是哈希，不能直接复用会话；token 明文只出现在登录响应里，服务端不落盘。
 
 索引仓库 `index/plugins.json` 的 schema 由 `kore-plugins` 仓库的 `index/schema.json` 定义，kore 只读 `id/version/requires_kore/sha256` 四个字段，不复制其字段表；本文件的 `requires_kore` 语义与之保持一致。
 
@@ -291,7 +291,7 @@ kored db dump --bucket meta                            # 核对 schema_version
 | 数据 | 规则 | 触发点 |
 | --- | --- | --- |
 | `tasks` | 保留 30 天，按 ULID 前缀范围扫描删除 | 启动 + 每次任务状态写入前检查 |
-| `sessions` | `expires_at < now` 即删 | 启动 + 每次登录/校验前 |
+| `sessions` | 过期不主动删除，仅读时判定失效（`expires_at < now` 或越过 `created+30d` 均拒绝）；删除只发生在登出 / 吊销 / 改口令 | 读时（无启动清扫、无惰性清理） |
 | `audit` | 保留 90 天，按纳秒前缀范围删除 | 启动 + 每次审计写入前检查 |
 | 旧插件版本 | 保留当前 + 上一版本 | 升级成功后同步清理 |
 | 插件日志 | 轮转 10 MiB × 2 | 写入路径 |
