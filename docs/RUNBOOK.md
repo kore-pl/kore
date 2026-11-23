@@ -326,3 +326,44 @@ sudo cp -a /etc/kore/config.yaml /opt/kore/config/config.yaml 2>/dev/null || tru
 ### 6.4 门禁
 
 `make zero-intrusion-check`：在 `/tmp` 建隔离安装根、编译 `<install>/bin/kored`、**不设** `KORE_HOME`/`--config` 起实例，断言 `portable` 目录与 socket 全在安装目录内、系统路径零新增、未新建 `kore-*` 用户/unit（既有用户与 unit 单列为豁免项）。该段同时是 `make check` 的第 11/12 段。
+
+## 7. 重置管理员口令（忘记口令 / 首启没设置）
+
+kore 是单管理员模型，没有"找回"流程：口令哈希在配置文件的 `auth.admin_password_hash`，重置 = 生成新哈希并重启。
+
+### 7.1 正常路径（服务可停、有 shell）
+
+```bash
+# 1) 生成新口令并写回配置（原子写 + 权限 0600；口令只打印这一次）
+/opt/kore/bin/kored admin-password --generate
+#    想自己指定口令（读两次、不回显）：
+# /opt/kore/bin/kored admin-password --set
+#    非交互（Ansible / 容器 entrypoint），从管道读：
+# printf '%s' "$KORE_ADMIN_PW" | /opt/kore/bin/kored admin-password --set --stdin
+
+# 2) 重启内核（admin_password_hash 虽是热更字段，但重启最省事、也清掉旧会话）
+sudo systemctl restart kore
+
+# 3) 验证：新口令能换到会话（200 + 两个 cookie），旧口令 401
+curl -s -o /dev/null -w 'new=%{http_code}\n' -X POST http://127.0.0.1:8787/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"password":"<新口令>"}'
+```
+
+判据：`new=200`；用旧口令复跑同一请求应为 `401`。改完不要忘记：`admin_password_hash` 变化**不会吊销已签发的会话**（配置热更日志会写明），需要立刻踢掉旧会话就重启。
+
+### 7.2 配置文件路径怎么找
+
+- portable（默认）：`<install>/config/config.yaml`；设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`。
+- fhs（发行版打包）：`/etc/kore/config.yaml`。
+- 显式指定：`kored admin-password --generate --config /path/to/config.yaml`。
+- 不确定时看 `kored serve` 启动日志里的配置告警行，或 `curl -s 127.0.0.1:8787/api/v1/system/info`。
+
+### 7.3 配置文件被改坏 / 完全没配置
+
+`kored serve` 启动时会自检：配置不存在或哈希为空时，终端里直接引导输入新口令（非终端只提示、不阻塞）。救急也可以让命令自己建配置——`admin-password --generate --config <path>` 会创建父目录（0700）并写出只含 `auth` 段的新文件，再按需补 `server.addr` 等键。
+
+### 7.4 防呆
+
+- 配置文件权限应恒为 `0600`：`stat -c '%a %n' /opt/kore/config/config.yaml`；不是 0600 就 `chmod 600`。
+- 不要用 `git`、备份工具或工单系统搬运含哈希的配置；哈希虽不是明文，但等同于口令。
+- 写盘失败（磁盘满 / 只读挂载）时命令返回非 0 且原文件不变——不要忽略退出码。

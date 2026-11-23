@@ -46,6 +46,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runAudit(args[1:], stdout, stderr)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr)
+	case "admin-password":
+		return runAdminPassword(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return exitOK
@@ -64,6 +66,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  install   安装插件（M1 只解析 --package / --scenario，实现归 M2）")
 	fmt.Fprintln(w, "  audit     查询审计记录（--since 必填，--action 过滤，--csv 导出）")
 	fmt.Fprintln(w, "  uninstall 卸载链：清 systemd unit / kore-* 用户 / 变更账本（ADR-0023；--dry-run 看计划）")
+	fmt.Fprintln(w, "  admin-password 设置管理员口令（--generate / --set [--stdin] / --hash），原子写配置且权限 0600")
 	fmt.Fprintln(w, "  help      打印本帮助")
 	fmt.Fprintln(w, "退出码: 0 正常 / 2 配置 / 3 状态目录或锁 / 4 存储或 schema / 5 监听绑定 / 6 环境不满足")
 }
