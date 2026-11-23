@@ -73,7 +73,7 @@ help: ## 显示本帮助（默认目标）
 # + 八个按需子模块（files-l2 / site-edit / config-panel / monitor-cards / db-l2 / search / audit / alerts）
 # + 英文包（i18n/en-US.js，运行期按需注入，不进首屏）。
 # 只在缺失或源更新时拷贝，不删目录、不跑体积门禁，开销为几次 stat。
-WEB_SRC_FILES := index.html app.js style.css shell.js i18n.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js terminal.js db.js db-l2.js logs.js process.js ssl.js backups.js redis.js firewall.js waf.js dns.js runtimes.js integrity.js container.js search.js audit.js alerts.js
+WEB_SRC_FILES := index.html app.js style.css shell.js i18n.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js terminal.js db.js db-l2.js logs.js process.js ssl.js backups.js redis.js firewall.js waf.js dns.js runtimes.js integrity.js container.js search.js audit.js alerts.js credentials.js
 # 语言包源码在 web/i18n/ 下，产物拍平成 web/dist/i18n-<locale>.js：
 # 内核静态路由只托管「单段文件名」（server.go handleAsset 拒绝含 / 的路径），
 # 不为了子目录去放宽内核的遍历面（ADR-0021）。
@@ -141,7 +141,7 @@ frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖
 	cp $(addprefix web/,$(WEB_SRC_FILES)) web/dist/; \
 	cp web/i18n/zh-CN.js web/dist/i18n-zh-CN.js; \
 	cp web/i18n/en-US.js web/dist/i18n-en-US.js; \
-	echo "[OK] 前端静态产物已打包: web/dist（34 文件，零依赖；首屏 6 件套 + 19 视图模块 + 8 按需子模块 + 英文包）"; \
+	echo "[OK] 前端静态产物已打包: web/dist（35 文件，零依赖；首屏 6 件套 + 19 视图模块 + 9 按需子模块 + 英文包）"; \
 	bash scripts/frontend-check.sh
 
 mem: ## 采样 VmRSS：日常 5 点 ≈10s（默认）/ 收口 MEM_POINTS=60 ≈65s；含 RssAnon/RssFile 诊断（目标 8192 / 红线 16384 KiB）
