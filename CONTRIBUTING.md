@@ -1,14 +1,25 @@
 # 贡献指南（CONTRIBUTING）
 
-感谢参与 kore。动手前请先读 [AGENTS.md](AGENTS.md)（协作与硬门禁）与 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)（开源化政策，MIT）。
+感谢参与 kore。动手前请先读 [AGENTS.md](AGENTS.md)（协作与硬门禁）与 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)（开源化政策：MIT 许可、逐仓开源资产矩阵、九件套规范、名称与贡献者路径）。
 
 ## 1. 开发环境
 
 - **Go 1.26+**（`go.mod` 已声明 `go 1.26`）；构建统一 `CGO_ENABLED=0`。
 - `make build`：构建 `bin/kored`（`-trimpath -buildvcs=false -s -w`）。
-- `make check`：聚合门禁，必须全绿。当前为 **10 段**（docs-check / 依赖白名单 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree 卫生 / `oss-check` / **`case-check`** / **`frontend` 首屏体积**）。
-  - 第 9 段 `case-check`：大小写一致性——module 路径全小写且无 `!` 转义、无同目录大小写冲突、插件 `id` 小写、文档 GitHub URL 的 owner 段小写。
-  - 第 10 段 `frontend` 首屏体积门禁（≤300 KiB gzip，`make frontend`，G-03 阻断级）。
+- `make check`：聚合门禁，必须全绿。当前为 **13 段**（顺序即执行顺序）：
+  1. `docs-check`——文档元信息 / 相对链接 / 占位词 / 行数 / 关键口径
+  2. 依赖白名单 + 兼容基线（第三方直接依赖 ≤3，`CGO_ENABLED=0` / `GOAMD64=v1` / `GOARM64=v8.0` / `-buildvcs=false`）
+  3. 薄壳边界（`internal/core` 只做规则、不写业务、不 import 插件）
+  4. `repo-check`——跨仓库边界（本仓无插件代码 / 插件 import / 插件索引）
+  5. `canonical-check`——口径唯一性（旧预算 / 旧字段 / 幽灵 id 清零）
+  6. `log-check`——判断留痕台账（WARN 级，不阻断）
+  7. `wt-check`——worktree 卫生（WARN 级，里程碑收口前必须清空）
+  8. `oss-check`——`kore` 本仓根开源资产（MIT `LICENSE` / 根文档 / CI / 协议头，G-26）
+  9. `case-check`——大小写一致性（module 全小写无 `!` 转义、无同目录大小写冲突、插件 `id` 小写、文档 URL owner 段小写）
+  10. `frontend`——首屏体积 ≤300 KiB gzip（G-03 阻断级）
+  11. 零侵入门禁（ADR-0023：安装目录外零新增写入）
+  12. `secret-check`——明文凭据扫描（G-30）
+  13. `plugin-oss-check`——**25 个兄弟仓九件套**（24 个插件仓 + `kore-plugins`：`CONTRIBUTING` / `SECURITY` / `CODE_OF_CONDUCT` / `AGENTS` / PR 模板 / issue 模板三件 / `ci.yml` / README 开源段）；任一仓缺件或 CI 触发漂移即整段红
 - 单测 / 静态检查：`make vet`、`make test`。
 - 资源类改动额外跑 `make mem`；里程碑收口再跑 `make idle` / `make budget-check`（需要真实进程，不在 CI 跑）。
 
@@ -31,6 +42,40 @@ go work use ./kore-plugins
 go work sync
 ```
 
+### 2.1 插件仓九件套与模板
+
+**25 个兄弟仓**（24 个 `kore-plugin-<id>` + `kore-plugins`）各自必须带同一套开源资产，唯一真源是 [scripts/plugin-templates/](scripts/plugin-templates/README.md)。**不要直接编辑兄弟仓里的这些文件**——下一次同步会覆盖。
+
+| 文件 | 硬要求 |
+| --- | --- |
+| `LICENSE` | MIT 全文，与 `kore` 逐字一致（不进模板，各仓各自提交） |
+| `CONTRIBUTING.md` | 本仓 `make check` / `make dist` 命令、DCO、安全披露指向根政策 |
+| `SECURITY.md` | 与根 `SECURITY.md` 同口径：**72 小时确认 / 90 天协调披露** |
+| `CODE_OF_CONDUCT.md` | 与 `kore` 同一文本，举报渠道指向维护者 |
+| `AGENTS.md` | **≤20 行**（R5），只写本仓事实 + 指向 `kore` 治理真源 |
+| `.github/PULL_REQUEST_TEMPLATE.md` | 留 `make check` 与两次 `make dist` sha 一致的输出位 |
+| `.github/ISSUE_TEMPLATE/` 三件 | `bug_report.yml`（版本 / `requires_kore` / 平台 / 复现 / 日志）、`feature_request.yml`、`config.yml`（`blank_issues_enabled: false`） |
+| `.github/workflows/ci.yml` | **少触发**：`push main` / tag `v*` / PR / `workflow_dispatch`；Gitea 不配 |
+| `README` 开源段 | `<!-- oss:begin -->` … `<!-- oss:end -->` 之间由模板渲染 |
+
+```bash
+# 同步（幂等；第二次运行 0 变更）——在 kore 仓根执行
+bash scripts/plugin-oss-sync.sh
+bash scripts/plugin-oss-sync.sh --dry-run     # 只打印将写哪些文件
+bash scripts/plugin-oss-sync.sh --check       # 只报差异，全绿 exit 0
+
+# 跨仓校验（等价于 make check 第 13 段）
+bash scripts/plugin-oss-check.sh
+```
+
+**新插件仓建仓时**：新建 `kore-plugin-<id>` 仓 → 填 `info.json` / `Makefile`（含 `dist`）/ `CHANGELOG.md` → `bash scripts/plugin-oss-sync.sh ../kore-plugin-<id>` → `bash scripts/plugin-oss-check.sh ../kore-plugin-<id>`，两条都 exit 0 即完成九件套。逐文件职责与硬要求见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) §4。
+
+### 2.2 CI 触发口径（少触发）
+
+- **26 个仓都配 CI**（`kore` + 24 个插件仓 + `kore-plugins`），但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；日常 feature 分支 push 不跑。
+- **Gitea 不配 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）；issue / PR 与日常提交在 Gitea（权威源，[ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md)），GitHub / gitee 是镜像。
+- **日常反馈用本地 `make check`**，CI 只做"能否拉取 / 能否构建"的合入兜底；`make idle` / `make budget-check` 需要真实进程，CI 不跑。
+
 ## 3. 提交规范
 
 - 格式：`type(scope): 中文描述`，type ∈ `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore` / `build`。
@@ -41,7 +86,7 @@ go work sync
 
 ## 4. PR 要求
 
-1. 先 `make check` **10/10 绿**（含 `oss-check`、`case-check`、`frontend` 首屏体积），把关键输出贴进 PR 模板。
+1. 先 `make check` **13/13 绿**（含第 13 段 `plugin-oss-check` 覆盖 25 个兄弟仓九件套），把关键输出贴进 PR 模板。
 2. 插件 PR 必须带 `info.json`、`Makefile` 的 `dist` 目标、`CHANGELOG.md` 三件套。
 3. 改协议或数据格式（`pkg/pluginapi`、`info.json`、索引、预设 schema）**必须附 ADR**，写清兼容性与版本影响。
 4. 一个 PR 只做一件事；无关重构拆开提。
@@ -78,10 +123,10 @@ go work sync
 | G-23 | 判断留痕：`DECISIONS.md` / `DISPATCH.md` 台账 |
 | G-24 | 无 any / object 逃逸：对外 schema 禁 `any` / `object` / `map[string]any` |
 | G-25 | worktree 卫生：无残留 worktree 与 `wt-*` / `tmp-*` 分支 |
-| G-26 | 开源资产完整：`LICENSE`(MIT) / `CONTRIBUTING` / `CODE_OF_CONDUCT` / `SECURITY` / `CHANGELOG` / CI 齐备 |
+| G-26 | 开源资产完整：根资产（`LICENSE`(MIT) / `CONTRIBUTING` / `CODE_OF_CONDUCT` / `SECURITY` / `CHANGELOG` / CI）+ 25 个兄弟仓九件套（含 CI 少触发） |
 | G-27 | 大小写一致性：module 全小写无 `!` 转义、无同目录大小写冲突、插件 id 小写、文档 URL owner 小写 |
 
-> G-26 / G-27 分别由 `make oss-check` 与 `make case-check` 守护。
+> G-26 由 `make oss-check`（本仓根资产，第 8 段）+ `make check` 第 13 段 `plugin-oss-check`（25 个兄弟仓九件套）共同守护；G-27 由 `make case-check`（第 9 段）守护。
 
 ## 6. 如何新增插件
 

@@ -186,3 +186,30 @@ sha256sum dist/hello-0.1.1.tar.gz; make dist; sha256sum dist/hello-0.1.1.tar.gz 
 go test -run TestHello -v ./...                     # 8. hello 往返 EXIT 0
 ```
 第 8 条可在 echo 仓握手测试基础上改：用 `net.Pipe` 造一对连接，客户端发 `kore.hello`、服务端回 `{"type":"response","id":<同值>,"result":{"ok":true,"protocol":"kore.plugin.v1"}}`，客户端校验三项通过——记得每个写请求配对读一次响应（§5）。八条全绿即达成「第三方按文档 30 分钟跑通 hello」。
+
+## 8. 插件仓开源资产九件套
+
+新建插件仓时，代码之外还必须自带一套开源资产，否则 GitHub 上缺 `LICENSE` 等于默认保留所有权利、缺 `SECURITY.md` 等于没有披露渠道。**九件套由 `kore` 仓的 `scripts/plugin-templates/` 渲染，禁止手写、禁止手改**（下一次同步会覆盖）——唯一真源与逐文件硬要求见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
+
+| 文件 | 职责 | 模板命令 / 校验 |
+| --- | --- | --- |
+| `LICENSE` | MIT 全文，与 `kore` 逐字一致（版权人 `pengtang1024`） | 不进模板；`bash scripts/plugin-oss-check.sh` 逐仓比对 |
+| `CONTRIBUTING.md` | 本仓贡献入口：`make check` / `make dist` / DCO / 安全披露指向 | `bash scripts/plugin-oss-sync.sh` |
+| `SECURITY.md` | 披露政策，与根 `SECURITY.md` 同口径：72 小时确认 / 90 天协调披露 | 同上 |
+| `CODE_OF_CONDUCT.md` | 行为准则，与 `kore` 同一文本 | 同上 |
+| `AGENTS.md` | **≤20 行**（R5），只写本仓事实 + 指向 `kore` 治理真源 | 同上；`wc -l` 核对 |
+| `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板：留 `make check` 与两次 `make dist` sha 一致输出位 | 同上 |
+| `.github/ISSUE_TEMPLATE/` 三件 | `bug_report.yml` / `feature_request.yml` / `config.yml`（`blank_issues_enabled: false`） | 同上 |
+| `.github/workflows/ci.yml` | **少触发**：`push main` / tag `v*` / PR / `workflow_dispatch`；Gitea 不配 | 同上；check 脚本校验触发块 |
+| `README` 开源段 | `<!-- oss:begin -->` … `<!-- oss:end -->` 之间由模板渲染，标记块外一字节不改 | 同上 |
+
+```bash
+# 渲染/更新九件套（幂等；在 kore 仓根执行，只作用于兄弟仓）
+bash scripts/plugin-oss-sync.sh ../kore-plugin-hello
+bash scripts/plugin-oss-sync.sh --check ../kore-plugin-hello   # 只报差异
+
+# 跨仓校验（等价 make check 第 13 段，25 个兄弟仓逐个扫）
+bash scripts/plugin-oss-check.sh ../kore-plugin-hello
+```
+
+两条命令都 exit 0 之后，九件套才算齐备；`make check` 第 13 段会在 `kore` 仓侧再复核一遍 25 个兄弟仓。CI 只做"能否拉取 / 能否构建"的兜底，日常反馈仍用本地 `make check`。

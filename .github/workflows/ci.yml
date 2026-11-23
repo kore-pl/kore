@@ -2,7 +2,7 @@ name: CI
 
 # 触发（2026-11-23 用户要求：CI 要少执行，见 .agents/QUALITY-GATES.md §6）：
 #   push main / tag（v*、pkg/pluginapi/v*）/ PR / 手动；日常 feature 分支 push 不跑。
-#   本地 `make check`（12 段）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
+#   本地 `make check`（13 段，含第 13 段 plugin-oss-check 扫 25 个兄弟仓九件套）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
 on:
   push:
     branches: [main]
@@ -16,7 +16,7 @@ on:
 
 jobs:
   check:
-    name: Build + check (8 segments)
+    name: Build + check (13 segments)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

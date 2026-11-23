@@ -201,11 +201,13 @@ go work use kore-plugins              # 需要联调索引脚本时再加
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/kore-pl)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
+Kore 以 **MIT** 协议开源。**版权人**是 [`pengtang1024`](https://github.com/pengtang1024)（自然人），**仓库归属**是 GitHub 组织 [`kore-pl`](https://github.com/kore-pl)——两者是不同概念，Go module 路径仍是 `github.com/pengtang1024/kore`（见 [ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md)）。内核、索引与 24 个插件仓放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
+
+**25 个兄弟仓统一九件套**（24 个插件仓 + `kore-plugins`：`CONTRIBUTING` / `SECURITY` / `CODE_OF_CONDUCT` / `AGENTS` / PR 模板 / issue 模板三件 / `ci.yml` / README 开源段）：唯一真源是 `scripts/plugin-templates/`，幂等同步 `bash scripts/plugin-oss-sync.sh`，跨仓校验 `bash scripts/plugin-oss-check.sh`，并由 `make check` **第 13 段**逐仓复核（口径见 [OPEN-SOURCE.md §3–§4](docs/OPEN-SOURCE.md)）。
 
 - **如何贡献**：[CONTRIBUTING.md](CONTRIBUTING.md)——PR 即按 MIT 授权（inbound = outbound），**不要求 CLA**，签名用 `git commit -s`（DCO）；行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
-- **安全披露**：[SECURITY.md](SECURITY.md)（披露流程）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
-- **本项目不收集任何遥测**：无账号、无上报、无隐藏出网；空载 `ss -tnp` 为空。
+- **安全披露**：[SECURITY.md](SECURITY.md)（披露流程，72 小时确认 / 90 天协调披露）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
+- **本项目不收集任何遥测**：无账号、无上报、无隐藏出网；空载 `ss -tnp` 为空。CI 只在主干 / tag / PR 上跑（少触发），与遥测无关——省的是 runner 分钟，不是数据。
 
 ## 参与方式
 

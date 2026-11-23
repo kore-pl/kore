@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M2
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M2
 
 # PLUGIN-CATALOG — 插件目录与生命周期配额
 
@@ -203,13 +203,45 @@
 | 冷启动并发 | 多个请求同时唤起同一插件 | supervisor 冷启动互斥 + bus 排队上限（见 CORE） |
 | 内存回落 | 退出后 RSS 才归 0 | 用 `pgrep` + `/proc/<pid>/status` 验收，不看缓存 |
 
-## 15. 与其他文档的关系
+## 15. 开源信息
+
+20 个产品插件各自一个公开仓库，许可一律 MIT，**九件套齐备**（贡献指南 / 披露政策 / 行为准则 / AGENTS / PR 模板 / issue 模板三件 / CI）。仓库地址模板 `https://github.com/kore-pl/kore-plugin-<id>`（GitHub 镜像），**issue / PR 只在 Gitea 更新**：`https://gitea.iouf.cn/kore-pl/kore-plugin-<id>` 是唯一权威源（[ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md) 决策 B/D），把 `<id>` 换成下表第一列即可得到该仓入口。
+
+| id | 仓库（GitHub 镜像） | 许可 | Issues（Gitea 权威源） | Releases（GitHub 镜像） | 维护状态 | 验证方式 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `site` | <https://github.com/kore-pl/kore-plugin-site> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-site/issues> | <https://github.com/kore-pl/kore-plugin-site/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `ssl` | <https://github.com/kore-pl/kore-plugin-ssl> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssl/issues> | <https://github.com/kore-pl/kore-plugin-ssl/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `runtime-php` | <https://github.com/kore-pl/kore-plugin-runtime-php> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-php/issues> | <https://github.com/kore-pl/kore-plugin-runtime-php/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `runtime-node` | <https://github.com/kore-pl/kore-plugin-runtime-node> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-node/issues> | <https://github.com/kore-pl/kore-plugin-runtime-node/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `runtime-python` | <https://github.com/kore-pl/kore-plugin-runtime-python> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-python/issues> | <https://github.com/kore-pl/kore-plugin-runtime-python/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `db-mysql` | <https://github.com/kore-pl/kore-plugin-db-mysql> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-mysql/issues> | <https://github.com/kore-pl/kore-plugin-db-mysql/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `db-postgres` | <https://github.com/kore-pl/kore-plugin-db-postgres> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-postgres/issues> | <https://github.com/kore-pl/kore-plugin-db-postgres/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `redis` | <https://github.com/kore-pl/kore-plugin-redis> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-redis/issues> | <https://github.com/kore-pl/kore-plugin-redis/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `file` | <https://github.com/kore-pl/kore-plugin-file> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-file/issues> | <https://github.com/kore-pl/kore-plugin-file/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `cron` | <https://github.com/kore-pl/kore-plugin-cron> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-cron/issues> | <https://github.com/kore-pl/kore-plugin-cron/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `logs` | <https://github.com/kore-pl/kore-plugin-logs> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-logs/issues> | <https://github.com/kore-pl/kore-plugin-logs/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `monitor` | <https://github.com/kore-pl/kore-plugin-monitor> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-monitor/issues> | <https://github.com/kore-pl/kore-plugin-monitor/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `backup` | <https://github.com/kore-pl/kore-plugin-backup> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-backup/issues> | <https://github.com/kore-pl/kore-plugin-backup/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `firewall` | <https://github.com/kore-pl/kore-plugin-firewall> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-firewall/issues> | <https://github.com/kore-pl/kore-plugin-firewall/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `waf` | <https://github.com/kore-pl/kore-plugin-waf> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-waf/issues> | <https://github.com/kore-pl/kore-plugin-waf/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `ssh-guard` | <https://github.com/kore-pl/kore-plugin-ssh-guard> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssh-guard/issues> | <https://github.com/kore-pl/kore-plugin-ssh-guard/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `integrity` | <https://github.com/kore-pl/kore-plugin-integrity> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-integrity/issues> | <https://github.com/kore-pl/kore-plugin-integrity/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `app-deploy` | <https://github.com/kore-pl/kore-plugin-app-deploy> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-app-deploy/issues> | <https://github.com/kore-pl/kore-plugin-app-deploy/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `dns` | <https://github.com/kore-pl/kore-plugin-dns> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-dns/issues> | <https://github.com/kore-pl/kore-plugin-dns/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `container` | <https://github.com/kore-pl/kore-plugin-container> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-container/issues> | <https://github.com/kore-pl/kore-plugin-container/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+
+**`echo` 单列**：`kore-plugin-echo` 是 M1 验证件（Walking Skeleton），`depth_level=basic`，**不参与产品评级**，也不计入 §6.1 的「12 生产级 / 8 基础级」。它有同样的九件套与 MIT 许可，仓库为 <https://github.com/kore-pl/kore-plugin-echo>，仅用于验证 `info.json` + `Makefile dist` + `CHANGELOG` 三件套与 `pluginapi` 调用链。
+
+**验证口径**：每仓本地跑该仓 `make check`；CI 少触发（`push main` / tag / PR / `workflow_dispatch`，Gitea 不配），只做"能否拉取 / 能否构建"的兜底。九件套的唯一真源与同步命令见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
+
+## 16. 与其他文档的关系
 
 | 文档 | 关系 |
 | --- | --- |
 | [FEATURE-PARITY.md](./FEATURE-PARITY.md) | 能力域 → 插件 id 的对标矩阵；本目录是其明细 |
 | [SCENARIOS.md](./SCENARIOS.md) | 8 个预设如何组合本目录插件，并验证 ≤3 常驻 / ≤24 MiB |
-| [REPOS.md](./REPOS.md) | 插件仓库形态、发布流程、版本兼容 |
+| [REPOS.md](./REPOS.md) | 插件仓库形态、发布流程、版本兼容；R9 开源资产自包含 |
+| [OPEN-SOURCE.md](./OPEN-SOURCE.md) | 逐仓开源资产矩阵与九件套规范（§3 / §4） |
 | [CORE.md](./CORE.md) | `installer` / `market` / supervisor 的 lazy 配额仲裁规格 |
 
 > 目录的价值是让"对标"可执行，也让**预算可执行**：20 个插件里只有 3 个允许常驻。谁想让自己的插件常驻，先回答"它凭什么替代 site / monitor / cron 其中之一"。

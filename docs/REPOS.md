@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
 
 # REPOS — 多仓库拓扑与跨仓库规则
 
@@ -7,7 +7,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 读者 | 所有参与 kore 的 agent；新增插件仓库的人；发版与索引维护者 |
-| 作用 | 定义仓库清单、单向依赖、跨仓库规则 R1–R8、本地联调、版本兼容与发布流程 |
+| 作用 | 定义仓库清单、单向依赖、跨仓库规则 R1–R9、本地联调、版本兼容与发布流程 |
 | 不作用 | 不写内核模块规格（见 [CORE.md](./CORE.md)）、不写组件与数据流（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写协议字段（见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)） |
 | 硬约束 | 项目是**多 git 仓库**：`kore` 只含内核与主壳，插件各有独立仓库；"插件放在 kore 的 `plugins/` 子目录"这一旧假设**已作废** |
 | 仓库归属 | 全部 module 用 `github.com/pengtang1024/...`；发布仓库在 `kore-pl` 组织下（2026-11-23 迁移，见 ADR-0017），不留第二套写法 |
@@ -16,15 +16,19 @@
 
 ## 1. 仓库清单
 
-| 仓库 | 定位 | module 路径 | 内容 | 发布物 | CI 触发 |
-| --- | --- | --- | --- | --- | --- |
-| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/pengtang1024/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | push/PR：docs-check + build + test；tag：release |
-| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/pengtang1024/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | PR 改 `index/plugins.json`：validate.sh |
-| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/pengtang1024/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | tag `v*`：交叉编译 + 打包 + release |
-| `kore-plugin-echo` | M1 验证件（Walking Skeleton） | `github.com/pengtang1024/kore-plugin-echo` | 同上，仅实现 hello/ping/echo 与 `kore.event` | 同上 | 同上 |
-| `kore-plugin-site` | 常驻插件（M2） | `github.com/pengtang1024/kore-plugin-site` | 同上 + 站点管理能力 + `web/` | 同上 | 同上 |
-| `kore-plugin-backup` | 一次性插件（M2） | `github.com/pengtang1024/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同上 |
-| `kore-plugin-sdk-rust` / `-starlark` | 非 Go SDK（M4 可选） | 同名 | 帧编解码 + hello 示例 | crate/包 | tag |
+| 仓库 | 定位 | module 路径 | 内容 | 发布物 | 开源资产 | CI 触发 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/pengtang1024/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | 九件套齐备（手工维护，唯一非模板仓） | 少触发：`push main` / tag / PR / 手动 |
+| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/pengtang1024/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | 九件套齐备（模板渲染） | 少触发：同左；**Gitea 不配** |
+| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/pengtang1024/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | 九件套齐备（模板渲染） | 少触发：`push main` / tag `v*` / PR / 手动；**Gitea 不配** |
+| `kore-plugin-echo` | M1 验证件（Walking Skeleton） | `github.com/pengtang1024/kore-plugin-echo` | 同上，仅实现 hello/ping/echo 与 `kore.event` | 同上 | 同模板行（模板渲染） | 同上 |
+| `kore-plugin-site` | 常驻插件（M2） | `github.com/pengtang1024/kore-plugin-site` | 同上 + 站点管理能力 + `web/` | 同上 | 同模板行（模板渲染） | 同上 |
+| `kore-plugin-backup` | 一次性插件（M2） | `github.com/pengtang1024/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同模板行（模板渲染） | 同上 |
+| `kore-plugin-sdk-rust` / `-starlark` | 非 Go SDK（M4 可选） | 同名 | 帧编解码 + hello 示例 | crate/包 | 建仓即套用九件套 | tag |
+
+**仓库地址 vs module 路径**（[ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md) 决策 C）：**仓库地址**一律 `github.com/kore-pl/<repo>`（公开镜像）与 `gitee.com/kore-pl/<repo>`（国内镜像），**权威源是自建 Gitea `gitea.iouf.cn/kore-pl/<repo>`**；**module 路径保持 `github.com/pengtang1024/...`**。两件事分开写，不混用。
+
+「开源资产」列的口径是**自包含**：该仓根目录自己带 `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` / `CODE_OF_CONDUCT.md` / `CHANGELOG.md` / `AGENTS.md` / `.github`（PR 模板 + issue 模板三件 + `ci.yml`）/ README 开源段，规则见 §3 的 R9，逐文件硬要求见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
 
 索引仓库的边界（防止它长成平台）：**纯静态聚合，不做人工审核、不代管包、无账号、无上传接口**。它只读插件仓库的 release 产物，把 `{id,version,requires_kore,protocol,sha256,url,size}` 聚合成一个 JSON。
 
@@ -57,7 +61,7 @@
 2. **插件 → 索引**：发布物单向流动（release 资产 → 索引条目），索引不回写插件仓库。
 3. **kore ⇸ 插件/索引**：运行期零依赖。kore 不 import 任何插件仓库、不请求索引；索引挂了不影响已装插件运行。
 
-## 3. 跨仓库规则 R1–R8
+## 3. 跨仓库规则 R1–R9
 
 | 规则 | 内容 | 违反的后果 |
 | --- | --- | --- |
@@ -69,6 +73,7 @@
 | **R6 变更集** | 跨仓库改动在 `kore` 的 `.agents/BOARD.md` 登记为**一个变更集**（change set） | 跨仓库改动没有单一负责人与验收证据，容易出现"kore 改了、插件没发、索引没更新"的半上线 |
 | **R7 各自构建** | 各仓库自带 `Makefile`；kore 的 `make` 不构建插件 | kore 的构建依赖兄弟仓库路径，CI 不可复现，clone 下来就红 |
 | **R8 门禁归属** | `docs-check` 只在 `kore` 跑 | 插件仓库没有 `docs/` 与 `.agents/` 结构，跑 kore 的门禁永远红，最后被"跳过" |
+| **R9 开源资产自包含** | 每个仓库自带 `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` / `CODE_OF_CONDUCT.md` / `CHANGELOG.md` / `AGENTS.md` / `.github`（PR 模板 + issue 模板三件 + `ci.yml`）/ README 开源段；九件套由 `scripts/plugin-templates/` 渲染，**禁止各仓手改漂移**；跨仓校验 `bash scripts/plugin-oss-check.sh`（`make check` 第 13 段），单仓预览 `--dry-run` / `--check` 走 `bash scripts/plugin-oss-sync.sh` | 缺件即第 13 段红：GitHub 上缺 `LICENSE` 等于默认保留所有权利，缺 `SECURITY.md` 等于没有披露渠道；各仓手改会与模板漂移，下次同步被覆盖且校验报差异 |
 
 ## 4. 本地多仓库开发布局
 
@@ -137,10 +142,12 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 ### 7.1 插件仓库（`kore-plugin-<id>`）
 
 1. 改版本号（`info.json.version` 与 `CHANGELOG.md` 同一次提交）。
-2. `make test` → `make package`，产出 `dist/kore-plugin-<id>-<version>.tar.gz` 与同名 `.sha256`。
+2. `make check` 绿 → `make test` → `make package`，产出 `dist/kore-plugin-<id>-<version>.tar.gz` 与同名 `.sha256`。
 3. 校验包内容：`tar -tzf` 必须只含 `info.json`、`bin/<id>`、`web/**`（可选）、`signature`（M4 可选）。
-4. `git tag -a v<version> -m "<id> v<version>"` 并 push tag。
-5. release 挂 **tar.gz + .sha256 + CHANGELOG 摘要**；release 是索引的唯一数据源。
+4. `git tag -a v<version> -m "<id> v<version>"` 并 push tag（三端：Gitea 权威源 + GitHub / gitee 镜像，见 [ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md)）。
+5. **release 必须挂两个资产**：`kore-plugin-<id>-<version>.tar.gz` 与 `kore-plugin-<id>-<version>.tar.gz.sha256`，外加 CHANGELOG 摘要；release 是索引的唯一数据源，缺 `.sha256` 的 release 不可被索引收录。
+6. **CI 的 tag 触发只做构建与打包**（交叉编译 + `make dist` + 挂 release），不重跑全量门禁；门禁由发版前的本地 `make check` 保证（触发口径见 [.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §6：`push main` / tag / PR / `workflow_dispatch`，Gitea 不配）。
+7. 九件套随仓提交（R9）：发版 PR 不得顺手改 `CONTRIBUTING.md` / `SECURITY.md` / `.github/` —— 要改文案就改 `scripts/plugin-templates/` 再 `bash scripts/plugin-oss-sync.sh`。
 
 ### 7.2 索引仓库（`kore-plugins`）
 
@@ -151,9 +158,10 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 
 ### 7.3 kore 仓库
 
-1. `make docs-check` → `make build` → `make test` 全绿（M1 起生效）。
-2. `git tag -a vX.Y.Z` → release 挂 `kored` + checksums。
-3. kore 发版**不触发**任何插件发版；插件是否兼容由 R3 的 `requires_kore` 表达。
+1. `make docs-check` → `make build` → `make test` 全绿（M1 起生效），发版前再跑一次 `make check`（13 段，含第 13 段 25 仓九件套）。
+2. `git tag -a vX.Y.Z` → release 挂 `kored` + checksums（`kored` 与 `checksums.txt` 两个资产）。
+3. CI 的 tag 触发负责构建与挂载 release，`make idle` / `make budget-check` 仍需本地或里程碑门禁跑（CI 不跑，见 QUALITY-GATES §6）。
+4. kore 发版**不触发**任何插件发版；插件是否兼容由 R3 的 `requires_kore` 表达。
 
 ## 8. 故障域
 
@@ -176,5 +184,8 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 | [VISION.md](./VISION.md) | 本文是"插件可装可卸可替换、第三方接入不改主壳"这一锚点的物理实现 |
 | [GLOSSARY.md](./GLOSSARY.md) | 仓库/索引/协议 SDK/变更集等术语的唯一解释 |
 | [DATA-MODEL.md](./DATA-MODEL.md) | `info.json` 字段、`requires_kore` 校验与索引条目 schema 的数据侧真源 |
+| [OPEN-SOURCE.md](./OPEN-SOURCE.md) | 逐仓开源资产矩阵、九件套硬要求、名称与贡献者路径；本文 R9 是其跨仓库规则侧 |
+| [ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md) | 仓库归属 `kore-pl`、Gitea 为唯一权威源、module 路径不变；本文 §1 / §7 的地址与推送口径据其写定 |
+| [scripts/plugin-templates/](../scripts/plugin-templates/README.md) | 九件套唯一真源；同步 `bash scripts/plugin-oss-sync.sh`、跨仓校验 `bash scripts/plugin-oss-check.sh` |
 
 > 多仓库不是"把代码拆散"，是**把耦合从目录搬到版本号**：目录耦合靠 clone 才能对齐，版本耦合靠 `requires_kore` 与 tag 就能对齐。谁把插件塞回 kore 的 `plugins/`，谁就是在恢复已被否决的旧拓扑。

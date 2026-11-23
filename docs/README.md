@@ -29,11 +29,10 @@
 
 | 文档 | 作用 |
 | --- | --- |
-| [CORE.md](./CORE.md) | 内核规格：九个模块 + 支撑小节、HTTP 端点与边界 |
+| [CORE.md](./CORE.md) | 内核规格：十一个模块 + 支撑小节、HTTP 端点与边界 |
 | [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) | 插件协议 `kore.plugin.v1` 唯一来源：帧格式 / 握手 / 方法 / 事件 / 错误码 |
-| [REPOS.md](./REPOS.md) | 多仓库拓扑（N+2）与跨仓库规则 |
-
-> 说明：`PLUGIN-SDK.md` 尚未落盘；插件公开 SDK 的接口契约暂以 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) 为准。
+| [PLUGIN-SDK.md](./PLUGIN-SDK.md) | 第三方插件接入指南：30 分钟跑通 hello、`info.json` 12 字段、包格式与 dist、net.Pipe 测试契约、验收清单与开源资产九件套 |
+| [REPOS.md](./REPOS.md) | 多仓库拓扑（N+2）、跨仓库规则 R1–R9 与发布流程 |
 
 ### 1.3 资源与数据
 
@@ -56,11 +55,12 @@
 
 | 文档 | 作用 |
 | --- | --- |
-| [OPEN-SOURCE.md](./OPEN-SOURCE.md) | MIT 许可、版权人、PR / Issue 流程与评审要求 |
+| [OPEN-SOURCE.md](./OPEN-SOURCE.md) | MIT 许可、版权人 vs 仓库归属、逐仓开源资产矩阵（26 仓）、插件仓九件套规范与模板命令、名称与标识、贡献者路径、安全披露时限 |
+| [REPOS.md](./REPOS.md) | 部署与仓库侧规则：R9「开源资产自包含」约束每仓自带九件套，发布流程的 release 资产与 CI tag 触发 |
 
 ### 1.6 决策 ADR
 
-[DECISIONS/](./DECISIONS/) 目录收录全部架构决策记录，编号 0001–0017，覆盖协议选型、进程隔离、资源预算、多仓拓扑、兼容基线等不可逆选择。每篇含备选对比、后果与复审条件。可通过[文档站](./site/index.html)的「决策 ADR」分类统一浏览。
+[DECISIONS/](./DECISIONS/) 目录收录全部架构决策记录，编号 0001–0024，覆盖协议选型、进程隔离、资源预算、多仓拓扑、兼容基线等不可逆选择。每篇含备选对比、后果与复审条件。可通过[文档站](./site/index.html)的「决策 ADR」分类统一浏览。
 
 ## 2. 阅读顺序
 
