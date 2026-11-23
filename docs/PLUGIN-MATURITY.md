@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
+> 状态: draft · 归属: architect · 更新: 2026-11-24 · 里程碑: M5
 
 # PLUGIN-MATURITY — 插件与主壳成熟度分级 · 功能矩阵 · 改造优先级
 
@@ -13,9 +13,10 @@
 | 盘点基线 | 24 个 `kore-plugin-*` 仓、**完整方法面 252**（`§6` 实测：case 字面量 213 + `site` verbRegistry 20 + `redis` methodTable 19；不含 `config.get/set`）、主壳 **22 导航项 / 20 懒加载视图模块**（两个指标，别混用）、**9 个仓有配置契约**、**23 个仓有方法级 `method_capabilities`**（`grep -l` 实测；`echo` 验证件不计）；`echo` 不参与 L 分级 |
 | 竞品口径 | 宝塔面板 / 1Panel 专业版**公开功能**的常识描述；无法确认的项标"待核实"，不臆造 |
 | 盘点范围 | 任务给定的 **24 个** `kore-plugin-*` 仓；`discover` 自 Round 2 起纳入，不留在表外 |
-| 盘点时刻 | **2026-11-23 21:00 +08:00**。HEAD 实测版本：`site` 0.4.3 / `file` 0.3.2 / `db-mysql` 0.4.1 / `db-postgres` 0.3.3 / `dns` 0.4.0 / `ssl` 0.6.0 / `redis` 0.6.0 / `container` 0.5.1 / `integrity` 0.4.0 / `logs` 0.5.0 / `cron` 0.5.0 / `firewall` 0.2.6 / `process` 0.3.0 / `ssh-guard` 0.3.0 / `waf` 0.4.1 / `runtime-node` 0.2.4 / `runtime-python` 0.3.1 / `runtime-php` 0.2.2 / `app-deploy` 0.3.0 / `backup` 0.4.1 / `monitor` 0.3.0 / `terminal` 0.2.0 / `discover` 0.3.0 / `echo` 0.1.4（全部 `depth_level: production`，`basic` 0），按 **HEAD** 计；索引对齐与方法数都是滚动量，以 §6 命令实测为准 |
+| 盘点时刻 | **2026-11-23 21:00 +08:00**。HEAD 实测版本：`site` 0.4.3 / `file` 0.3.2 / `db-mysql` 0.4.1 / `db-postgres` 0.3.3 / `dns` 0.4.0 / `ssl` 0.6.0 / `redis` 0.6.0 / `container` 0.5.1 / `integrity` 0.4.0 / `logs` 0.5.0 / `cron` 0.5.0 / `firewall` 0.2.6 / `process` 0.3.0 / `ssh-guard` 0.3.0 / `waf` 0.4.1 / `runtime-node` 0.2.4 / `runtime-python` 0.3.1 / `runtime-php` 0.2.2 / `app-deploy` 0.3.0 / `backup` 0.4.1 / `monitor` 0.3.0 / `terminal` 0.2.0 / `discover` 0.3.0 / `echo` 0.1.4（HEAD 实测 `depth_level`：**23 个 `production` / 1 个 `basic`**；产品分级以 [PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) §6.1 的 **12 生产级 / 8 基础级** 为准，8 个仓待各自自然发版时回退 `basic`，见 [ADR-0045](./DECISIONS/0045-depth-level-convergence.md) 与 [`scripts/depth-level-pending.txt`](../scripts/depth-level-pending.txt)），按 **HEAD** 计；索引对齐与方法数都是滚动量，以 §6 命令实测为准 |
+| 分级口径 | **唯一分级真源是 [PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) §6.1 的 12 生产级 / 8 基础级**；本文出现的 `depth_level` 指仓库 `info.json` 的**当前字面值**（盘点观测），不等于产品分级；两者偏差按 [ADR-0045](./DECISIONS/0045-depth-level-convergence.md) 随各仓自然发版收敛 |
 
-**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 2 / L2 21 / L3 0**（改前 L1.5 18 / L2 5）。本轮升级依据 = **代码事实 + G-28 双端截图**（`.agents/verify/screenshots/` 同名 desktop+mobile 成对）；**`app-deploy` 与 `discover` 因无截图压住不升**（后端已具备：`app-deploy` 0.3.0 upload/upgrade/jobs；`discover` 0.3.0 探测增强）。L2 = `site`/`file`/`db-mysql`/`cron`/`terminal`/`logs`/`process`/`ssl`/`backup`/`monitor`/`firewall`/`waf`/`dns`/`redis`/`db-postgres`/`runtime-node`/`runtime-php`/`runtime-python`/`container`/`integrity`/`ssh-guard`。**插件降权已落地**（#13）；**方法级 capability 23/24**（`echo` 验证件不计）；`depth_level` 24/24 `production`、`basic` 0。索引对齐：22/24 已收录（待入索引 2 仓按发版滚动）。
+**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 2 / L2 21 / L3 0**（改前 L1.5 18 / L2 5）。本轮升级依据 = **代码事实 + G-28 双端截图**（`.agents/verify/screenshots/` 同名 desktop+mobile 成对）；**`app-deploy` 与 `discover` 因无截图压住不升**（后端已具备：`app-deploy` 0.3.0 upload/upgrade/jobs；`discover` 0.3.0 探测增强）。L2 = `site`/`file`/`db-mysql`/`cron`/`terminal`/`logs`/`process`/`ssl`/`backup`/`monitor`/`firewall`/`waf`/`dns`/`redis`/`db-postgres`/`runtime-node`/`runtime-php`/`runtime-python`/`container`/`integrity`/`ssh-guard`。**插件降权已落地**（#13）；**方法级 capability 23/24**（`echo` 验证件不计）；`depth_level` 仓库 `info.json` 当前 **23 `production` / 1 `basic`**（`ssh-guard` 已是 `basic`）；产品分级为 **12 生产级 / 8 基础级**（[PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) §6.1），其余 8 个仓（7 个基础级产品仓 + `echo` 验证件）待各自自然发版时回退 `basic`，登记于 [`scripts/depth-level-pending.txt`](../scripts/depth-level-pending.txt)（[ADR-0045](./DECISIONS/0045-depth-level-convergence.md)）。索引对齐：22/24 已收录（待入索引 2 仓按发版滚动）。
 
 ### 0.1 文档声明 vs 代码事实（本轮重判）
 
@@ -58,7 +59,7 @@
 | 20 | L 分布「L1.5 18 / L2 5」 | **L1.5 2 / L2 21**（app-deploy / discover 因无 G-28 双端截图压住不升） | `.agents/verify/screenshots/` 同名 desktop+mobile 成对 + file:line | §2 矩阵 23 仓重定级 |
 ## 2. 功能矩阵（3.2，24 个插件仓）
 
-**depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**；`echo` 0.1.4 为**最后一个**升 production 的仓（`basic` 已清零），`file` 0.3.1 同批。G-20 判据：`tests/fault/` + dist 可复现——本盘点只实测 `info.json` 版本与方法面，**fault 测试未复跑**（各仓证据以仓库内 `tests/fault/` 与 CHANGELOG 为准，不在此文冒充已证）。方法总数见 §6 实测（175 + site 19 + redis 16 = 210）。
+**depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**；`echo` 0.1.4 为**最后一个**升 production 的仓（`basic` 已清零），`file` 0.3.1 同批。G-20 判据：`tests/fault/` + dist 可复现——本盘点只实测 `info.json` 版本与方法面，**fault 测试未复跑**（各仓证据以仓库内 `tests/fault/` 与 CHANGELOG 为准，不在此文冒充已证）。方法总数见 §6 实测（175 + site 19 + redis 16 = 210）。（**2026-11-24 口径更正**：以上是当时盘点动作的记录；按 [ADR-0045](./DECISIONS/0045-depth-level-convergence.md) 用户裁决，分级以 [PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) §6.1 的 12/8 为准。HEAD 实测 `ssh-guard` 已为 `basic`，其余 7 个基础级产品仓与 `echo` 验证件仍为 `production`，待各自自然发版时回退——「`basic` 已清零」不再成立；清单见 [`scripts/depth-level-pending.txt`](../scripts/depth-level-pending.txt)。）
 
 | 能力域 | 插件（版本） | 现级别 | 现有方法（数量） | 已补（代码事实） | 仍缺（到 L2 / L3） |
 | --- | --- | --- | --- | --- | --- |
