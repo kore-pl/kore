@@ -1,5 +1,5 @@
 > 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
-> ADR 状态: accepted（2026-11-23 lead 裁决）· 实现进度: 阶段 A（portable 默认）+ E（`make zero-intrusion-check`）已落地 · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md
+> ADR 状态: accepted（2026-11-23 lead 裁决）· 实现进度: 阶段 A（portable 默认）+ B（卸载链 `kore uninstall`）+ E（`make zero-intrusion-check`）已落地 · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md
 
 # ADR-0023: 零侵入设计规范——删掉安装目录即等于卸载
 
