@@ -1,14 +1,14 @@
 # 数据模型（配置 · 状态 · 日志）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-24 · 里程碑: M0
 
 kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、**文件日志**。不引入任何数据库服务进程。本文件是字段与落盘格式的唯一来源；协议字段见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)，预算与度量见 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md)。
 
 ## 1. 存储原则
 
 1. **无独立 DB**：状态只存 `/var/lib/kore/state.db`（bbolt），不引入 SQLite/Postgres/Redis，不为存储多起一个进程。
-2. **明文可审计**：配置是 YAML 文本，可 diff、可 grep、可手改；bbolt 里的 value 是 JSON 文本，`kored db dump <bucket>` 可直接打印。
-3. **单文件可备份**：`Tx.CopyFile` 边写边拷出一致快照；备份 = `state.db` + `config.yaml` + 插件包，三个路径即可重建。
+2. **明文可审计**：配置是 YAML 文本，可 diff、可 grep、可手改；bbolt 里的 value 是 JSON 文本，用 bbolt CLI 离线读出（`bbolt get state.db <bucket> <key>`，须先停 `kored`，见 §10）；`kored db dump` 子命令**未实现**，别照敲。
+3. **单文件可备份**：bbolt 具备 `Tx.CopyFile` 边写边拷的一致快照能力，但当前**无 CLI 入口**——运维按 §10 停机 `cp -a` 备份；备份 = `state.db` + `config.yaml` + 插件包，三个路径即可重建。
 4. **写入有唯一入口**：写事务统一经 `Store.Update` 透传到 bbolt `db.Update` 单事务，由 bbolt 内置文件锁（`LOCK_EX|LOCK_NB` + `Timeout`）保证单写者与进程间互斥；无 writer goroutine、无 chan 队列（详见 §6.1）。
 
 ## 2. 分层表
@@ -16,7 +16,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 | 层 | 路径 | 形态 | 生命周期 | 备份 |
 | --- | --- | --- | --- | --- |
 | 配置 | `/etc/kore/config.yaml`（env `KORE_CONFIG` 可覆盖） | YAML 文本，0600 | 长期，人工维护 | 每次备份必带 |
-| 状态 | `/var/lib/kore/state.db` | bbolt 单文件，0600 | 长期，schema 迁移 | `Tx.CopyFile` 快照 |
+| 状态 | `/var/lib/kore/state.db` | bbolt 单文件，0600 | 长期，schema 迁移 | 停机 `cp -a`（见 §10） |
 | 插件 | `/var/lib/kore/plugins/<id>/<version>/`（`bin/<id>` + `web/`） | 目录 + 二进制 | 长期，保留当前与上一版本 | 打包含 sha256 |
 | 日志 | `/var/log/kore/kore.log`、`/var/log/kore/plugins/<id>.log` | 文本，10 MiB 轮转 | 滚动保留 5 份/2 份 | 不备份（可重建） |
 | 任务产物 | `/var/lib/kore/tasks/<plugin>/<ts>.json` | 每次执行的 stdout/stderr 与结果摘要 | 短期，保留 7 天 | 不备份（可重建） |
@@ -27,7 +27,7 @@ kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、
 
 多版本并存：每个 `<id>/<version>/` 是独立目录，升级保留当前 + 上一版本；回滚 = 把 registry 指向上一版本目录并以该目录 `bin/<id>` 重启进程，删除目录即释放磁盘。插件包由 `kore-plugin-<id>` 仓库 `make dist` 产出，本仓库只解包与登记，不构建插件。商店缓存不是真源：真源在 `kore-plugins` 的 `index/plugins.json`，`/var/lib/kore/store/index.json` 只是离线可看的副本，丢失或过期即可直接删除，下次显式刷新重建。
 
-CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dump` / `kored backup` / `kored restore` / `kored invoke <plugin> <method>` / `kored audit`），用标准库 `flag` 手写解析子命令，不引入 cobra/urfave 等 CLI 框架（依赖白名单 G-02）。
+CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 `flag` 手写分发，不引入 cobra/urfave 等 CLI 框架（依赖白名单 G-02）。**已实现**（`kored help` 为唯一权威清单）：`serve`（默认）/ `version` / `install` / `uninstall` / `status` / `upgrade` / `audit` / `admin-password`。**未实现**：`kored db dump` / `kored backup` / `kored restore` / `kored invoke <plugin> <method>`——备份恢复按 §10 的停机手工流程执行，`invoke` 与 `db` 系列上线前不可执行。
 
 ## 3. config.yaml
 
@@ -202,7 +202,7 @@ sessions 只存 token 的 SHA-256 与时间戳（另有口令指纹键，见 §5
 {"id":"01JC8Q3A7B8C9D0E1F2G3H4J5K","plugin_id":"backup","method":"backup.run","trigger":"http","status":"ok","started_at":"2026-11-21T20:40:15.123+08:00","finished_at":"2026-11-21T20:41:02.456+08:00","dur_ms":47333,"error_code":"","req_id":"r-01JC8Q3A"}
 ```
 
-UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核读 bucket 后组装响应；`kored db dump --bucket tasks --limit 50` 仅供排障（只读，需 root）。
+UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核读 bucket 后组装响应；排障读 bucket 只能离线：停 `kored` 后 `bbolt keys state.db tasks` / `bbolt get state.db tasks <key>` 查看（bbolt 写锁由运行中的 `kored` 持有，读写/只读打开都无法并存，必须停服）；`kored db dump` 子命令**未实现**。
 
 ## 6. 事务与并发规则
 
@@ -269,28 +269,46 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 **HTTP 侧审计（登录 / 方法调用）**：`login.success`（result=ok，detail=`{ip,user_agent,session_id_prefix}`）与 `login.failed`（result=denied，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`）在登录处理器内成功与失败各写一条；IP 只保留前 3 段（`192.168.1.x`）、UA 截断 100 字符、会话只留前 8 字符前缀，**任何形式的口令都不进审计**。invoke 审计口径与授权口径一致——按**最终生效能力**判定：先查方法级 `method_capabilities[<id>.<method>]`，未命中回退插件级 `capabilities`；只有 `write`/`admin` 类方法才落 `invoke.<plugin>.<method>`，只读类（方法级或插件级解析为 `*:read`）默认不审计；`audit.invoke_all=true` 时全量审计（调试用）。方法级能力使同一插件内「只读方法不审计、写方法审计」成为可能，内核仍只比较能力字符串、不维护业务方法表（G-01）。同一方法 1 秒内调用超过 10 次时，前 10 次逐条、第 11 次起合并为一条 `invoke.burst`（detail=`{method,count,window_ms}`）并抑制本窗口后续记录，避免刷爆审计库。
 
-查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 24h` 读 bbolt 输出；前端列表见 `web/audit.js`。**保留策略**：`audit.retention`（默认 90 天）内的记录保留，超期记录由 scheduler 内置任务 `builtin-audit-clean` 按龄删除（周期 `audit.clean_interval` 默认 6h、单次上限 `audit.clean_batch` 默认 1000；`audit.clean_enabled=false` 可关，见 §11）。清理本身写一条 `audit.clean` 审计。
+查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 2026-11-24T00:00:00+08:00 [--action <动作>] [--limit N] [--csv]` 读 bbolt 输出（**`--since` 必须是 RFC3339 时间戳**，`--since 24h` 这类相对写法会被拒并返回退出码 2）；前端列表见 `web/audit.js`。**保留策略**：`audit.retention`（默认 90 天）内的记录保留，超期记录由 scheduler 内置任务 `builtin-audit-clean` 按龄删除（周期 `audit.clean_interval` 默认 6h、单次上限 `audit.clean_batch` 默认 1000；`audit.clean_enabled=false` 可关，见 §11）。清理本身写一条 `audit.clean` 审计。
 
 ## 10. 备份与恢复
 
-备份内容（一次 `kored backup --out <dir>`）：
+> **当前未实现**：`kored backup` / `kored restore` / `kored db dump` **都没有对应子命令**（唯一权威清单是 `kored help`）；下面是**停机手工流程**，可直接照敲，M2 由 backup 能力接管。离线核对需要 bbolt CLI，它不随 `kored` 分发，按 `go.mod` 的版本自行安装：`go install go.etcd.io/bbolt/cmd/bbolt@v1.3.11`。
 
-1. `state.db`：`db.View(func(tx *bbolt.Tx) error { return tx.CopyFile(<dir>/state.db, 0600) })`，得到一致快照，无需停服。
+备份内容（离线停机备份，一次一组）：
+
+1. `state.db`：停服后 `cp -a`——bbolt 独占文件锁，运行中直接拷可能拿到撕裂文件；在线一致快照（`Tx.CopyFile`）当前**只有 bbolt API、无 CLI 入口**。
 2. `config.yaml`：原样复制（含 0600 权限）。
-3. 插件包：`/var/lib/kore/plugins/` 下已安装版本目录打包为 `plugins.tar.gz`。
-4. `manifest.json`：`{"created_at","kore_version","schema_version","files":[{"path","sha256","size"}]}`。
+3. 插件包：`/var/lib/kore/plugins/` 打包为 `plugins.tar.gz`。
+4. 校验清单：`created_at` / `kore_version` / `schema_version` / 每文件 `sha256` 与 `size`——当前无自动生成器，用 `sha256sum` 清单替代。
+
+```bash
+# 停机备份（路径以 `kored status` 打印的 state_dir 为准）
+systemctl stop kore.service
+ts=$(date +%Y%m%dT%H%M%S); out="/var/backups/kore/$ts"; mkdir -p "$out"
+cp -a /var/lib/kore/state.db "$out/state.db"
+cp -a /etc/kore/config.yaml "$out/config.yaml"
+tar -czf "$out/plugins.tar.gz" -C /var/lib/kore plugins
+( cd "$out" && sha256sum state.db config.yaml plugins.tar.gz > SHA256SUMS )
+systemctl start kore.service
+```
 
 恢复流程（停机执行）：
 
 ```bash
-systemctl stop kore
-kored restore --from /var/backups/kore/<ts> --verify   # 校验 manifest sha256，失败即中止
-systemctl start kore
-curl -fsS http://127.0.0.1:8787/-/healthz             # 期望 {"ok":true}
-kored db dump --bucket meta                            # 核对 schema_version
+systemctl stop kore.service
+ts=20260101T000000                        # 换成实际备份目录名（第 2 步 $out 的后缀）
+cp -a /var/lib/kore/state.db "/var/lib/kore/state.db.pre-restore.$(date +%Y%m%dT%H%M%S)"   # 恢复前先快照
+cd "/var/backups/kore/$ts" && sha256sum -c SHA256SUMS                                     # 失败即中止
+bbolt get state.db meta schema_version                                                    # 值形如 {"schema_version":1}
+cp -a state.db /var/lib/kore/state.db
+cp -a config.yaml /etc/kore/config.yaml
+tar -xzf plugins.tar.gz -C /var/lib/kore
+systemctl start kore.service
+curl -fsS http://127.0.0.1:8787/-/healthz    # 期望 {"status":"ok"}
 ```
 
-校验：恢复前逐文件比对 sha256；恢复后核对 `schema_version` 与 `kored --version` 兼容（current ≤ target）；任一失败回滚到恢复前备份（恢复流程本身也先做一次快照）。RPO 目标 24 小时（每日备份 + 升级前强制备份），RTO 目标 10 分钟（单机、单文件、无外部依赖）。
+校验：恢复前逐文件比对 sha256；恢复后启动日志 `状态库已打开 ... schema_version=<n>` 必须 ≤ 当前内核声明，高于即拒绝启动（退出码 4，见 §7），此时回滚到恢复前的快照；任一失败回滚。RPO 目标 24 小时（需运维按上述流程每日执行 + 升级前执行），RTO 目标 10 分钟（单机、单文件、无外部依赖）。
 
 ## 11. 生命周期清理
 
