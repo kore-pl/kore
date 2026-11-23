@@ -1,0 +1,16 @@
+# depth_level 已知待裁决清单（G-20 门禁的存量豁免，非放行名单）
+#
+# 判据：索引 ../kore-plugins/index/plugins.json 的 depth_level 必须等于
+#       ../kore-plugin-<id>/info.json 的 depth_level。
+# 本清单只登记「已核实、方向待产品裁决」的既有不一致：
+#   在清单里 → [WARN]（不阻断 make check）；不在清单里 → [FAIL]（新增不一致，阻断）。
+# 裁决落定、索引值更新后，把对应 id 从本文件删除；残留条目会被门禁 WARN 提示移除。
+# 一行一个插件 id，# 起注释。格式：id
+container
+db-postgres
+dns
+echo
+integrity
+runtime-node
+runtime-python
+waf

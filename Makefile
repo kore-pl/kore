@@ -326,7 +326,7 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 字段 + 描述类字段四选一（全缺 WARN）+ id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截）
 	@bash scripts/store-check.sh
 
-presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积）
+presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production）
 	@bash scripts/presets-check.sh
 
 check: ## 聚合门禁（16 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源（ADR-0025）
@@ -397,7 +397,7 @@ check: ## 聚合门禁（16 段）：docs-check + 明文凭据 + 依赖白名单
 	  echo "[WARN] store-check 有 $$store_fail 处不合规（WARN 级不阻断：判据未放宽，单跑 bash scripts/store-check.sh 为 exit 1；转阻断条件见 QUALITY-GATES §G-17）"; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 15/16 presets-check（G-18：预设 id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积；阻断级）"; \
+	echo "[RUN ] 15/16 presets-check（G-18：预设 id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积；G-20：索引↔仓库 depth_level 一致 + out_of_box×depth_level；阻断级）"; \
 	if ! bash scripts/presets-check.sh; then fail=1; fi; \
 	echo ""; \
 	echo "[RUN ] 16/16 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \

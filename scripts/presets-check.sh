@@ -16,6 +16,14 @@
 #      常驻内存取自 ../kore-plugin-<id>/info.json 的 resources.memory_mb
 #      （索引无该字段；取不到即 FAIL —— 无法核对预算不允许算过）
 #   4) 失败指名到「preset + id + 区间 + 原因」
+#   5) 深度等级一致性（G-20）：索引 index/plugins.json 的 depth_level 必须等于
+#      ../kore-plugin-<id>/info.json 的 depth_level。分类三档，不混判：
+#        · 不一致且 id 在 scripts/depth-level-pending.txt（已知待裁决清单）→ WARN，不阻断
+#        · 不一致且不在清单（新增不一致）→ FAIL，阻断
+#        · 清单条目已一致 / 索引已无此 id（陈旧条目）→ WARN，提示移除
+#      判据不放宽：清单是「存量豁免登记」，不是放行名单——新仓新错一律 FAIL。
+#   6) out_of_box × depth_level（G-20 明文：basic 插件不得被预设标为「开箱可用」）：
+#      out_of_box=true 的预设不得引用索引 depth_level≠production 的插件（不看 desired）。
 #
 # 不联网、不调用 git、不修改任何文件。退出码 0 无 FAIL；1 有 FAIL；2 参数错误。
 set -euo pipefail
@@ -24,6 +32,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRESETS_DIR="${PRESETS_DIR:-$ROOT/../kore-plugins/presets}"
 INDEX_FILE="${INDEX_FILE:-$ROOT/../kore-plugins/index/plugins.json}"
 PLUGIN_REPOS_DIR="${PLUGIN_REPOS_DIR:-$ROOT/..}"
+# depth_level 已知待裁决清单（G-20）：存量不一致的登记处，新增不一致仍 FAIL
+DEPTH_PENDING_FILE="${DEPTH_PENDING_FILE:-$ROOT/scripts/depth-level-pending.txt}"
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +42,9 @@ usage() {
   --self-test   只跑版本区间解析器用例（会证明不支持的写法确实报错）
   preset.json   指定要校验的预设文件，可多个（默认扫描 presets 目录）
   --help        打印本帮助
+
+环境变量: INDEX_FILE / PRESETS_DIR / PLUGIN_REPOS_DIR / DEPTH_PENDING_FILE
+  DEPTH_PENDING_FILE 指向 depth_level 已知待裁决清单（默认 scripts/depth-level-pending.txt）
 
 退出码: 0 无 FAIL；1 有 FAIL；2 参数错误。
 USAGE
@@ -178,7 +191,7 @@ MAX_RESIDENT="${MAX_RESIDENT:-3}"
 BIN_MAX_BYTES="${BIN_MAX_BYTES:-26214400}"
 
 python3 - "$INDEX_FILE" "$PLUGIN_REPOS_DIR" "$RSS_RED_MIB" "$RSS_GOAL_MIB" \
-         "$MAX_RESIDENT" "$BIN_MAX_BYTES" "${PRESETS[@]}" <<'PY'
+         "$MAX_RESIDENT" "$BIN_MAX_BYTES" "$DEPTH_PENDING_FILE" "${PRESETS[@]}" <<'PY'
 import glob
 import json
 import os
@@ -191,7 +204,8 @@ rss_red = float(sys.argv[3])
 rss_goal = float(sys.argv[4])
 max_resident = int(sys.argv[5])
 bin_max = int(sys.argv[6])
-preset_files = sys.argv[7:]
+pending_file = sys.argv[7]
+preset_files = sys.argv[8:]
 
 TOKEN_RE = re.compile(r"^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$")
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -245,6 +259,26 @@ def load_json(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
+VALID_DEPTH = ("production", "basic")
+
+def load_pending(path):
+    """已知待裁决清单：一行一个插件 id，# 起注释。返回 (集合, 有序列表)。
+
+    文件缺失 = 空清单：存量不一致会全部落进「新增不一致 → FAIL」，不静默放过。
+    """
+    ids = set()
+    order = []
+    if not os.path.isfile(path):
+        return ids, order
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            pid = raw.split("#", 1)[0].strip()
+            if not pid or pid in ids:
+                continue
+            ids.add(pid)
+            order.append(pid)
+    return ids, order
+
 def memory_mib(pid):
     """常驻内存取自插件仓 info.json.resources.memory_mb（索引无此字段）。"""
     path = os.path.join(repos_dir, f"kore-plugin-{pid}", "info.json")
@@ -285,6 +319,63 @@ for entry in entries:
 
 print(f"索引: {index_file}（{len(by_id)} 个已收录插件）")
 print(f"预设: {len(preset_files)} 个")
+print("")
+
+# ── 深度等级一致性（G-20）：索引 ↔ 仓库 info.json ──
+pending_ids, pending_order = load_pending(pending_file)
+print("深度等级一致性（G-20）：索引 depth_level ↔ 仓库 info.json depth_level")
+diff_ids = set()
+for pid, entry in by_id.items():
+    idx_level = entry.get("depth_level")
+    if idx_level not in VALID_DEPTH:
+        n_fail += 1
+        print(f"[FAIL] 索引 depth_level 非法/缺失: {pid}={idx_level!r}"
+              f"（只允许 {' / '.join(VALID_DEPTH)}）")
+        continue
+    repo_info_path = os.path.join(repos_dir, f"kore-plugin-{pid}", "info.json")
+    if not os.path.isfile(repo_info_path):
+        n_fail += 1
+        print(f"[FAIL] 无法核对 depth_level: {pid} 缺 ../kore-plugin-{pid}/info.json")
+        continue
+    try:
+        repo_info = load_json(repo_info_path)
+    except Exception as exc:  # noqa: BLE001
+        n_fail += 1
+        print(f"[FAIL] 无法核对 depth_level: {pid}: ../kore-plugin-{pid}/info.json 解析失败: {exc}")
+        continue
+    repo_level = repo_info.get("depth_level")
+    if repo_level not in VALID_DEPTH:
+        n_fail += 1
+        print(f"[FAIL] 仓库 depth_level 非法/缺失（G-20 必填）: {pid}={repo_level!r}"
+              f"（../kore-plugin-{pid}/info.json）")
+        continue
+    if repo_level == idx_level:
+        continue
+    diff_ids.add(pid)
+    if pid in pending_ids:
+        n_warn += 1
+        print(f"[WARN] depth_level 待裁决（已知存量，不阻断）: {pid}: "
+              f"索引 {idx_level} / 仓库 {repo_level}"
+              f"（已登记 {os.path.basename(pending_file)}，等产品裁决方向）")
+    else:
+        n_fail += 1
+        print(f"[FAIL] depth_level 不一致（新增，阻断）: {pid}: "
+              f"索引 {idx_level} / 仓库 {repo_level}"
+              f"（未登记 {os.path.basename(pending_file)}；新仓新错不得进商店）")
+
+for pid in pending_order:
+    if pid in diff_ids:
+        continue
+    n_warn += 1
+    if pid in by_id:
+        print(f"[WARN] 待裁决清单陈旧条目: {pid} 的索引与仓库已一致 —— "
+              f"裁决已落定，请从 {os.path.basename(pending_file)} 移除")
+    else:
+        print(f"[WARN] 待裁决清单陈旧条目: {pid} 已不在索引 —— "
+              f"请从 {os.path.basename(pending_file)} 移除")
+
+print(f"[INFO] depth_level 核对: {len(by_id)} 个已收录插件 · 不一致 {len(diff_ids)} 条"
+      f"（已知待裁决 {len(diff_ids & pending_ids)} / 新增 {len(diff_ids - pending_ids)}）")
 print("")
 
 for path in preset_files:
@@ -376,6 +467,24 @@ for path in preset_files:
                 resident_mib += mem
                 resident_ids.append((pid, mem))
 
+    # out_of_box × depth_level（G-20 明文）：basic 插件不得被预设标为「开箱可用」。
+    # 判据落在索引（商店实际下发的值）上，不看 desired —— 引用即「标为开箱可用」。
+    if preset.get("out_of_box") is True:
+        for idx, item in enumerate(plugins):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            pid = item["id"]
+            entry = by_id.get(pid)
+            if entry is None:
+                continue  # id 不可解析已在上方按 FAIL 报过，不重复计
+            level = entry.get("depth_level")
+            if level != "production":
+                problems.append(
+                    f"out_of_box=true 引用了 depth_level={level!r} 的插件 {pid}"
+                    f"（desired={item.get('desired', 'enabled')}）"
+                    f"—— G-20「basic 插件不得被预设标为开箱可用」"
+                )
+
     # 常驻资源红线（G-03）：合计 RSS / 同时常驻数
     if resident_mib > rss_red:
         problems.append(
@@ -410,7 +519,9 @@ for path in preset_files:
 
 print("")
 print("检查范围: id 可在索引解析 + 版本区间被实际版本满足（精确 / ^ / ~ / 比较器集合）"
-      " + 常驻 RSS 红线与目标 + 同时常驻数 + 单插件包体积")
+      " + 常驻 RSS 红线与目标 + 同时常驻数 + 单插件包体积"
+      " + 索引↔仓库 depth_level 一致性（G-20：新增不一致 FAIL / 已知待裁决 WARN）"
+      " + out_of_box 预设不得引用 non-production 插件（G-20）")
 print(f"presets-check: {n_pass} pass, {n_warn} warn, {n_fail} fail")
 sys.exit(1 if n_fail else 0)
 PY
