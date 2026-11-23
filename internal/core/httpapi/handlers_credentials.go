@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -78,11 +79,15 @@ func (s *Server) handleCredentialList(w http.ResponseWriter, r *http.Request) {
 		Name      string   `json:"name"`
 		EnvVar    string   `json:"envVar"`
 		GrantedTo []string `json:"grantedTo"`
+		// CreatedAt / UpdatedAt 与 grant 端点的 grantedAt 同为 RFC3339（ADR-0026 index 字段）。
+		CreatedAt string `json:"createdAt"`
+		UpdatedAt string `json:"updatedAt"`
 	}
 	items := make([]item, 0, len(entries))
 	for _, entry := range entries {
 		items = append(items, item{ID: entry.ID, Owner: entry.Owner, Name: entry.Name,
-			EnvVar: entry.EnvVar, GrantedTo: append([]string{}, entry.GrantedTo...)})
+			EnvVar: entry.EnvVar, GrantedTo: append([]string{}, entry.GrantedTo...),
+			CreatedAt: entry.CreatedAt.Format(time.RFC3339), UpdatedAt: entry.UpdatedAt.Format(time.RFC3339)})
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Credentials []item `json:"credentials"`

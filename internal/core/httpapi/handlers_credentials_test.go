@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/credential"
@@ -110,6 +112,43 @@ func TestCredentialDeleteRequiresAdmin(t *testing.T) {
 	}
 	if _, err := svc.List(t.Context(), "admin", "db-mysql"); err != nil {
 		t.Fatalf("被拒后凭据应仍存在: %v", err)
+	}
+}
+
+// TestCredentialListIncludesTimestamps 验证列表项带 RFC3339 的 createdAt/updatedAt，
+// 且任何读响应都不出现 secret 字段或口令值（ADR-0026 §3：secret 永不回显）。
+func TestCredentialListIncludesTimestamps(t *testing.T) {
+	srv, svc := newCredentialServer(t, false)
+	const secretValue = "s3cret-e2e-value"
+	entry, err := svc.Set(t.Context(), "db-mysql", "db-mysql", "mysqlRoot", "MYSQL_PWD", []byte(secretValue))
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	rec := serve(t, srv, http.MethodGet, "/api/v1/credentials?owner=db-mysql")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET 状态码 = %d；body=%s", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.String()
+	if strings.Contains(raw, secretValue) || strings.Contains(raw, `"secret"`) {
+		t.Fatalf("读响应泄漏 secret：%s", raw)
+	}
+	var body struct {
+		Credentials []struct {
+			ID        string `json:"id"`
+			CreatedAt string `json:"createdAt"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"credentials"`
+	}
+	if err := decodeJSON(rec, &body); err != nil {
+		t.Fatalf("响应不是 JSON: %v", err)
+	}
+	if len(body.Credentials) != 1 || body.Credentials[0].ID != entry.ID {
+		t.Fatalf("列表 = %+v，期望含 %s", body.Credentials, entry.ID)
+	}
+	for _, field := range []string{body.Credentials[0].CreatedAt, body.Credentials[0].UpdatedAt} {
+		if _, err := time.Parse(time.RFC3339, field); err != nil {
+			t.Fatalf("时间字段 %q 不是 RFC3339: %v", field, err)
+		}
 	}
 }
 
