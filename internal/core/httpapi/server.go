@@ -296,7 +296,7 @@ type Server struct {
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
 	loginStreakMu   sync.Mutex
 	loginFailStreak int
-	// localCSRFMu / localCSRFTokenValue 是本机免密通道的进程级 CSRF token
+	// localCSRFMu / localCSRFTokenValue 是本机通道的进程级 CSRF token
 	//（幂等请求首次下发后稳定复用，避免并发下发互相覆盖 cookie 的竞态）。
 	localCSRFMu         sync.Mutex
 	localCSRFTokenValue string
@@ -339,8 +339,8 @@ func New(opts Options, transport platform.Transport) *Server {
 		Handler:           server.withRequestID(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		// 把 net.Conn 带进请求上下文：UDS 免密要拿它做 SO_PEERCRED 校验，
-		// 同时按连接记住"是否已记过 local.access"（只记首次连接 + 写操作）。
+		// 把 net.Conn 带进请求上下文：UDS 用它做通道识别（SO_PEERCRED），
+		// 仅服务于 CSRF 引导/豁免与通道判定，不参与认证（认证由 withAuth 会话承担）。
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
 			return context.WithValue(ctx, connKey{}, &connInfo{conn: conn})
 		},

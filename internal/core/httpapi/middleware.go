@@ -149,9 +149,10 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// UDS 免密请求豁免 CSRF：浏览器没有 unix socket 通道，跨站请求打不到这里，
-		// 认证由文件系统权限（0600 socket）承担。loopback TCP **不豁免**——浏览器
-		// 就在本机，SameSite 挡不住同站跨源，双提交必须照做。
+		// UDS 请求豁免 CSRF：浏览器没有 unix socket 通道，跨站请求打不到这里。
+		// 本豁免**只免 CSRF**，不免认证——认证仍由 withAuth 的会话承担（ADR-0043），
+		// 文件系统权限（0600 socket）只决定可达性、不构成认证。loopback TCP
+		// **不豁免**——浏览器就在本机，SameSite 挡不住同站跨源，双提交必须照做。
 		if local, _ := s.resolveLocal(r); local.channel == localChannelUnix {
 			next.ServeHTTP(w, r)
 			return
