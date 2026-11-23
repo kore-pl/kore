@@ -2,9 +2,12 @@
    数据源优先级：monitor 插件（真实读 /proc 与 /sys）→ 内核 /api/v1/system/metrics 降级。
    插件未安装或调用失败时**不报错、不白屏**：降级渲染内核基础指标并在顶部标一条灰字提示。
    调用形态：POST /api/v1/invoke/monitor/monitor.<method>（方法段写完整限定名）。
-   刷新：仅手动「刷新」按钮（G-19 禁止轮询/定时器；本文件不含 setInterval / setTimeout）。
+   刷新：仅手动「刷新」按钮（G-19 禁止轮询：本文件不含 setInterval / 轮询定时器）；
+   唯一的 setTimeout 是 100ms 的 resize 防抖，唯一的时间驱动是单帧 requestAnimationFrame。
    渲染构件在 web/monitor-cards.js，进入本视图时才注入，不进首屏。
-   window.KoreMonitor.render(container) → {destroy}。 */
+   window.KoreMonitor.render(container) → {destroy}。
+   图表：自研 Canvas 折线（零图表库 / 零动画 / 零 tooltip），生命周期统一走本文件的
+   charts 注册表，验收断言入口 window.__koreMonitorChart = {count, dispose}。 */
 (function () {
   'use strict';
 
@@ -15,16 +18,32 @@
   var FALLBACK_NOTE = '当前使用内核基础指标，安装 monitor 插件可获得磁盘/网络/温度详情';
   /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。 */
   var THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
-  /* 三条迷你折线：CPU / 内存 / 负载（负载不是百分比，按核数换算参照线）。 */
+  /* 三条曲线：CPU / 内存 / 负载（负载不是百分比，按核数换算参照线）。
+     ink 是主题色变量名（布局时只读一次 computedStyle），thr 指明参照线来源。 */
   var SERIES = [
-    { key: 'cpu_percent', label: 'CPU', unit: '%', cls: 'mon-line-cpu', pct: true },
-    { key: 'memory_percent', label: '内存', unit: '%', cls: 'mon-line-mem', pct: true },
-    { key: 'load1', label: '负载', unit: '', cls: 'mon-line-load', pct: false }
+    { key: 'cpu_percent', label: 'CPU', unit: '%', swatch: 'mon-swatch-cpu', ink: '--kore-info',
+      pct: true, thr: 'cpu_percent' },
+    { key: 'memory_percent', label: '内存', unit: '%', swatch: 'mon-swatch-mem', ink: '--kore-success',
+      pct: true, thr: 'memory_percent' },
+    { key: 'load1', label: '负载', unit: '', swatch: 'mon-swatch-load', ink: '--kore-text-3',
+      pct: false, thr: 'cores' }
   ];
+  /* 单序列点数硬上限；超出尾部截断（保留最近 MAX_POINTS 点），后端预聚合待办。 */
+  var MAX_POINTS = 1000;
+  var CHART_PAD = 22;
+  var RESIZE_DEBOUNCE_MS = 100;
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
     procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null,
     cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null };
+  /* 图表注册表（模块级，唯一真源）：charts 里的实例即 window.__koreMonitorChart.count()；
+     chartPanelEl 是持久面板节点，刷新时复用同一个 canvas，不重建 DOM；
+     resize 只在有实例时绑定一个监听（100ms 防抖），实例清零即解绑。 */
+  var charts = [];
+  var chartPanelEl = null;
+  var legendTextEl = null;
+  var resizeBound = false;
+  var resizeTimer = 0;
 
   /* 本视图样式随模块注入（不修改 style.css）：卡片网格复用 .monitor-*，表格独立命名。 */
   var CSS = [
@@ -54,23 +73,21 @@
     '.mon-sort[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
     '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}',
     '.mon-chart-body{padding:8px 16px 12px}',
+    '.mon-chart-box{display:block;padding-top:6px}',
     '.mon-chart{display:block;width:100%;height:132px}',
     '.mon-mini{padding:10px 16px 4px}',
     '.mon-mini-head{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--kore-text-2)}',
     '.mon-mini-val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
-    '.mon-line-load{stroke:var(--kore-text-3)}',
-    '.mon-threshold{stroke:var(--kore-danger);stroke-width:1;stroke-dasharray:4 3;opacity:.7}',
     '.mon-all{display:inline-block;min-height:44px;line-height:44px;padding:0 4px;color:var(--kore-info)}',
     '.mon-lock{margin-left:4px;font-size:11px;color:var(--kore-text-3)}',
     '.mon-empty-note{padding:12px 16px;color:var(--kore-text-3)}',
     '@media (max-width:640px){.mon-chart{height:96px}.mon-mini{padding:8px 12px 2px}}',
-    '.mon-chart .mon-grid{stroke:var(--kore-border-2);stroke-width:1}',
-    '.mon-chart .mon-line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}',
-    '.mon-line-cpu{stroke:var(--kore-info)}',
-    '.mon-line-mem{stroke:var(--kore-success)}',
-    '.mon-line-disk{stroke:var(--kore-warning)}',
-    '.mon-legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--kore-text-2);padding-top:8px}',
+    '.mon-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;font-size:12px;color:var(--kore-text-2);padding-top:8px}',
     '.mon-legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle;border-radius:2px}',
+    '.mon-swatch-cpu{background:var(--kore-info)}',
+    '.mon-swatch-mem{background:var(--kore-success)}',
+    '.mon-swatch-load{background:var(--kore-text-3)}',
+    '.mon-legend-note{color:var(--kore-text-3)}',
     '.mon-alert-body{padding:8px 16px 12px;display:flex;flex-direction:column;gap:8px}',
     '.mon-alert{padding:10px 12px;border-left:3px solid var(--kore-warning);background:var(--kore-bg-0);border-radius:4px}',
     '.mon-alert-critical{border-left-color:var(--kore-danger)}',
@@ -228,85 +245,278 @@
     });
   }
 
-  function svgEl(tag, cls) {
-    var n = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    if (cls) n.setAttribute('class', cls);
-    return n;
-  }
+  /* ---------- 自研 Canvas 时序曲线（零图表库 / 零动画 / 零 hover / 零 tooltip） ----------
+     数据契约：monitor.system.history 是**列式数组**——history.timestamps（ms，单调递增）
+     与 history.cpu_percent / history.memory_percent / history.load1 等长；
+     cpu/memory 为 0–100 的百分比，load1 是核归一负载（>100 也合法，纵轴按核数放大）。
+     前端只保最近 MAX_POINTS 点（尾部截断）；点数超过可视宽度像素数时用 LTTB 抽样，
+     单帧绘制点数 ≤ min(可视宽度, 1000)。后端预聚合待办：当前 60s 一点时 1000 点约 16.7 小时窗口。
+     布局（量尺寸 / 取主题色 / 铺网格）只在创建与 resize 防抖后做；刷新只重绘数据层。 */
 
-  /* 历史曲线：monitor.system.history 是列式数组（timestamps + cpu_percent/memory_percent/load1），
-     三条迷你 SVG 折线自研绘制，不引任何第三方图表库；悬停用 SVG <title> 显示该点数值与时间。 */
-  function fmtPointTime(ms) {
-    var d = new Date(num(ms) === null ? Date.now() : ms);
-    return d.toLocaleTimeString('zh-CN', { hour12: false });
-  }
-  function chartInto(host, history, cores) {
-    var ts = history && Array.isArray(history.timestamps) ? history.timestamps : [];
-    if (ts.length < 2) {
-      var lack = 2 - ts.length;
-      add(host, el('p', 'mon-empty-note', '正在积累数据（还差 ' + lack + ' 个采样；默认 60s 一个点，点「刷新」后更新）'));
-      return;
+  /* LTTB（Largest Triangle Three Buckets）：纯函数、无 DOM 依赖。
+     入参 xs/ys 等长且按 x 递增，target 为目标点数；返回保留点的下标数组，
+     首点与尾点必然保留（曲线两端不会被抽样吃掉）。 */
+  function lttbSample(xs, ys, target) {
+    var n = ys.length, out = [], every, a = 0, i, j;
+    if (n === 0 || target <= 0) return out;
+    if (target >= n || target < 3) {
+      for (i = 0; i < n; i++) out.push(i);
+      return out;
     }
-    SERIES.forEach(function (series) {
-      var values = Array.isArray(history[series.key]) ? history[series.key] : [];
-      if (!values.length) return;
-      var latest = num(values[values.length - 1]);
-      var max = series.pct ? 100 : Math.max(1, (num(cores) || 1) * 1.5, latest !== null ? latest * 1.2 : 0);
-      var ref = series.pct ? THRESHOLDS.cpu_percent : (num(cores) || null);
-      var wrap = add(host, el('div', 'mon-mini'));
-      var head = add(wrap, el('div', 'mon-mini-head'));
-      add(head, el('span', null, series.label));
-      var refText = ref === null ? '' : (series.pct ? '阈值 ' + ref + '%' : '阈值 ' + ref + '（' + cores + ' 核）');
-      if (refText) add(head, el('span', 'muted', refText));
-      add(head, el('span', 'mon-mini-val', (latest === null ? '—' : latest.toFixed(1)) + series.unit));
+    every = (n - 2) / (target - 2);
+    out.push(0);
+    for (i = 0; i < target - 2; i++) {
+      var c0 = Math.floor(i * every) + 1;
+      var c1 = Math.max(c0 + 1, Math.min(Math.floor((i + 1) * every) + 1, n - 1));
+      var n0 = Math.floor((i + 1) * every) + 1;
+      var n1 = Math.max(n0 + 1, Math.min(Math.floor((i + 2) * every) + 1, n));
+      var ax = 0, ay = 0, cnt = n1 - n0, best = -1, pick = c0;
+      for (j = n0; j < n1; j++) { ax += xs[j]; ay += ys[j]; }
+      if (cnt > 0) { ax /= cnt; ay /= cnt; } else { ax = xs[n - 1]; ay = ys[n - 1]; }
+      for (j = c0; j < c1; j++) {
+        var area = Math.abs((xs[a] - ax) * (ys[j] - ys[a]) - (xs[a] - xs[j]) * (ay - ys[a]));
+        if (area > best) { best = area; pick = j; }
+      }
+      out.push(pick);
+      a = pick;
+    }
+    out.push(n - 1);
+    return out;
+  }
 
-      var W = 640, H = 132, PAD = 22, PLOT = H - 2 * PAD;
-      var svg = svgEl('svg', 'mon-chart');
-      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-      svg.setAttribute('role', 'img');
-      svg.setAttribute('aria-label', series.label + ' 历史曲线，最近 ' + ts.length + ' 个采样点');
-      [0, 0.5, 1].forEach(function (frac) {
-        var y = H - PAD - PLOT * frac, line = svgEl('line', 'mon-grid');
-        line.setAttribute('x1', PAD); line.setAttribute('x2', W - PAD);
-        line.setAttribute('y1', y.toFixed(1)); line.setAttribute('y2', y.toFixed(1));
-        svg.appendChild(line);
-      });
-      if (ref !== null) {
-        var ty = H - PAD - PLOT * Math.min(1, ref / max), tl = svgEl('line', 'mon-threshold');
-        tl.setAttribute('x1', PAD); tl.setAttribute('x2', W - PAD);
-        tl.setAttribute('y1', ty.toFixed(1)); tl.setAttribute('y2', ty.toFixed(1));
-        svg.appendChild(tl);
+  function cssVar(cs, name, fallback) {
+    var v = cs && cs.getPropertyValue ? cs.getPropertyValue(name) : '';
+    v = v && v.trim();
+    return v || fallback;
+  }
+
+  /* 布局：量一次 CSS 尺寸，按 devicePixelRatio 放大像素缓冲（CSS 尺寸与像素尺寸分离），
+     把静态网格预渲染到离屏 canvas。只在创建与 resize 防抖后调用，刷新路径不量布局。 */
+  function layoutChart(c) {
+    if (!c.canvas) return;
+    var rect = c.canvas.getBoundingClientRect();
+    var w = Math.round(rect.width) || c.canvas.clientWidth || c.box.clientWidth || 320;
+    var h = Math.round(rect.height) || 132;
+    if (w < 40) w = 40;
+    if (h < 40) h = 40;
+    var dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+    if (w === c.w && h === c.h && dpr === c.dpr && c.grid) return;
+    c.w = w; c.h = h; c.dpr = dpr;
+    c.canvas.width = Math.round(w * dpr);
+    c.canvas.height = Math.round(h * dpr);
+    var cs = window.getComputedStyle(c.canvas);
+    c.ink = cssVar(cs, c.series.ink, '#4c8dff');
+    c.gridInk = cssVar(cs, '--kore-border-2', 'rgba(148,163,184,.35)');
+    c.refInk = cssVar(cs, '--kore-danger', '#e5484d');
+    c.grid = document.createElement('canvas');
+    c.grid.width = c.canvas.width;
+    c.grid.height = c.canvas.height;
+    var g = c.grid.getContext('2d');
+    if (g) {
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.strokeStyle = c.gridInk;
+      g.lineWidth = 1;
+      var plot = Math.max(10, h - 2 * CHART_PAD), i, y;
+      for (i = 0; i <= 2; i++) {
+        y = Math.round(h - CHART_PAD - plot * (i / 2)) + 0.5;
+        g.beginPath(); g.moveTo(CHART_PAD, y); g.lineTo(w - CHART_PAD, y); g.stroke();
       }
-      var pts = [], i, v;
-      for (i = 0; i < values.length && i < ts.length; i++) {
-        v = num(values[i]);
-        if (v === null) continue;
-        var x = PAD + (W - 2 * PAD) * i / Math.max(1, values.length - 1);
-        var y2 = H - PAD - PLOT * Math.max(0, Math.min(max, v)) / max;
-        pts.push(x.toFixed(1) + ',' + y2.toFixed(1));
-        var hit = svgEl('circle', 'mon-hit');
-        hit.setAttribute('cx', x.toFixed(1)); hit.setAttribute('cy', y2.toFixed(1));
-        hit.setAttribute('r', '8'); hit.setAttribute('fill', 'transparent'); hit.setAttribute('pointer-events', 'all');
-        var title = svgEl('title');
-        title.textContent = fmtPointTime(ts[i]) + ' · ' + v.toFixed(1) + series.unit;
-        hit.appendChild(title); svg.appendChild(hit);
-      }
-      if (pts.length >= 2) {
-        var poly = svgEl('polyline', 'mon-line ' + series.cls);
-        poly.setAttribute('points', pts.join(' '));
-        svg.appendChild(poly);
-      }
-      add(wrap, svg);
+    }
+    scheduleChart(c);
+  }
+
+  /* 数据层重绘：clearRect + 贴离屏网格 + 画一条折线。不新建任何 DOM / canvas。 */
+  function drawChart(c) {
+    c.raf = 0;
+    var g = c.ctx;
+    if (!g || !c.w || !c.h) return;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, c.canvas.width, c.canvas.height);
+    if (c.grid) g.drawImage(c.grid, 0, 0);
+    g.setTransform(c.dpr, 0, 0, c.dpr, 0, 0);
+    var n = c.ys.length, plot = Math.max(10, c.h - 2 * CHART_PAD), i, idx;
+    if (c.ref !== null && c.ref > 0) {
+      var ty = Math.round(c.h - CHART_PAD - plot * Math.min(1, c.ref / c.max)) + 0.5;
+      g.strokeStyle = c.refInk;
+      g.lineWidth = 1;
+      g.setLineDash([4, 3]);
+      g.beginPath(); g.moveTo(CHART_PAD, ty); g.lineTo(c.w - CHART_PAD, ty); g.stroke();
+      g.setLineDash([]);
+    }
+    if (n < 2) return;
+    /* 目标点数 = 可视宽度像素数，硬上限 MAX_POINTS；超出才抽样。 */
+    var target = Math.min(MAX_POINTS, Math.max(2, Math.round(c.w)));
+    var picks = n > target ? lttbSample(c.xs, c.ys, target) : null;
+    g.strokeStyle = c.ink;
+    g.lineWidth = 2;
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    g.beginPath();
+    for (i = 0; i < (picks ? picks.length : n); i++) {
+      idx = picks ? picks[i] : i;
+      var x = CHART_PAD + (c.w - 2 * CHART_PAD) * idx / Math.max(1, n - 1);
+      var y = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[idx])) / c.max;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+
+  /* 单帧调度：同一实例同时最多一个待绘制帧，避免刷新连点时堆帧。 */
+  function scheduleChart(c) {
+    if (c.raf) return;
+    if (!window.requestAnimationFrame) { drawChart(c); return; }
+    c.raf = window.requestAnimationFrame(function () { drawChart(c); });
+  }
+
+  /* 读数走图注文本 + aria-label 摘要（无 tooltip / 无 hover 高亮）。 */
+  function chartSummary(c, latest, intervalS) {
+    var n = c.ys.length, lo = null, hi = null, i;
+    for (i = 0; i < n; i++) {
+      if (lo === null || c.ys[i] < lo) lo = c.ys[i];
+      if (hi === null || c.ys[i] > hi) hi = c.ys[i];
+    }
+    var span = lo === null ? '暂无数据'
+      : lo.toFixed(1) + c.series.unit + ' ~ ' + hi.toFixed(1) + c.series.unit;
+    return c.series.label + ' 历史曲线：' + n + ' 个点，区间 ' + span + '，最近 ' +
+      (latest === null ? '—' : latest.toFixed(1) + c.series.unit) +
+      (num(intervalS) === null ? '' : '，采样间隔 ' + intervalS + ' 秒') +
+      '；无动画、无悬停读数，数值见上方图注';
+  }
+
+  /* 刷新路径：只换数据 + 更新图注/aria，然后一帧内重绘数据层；不重建 canvas/DOM。 */
+  function setChartData(c, ts, values, cores, intervalS) {
+    if (!c.w) layoutChart(c);
+    var n = Math.min(ts.length, values.length);
+    var start = Math.max(0, n - MAX_POINTS);
+    var xs = [], ys = [], i, v;
+    for (i = start; i < n; i++) {
+      v = num(values[i]);
+      if (v === null) continue;
+      xs.push(num(ts[i]) === null ? i : num(ts[i]));
+      ys.push(v);
+    }
+    c.xs = xs; c.ys = ys;
+    var latest = ys.length ? ys[ys.length - 1] : null;
+    c.ref = c.series.thr === 'cores' ? (num(cores) || null) : THRESHOLDS[c.series.thr];
+    c.max = c.series.pct ? 100
+      : Math.max(1, (num(cores) || 1) * 1.5, latest === null ? 0 : latest * 1.2);
+    c.valEl.textContent = latest === null ? '—' : latest.toFixed(1) + c.series.unit;
+    c.noteEl.textContent = c.ref === null ? ''
+      : (c.series.pct ? '阈值 ' + c.ref + '%' : '阈值 ' + c.ref + '（' + cores + ' 核）');
+    c.box.setAttribute('aria-label', chartSummary(c, latest, intervalS));
+    scheduleChart(c);
+  }
+
+  function makeChart(host, series) {
+    var wrap = add(host, el('div', 'mon-mini'));
+    var head = add(wrap, el('div', 'mon-mini-head'));
+    add(head, el('span', null, series.label));
+    var noteEl = add(head, el('span', 'muted'));
+    var valEl = add(head, el('span', 'mon-mini-val', '—'));
+    var box = add(wrap, el('div', 'mon-chart-box'));
+    box.setAttribute('role', 'img');
+    box.setAttribute('aria-label', series.label + ' 历史曲线：等待数据');
+    var canvas = add(box, el('canvas', 'mon-chart'));
+    var inst = { series: series, wrap: wrap, box: box, canvas: canvas,
+      ctx: canvas.getContext('2d'), grid: null, w: 0, h: 0, dpr: 0,
+      ink: '', gridInk: '', refInk: '', xs: [], ys: [], max: 1, ref: null,
+      raf: 0, noteEl: noteEl, valEl: valEl };
+    charts.push(inst);
+    return inst;
+  }
+
+  function buildCharts(host) {
+    charts.length = 0;
+    bindResize();
+    SERIES.forEach(function (series) { makeChart(host, series); });
+  }
+
+  function updateCharts(history, cores) {
+    var ts = Array.isArray(history.timestamps) ? history.timestamps : [];
+    charts.forEach(function (c) {
+      var values = Array.isArray(history[c.series.key]) ? history[c.series.key] : [];
+      setChartData(c, ts, values, cores, history.interval_s);
     });
-    var legend = add(host, el('div', 'mon-legend'));
-    add(legend, el('span', null, '共 ' + ts.length + ' 点 · 间隔 ' +
-      (num(history.interval_s) === null ? '—' : history.interval_s) + 's · 悬停折线查看数值与时间'));
+  }
+
+  function legendText(history) {
+    var n = Array.isArray(history.timestamps) ? history.timestamps.length : 0;
+    var iv = num(history.interval_s);
+    return '共 ' + n + ' 点 · 间隔 ' + (iv === null ? '—' : iv) + 's · 单序列上限 ' +
+      MAX_POINTS + ' 点（后端预聚合待办）· 无动画 / 无悬停读数';
+  }
+
+  /* 视图切走 / 卸载：取消待绘制帧 + 清引用 + 解绑唯一 resize 监听。幂等。 */
+  function disposeCharts() {
+    charts.forEach(function (c) {
+      if (c.raf) {
+        if (window.cancelAnimationFrame) window.cancelAnimationFrame(c.raf);
+        c.raf = 0;
+      }
+      c.ctx = null;
+      c.grid = null;
+      c.xs = [];
+      c.ys = [];
+      if (c.canvas) { c.canvas.width = 0; c.canvas.height = 0; }
+    });
+    charts.length = 0;
+    chartPanelEl = null;
+    legendTextEl = null;
+    unbindResize();
+  }
+
+  /* resize：模块内唯一监听 + 100ms 防抖；实例清零时解绑（切视图不残留监听）。 */
+  function onResize() {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      resizeTimer = 0;
+      charts.forEach(layoutChart);
+    }, RESIZE_DEBOUNCE_MS);
+  }
+  function bindResize() {
+    if (resizeBound) return;
+    resizeBound = true;
+    window.addEventListener('resize', onResize);
+  }
+  function unbindResize() {
+    if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = 0; }
+    if (!resizeBound) return;
+    resizeBound = false;
+    window.removeEventListener('resize', onResize);
   }
 
   function chartPanel(d) {
-    var p = S.C.panel('历史曲线', null, 'mon-chart-body');
-    chartInto(p.body, d.history || {}, d.cpu && d.cpu.cores);
-    return p;
+    var history = d.history || {};
+    var ts = Array.isArray(history.timestamps) ? history.timestamps : [];
+    if (ts.length < 2) {
+      /* 空态 / 1 点态：保留原本文案语义，不建 canvas、不白屏。 */
+      disposeCharts();
+      var p0 = S.C.panel('历史曲线', null, 'mon-chart-body');
+      var lack = 2 - ts.length;
+      add(p0.body, el('p', 'mon-empty-note',
+        '正在积累数据（还差 ' + lack + ' 个采样；默认 60s 一个点，点「刷新」后更新）'));
+      return p0;
+    }
+    if (!chartPanelEl) {
+      chartPanelEl = S.C.panel('历史曲线', null, 'mon-chart-body');
+      buildCharts(chartPanelEl.body);
+      var legend = add(chartPanelEl.body, el('div', 'mon-legend'));
+      SERIES.forEach(function (s) {
+        var item = add(legend, el('span'));
+        add(item, el('i', s.swatch));
+        add(item, el('span', null, s.label));
+      });
+      legendTextEl = add(legend, el('span', 'mon-legend-note'));
+    }
+    return chartPanelEl;
+  }
+
+  /* 数据灌入（面板已挂载后调用）：只更新数据 + 图注 + aria，一帧内重绘数据层。 */
+  function paintCharts(d) {
+    if (!charts.length) return;
+    var history = d.history || {};
+    updateCharts(history, d.cpu && d.cpu.cores);
+    if (legendTextEl) legendTextEl.textContent = legendText(history);
   }
 
   /* 阈值告警：alerts 由后端按本次 thresholds 计算；级别色 + 人话 + 怎么办。 */
@@ -343,7 +553,9 @@
 
     S.panels.textContent = '';
     S.panels.appendChild(alertPanel(d || {}));
+    /* 先挂载再灌数据：canvas 必须在已连接状态下量一次尺寸，之后刷新不再测量。 */
     S.panels.appendChild(chartPanel(d || {}));
+    paintCharts(d || {});
     S.panels.appendChild(C.diskPanel(d || {}));
     S.panels.appendChild(C.netPanel(d || {}));
     var temp = C.panel('温度', null, 'mon-temp');
@@ -370,6 +582,8 @@
     S.cards.textContent = '';
     C.kernelCards(m || {}).forEach(function (node) { S.cards.appendChild(node); });
     S.panels.textContent = '';
+    /* 降级态没有 history：销毁图表实例，别让隐藏 canvas 计入活动实例数。 */
+    disposeCharts();
     var p = C.panel('插件详情不可用', null, 'mon-temp');
     add(p.body, el('span', 'muted', '磁盘明细、网络收发、温度与进程 Top10 由 monitor 插件提供；安装后在软件商店启用再刷新本页。'));
     S.panels.appendChild(p);
@@ -385,6 +599,7 @@
   function failBoth(gen, message) {
     if (stale(gen)) return;
     S.cards.textContent = ''; S.panels.textContent = '';
+    disposeCharts();
     var wrap = el('div', 'panel'), msg = add(wrap, el('p', 'panel-empty', message));
     msg.style.lineHeight = '1.7';
     add(S.panels, wrap);
@@ -438,11 +653,21 @@
     });
   }
 
+  /* 视图卸载：先停图表（cancelAnimationFrame + 清引用 + 解绑 resize），再放弃容器。 */
+  function teardown() {
+    S.gen++;
+    disposeCharts();
+    S.box = null; S.procs = null; S.procErr = '';
+    S.refresh = null; S.tsEl = null; S.notice = null; S.cards = null; S.panels = null;
+    S.warn = null; S.procBody = null; S.sortCpu = null; S.sortMem = null; S.src = null;
+    S.C = null; S.cardsReady = null; S.mode = '';
+  }
+
   function render(container) {
     if (!container || typeof container.appendChild !== 'function') return null;
     ensureStyle();
-    S.gen++;
-    S.box = container; S.mode = ''; S.procs = null; S.procErr = '';
+    teardown();
+    S.box = container;
     container.classList.add('kore-monitor');
     container.textContent = '';
 
@@ -461,13 +686,21 @@
     S.warn = add(container, el('div', 'monitor-mode'));
 
     loadAll();
-    return { destroy: function () { S.gen++; S.box = null; S.procs = null; } };
+    return { destroy: teardown };
   }
 
   window.KoreMonitor = {
     render: render,
-    destroy: function () { S.gen++; S.box = null; S.procs = null; },
+    destroy: teardown,
     endpoints: { invoke: API, metrics: METRICS, cards: CARDS_URL },
     fallbackNote: FALLBACK_NOTE
+  };
+
+  /* 验收断言入口（G-32 / FRONTEND §13）：切走视图后 count() 必须为 0；
+     连续刷新不增长（实例只在首次渲染时创建，刷新复用同一批 canvas）。
+     dispose() 供冒烟脚本主动清场，正常路径由 teardown() 调用。 */
+  window.__koreMonitorChart = {
+    count: function () { return charts.length; },
+    dispose: function () { disposeCharts(); }
   };
 })();
