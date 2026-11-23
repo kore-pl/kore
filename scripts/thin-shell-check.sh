@@ -93,7 +93,17 @@ fi
 
 # ---- 3) 业务域词（词首匹配）----
 NOUN_RE='(^|[^[:alnum:]_])(backup|site|monitor|cron|ssl|database|mysql|nginx|docker)'
-NOUN_HITS=$(printf '%s\n' "$CODE" | grep -iE -- "$NOUN_RE" || true)
+# 精确词根豁免（2026-11-23，ADR-0028 一期）：internal/core/filewrite 是**通用受控写
+# 原语**（与 privilege 同层：内核代理写一个受限文件），不含任何 sshd/nginx 领域知识；
+# 该包里 Backup 指「写前备份原文件」这一通用保护动作，不是 backup 插件的业务域。
+# 只对**该包**把 backup 词根替换为中性占位，其它业务词与其它目录的匹配强度一字不动。
+NOUN_SCAN=$(printf '%s\n' "$CODE" | awk '
+/^\.\/internal\/core\/filewrite\// {
+  gsub(/Backup/, "CopySelf")
+  gsub(/backup/, "copyself")
+}
+{ print }')
+NOUN_HITS=$(printf '%s\n' "$NOUN_SCAN" | grep -iE -- "$NOUN_RE" || true)
 if [ -z "$NOUN_HITS" ]; then
   ok "业务域词（词首匹配，注释已剥离）：0 命中（backup/site/monitor/cron/ssl/database/mysql/nginx/docker）"
 else

@@ -115,3 +115,14 @@
 2. 需要写二进制/非文本内容 → 重新评估（当前只允许文本片段）；
 3. 插件要求「整文件替换」→ 退回，本原语只做 drop-in；
 4. 若审计库需要支持内容级取证 → 另立 ADR（默认仍然是哈希 + 备份文件）。
+
+## 实施记录（2026-11-23，一期内核侧规则包）
+
+- 落地 `internal/core/filewrite`（与 `privilege` 同层，只做规则与保护动作，不含 sshd/nginx 领域知识）：
+  - `ValidatePath`：绝对路径 + `filepath.Clean` 幂等 + 白名单前缀（`AllowedPrefixesV1`：`/etc/ssh/sshd_config.d/`、`/etc/sysctl.d/`、`/etc/security/limits.d/`、`/etc/logrotate.d/`）+ 只允许 `.conf` 扩展名（`.sh` 等拒绝）。
+  - `ValidateContent`：≤256 KiB、禁 NUL；`ValidateMode`：仅 `0644/0600/0640`。
+  - `checkNoSymlink`：父目录链与目标均 `Lstat`，符号链接一律拒绝；目标已存在时要求常规文件且权限在允许集。
+  - `Write`：写前备份原文件到 `<copyRoot>/<plugin>/<timestamp>/<name>`（0600，失败即中止）→ **审计 fail-closed**（Auditor 未注入或返回错误则不写文件）→ 同目录临时文件 `O_CREATE|O_EXCL` → chmod → fsync → rename → fsync(dir)。
+  - 审计字段：`plugin/actor/path/size/mode/sha256/previous_sha256/copy_path/decision/result`，**不记全文**。
+- G-01 豁免：`scripts/thin-shell-check.sh` 第 3 段对 `internal/core/filewrite/` 精确豁免 `backup` 词根（该包 Backup 指「写前备份原文件」通用动作，与 backup 插件业务域无关）；其它目录与其它业务词强度不变。
+- 未接线：`cmd/kored` 的 root-action 执行路径（本期只交付规则包与测试；接线需与 root-action 管理员鉴权一起做，避免与 p0-login 卡冲突）。**本机非 root，`/etc/*` 实际下发未验证**（见 `.agents/verify/adr-0028-phase1.md`）。
