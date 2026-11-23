@@ -2,7 +2,7 @@
 
 > 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
 
-面向第三方插件作者：只依赖公开 SDK `github.com/pengtang1024/kore/pkg/pluginapi`（v0.1.2），不碰内核 `internal/*`，30 分钟完成「建仓→连 UDS→握手→会话循环」。协议唯一真源是 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)：帧格式 §4、握手 §5、清单 §3.1、错误码 §9；参考实现是同级 `kore-plugin-echo` 仓。冲突时以协议文档为准。
+面向第三方插件作者：只依赖公开 SDK `github.com/pengtang1024/kore/pkg/pluginapi`（v0.1.3），不碰内核 `internal/*`，30 分钟完成「建仓→连 UDS→握手→会话循环」。协议唯一真源是 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)：帧格式 §4、握手 §5、清单 §3.1、错误码 §9；参考实现是同级 `kore-plugin-echo` 仓。冲突时以协议文档为准。
 
 ## 1. 30 分钟 quickstart
 
@@ -15,7 +15,7 @@ mkdir kore-plugin-hello && cd kore-plugin-hello && git init
 cat > go.mod <<'EOF'
 module github.com/pengtang1024/kore-plugin-hello
 go 1.26
-require github.com/pengtang1024/kore/pkg/pluginapi v0.1.2
+require github.com/pengtang1024/kore/pkg/pluginapi v0.1.3
 EOF
 go mod download
 ```
@@ -139,7 +139,13 @@ for {
 | `scenario_tags` | string[] | `[]` | 枚举仅 `web`/`data`/`ops`/`sec`/`app`，写成 preset 名即 `E_INVALID` |
 | `size_bytes` | int | `0` | `make dist` 打包时回填；仓库内可为 0，须 ≥0 |
 
-**`requires_root` / `root_actions`（ADR-0018）**：需要宿主 root 的插件在 `info.json` 声明这两个字段（`root_actions` 非空时 `requires_root` 必须为 `true`）。SDK **v0.1.2 起**提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`：在插件测试里读 `info.json` 的 `root_actions`、逐条调用 `ValidateRootAction`，失败即测试失败——这样清单与代码的漂移会在 CI 暴露，而不是等用户安装。schema 与**受控命令形状**口径见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) §3.1.3（白名单单位是「命令 + 子命令 + 参数形状」，见 [ADR-0022](./DECISIONS/0022-root-command-shapes.md)）。
+**`requires_root` / `root_actions`（ADR-0018）与统一自检（v0.1.3）**：需要宿主 root 的插件在 `info.json` 声明这两个字段（`root_actions` 非空时 `requires_root` 必须为 `true`）。SDK **v0.1.3 起**提供统一自检入口，插件测试里一行即可：
+
+```go
+func TestInfoJSON(t *testing.T) { pluginapitest.CheckInfoJSON(t, "info.json") }
+```
+
+它一次性校验：`capabilities`（1–16 项、语法、域）、`method_capabilities`（≤64、键域必须是自身 id、值域 6 项特权能力、只收窄不放大）、`root_actions`（≤16 条、id 唯一、每条过 `pluginapi.ValidateRootAction`，含 ADR-0022 受控命令形状）。只补形状时可单独调用 `pluginapi.ValidateRootArgv` / `ValidateRootAppendedArgv`。schema 与**受控命令形状**口径见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) §3.1.3（白名单单位是「命令 + 子命令 + 参数形状」，见 [ADR-0022](./DECISIONS/0022-root-command-shapes.md)）。
 
 ## 4. 包格式与 dist
 

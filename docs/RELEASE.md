@@ -92,7 +92,7 @@ cd /tmp && rm -rf sdk-consume
 
 ### 4.4 插件侧消费口径
 
-SDK `v0.1.2` 起提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（可参考 `pkg/pluginapi/rootaction_test.go`）；不要手写 schema，也不要用跨仓 `replace`。
+SDK `v0.1.3` 起提供统一自检入口 `pluginapitest.CheckInfoJSON(t, "info.json")`：一次校验 `capabilities` / `method_capabilities`（键域、值域、≤64、只收窄不放大）/ `root_actions`（≤16、id 唯一、每条 `ValidateRootAction`，含 ADR-0022 命令形状）。插件应在测试里调用它，不要手写 schema，也不要用跨仓 `replace`；只补形状时可用 `pluginapi.ValidateRootArgv` / `ValidateRootAppendedArgv`。
 
 ## 5. tag 类型口径（历史轻量 tag 保留 / 新 tag 一律 annotated）
 
