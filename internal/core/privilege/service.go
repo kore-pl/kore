@@ -90,8 +90,8 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 	}
 	if !s.opts.Root() {
 		return Result{}, s.deny(ctx, req, argvText, "not_root", errCode(pluginapi.E_NEED_ROOT,
-			"需要 root 权限：请用 sudo/systemd 启动 kored",
-			"用 `sudo kored` 或 systemd unit（User=root）启动；插件进程自身永不提权"))
+			"需要 root 权限：内核需以系统服务形态运行",
+			"按 ADR-0042 以系统服务形态运行内核（systemd unit 内 User=root，`systemctl enable --now kore`）后重试；插件进程自身永不提权"))
 	}
 	if ok, detail := s.opts.Systemd(); !ok {
 		return Result{}, s.deny(ctx, req, argvText, "no_systemd", errCode(pluginapi.E_NO_SYSTEMD,

@@ -87,12 +87,12 @@
     if (h) return h + ' 小时 ' + m + ' 分';
     return m ? m + ' 分' : sec + ' 秒';
   }
-  // hintFor：服务端 message 已含可操作提示（如 sudo）时不再重复；否则按错误码补一句"怎么办"。
+  // hintFor：服务端 message 已含可操作提示时不再重复；否则按错误码补一句"怎么办"。
   function hintFor(err) {
     var msg = (err && err.message) || '';
-    if (/sudo|root|刷新后重试/.test(msg)) return '';
+    if (/root|刷新后重试/.test(msg)) return '';
     var code = (err && err.code) || '';
-    if (code === 'E_NEED_ROOT') return '（需要 root：用 sudo 重启 kored 后重试）';
+    if (code === 'E_NEED_ROOT') return '（需要内核以系统服务（root）运行：把 kore 配成 systemd 服务后重启，再重试）';
     if (code === 'E_UNAUTHORIZED') return '（该进程在保护名单内，不允许此操作）';
     if (code === 'E_NOTFOUND') return '（进程可能已退出：点「刷新」重新拉取）';
     if (code === 'E_CONFLICT') return '（进程名不符，可能 PID 已复用：点「刷新」后重试）';
@@ -367,7 +367,7 @@
     on(ok, function () { doRenice(d); });
     var cancel = add(row, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
     on(cancel, function () { S.renice = false; S.reniceError = ''; S.reniceResult = null; paintDrawer(); });
-    add(box, el('p', 'proc-confirm-text', '把数字调小（提权）需要 root：没有 root 时会提示用 sudo 启动 kored；' +
+    add(box, el('p', 'proc-confirm-text', '把数字调小（提权）需要 root：内核需以系统服务（root）运行；' +
       '调大（降优先级）随时可用。'));
     if (S.reniceBusy) add(box, el('p', 'muted proc-confirm-text', '正在调整…'));
     if (S.reniceError) {

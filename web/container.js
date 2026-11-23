@@ -53,8 +53,8 @@
     '.ctr-exec-opts .ctr-field{min-width:0}.ctr-exec-actions{flex-direction:column}' +
     '.ctr-exec-actions .btn{min-height:44px;width:100%}.ctr-exec-out-label .btn{min-height:44px}}';
   function fresh() {
-    return { items: [], all: false, loadError: '', shown: PAGE, destroyed: false, stats: {}, statsBusy: false,
-      drawer: null, drawerEl: null, drawerId: '', drawerData: null, drawerError: '', since: '', sinceInput: null, confirm: null, notice: '',
+    return { items: [], all: false, loadError: '', loadFail: null, shown: PAGE, destroyed: false, stats: {}, statsBusy: false,
+      drawer: null, drawerEl: null, drawerId: '', drawerData: null, drawerError: '', drawerFail: null, since: '', sinceInput: null, confirm: null, notice: '',
       execFor: '', exec: { cmd: '', workdir: '', user: '', confirm: false, busy: false, result: null, error: '' } };
   }
   var S = fresh();
@@ -78,7 +78,11 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error((data.code ? data.code + '：' : '') + (data.message || ('请求失败（HTTP ' + res.status + '）')));
-        err.code = data.code || ''; throw err;
+        err.code = data.code || '';
+        err.detail = data.detail || '';
+        err.hint = data.hint || '';
+        err.reason = reasonOfDetail(data.detail);
+        throw err;
       });
     }, function (err) { if (timer !== null) clearTimeout(timer); if (err && err.name === 'AbortError') throw new Error('请求超时（' + (TIMEOUT_MS / 1000) + ' 秒）'); throw err; });
   }
@@ -91,6 +95,20 @@
     var u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'], i = 0, v = n;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i ? v.toFixed(1) : v) + ' ' + u[i];
+  }
+  // detail 是 HTTP 错误体里的原始 JSON 字符串（如 {"reason":"need_root"}）；
+  // 按 reason 判别而不是猜 message，才分得清「内核不是 root 服务」和「缺 docker」。
+  function reasonOfDetail(detail) {
+    if (!detail) return '';
+    if (typeof detail === 'object') return detail.reason ? String(detail.reason) : '';
+    try { var d = JSON.parse(String(detail)); return d && d.reason ? String(d.reason) : ''; } catch (e) { return ''; }
+  }
+  // 文案映射唯一来源是主壳 KoreUI.failureOf（显式 map）；未收录的 code 回退到既有 hintFor。
+  function errorView(err) {
+    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : { mapped: false };
+    var msg = String((err && err.message) || err || '');
+    if (f.mapped) return f;
+    return { mapped: false, title: '', action: hintFor(msg), detail: msg.replace(/^E_[A-Z_]+[:：]\s*/, '') };
   }
   function hintFor(text) {
     var msg = String(text || '');
@@ -128,9 +146,12 @@
     var host = S.listHost; host.textContent = '';
     if (S.countMeta) S.countMeta.textContent = ''; // 失败/空态先清掉上一次的计数，避免残留误导
     if (S.loadError) {
+      var view = errorView(S.loadFail || { message: S.loadError });
       var fail = add(host, el('div', 'empty-state'));
-      add(fail, el('p', 'empty-state-title', '容器列表读取失败')); add(fail, el('p', 'empty-state-text', S.loadError));
-      add(fail, el('p', 'empty-state-text', '怎么办：' + hintFor(S.loadError))); add(fail, smallBtn('重新读取', load)); return;
+      add(fail, el('p', 'empty-state-title', view.title || '容器列表读取失败'));
+      add(fail, el('p', 'empty-state-text', view.detail || S.loadError));
+      add(fail, el('p', 'empty-state-text', '怎么办：' + (view.action || hintFor(S.loadError))));
+      add(fail, smallBtn('重新读取', load)); return;
     }
     if (!S.items.length) {
       var empty = add(host, el('div', 'empty-state'));
@@ -209,9 +230,9 @@
     if (!S.mask || !S.drawerEl) return;
     S.mask.hidden = !open; S.drawerEl.hidden = !open; if (open && S.closeBtn) S.closeBtn.focus();
   }
-  function closeDrawer() { S.drawer = null; S.drawerId = ''; S.drawerData = null; S.drawerError = ''; setDrawer(false); }
+  function closeDrawer() { S.drawer = null; S.drawerId = ''; S.drawerData = null; S.drawerError = ''; S.drawerFail = null; setDrawer(false); }
   function openDrawer(mode, c, loader) {
-    S.drawer = mode; S.drawerId = c.id; S.drawerData = null; S.drawerError = ''; S.since = '';
+    S.drawer = mode; S.drawerId = c.id; S.drawerData = null; S.drawerError = ''; S.drawerFail = null; S.since = '';
     S.drawerTitle.textContent = (mode === 'logs' ? '日志 · ' : '详情 · ') + (c.name || c.id);
     setDrawer(true); paintDrawer(); loader();
   }
@@ -219,21 +240,22 @@
   function openDetail(c) {
     openDrawer('detail', c, function () {
       invoke('container.inspect', { id: c.id }).then(function (d) { if (!S.destroyed && S.drawerId === c.id && S.drawer === 'detail') { S.drawerData = d; paintDrawer(); } },
-        function (err) { if (!S.destroyed && S.drawerId === c.id) { S.drawerError = err.message; paintDrawer(); } });
+        function (err) { if (!S.destroyed && S.drawerId === c.id) { S.drawerError = err.message; S.drawerFail = err; paintDrawer(); } });
     });
   }
   function fetchLogs() {
     var id = S.drawerId, params = { id: id, tail: 200 };
     if (S.since) params.since = S.since;
     invoke('container.logs', params).then(function (d) { if (!S.destroyed && S.drawerId === id && S.drawer === 'logs') { S.drawerData = d; paintDrawer(); } },
-      function (err) { if (!S.destroyed && S.drawerId === id) { S.drawerError = err.message; paintDrawer(); } });
+      function (err) { if (!S.destroyed && S.drawerId === id) { S.drawerError = err.message; S.drawerFail = err; paintDrawer(); } });
   }
   function paintDrawer() {
     if (!S.drawerBody) return;
     var host = S.drawerBody; host.textContent = '';
     if (S.drawerError) {
-      host.appendChild(noticeBox('读取失败：' + S.drawerError));
-      host.appendChild(el('p', 'empty-state-text', '怎么办：' + hintFor(S.drawerError))); return;
+      var dview = errorView(S.drawerFail || { message: S.drawerError });
+      host.appendChild(noticeBox((dview.title ? dview.title + '：' : '读取失败：') + (dview.detail || S.drawerError)));
+      host.appendChild(el('p', 'empty-state-text', '怎么办：' + (dview.action || hintFor(S.drawerError)))); return;
     }
     if (!S.drawerData) { add(host, el('p', 'muted', '正在读取…')); return; }
     if (S.drawer === 'logs') {
@@ -274,6 +296,8 @@
   // root 未确认 → 引导勾确认框；E_UNSUPPORTED 在本方法语境是 docker CLI 缺失 → 走安装指引。
   function execErrorText(err) {
     var code = err && err.code ? err.code : '';
+    var mapped = errorView(err);
+    if (mapped.mapped) return mapped.title + '：' + mapped.action;
     var msg = String(err && err.message ? err.message : err || '').replace(/^E_[A-Z_]+[:：]\s*/, '');
     if (/被拒绝：/.test(msg)) return '该命令被安全策略拒绝：' + msg + '。这是策略拦截而非临时故障，请换一种方式完成，不需要重试。';
     if (code === 'E_INVALID' && /confirm|root/i.test(msg)) return '以 root 执行需要先勾选「我确认以 root 执行」：' + msg;
@@ -389,8 +413,9 @@
       delete S.stats[c.id]; paintNotice(); load();
     }, function (err) {
       if (S.destroyed) return;
-      if (S.confirm) { S.confirmMsg.textContent = err.message; S.confirmMsg.setAttribute('role', 'alert'); return; }
-      S.notice = err.message; paintNotice();
+      var av = errorView(err);
+      if (S.confirm) { S.confirmMsg.textContent = av.mapped ? av.title + '：' + av.action : err.message; S.confirmMsg.setAttribute('role', 'alert'); return; }
+      S.notice = av.mapped ? av.title + '：' + av.action : err.message; paintNotice();
     });
   }
   function paintNotice() {
@@ -398,11 +423,11 @@
     S.noticeHost.textContent = ''; if (S.notice) S.noticeHost.appendChild(noticeBox(S.notice));
   }
   function load() {
-    S.loadError = ''; S.shown = PAGE; S.stats = {}; paintList();
+    S.loadError = ''; S.loadFail = null; S.shown = PAGE; S.stats = {}; paintList();
     invoke('container.list', { all: S.all }).then(function (d) {
       if (S.destroyed) return;
       S.items = d.containers || []; paintList();
-    }, function (err) { if (S.destroyed) return; S.loadError = err.message; S.items = []; paintList(); });
+    }, function (err) { if (S.destroyed) return; S.loadError = err.message; S.loadFail = err; S.items = []; paintList(); });
   }
   function build(root) {
     var head = add(root, el('header', 'view-head')); add(head, el('h2', 'view-title', '容器')); add(head, el('p', 'view-sub', '本机 Docker 容器：列表、日志、统计与启停；核心服务容器带锁标不可操作。'));

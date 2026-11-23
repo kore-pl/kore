@@ -41,7 +41,7 @@ type errorBody struct {
 	Detail string `json:"detail"`
 	// RequiresRestart 提示前端"需重启 kored 才能恢复"，仅在确有该语义时出现。
 	RequiresRestart bool `json:"requires_restart,omitempty"`
-	// Hint 是可操作提示（如"请用 sudo/systemd 启动 kored"），源自 detail.hint。
+	// Hint 是可操作提示（如"按 ADR-0042 以系统服务形态运行内核"），源自 detail.hint。
 	Hint string `json:"hint,omitempty"`
 }
 

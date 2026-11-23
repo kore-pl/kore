@@ -111,8 +111,8 @@ func TestRootActionNeedRoot(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("响应不是合法 JSON: %v body=%s", err, body)
 	}
-	if got.Code != pluginapi.E_NEED_ROOT || !strings.Contains(got.Hint, "sudo") {
-		t.Fatalf("应为 E_NEED_ROOT + sudo hint，实际 %+v body=%s", got, body)
+	if got.Code != pluginapi.E_NEED_ROOT || !strings.Contains(got.Hint, "系统服务") || strings.Contains(got.Hint, "sudo") {
+		t.Fatalf("应为 E_NEED_ROOT + 系统服务形态 hint（且不教 sudo），实际 %+v body=%s", got, body)
 	}
 }
 

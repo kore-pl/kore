@@ -227,8 +227,8 @@ func TestExecuteNeedRoot(t *testing.T) {
 	if code := codeOf(t, err); code != pluginapi.E_NEED_ROOT {
 		t.Fatalf("应 E_NEED_ROOT，实际 %s", code)
 	}
-	if hint := hintOf(t, err); !strings.Contains(hint, "sudo") {
-		t.Fatalf("hint 应给出 sudo/systemd 路径，实际 %q", hint)
+	if hint := hintOf(t, err); !strings.Contains(hint, "系统服务") || strings.Contains(hint, "sudo") {
+		t.Fatalf("hint 应按 ADR-0042 指向系统服务形态且不教 sudo，实际 %q", hint)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("拒绝路径不得执行命令，实际调用 %d 次", len(runner.calls))

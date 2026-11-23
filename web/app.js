@@ -108,6 +108,56 @@
     return '操作未完成（HTTP ' + (res && res.status ? res.status : '?') + '）';
   }
 
+  // 错误码 → 用户可执行文案的显式映射表（ADR-0042 / ADR-0026）。
+  // 用 map 而不是散落 if-else：错误码是有限枚举，集中一处可穷举审计；新增码只加一行，
+  // 不会在多个消费者里漏改。`code|detail.reason` 复合键让同一 code 的不同原因各有文案：
+  // E_NEED_ROOT 是「内核没以系统服务（root）运行」，E_UNSUPPORTED|docker_missing 才是「缺依赖」，
+  // 两者都曾被 message 正则混成同一句「检查 Docker」，正是本表要拆开的。
+  var ERROR_VIEW = (function () {
+    var needRoot = {
+      title: '需要内核以系统服务（root）运行',
+      action: '把 Kore 内核配置成 systemd 服务并以 root 运行（unit 内 User=root），重启服务后重试；插件进程自身永不提权。'
+    };
+    var dockerMissing = {
+      title: '依赖缺失：Docker 未安装或未启动',
+      action: 'Debian/Ubuntu 用 curl -fsSL https://get.docker.com | sh 安装，RHEL 用 dnf install docker；装好后 systemctl enable --now docker，再刷新本页。'
+    };
+    return {
+      'E_NEED_ROOT': needRoot,
+      'E_NEED_ROOT|need_root': needRoot,
+      'E_UNSUPPORTED|docker_missing': dockerMissing,
+      'E_UNAVAILABLE|docker_missing': dockerMissing,
+      'E_UNAVAILABLE': { title: '依赖缺失', action: '按提示安装所需组件后重试。' }
+    };
+  })();
+
+  // failureReason 从 detail.reason 取可判别原因；detail 可能是 JSON 字符串（HTTP 错误体）或对象。
+  function failureReason(err) {
+    if (!err) return '';
+    if (err.reason) return String(err.reason);
+    var detail = err.detail;
+    if (detail && typeof detail === 'object') return detail.reason ? String(detail.reason) : '';
+    if (typeof detail === 'string' && detail) {
+      try {
+        var parsed = JSON.parse(detail);
+        return parsed && parsed.reason ? String(parsed.reason) : '';
+      } catch (e) { return ''; }
+    }
+    return '';
+  }
+
+  // failureOf 把 {code,message,detail,hint} 或 Error 归一成 {title,action,detail,mapped}。
+  // mapped=false 时调用方沿用既有通用文案，保证未收录的错误码行为不变。
+  function failureOf(err) {
+    var code = String((err && err.code) || '');
+    var reason = failureReason(err);
+    var view = (reason && ERROR_VIEW[code + '|' + reason]) || ERROR_VIEW[code] || null;
+    var detail = err && err.message ? String(err.message) : '';
+    detail = detail.replace(/^E_[A-Z_]+[:：]\s*/, '');
+    if (!detail && err && err.hint) detail = String(err.hint);
+    return { title: view ? view.title : '', action: view ? view.action : '', detail: detail, mapped: !!view };
+  }
+
   // CSRF 双提交：cookie 缺失时先 GET 一次探测（服务端仅在登录成功时下发），仍无则明确报错。
   function ensureCsrf() {
     var token = readCookie('kore_csrf');
@@ -881,7 +931,9 @@
         btn.title = '该插件不支持 ping 方法';
         return;
       }
-      entry.error = describeError(res);
+      var body = (res && res.data) || {};
+      var view = failureOf({ code: code, message: describeError(res), detail: body.detail, hint: body.hint });
+      entry.error = view.mapped ? view.title + '：' + view.action : describeError(res);
       note.className = 'row-note row-note-fail';
       note.textContent = 'ping 失败：' + entry.error;
       btn.disabled = false;
@@ -1165,7 +1217,19 @@
       return fetch(url, init).then(function (res) {
         return res.text().then(function (raw) {
           if (timer !== null) clearTimeout(timer);
-          if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + raw.slice(0, 200));
+          if (!res.ok) {
+            // 不把错误体压成字符串：code / detail.reason / hint 是插件 UI 分流渲染的依据，
+            // 丢掉它们只能按 message 猜（E_NEED_ROOT 与 docker_missing 就会混成一句）。
+            var errBody = {};
+            try { errBody = raw ? JSON.parse(raw) : {}; } catch (e) { errBody = {}; }
+            var invokeErr = new Error(errBody.message ? String(errBody.message) : ('HTTP ' + res.status + ' ' + raw.slice(0, 200)));
+            invokeErr.code = errBody.code ? String(errBody.code) : '';
+            invokeErr.detail = errBody.detail || '';
+            invokeErr.hint = errBody.hint || '';
+            invokeErr.reason = failureReason(invokeErr);
+            invokeErr.status = res.status;
+            throw invokeErr;
+          }
           if (!raw) return {};
           try { return JSON.parse(raw); } catch (e) { return { raw: raw }; }
         });
@@ -1185,6 +1249,9 @@
           body.result_json = JSON.stringify(body.result);
         } else {
           body.error = { code: error.code, message: error.message };
+          if (error.detail) body.error.detail = error.detail;
+          if (error.hint) body.error.hint = error.hint;
+          if (error.reason) body.error.reason = error.reason;
         }
         session.frame.contentWindow.postMessage(body, '*');
       }
@@ -1199,9 +1266,13 @@
       forward(session, method, params || {}).then(
         function (result) { reply(true, result, null); },
         function (err) {
+          // 后端错误码原样透传；只有真正的网络/桥错误才落到 E_INVOKE。
           reply(false, null, {
-            code: 'E_INVOKE',
-            message: err && err.message ? err.message : '调用失败'
+            code: (err && err.code) || 'E_INVOKE',
+            message: err && err.message ? err.message : '调用失败',
+            detail: err && err.detail ? err.detail : '',
+            hint: err && err.hint ? err.hint : '',
+            reason: err && err.reason ? err.reason : ''
           });
         }
       );
@@ -2120,6 +2191,9 @@
   }
   window.KoreUI = window.KoreUI || {};
   window.KoreUI.rootErrorHint = rootErrorHint;
+  // 错误码分流入口：视图模块统一走这里，避免各自复制一套 code → 文案判断。
+  window.KoreUI.failureOf = failureOf;
+  window.KoreUI.failureReason = failureReason;
 
   start();
 })();
