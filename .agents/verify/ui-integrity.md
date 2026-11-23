@@ -17,7 +17,7 @@
 | `make docs-check` | 0 | 5 pass / 1 warn（PLUGIN-PROTOCOL 437 行、RELEASE 40 行越界，均为既有） |
 | `make check` | 0 | 11 段全绿：case 28 pass、secret 0 FAIL、首屏达标 |
 
-## 2 真机验证（8787，PID 2547031，20 个已装插件，integrity 0.2.0）
+## 2 真机验证（8787，验证时 PID 2547031；现 PID 2573992 为同期同 binary 的重启，20 个已装插件，integrity 0.2.0）
 
 | # | 动作 | 实测结果 |
 | --- | --- | --- |
@@ -56,6 +56,6 @@
 
 ## 5 运行态与风险声明（G-29 / 并发）
 
-- 本轮改过运行态：`make build` 重建 `bin/kored` 并以**同 config、同 env、同用户**重启（PID 2461308 → 2547031，`healthz 200`）；未改 `.kore-local.yaml`、未动 `index_dir`、未改插件白名单。
+- 本轮改过运行态：`make build` 重建 `bin/kored` 并以**同 config、同 env、同用户**重启（PID 2461308 → 2547031，`healthz 200`；此后其它 agent 用同一 binary 重启为 2573992，`assets/integrity.js` 与提交版 md5 一致 `84eabd1…`）；未改 `.kore-local.yaml`、未动 `index_dir`、未改插件白名单。
 - 插件侧留下演示态：`…/plugins/integrity/baseline.json`（3 文件基线）与 `probe/` 测试树；清零只需删除这两个路径（均为 gitignore 的运行态）。
 - 与 `r6-runtime-ui` 并发共享 4 个文件：其 runtimes 接线已由其 commit `40362f3` 落库，我这笔只带自己的 delta（含双方共用的计数最终态 28 文件 / 16 模块 / 18 项导航）。
