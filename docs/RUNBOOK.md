@@ -239,24 +239,45 @@ sudo systemctl daemon-reload && sudo systemctl enable --now kore
 
 安装目录换位置时用 `KORE_HOME` 显式指定（服务脚本里写 `Environment=KORE_HOME=/opt/kore` 最稳）；若二进制被装进 `/usr/local/bin` 等系统目录，内核会**自动退回 `fhs` profile 并打 WARN**——那是发行版打包形态，不是默认形态。
 
-### 6.2 卸载（两条路径）
+### 6.2 卸载（卸载链，ADR-0023 阶段 B）
 
 ```bash
-# portable：先停服务（若装了 unit）、清豁免项，再删目录
-sudo systemctl disable --now kore 2>/dev/null || true
-sudo rm -f /etc/systemd/system/kore.service && sudo systemctl daemon-reload   # 豁免 #1
-sudo getent passwd | awk -F: '$1 ~ /^kore-/ {print $1}' | xargs -r -n1 sudo userdel   # 豁免 #2（root 内核降权时才有）
-rm -rf /opt/kore                                                                       # 主体：状态/配置/socket/日志一起没
-# 断言（应全部无输出）
-! test -e /etc/kore && ! test -e /var/lib/kore && ! test -e /var/log/kore && ! test -e /run/kore
-! pgrep -x kored && ! ss -lx | grep -q kore
+# 先看计划（安全阀：零变更；非 root 也能跑）
+kored uninstall --dry-run
 
-# fhs（发行版打包 / 显式 KORE_PROFILE=fhs）：路径在系统目录，按包管理器或手工清
-sudo systemctl disable --now kore && sudo rm -f /etc/systemd/system/kore.service
-sudo rm -rf /etc/kore /var/lib/kore /var/log/kore /run/kore
+# 执行：stop → disable → rm unit → daemon-reload → 按 kore- 前缀 userdel
+#      → 打印 <state>/changes.jsonl 清单（默认不回滚）→ 提示手工步骤
+sudo kored uninstall --yes
+
+# 连状态目录一起删，并执行账本里 reversible=true 的结构化 purge_op
+sudo kored uninstall --yes --purge
 ```
 
-**用户主动施加的宿主变更默认不回滚**（ADR-0023 §3.4）：`<install>/data/changes.jsonl` 里逐条记录了 nginx vhost / ufw·nft 规则 / crontab 行等，`kore uninstall --purge` 才会按 `purge` 字段执行；不带 `--purge` 只打印清单。
+| 参数 | 作用 |
+| --- | --- |
+| `--dry-run` | 只打印计划：命中的 unit / 账户 / 账本条目 / 将删的状态目录 |
+| `--yes` | 非交互确认；**无 TTY 且无它 → 零变更、退出码 2** |
+| `--purge` | 删状态目录 + 执行账本里可回滚的 `purge_op`（结构化操作，不执行 shell 字符串） |
+| `--keep-service` / `--keep-users` | 保留 unit / 保留 `kore-*` 用户（只清另一项） |
+| `--unit-dir` / `--unit-name` / `--user-prefix` | 覆盖探测位置（默认 `/etc/systemd/system` / `kore.service` / `kore-`） |
+
+**行为约定**：
+- `userdel` 按 `/etc/passwd` 前缀扫描，**不依赖 state**（用户可能先删了 state）；删除前用与建用户相同的正则再校验，`-r` 只删 home（插件 home 是 `/nonexistent`）；"does not exist" 视为成功；
+- 非 root 且要清理 unit/用户 → **退出码 6** 并提示 `sudo`；
+- 幂等：unit / 用户 / 账本 / state 缺失都按"已清理"处理；
+- `--purge` 只执行白名单 `purge_op`（`file.remove` / `file.restore`），**绝不 `sh -c`**；
+- `make uninstall` 等价 `kored uninstall`（`make uninstall ARGS="--dry-run"` 先看计划）。
+
+手工兜底（卸载命令不可用时）：
+
+```bash
+sudo systemctl disable --now kore 2>/dev/null || true
+sudo rm -f /etc/systemd/system/kore.service && sudo systemctl daemon-reload
+sudo getent passwd | awk -F: '$1 ~ /^kore-/ {print $1}' | xargs -r -n1 sudo userdel
+rm -rf /opt/kore
+# 断言（应全部无输出）
+! test -e /etc/kore && ! test -e /var/lib/kore && ! pgrep -x kored && ! ss -lx | grep -q kore
+```
 
 ### 6.3 从旧（fhs）布局迁移
 

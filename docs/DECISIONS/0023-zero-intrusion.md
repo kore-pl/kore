@@ -230,3 +230,36 @@ lead 裁决后先落地"默认值 + 判据"，阶段 B（uninstall / changes.jso
 **首跑结果（2026-11-23，本机）**：隔离根 `/tmp/kore-zero-intrusion.XXXX`，11 PASS / 0 INFO / 0 FAIL——`<install>/data|run|logs` 齐备、socket 在 `<install>/run/kore.sock`、`/-/healthz` 200、`/etc/kore` `/var/lib/kore` `/var/log/kore` `/run/kore` 零新增、无新用户/组/unit。
 
 **已知遗留（阶段 B/C）**：`kore uninstall` 尚未提供（豁免 #1/#2 的清理目前靠 RUNBOOK 命令）；`changes.jsonl` 未落地（插件宿主变更无清单）；`site` / `ssl` / `app-deploy` 的默认目录仍偏系统路径；`cmd/kored` 里 `index_dir` 空值兜底仍写 `/var/lib/kore/index`（不在本阶段写域，随 B 收口）。
+
+## 10. 卸载链实现记录（阶段 B，2026-11-23）
+
+**已落地**：`kored uninstall`（`cmd/kored/uninstall.go`）+ 平台能力（`internal/platform/{cleanup.go,linux_cleanup.go,stub_cleanup.go}`）+ 结构化账本（`cmd/kored/changes.go`）+ `make install/uninstall` + RUNBOOK §6.2。
+
+执行序（不可变，`runUninstallWith` 内按序调用）：
+
+```
+1. systemctl stop kore.service（Active 才停）
+2. systemctl disable kore.service
+3. rm /etc/systemd/system/kore.service
+4. systemctl daemon-reload        ← 不能省，否则 systemctl 仍认旧 unit
+5. 按 /etc/passwd 前缀 userdel -r 所有 kore-*
+6. 打印 <state>/changes.jsonl 清单（默认不执行回滚）
+7. --purge：执行白名单 purge_op + 删状态目录
+8. 打印仍需手工处理项（安装目录、未回滚的宿主变更）
+```
+
+**关键约束与实现**：
+
+| 约束 | 实现 |
+| --- | --- |
+| 用户扫描不依赖 state | `linux_cleanup.go` 直接读 `/etc/passwd` 前缀匹配，`passwdPath` 可注入仅用于测试 |
+| 删除前再校验名字 | 复用 `validateAccountName`（与 useradd 同一正则），不合法即 `Failed` 不拼 argv |
+| `-r` 安全 | 插件 home 建为 `/nonexistent`；`-r` 只删 home，不会碰真实数据目录 |
+| 幂等 | unit 缺失 → 跳过；"does not exist" → 视为成功；账本/state 缺失 → 空清单 |
+| 安全阀 | 非 root 且动 unit/用户 → 退出 6；非 TTY 且无 `--yes` → 零变更退出 2 |
+| G-16 | `systemctl`/`userdel` 只在 `internal/platform` 调，固定候选路径不查 PATH |
+| 账本不用 shell 字符串 | `purge_op{kind,args}`，kind 白名单 `file.remove` / `file.restore`，未知 kind 拒绝；路径必须绝对且非 `/` |
+
+**测试**：`cmd/kored/uninstall_test.go`（注入假 `platform.Cleanup` + 假 `execPurge` + 临时 state）、`cmd/kored/changes_test.go`（账本 0600、结构化 op、坏行、拒绝 shell 字符串）、`internal/platform/linux_cleanup_test.go`（临时 `/etc/passwd` + 假 `userdel`/`systemctl` 可执行文件）。**测试从不触碰真实系统用户**。
+
+**未实现（下一阶段）**：`kore uninstall`（安装脚本形态）尚未提供——当前由 `make install` 写 unit；账本写入点仍在阶段 C（`privilege` 的 root.action 收口后自动记账）；`file.restore` 需要备份文件先由插件写入。

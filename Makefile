@@ -21,6 +21,12 @@ APP       ?= kored
 VERSION   ?= 0.1.0
 CMD       ?= ./cmd/kored
 BIN       ?= ./bin/kored
+# 零侵入安装（ADR-0023）：默认 PREFIX=/opt/kore → 二进制 <install>/bin/kored，
+# 状态/日志/socket 全在 <install> 内。覆盖成 /usr/local 会落进系统目录（fhs 形态）。
+PREFIX    ?= /opt/kore
+BINDIR    ?= $(PREFIX)/bin
+UNITDIR   ?= /etc/systemd/system
+UNITNAME  ?= kore.service
 GO        ?= go
 GOFLAGS   ?=
 GOAMD64   ?= v1
@@ -380,6 +386,24 @@ check: ## 聚合门禁（13 段）：docs-check + 明文凭据 + 依赖白名单
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"
+
+install: build ## 安装二进制 + systemd unit（写安装目录外：ADR-0023 豁免 #1/#4）
+	@echo "[WARN] make install 会写入安装目录外（ADR-0023 §3.5 豁免）："
+	@echo "       #1 systemd unit  $(UNITDIR)/$(UNITNAME) + enable 软链"
+	@echo "       #4 二进制        $(BINDIR)/kored"
+	@install -d -m 0755 "$(BINDIR)"
+	@install -m 0755 "$(BIN)" "$(BINDIR)/kored"
+	@echo "[OK] 已安装二进制: $(BINDIR)/kored"
+	@bash scripts/install-service.sh "$(BINDIR)/kored" "$(PREFIX)" "$(UNITDIR)" "$(UNITNAME)"
+
+uninstall: ## 卸载链（ADR-0023 阶段 B）：unit / kore-* 用户 / 账本清单（ARGS="--dry-run" 先看计划）
+	@echo "[INFO] 调 kored uninstall（PREFIX=$(PREFIX)；ARGS=$(ARGS)）"
+	@if [ -x "$(BINDIR)/kored" ]; then \
+	  KORE_HOME="$(PREFIX)" "$(BINDIR)/kored" uninstall $(ARGS); \
+	else \
+	  echo "[INFO] 未找到 $(BINDIR)/kored，改用 go run（KORE_HOME=$(PREFIX)）"; \
+	  KORE_HOME="$(PREFIX)" $(GO) run $(CMD) uninstall $(ARGS); \
+	fi
 
 clean: ## 清理构建产物（bin/ 与 web/dist）
 	@rm -rf bin web/dist
