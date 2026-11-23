@@ -142,6 +142,32 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 状态：`confirmed`（三端推送回读一致、make check 13 段、主实例重启复核 healthz/商店全绿、三端一致性 0/78）
 关联：Gitea #2（零侵入 B）closed；Gitea #3（前端接线）closed。
 
+### CS-20261124-01 · ADR-0047 方法名接受下划线（内核 + SDK + integrity 声明面）
+
+[ADR-0047](../docs/DECISIONS/0047-method-name-charset.md) 由 `proposed` 转 `accepted`：`methodActionPattern`
+只加 `_`（段首仍限小写、连字符仍拒），内核与 SDK 两份逐字副本同批改；`integrity.verify_file`
+因此可单列 `system:read`。
+
+| 仓库 | commit | 内容 |
+|---|---|---|
+| `kore` | `512f1a2` | 内核 `internal/core/registry/validate.go` + SDK `pkg/pluginapi/pluginapitest/infocheck.go` 正则放宽；`TestParseMethodCapabilitiesUnderscore`（正反例 + `a_b.c` 不切分反向断言）；SDK 原「含下划线」拒绝用例拆分；`docs/PLUGIN-PROTOCOL.md` §3.1.2.1 与 ADR-0047（accepted + §7 实施记录） |
+| `kore-plugin-integrity` | `bee9324` | `info.json` 增 `integrity.verify_file: system:read` + 升 `0.5.0`；`manifest.json` 同步；`CHANGELOG`；两处熔断器按 ADR 解除并反向（`tests/fault/declaration_test.go`、`capabilities_test.go`，含两处正则副本同步） |
+| BOARD / LOG | 本行 | `.agents/BOARD.md` §5、`.agents/LOG/DECISIONS.md`（同一提交） |
+
+**协议影响**：`method_capabilities` 的 `<action>` 字符集放宽（加法，旧值仍全部合法，G-14 无破坏性变更）；
+`capabilities` / `idPattern` / 连字符口径**未动**。
+
+**合并顺序**：`kore`（内核 + SDK 同批）先行 → `kore-plugin-integrity` 出新版并声明 `verify_file`。
+反向顺序会让插件自检/装载分叉（一边接受、一边 fail-closed）。
+
+**验收方式**：`registry.Parse` 真解析 `integrity/info.json` → `PARSE OK version=0.5.0 method_caps=8 verify_file="system:read"`；
+内核真实解析器正反例（`verify_file`/`verifyFile`/`a_b.c` ACCEPT；`verify-file`/`_leading`/`1status` E_INVALID）；
+`go vet`（kore 根 + `pkg/pluginapi`）exit 0、`go test ./internal/core/registry/ ./internal/core/httpapi/` 与
+`kore-plugin-integrity` `go test ./...` 全绿、`make docs-check` exit 0、`make check` 17/17 段 exit 0；
+`integrity` dist 两打同 sha `474f414c…baa3`（含干净树 `git archive` 复现）、`size_bytes` 1468267 → 1468278（实测包体 1468279，±2 收敛）。
+
+**状态**：`confirmed`（本卡范围内；索引仓未收录 0.5.0 —— 发版入索引/重签不在本卡范围，登记为待办）。
+
 
 ## 6. 里程碑裁决记录
 
