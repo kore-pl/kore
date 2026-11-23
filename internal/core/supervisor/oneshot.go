@@ -87,6 +87,13 @@ func (c *oneshotConn) Close() error {
 	return c.Conn.Close()
 }
 
+// FinishCall 实现 bus.CallFinisher：本次调用一旦结束就回收进程并归还串行令牌。
+//
+// 这条钩子是超时路径的唯一回收出口：bus 超时后为 resident/lazy 保留连接（迟到帧
+// 重同步），oneshot 既读不到响应帧、也没人 Close，`finish` 只能由调用边界驱动。
+// 幂等由 once 保证（响应帧先到、随后 Close、再随后本钩子，只有第一次生效）。
+func (c *oneshotConn) FinishCall() { c.once.Do(c.finish) }
+
 // observe 按 [4 字节大端长度][载荷] 重组帧；解析出 response 即触发一次性回收。
 // 非响应帧（event/ping）忽略并继续累积，直到一帧完整或数据非法（停止观察）。
 func (c *oneshotConn) observe(chunk []byte) {

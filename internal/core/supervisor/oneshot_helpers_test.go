@@ -19,11 +19,20 @@ import (
 type oneshotEnv struct {
 	catalog *registry.Catalog
 	manager *supervisor.Manager
+	root    string
 	runDir  string
 }
 
 // newOneshotEnv 在 t.TempDir() 下装配 N 个插件，每个可独立指定 lifecycle。
 func newOneshotEnv(t *testing.T, specs map[string]string) *oneshotEnv {
+	t.Helper()
+	return newOneshotEnvWith(t, specs, nil, nil)
+}
+
+// newOneshotEnvWith 在 newOneshotEnv 基础上注入 fake.conf 与 Options：
+// conf 以本次 t.TempDir() 根为参数（pid_file 等路径要落在测试自己的目录里），
+// mutate 用于收紧 ShutdownGrace 这类时间预算（超时回收测试必需）。
+func newOneshotEnvWith(t *testing.T, specs map[string]string, conf func(root string) map[string]string, mutate func(*supervisor.Options)) *oneshotEnv {
 	t.Helper()
 	root := t.TempDir()
 	catalog := registry.NewCatalog()
@@ -47,6 +56,10 @@ func newOneshotEnv(t *testing.T, specs map[string]string) *oneshotEnv {
 		if err := catalog.Enable(id); err != nil {
 			t.Fatalf("enable 失败: %v", err)
 		}
+		if conf != nil {
+			// 假插件的状态目录 = <root>/<id>（manifest.Dir 的父目录）。
+			writeFakeConfig(t, filepath.Join(root, id), conf(root))
+		}
 	}
 	runDir := filepath.Join(root, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
@@ -59,13 +72,17 @@ func newOneshotEnv(t *testing.T, specs map[string]string) *oneshotEnv {
 	if err != nil {
 		t.Skipf("当前平台无运行期实现: %v", err)
 	}
-	manager, err := supervisor.New(supervisor.Options{
+	options := supervisor.Options{
 		Transport: plat.Transport, Manifests: catalog, RunDir: runDir, Version: "0.1.0",
-	})
+	}
+	if mutate != nil {
+		mutate(&options)
+	}
+	manager, err := supervisor.New(options)
 	if err != nil {
 		t.Fatalf("构造 supervisor 失败: %v", err)
 	}
-	env := &oneshotEnv{catalog: catalog, manager: manager, runDir: runDir}
+	env := &oneshotEnv{catalog: catalog, manager: manager, root: root, runDir: runDir}
 	t.Cleanup(func() {
 		for id := range specs {
 			_ = manager.Stop(context.Background(), id)

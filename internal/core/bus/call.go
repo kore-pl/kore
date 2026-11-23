@@ -21,6 +21,22 @@ import (
 // E_INVALID），避免在垃圾帧上无限消耗调用预算。
 const maxStaleResponses = 32
 
+// CallFinisher 是连接可选实现的「调用边界收尾」钩子。
+//
+// 存在的理由：超时路径上 bus 故意不关闭连接（resident/lazy 还要靠它重同步迟到帧），
+// 于是「一次调用已经结束」这件事没有出口。对 oneshot 这类**一次调用后必须回收**
+// 的连接，回收既不能等响应帧（超时就没有响应），也不能等 Close（bus 不关），只能
+// 由调用边界驱动：Call 在返回前（成功、超时、协议错误一律）回调一次。
+//
+// 契约：实现即声明该连接**在本次调用后不再复用**（下一次调用由 provider 重新
+// 提供新连接）。Call 因此在该回调后回收它的串行锁记录，避免一次性连接在锁表里
+// 按调用次数无界增长。非一次性连接（resident/lazy）不要实现本接口。
+type CallFinisher interface {
+	// FinishCall 在本次调用结束时被调用一次；实现必须幂等（响应帧观察与
+	// 连接关闭可能已先触发过同一收尾）。
+	FinishCall()
+}
+
 // Call 转发一次方法调用并等待响应。
 //
 // reqID 是跨进程追踪标识：非空时原样写入请求帧，插件必须回显；为空时自动生成
@@ -38,6 +54,10 @@ func (b *Bus) Call(ctx context.Context, plugin, method string, params json.RawMe
 	conn, err := b.provider.Ensure(ctx, plugin)
 	if err != nil {
 		return nil, err
+	}
+	// 先注册、后加锁：defer 后进先出，收尾必须在连接锁释放之后执行。
+	if finisher, ok := conn.(CallFinisher); ok {
+		defer b.finishCall(conn, finisher)
 	}
 	requestID, err := randomHex(16)
 	if err != nil {
@@ -146,6 +166,16 @@ func replyOf(response *pluginapi.Response, requestID, reqID string) (*Reply, err
 		return nil, response.Error
 	}
 	return &Reply{ReqID: response.ReqID, Result: response.Result}, nil
+}
+
+// finishCall 在调用边界收尾一次性连接：先通知实现方（触发进程回收/令牌归还），
+// 再回收该连接的串行锁记录。
+//
+// 回调放在连接锁释放之后（defer 顺序保证），因此这里删锁表记录不会与本次调用的
+// 加锁/解锁竞争；按 CallFinisher 的契约，该连接此后不再被任何调用复用。
+func (b *Bus) finishCall(conn net.Conn, finisher CallFinisher) {
+	finisher.FinishCall()
+	b.dropConnLock(conn)
 }
 
 // discardConn 把连接标记为不可用：回收连接锁记录并关闭连接。

@@ -5,6 +5,8 @@
 //	hello_delay=2.1s   连接后延迟多久再发 kore.hello（用于制造握手超时）
 //	ready_marker=/path 握手成功后写一个标记文件（用于证明进程活到了就绪）
 //	pid_file=/path     启动后立即写入自身 pid（用于断言进程确已被 SIGKILL）
+//	hold_method=name   收到该方法后不写响应（模拟执行超时，只能靠内核超时回收）
+//	hold_delay=30s     hold_method 的挂起时长（缺省 30s）
 //
 // 协议面：connect → 首帧 kore.hello → 收到响应 → 进入 serve 循环；
 // 业务方法原样回显 params（带 req_id），kore.shutdown 回 ok 后退出。
@@ -70,7 +72,7 @@ func run() error {
 			return fmt.Errorf("写就绪标记: %w", err)
 		}
 	}
-	return serve(conn)
+	return serve(conn, settings)
 }
 
 // handshake 发出 kore.hello 并读完响应帧。
@@ -103,7 +105,10 @@ func handshake(conn net.Conn) error {
 }
 
 // serve 循环读帧：业务方法回显 params，kore.shutdown 回 ok 后退出。
-func serve(conn net.Conn) error {
+//
+// hold_method 命中时本进程占着请求不写响应（模拟「执行超时」）：内核只能靠调用
+// 超时回收——这条路径专门验证超时后进程仍被回收、串行令牌仍被归还。
+func serve(conn net.Conn, settings map[string]string) error {
 	for {
 		payload, err := pluginapi.ReadFrame(conn, pluginapi.MaxFrameSize)
 		if err != nil {
@@ -115,6 +120,14 @@ func serve(conn net.Conn) error {
 		}
 		request, ok := env.(*pluginapi.Request)
 		if !ok {
+			continue
+		}
+		if method := settings["hold_method"]; method != "" && request.Method == method {
+			delay, parseErr := time.ParseDuration(settings["hold_delay"])
+			if parseErr != nil || delay <= 0 {
+				delay = 30 * time.Second
+			}
+			time.Sleep(delay)
 			continue
 		}
 		response := &pluginapi.Response{Type: pluginapi.TypeResponse, ID: request.ID, ReqID: request.ReqID}
