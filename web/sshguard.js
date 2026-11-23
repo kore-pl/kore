@@ -17,7 +17,9 @@
       attempts: null, attemptsLoaded: false, attemptsError: '', win: '24h',
       bans: [], bansLoaded: false, bansError: '', bansCode: '', bansNote: '', bansSource: '', bansAvailable: false,
       ip: '', busy: false, notice: '', noticeTone: '', confirmUnban: '', banMsg: '', banTone: '',
-      tokenMsg: '', readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false };
+      tokenMsg: '', readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false,
+      // 加固建议（suggest）：只生成建议，前端没有任何「应用」写操作
+      sugPw: false, sugRoot: false, sugBusy: false, sugResult: null, sugError: '', sugHint: '', sugMsg: '', sugTone: '' };
   }
   var S = fresh();
 
@@ -182,7 +184,7 @@
   }
   function hidePanels(hidden) {
     var flag = hidden === undefined ? true : !!hidden;
-    [S.attemptsPanel, S.bansPanel, S.formPanel].forEach(function (p) { if (p) p.hidden = flag; });
+    [S.attemptsPanel, S.bansPanel, S.formPanel, S.sugPanel].forEach(function (p) { if (p) p.hidden = flag; });
   }
 
   // ---- ② 暴力破解统计 ----
@@ -397,6 +399,139 @@
     S.banMsgHost.className = 'sg-msg' + (S.banTone === 'fail' ? ' is-fail' : (S.banTone === 'ok' ? ' is-ok' : ''));
   }
 
+  // ---- ⑤ 加固建议（suggest）----
+  // 只读：调 ssh-guard.suggest 拿 config_text / diff / risk / apply_commands；
+  // 落地方式只有「复制命令」，**没有一键应用**——后端没有真机下发能力（见插件 0.3.0）。
+  function copyTo(text, msgEl) {
+    function done() { if (msgEl) { msgEl.textContent = '已复制'; msgEl.className = 'sg-msg is-ok'; } }
+    function fail() { if (msgEl) { msgEl.textContent = '复制失败：请手动选中文本复制'; msgEl.className = 'sg-msg is-fail'; } }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fail); return;
+    }
+    var ta = el('textarea'); ta.value = text; ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { fail(); }
+    document.body.removeChild(ta);
+  }
+  function copyBtn(text, label, msgEl) {
+    var b = el('button', 'btn btn-ghost', label); b.type = 'button';
+    on(b, function () { copyTo(text, msgEl); return; });
+    return b;
+  }
+  function sugParams() {
+    var p = {};
+    if (S.sugPwCb && S.sugPwCb.checked) p.disable_password_auth = true;
+    if (S.sugRootCb && S.sugRootCb.checked) p.disable_root_login = true;
+    var port = (S.sugPort.value || '').trim();
+    if (port) p.port = parseInt(port, 10);
+    var max = (S.sugMax.value || '').trim();
+    if (max) p.max_auth_tries = parseInt(max, 10);
+    return p;
+  }
+  function paintSugMsg() {
+    if (!S.sugMsgHost) return;
+    S.sugMsgHost.textContent = S.sugMsg || '';
+    S.sugMsgHost.className = 'sg-msg' + (S.sugTone === 'fail' ? ' is-fail' : (S.sugTone === 'ok' ? ' is-ok' : ''));
+  }
+  function submitSuggest() {
+    if (S.sugBusy) return;
+    var p = sugParams();
+    var port = (S.sugPort.value || '').trim();
+    if (port && (!/^[0-9]+$/.test(port) || +port < 1 || +port > 65535)) {
+      S.sugError = ''; S.sugResult = null; S.sugMsg = '端口必须是 1–65535 的整数（留空表示保持当前端口）';
+      S.sugTone = 'fail'; paintSugMsg(); paintSuggestResult(); S.sugPort.focus(); return;
+    }
+    var max = (S.sugMax.value || '').trim();
+    if (max && (!/^[0-9]+$/.test(max) || +max < 1 || +max > 100)) {
+      S.sugError = ''; S.sugResult = null; S.sugMsg = '最大认证次数必须是 1–100 的整数';
+      S.sugTone = 'fail'; paintSugMsg(); paintSuggestResult(); S.sugMax.focus(); return;
+    }
+    S.sugBusy = true; S.sugError = ''; S.sugHint = ''; S.sugMsg = '正在生成建议…'; S.sugTone = ''; paintSugMsg();
+    if (S.sugBtn) S.sugBtn.disabled = true;
+    invoke('suggest', p).then(function (r) {
+      if (S.destroyed) return;
+      S.sugBusy = false; if (S.sugBtn) S.sugBtn.disabled = false;
+      S.sugResult = r || null; S.sugMsg = ''; S.sugTone = ''; paintSugMsg(); paintSuggestResult();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.sugBusy = false; if (S.sugBtn) S.sugBtn.disabled = false;
+      S.sugError = failureText(err, '生成加固建议'); S.sugHint = err.hint || ''; S.sugResult = null;
+      S.sugMsg = ''; paintSugMsg(); paintSuggestResult();
+    });
+  }
+  function paintSuggestResult() {
+    if (!S.sugHost) return;
+    var host = S.sugHost; host.textContent = '';
+    if (S.sugError) {
+      add(host, notice('生成失败：' + S.sugError, 'fail'));
+      if (S.sugHint) add(host, guideBox('生成失败', ['这是后端返回的原因，不是登录失效。'], [], S.sugHint));
+      return;
+    }
+    if (!S.sugResult) {
+      add(host, el('p', 'field-hint', '勾选要加固的项后点「生成建议」：会给出建议配置、与当前值的差异、风险与回滚，以及可整段复制的落地命令。'));
+      return;
+    }
+    var r = S.sugResult, i;
+    add(host, el('p', 'sg-sug-note', '建议态：kore 不会自动下发，请确认后手动执行。页面不提供「一键应用」。'));
+    // 建议配置
+    var cfg = add(host, el('div', 'sg-sug-sec'));
+    add(cfg, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', '建议配置（/etc/ssh/sshd_config.d/kore.conf）'));
+    add(cfg, el('pre', 'sg-cmd sg-sug-pre', r.config_text || ''));
+    var cfgOps = add(cfg, el('div', 'sg-sug-ops'));
+    var cfgMsg = add(cfgOps, el('span', 'sg-msg', ''));
+    add(cfgOps, copyBtn(r.config_text || '', '复制配置', cfgMsg));
+    if (r.path_hint) add(cfg, el('p', 'field-hint', r.path_hint));
+    // 差异
+    var diffs = r.diff_from_current || [];
+    var diff = add(host, el('div', 'sg-sug-sec'));
+    add(diff, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', '与当前值对比'));
+    if (diffs.length) {
+      diffs.forEach(function (d) {
+        var row = add(diff, el('p', 'sg-diff'));
+        add(row, el('span', 'sg-mono', (d.directive || '') + '：'));
+        add(row, el('span', 'sg-diff-cur', String(d.current == null ? '—' : d.current)));
+        add(row, el('span', 'sg-diff-arrow', ' → '));
+        add(row, el('span', 'sg-diff-new', String(d.suggested == null ? '—' : d.suggested)));
+      });
+    } else {
+      add(diff, el('p', 'field-hint', r.path_hint || '当前没有可对比的差异（可能未改动任何项）。'));
+    }
+    // 风险（每条必须显示回滚）
+    var risks = r.risk || [];
+    if (risks.length) {
+      var box = add(host, el('div', 'sg-sug-sec'));
+      add(box, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', '风险提示（每条都带怎么回滚）'));
+      risks.forEach(function (risk) {
+        var level = risk.level || 'low';
+        var cls = level === 'high' ? ' sg-risk-high' : (level === 'medium' ? ' sg-risk-medium' : ' sg-risk-low');
+        var card = add(box, el('div', 'sg-risk' + cls));
+        var rh = add(card, el('div', 'sg-risk-head'));
+        add(rh, el('span', 'sg-risk-level', level === 'high' ? '高危' : (level === 'medium' ? '注意' : '提示')));
+        if (risk.code) add(rh, el('span', 'sg-mono', risk.code));
+        add(card, el('p', 'sg-risk-msg', risk.message || ''));
+        add(card, el('p', 'sg-risk-rollback', '回滚：' + (risk.rollback || '按 apply_commands 里的备份恢复，再 sshd -t && systemctl reload sshd')));
+      });
+    }
+    // 落地命令（只有复制）
+    var applyText = (r.apply_commands || []).join('\n');
+    var cmd = add(host, el('div', 'sg-sug-sec'));
+    add(cmd, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', '落地命令（整段复制，确认后手动执行）'));
+    add(cmd, el('pre', 'sg-cmd sg-sug-pre', applyText || '（后端没有返回命令）'));
+    var cmdOps = add(cmd, el('div', 'sg-sug-ops'));
+    var cmdMsg = add(cmdOps, el('span', 'sg-msg', ''));
+    add(cmdOps, copyBtn(applyText, '复制全部命令', cmdMsg));
+    var verifyText = (r.verify_commands || []).join('\n');
+    if (verifyText) {
+      var ver = add(host, el('div', 'sg-sug-sec'));
+      add(ver, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', '验证命令（sshd -T 看最终生效值）'));
+      add(ver, el('pre', 'sg-cmd sg-sug-pre', verifyText));
+      var verOps = add(ver, el('div', 'sg-sug-ops'));
+      var verMsg = add(verOps, el('span', 'sg-msg', ''));
+      add(verOps, copyBtn(verifyText, '复制验证命令', verMsg));
+    }
+  }
+
   // ---- 加载 ----
   function sinceISO() {
     var h = S.win === '7d' ? 24 * 7 : 24;
@@ -474,8 +609,34 @@
       '.sg-msg.is-ok{color:var(--kore-success);}',
       '.sg-empty{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-4);color:var(--kore-text-3);font-size:var(--kore-font-13);}',
       '.sg-empty span{flex:1 1 260px;}',
+      '.sg-sug-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.sg-sug-toggle{display:inline-flex;align-items:center;gap:var(--kore-space-2);min-height:44px;font-size:var(--kore-font-13);}',
+      '.sg-sug-toggle input{width:20px;height:20px;flex:0 0 auto;}',
+      '.sg-sug-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4) 0;}',
+      '.sg-sug .btn,.sg-sug-form-ops .btn{min-height:44px;}',
+      '.sg-sug-sec{margin:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.sg-sug-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);margin-bottom:var(--kore-space-1);}',
+      '.sg-sug-title{font-size:var(--kore-font-13);font-weight:600;}',
+      '.sg-sug-note{margin:var(--kore-space-3) var(--kore-space-4) 0;padding:var(--kore-space-2) var(--kore-space-3);color:var(--kore-text-1);background:var(--kore-warning-bg);border:1px solid var(--kore-warning);border-left:3px solid var(--kore-warning);border-radius:var(--kore-radius-control);}',
+      '.sg-sug-pre{max-height:320px;overflow:auto;white-space:pre;word-break:normal;}',
+      '.sg-diff{margin:var(--kore-space-1) 0;font-size:var(--kore-font-13);word-break:break-word;}',
+      '.sg-diff-cur{color:var(--kore-danger);}',
+      '.sg-diff-arrow{color:var(--kore-text-3);}',
+      '.sg-diff-new{color:var(--kore-success);}',
+      '.sg-risk{margin:var(--kore-space-2) 0;padding:var(--kore-space-2) var(--kore-space-3);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-left:3px solid var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-13);}',
+      '.sg-risk-high{border-left-color:var(--kore-danger);}',
+      '.sg-risk-medium{border-left-color:var(--kore-warning);}',
+      '.sg-risk-low{border-left-color:var(--kore-text-3);}',
+      '.sg-risk-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);margin-bottom:2px;}',
+      '.sg-risk-level{font-size:var(--kore-font-12);font-weight:600;}',
+      '.sg-risk-high .sg-risk-level{color:var(--kore-danger);}',
+      '.sg-risk-medium .sg-risk-level{color:var(--kore-warning);}',
+      '.sg-risk-low .sg-risk-level{color:var(--kore-text-3);}',
+      '.sg-risk-msg{margin:0;color:var(--kore-text-2);word-break:break-word;}',
+      '.sg-risk-rollback{margin:var(--kore-space-1) 0 0;color:var(--kore-text-1);font-size:var(--kore-font-12);word-break:break-word;}',
       '@media (max-width:639px){',
-      '.sg-grid,.sg-form{grid-template-columns:1fr;}',
+      '.sg-grid,.sg-form,.sg-sug-form{grid-template-columns:1fr;}',
+      '.sg-sug .btn,.sg-sug-form-ops .btn{min-height:44px;width:100%;}',
       '.sg .panel-head{flex-wrap:wrap;row-gap:var(--kore-space-1);}',
       '}'
     ].join('\n');
@@ -536,6 +697,34 @@
     S.banMsgHost = add(ops, el('span', 'sg-msg', ''));
     S.banHint = add(form.panel, el('p', 'field-hint', ''));
     on(S.ipInput, function (e) { if (e.key === 'Enter') submitBan(); }, 'keydown');
+
+    // ⑤ 加固建议（只读生成，不下发）
+    var sug = panel('加固建议', '只生成建议，不自动下发');
+    add(S.root, sug.panel); S.sugPanel = sug.panel;
+    var sgrid = add(sug.panel, el('div', 'sg-sug-form'));
+    function sugToggle(text) {
+      var lab = add(sgrid, el('label', 'sg-sug-toggle'));
+      var cb = add(lab, el('input', null)); cb.type = 'checkbox';
+      add(lab, el('span', null, text));
+      return cb;
+    }
+    S.sugPwCb = sugToggle('关闭密码认证（仅保留密钥等）');
+    S.sugRootCb = sugToggle('禁止 root 直接登录');
+    var portField = add(sgrid, el('label', 'field'));
+    add(portField, el('span', 'field-label', 'SSH 端口（留空 = 保持当前）'));
+    S.sugPort = add(portField, el('input', 'field-input')); S.sugPort.type = 'number';
+    S.sugPort.min = '1'; S.sugPort.max = '65535'; S.sugPort.placeholder = '例如 2222';
+    var maxField = add(sgrid, el('label', 'field'));
+    add(maxField, el('span', 'field-label', '最大认证次数'));
+    S.sugMax = add(maxField, el('input', 'field-input')); S.sugMax.type = 'number';
+    S.sugMax.min = '1'; S.sugMax.max = '100'; S.sugMax.value = '6';
+    var sugOps = add(sug.panel, el('div', 'sg-sug-ops sg-sug-form-ops'));
+    S.sugBtn = add(sugOps, el('button', 'btn btn-primary', '生成建议')); S.sugBtn.type = 'button';
+    on(S.sugBtn, submitSuggest);
+    S.sugMsgHost = add(sugOps, el('span', 'sg-msg', ''));
+    add(sug.panel, el('p', 'field-hint', '只读生成：建议配置 + 差异 + 风险（含回滚）+ 可复制命令；不会修改 /etc/ssh，也没有「一键应用」。'));
+    S.sugHost = add(sug.panel, el('div', 'sg-sug-result'));
+    paintSuggestResult();
 
     paintStatus(); paintAttempts(); paintBans(); paintBanForm(); paintBanMsg();
     refreshAll();
