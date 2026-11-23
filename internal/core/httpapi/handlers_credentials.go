@@ -50,7 +50,8 @@ func (s *Server) handleCredentialCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体不是合法 JSON", "")
 		return
 	}
-	entry, err := s.opts.Credentials.Set(r.Context(), "admin", body.Owner, body.Name, body.EnvVar, []byte(body.Secret))
+	// 管理会话已过 system:admin；凭据库的 owner 约束由 owner 自身满足（ADR-0026 §2）。
+	entry, err := s.opts.Credentials.Set(r.Context(), body.Owner, body.Owner, body.Name, body.EnvVar, []byte(body.Secret))
 	if err != nil {
 		writeCredentialError(w, err)
 		return

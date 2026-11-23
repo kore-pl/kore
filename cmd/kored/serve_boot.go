@@ -89,6 +89,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		ChannelGroup:      "kore",
 		PluginPeer:        svc.manager.PluginPeer,
 		Scheduler:         svc.sched,
+		Credentials:       svc.credential,
 		Alerts:            alertSink(svc.db),
 	}, app.Transport)
 	if err := server.Start(); err != nil {

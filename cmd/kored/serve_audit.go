@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/pengtang1024/kore/internal/core/credential"
 	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/store"
@@ -100,4 +101,24 @@ func (a *httpAuditRecorderFromStore) Record(ev httpapi.AuditEvent) {
 	}); err != nil {
 		slog.Warn("HTTP 审计写入失败", "action", ev.Action, "plugin", ev.Plugin, "err", err)
 	}
+}
+
+// credentialAuditor 把 credential.grant / credential.revoke 写进 audit bucket（ADR-0026）。
+//
+// fail-closed 落点：credential.Service 在修改索引前调用本适配器，PutAudit 返回错误时
+// 授权/撤销整体失败（E_AUDIT），不允许"审计没写进去但授权生效"。
+type credentialAuditor struct {
+	db *store.Store
+}
+
+// Record 实现 credential.Auditor；detail 只含 owner/grantee/credentialId，不含 secret。
+func (a *credentialAuditor) Record(_ context.Context, ev credential.AuditEvent) error {
+	return a.db.PutAudit(store.AuditRecord{
+		Subject: ev.Actor,
+		Action:  ev.Action,
+		Plugin:  ev.Owner,
+		Target:  ev.CredentialID,
+		Result:  store.AuditResultOK,
+		Detail:  map[string]string{"grantee": ev.Grantee, "decision": ev.Decision},
+	})
 }

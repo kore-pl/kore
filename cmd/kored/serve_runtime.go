@@ -15,6 +15,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/bus"
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/credential"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/scheduler"
@@ -39,14 +40,15 @@ const (
 
 // service 是 serve 进程持有的内核运行件；关闭顺序由 shutdownAll 控制。
 type service struct {
-	catalog   *registry.Catalog
-	manager   *supervisor.Manager
-	bus       *bus.Bus
-	states    *stateRepo
-	backend   *daemon
-	auth      *auth.Manager
-	db        *store.Store
-	privilege *privilege.Service // ADR-0018 提权通道执行器
+	catalog    *registry.Catalog
+	manager    *supervisor.Manager
+	bus        *bus.Bus
+	states     *stateRepo
+	backend    *daemon
+	auth       *auth.Manager
+	db         *store.Store
+	privilege  *privilege.Service  // ADR-0018 提权通道执行器
+	credential *credential.Service // ADR-0026 凭据库（owner/grantee env 注入 + 4 端点）
 	// channelSocket 是插件 → 内核 root-action 的独立通道 UDS（空表示未启用）。
 	channelSocket string
 	sched         *scheduler.Service // ADR-0019 定时任务调度器（单 ticker）
@@ -93,6 +95,16 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		}
 		channelSocket = filepath.Join(app.Paths.Dir(platform.DirRun), "kore-channel.sock")
 	}
+	// ADR-0026：凭据库是运行态资产，落在 <install>/data/credentials（0700）。
+	// 审计适配器是 fail-closed 落点：未装配或 PutAudit 失败时 Grant/Revoke 一律拒绝。
+	credentialSvc, err := credential.New(credential.Options{
+		Dir:     filepath.Join(cfg.StateDir, "credentials"),
+		Auditor: &credentialAuditor{db: db},
+	})
+	if err != nil {
+		slog.Error("凭据库装配失败", "err", err)
+		return nil, exitState
+	}
 	manager, err := supervisor.New(supervisor.Options{
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
@@ -101,6 +113,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		InstallDir:     coreconfig.InstallRoot(),
 		ResidentMax:    cfg.snapshot.Resources.ResidentMax,
 		Auditor:        &storeAuditor{db: db},
+		Credentials:    credentialSvc,
 	})
 	if err != nil {
 		slog.Error("supervisor 装配失败", "err", err)
@@ -115,6 +128,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
 		db: db, backend: newDaemon(catalog, manager, frameBus, states),
 		privilege:     privilege.New(privilege.Options{Auditor: &rootActionAuditor{db: db}}),
+		credential:    credentialSvc,
 		pluginRootDir: root,
 		channelSocket: channelSocket,
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
