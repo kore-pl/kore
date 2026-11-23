@@ -144,6 +144,8 @@
 
 **命令白名单**（协议常量，唯一实现在 `pkg/pluginapi/rootaction.go`）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker`。
 
+**SDK 自检（`pkg/pluginapi` v0.1.2 起）**：公开 SDK 提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（样例见 `pkg/pluginapi/rootaction_test.go`）——不要手写一份 schema，也不要用跨仓 `replace`（G-17 禁止）；清单与代码的漂移应在插件 CI 暴露，而不是等用户安装时才报错。
+
 **执行口径**：内核 `POST /api/v1/plugins/<id>/root-action` → `systemd-run --uid=0 --collect --wait --pipe -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=kore-root-<plugin>-<action>-<rand> -- <argv...>`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`）；stdout/stderr 各截断 1 MiB。
 
 **G-01 边界**：内核只校验 schema（id/argv/timeout），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。

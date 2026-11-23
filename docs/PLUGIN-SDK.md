@@ -1,8 +1,8 @@
 # 第三方插件 SDK 接入指南（30 分钟跑通 hello）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-22 · 里程碑: M5
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
 
-面向第三方插件作者：只依赖公开 SDK `github.com/pengtang1024/kore/pkg/pluginapi`（v0.1.1），不碰内核 `internal/*`，30 分钟完成「建仓→连 UDS→握手→会话循环」。协议唯一真源是 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)：帧格式 §4、握手 §5、清单 §3.1、错误码 §9；参考实现是同级 `kore-plugin-echo` 仓。冲突时以协议文档为准。
+面向第三方插件作者：只依赖公开 SDK `github.com/pengtang1024/kore/pkg/pluginapi`（v0.1.2），不碰内核 `internal/*`，30 分钟完成「建仓→连 UDS→握手→会话循环」。协议唯一真源是 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)：帧格式 §4、握手 §5、清单 §3.1、错误码 §9；参考实现是同级 `kore-plugin-echo` 仓。冲突时以协议文档为准。
 
 ## 1. 30 分钟 quickstart
 
@@ -15,7 +15,7 @@ mkdir kore-plugin-hello && cd kore-plugin-hello && git init
 cat > go.mod <<'EOF'
 module github.com/pengtang1024/kore-plugin-hello
 go 1.26
-require github.com/pengtang1024/kore/pkg/pluginapi v0.1.1
+require github.com/pengtang1024/kore/pkg/pluginapi v0.1.2
 EOF
 go mod download
 ```
@@ -138,6 +138,8 @@ for {
 | `lifecycle` | string | `lazy` | `resident`/`lazy`/`oneshot`；显式 `resident` 才常驻 |
 | `scenario_tags` | string[] | `[]` | 枚举仅 `web`/`data`/`ops`/`sec`/`app`，写成 preset 名即 `E_INVALID` |
 | `size_bytes` | int | `0` | `make dist` 打包时回填；仓库内可为 0，须 ≥0 |
+
+**`requires_root` / `root_actions`（ADR-0018）**：需要宿主 root 的插件在 `info.json` 声明这两个字段（`root_actions` 非空时 `requires_root` 必须为 `true`）。SDK **v0.1.2 起**提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`：在插件测试里读 `info.json` 的 `root_actions`、逐条调用 `ValidateRootAction`，失败即测试失败——这样清单与代码的漂移会在 CI 暴露，而不是等用户安装。schema 与命令白名单口径见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) §3.1.3。
 
 ## 4. 包格式与 dist
 
