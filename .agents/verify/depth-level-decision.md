@@ -1,6 +1,6 @@
 # depth_level 8 条裁决（G-20 存量不一致 · M5 收口唯一阻断项）
 
-> 类型: 裁决报告 · 归属: architect · 日期: 2026-11-24 · 里程碑: M5 · 关联: [ADR-0045](../DECISIONS/0045-depth-level-convergence.md)、[PLUGIN-CATALOG](../../docs/PLUGIN-CATALOG.md) §6.1、[PLUGIN-MATURITY](../../docs/PLUGIN-MATURITY.md) §2、[G-20](../../AGENTS.md)、`scripts/depth-level-pending.txt`
+> 类型: 裁决报告 · 归属: architect · 日期: 2026-11-24 · 里程碑: M5 · 关联: [ADR-0045](../../docs/DECISIONS/0045-depth-level-convergence.md)、[PLUGIN-CATALOG](../../docs/PLUGIN-CATALOG.md) §6.1、[PLUGIN-MATURITY](../../docs/PLUGIN-MATURITY.md) §2、[G-20](../../AGENTS.md)、`scripts/depth-level-pending.txt`
 > 边界：本报告**只裁决，不改任何值**——索引、各仓 `info.json`、清单文件本轮均未改动；唯一写入是本文件。
 
 ## 0. 结论摘要（先给答案）
