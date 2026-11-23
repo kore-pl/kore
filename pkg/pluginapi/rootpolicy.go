@@ -151,6 +151,8 @@ var RootCommandPolicies = map[string]CommandPolicy{
 		{Tokens: []TokenSpec{lit("show"), lit("raw")}, Note: "底层规则"},
 		{Tokens: []TokenSpec{lit("--version")}, Note: "版本"},
 		{Tokens: []TokenSpec{lit("reload")}, Note: "重载规则"},
+		{Tokens: []TokenSpec{lit("enable")}, Note: "启用防火墙"},
+		{Tokens: []TokenSpec{lit("disable")}, Note: "停用防火墙"},
 		{Tokens: []TokenSpec{lit("allow")}, Tail: []ArgShape{shapeUFWTarget}, TailRepeat: true, Note: "放行目标"},
 		{Tokens: []TokenSpec{lit("deny")}, Tail: []ArgShape{shapeUFWTarget}, TailRepeat: true, Note: "拒绝目标"},
 		{Tokens: []TokenSpec{lit("delete")}, Tail: []ArgShape{shapeUFWTarget}, TailRepeat: true, Note: "删除目标规则"},

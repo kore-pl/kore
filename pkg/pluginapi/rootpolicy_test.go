@@ -100,7 +100,7 @@ func TestRootArgvRejectsUnknownOrUnshaped(t *testing.T) {
 		{"所在目录不在系统二进制目录内", []string{"/var/lib/kore/plugins/waf/nft", "list", "ruleset"}},
 		{"不是规范化的绝对路径", []string{"/usr/bin/../bin/nft", "list", "ruleset"}},
 		// 子命令必须被锁定。
-		{"不在受控形状内", []string{"ufw", "enable"}},
+		{"不在受控形状内", []string{"ufw", "enable", "--force"}},
 		{"不在受控形状内", []string{"nginx", "-s", "stop"}},
 		{"不在受控形状内", []string{"systemctl", "restart", "sshd"}},
 		{"不在受控形状内", []string{"iptables", "-A", "INPUT", "-j", "DROP"}},
