@@ -163,10 +163,10 @@ cert_renew:                     # 迁移为 scheduler 内置任务，默认关�
 | `meta` | 固定字符串：`schema_version` `installed_at` `kore_version` `last_backup_at` `preset_snapshot_version` `store_last_refresh_at` | `{"schema_version":1}` / `{"ts":"..."}` / `{"version":"0.1.0"}` / `{"preset_snapshot_version":"2026-11-21.1"}` / `{"ts":"..."}`（上次显式刷新时间，不是出站心跳） | 永不清理 |
 | `plugins` | 插件 id（如 `site`） | `{id,name,version,lifecycle:"resident"\|"lazy"\|"oneshot",idle_timeout_s,protocol,requires_kore,capabilities[],granted_capabilities{granted_by,granted_at,version,declaration_sha256,capabilities[],added_capabilities[]},triggers[],resources{memory_mb,cpu_quota,pids_max},installed_at,package_sha256,signed,source:"store"\|"local"\|"embedded"\|"manual",scenario_id,depends_on[],size_bytes,store_visibility,prev_version}` | 卸载即删；保留 `prev_version` 供回滚；索引仓库用同一 `requires_kore` 做兼容过滤；`scenario_id` 记录首次安装来源预设，手动安装为空 |
 | `plugin_state` | 插件 id | `{desired:"enabled"\|"disabled",actual:"ready"\|"degraded"\|"failed"\|"stopped"\|"idle",restarts,restart_window_start,last_error,last_active_at,last_upgrade_at,updated_at}` | 卸载即删 |
-| `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | **目标**保留 30 天；**当前未实现**（bucket 只有建库定义、无读写方，见 §11） |
+| `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 预留 bucket：**当前无写入方**，因此不定义保留窗口（原「30 天」承诺随写入方落地时再定义，见 §11） |
 | `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次）；另有保留键 `password-fingerprint`（值为 `sha256(admin_password_hash)` 的 hex） | 非 JSON：`"<expiryUnixNano> <createdUnixNano>"`（空格分隔的十进制纳秒；旧格式只有单个 expiry，读取时按当前 TTL 反推 created）。`expires_at` = 签发/续期时 `now + session_ttl`，且不超过 `created + 30d`；仅当剩余寿命 < `min(24h, ttl/2)` 才在鉴权时写回并重发 cookie | 读时判定过期（`Validate` 拒绝）；删除发生在登出 / 吊销 / 改口令，无后台清理任务 |
-| `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | **目标**保留 90 天；**当前未实现**（只有读取路径，无按龄删除，见 §11） |
-| `scheduler_tasks` | 任务 id（`tsk-<16 hex>`；内置任务 `builtin-cert-renew`） | `{id,name,plugin,method,params,schedule,interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count,created_at}`（`schedule` 为 5 段 cron 表达式）（ADR-0019；`params` 是插件方法参数原始 JSON，属 G-24 受控例外） | 删除任务即删；内置任务随 `cert_renew.enabled` 启停 |
+| `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | 保留 `audit.retention`（默认 90 天）；由 scheduler 内置任务 `builtin-audit-clean` 按龄删除（周期 `audit.clean_interval`、单次 ≤`audit.clean_batch`，见 §11） |
+| `scheduler_tasks` | 任务 id（`tsk-<16 hex>`；内置任务 `builtin-cert-renew` / `builtin-audit-clean`） | `{id,name,plugin,method,params,schedule,interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count,created_at}`（`schedule` 为 5 段 cron 表达式）（ADR-0019；`params` 是插件方法参数原始 JSON，属 G-24 受控例外） | 删除任务即删；`builtin-cert-renew` 随 `cert_renew.enabled` 启停，`builtin-audit-clean` 随 `audit.clean_enabled` 启停 |
 | `scheduler_runs` | `%020d-<task-id>-%06d`（unix 纳秒 + 序号），字典序 = 时间序 | `{task_id,started_at,finished_at,status:"ok"\|"failed"\|"timeout"\|"skipped"\|"missed",error,dur_ms}` | 保留最近 100 条（写入时裁剪） |
 | `alerts`（嵌套子桶 `events`） | `%020d-%06d`（unix 纳秒 + 序号，与 `audit` 同编码），字典序 = 时间序；键即对外 `id` | `{id,ts,severity:"critical"\|"warning"\|"info",source:"audit"\|"plugin"\|"resource"\|"slot",title,detail,seen,count}`——`id`/`ts` 由键派生不落库（与 `audit`「时间由键承载」同口径）；`count` 为同 `title+source` 5 分钟窗口内的合并次数（合并即删旧键按当前时刻重写，`seen` 归 false——新发生重新计未读）；校验方 `store.PutAlert`：severity/source 取值受控、title 1..200 字符、detail ≤512 字符（按 rune 计），非法拒绝写入不落库 | 保留最近 500 条（写入时裁剪）；同 `title+source` 5 分钟内去重合并 `count+1` |
 
@@ -269,7 +269,7 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 **HTTP 侧审计（登录 / 方法调用）**：`login.success`（result=ok，detail=`{ip,user_agent,session_id_prefix}`）与 `login.failed`（result=denied，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`）在登录处理器内成功与失败各写一条；IP 只保留前 3 段（`192.168.1.x`）、UA 截断 100 字符、会话只留前 8 字符前缀，**任何形式的口令都不进审计**。invoke 审计口径与授权口径一致——按**最终生效能力**判定：先查方法级 `method_capabilities[<id>.<method>]`，未命中回退插件级 `capabilities`；只有 `write`/`admin` 类方法才落 `invoke.<plugin>.<method>`，只读类（方法级或插件级解析为 `*:read`）默认不审计；`audit.invoke_all=true` 时全量审计（调试用）。方法级能力使同一插件内「只读方法不审计、写方法审计」成为可能，内核仍只比较能力字符串、不维护业务方法表（G-01）。同一方法 1 秒内调用超过 10 次时，前 10 次逐条、第 11 次起合并为一条 `invoke.burst`（detail=`{method,count,window_ms}`）并抑制本窗口后续记录，避免刷爆审计库。
 
-查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 24h` 读 bbolt 输出；前端列表见 `web/audit.js`。**保留目标 90 天；截至 2026-11-23 无自动清理实现**（超期数据需手工清理或后续实现，见 §11）。
+查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 24h` 读 bbolt 输出；前端列表见 `web/audit.js`。**保留策略**：`audit.retention`（默认 90 天）内的记录保留，超期记录由 scheduler 内置任务 `builtin-audit-clean` 按龄删除（周期 `audit.clean_interval` 默认 6h、单次上限 `audit.clean_batch` 默认 1000；`audit.clean_enabled=false` 可关，见 §11）。清理本身写一条 `audit.clean` 审计。
 
 ## 10. 备份与恢复
 
@@ -294,18 +294,24 @@ kored db dump --bucket meta                            # 核对 schema_version
 
 ## 11. 生命周期清理
 
-**设计意图**：不创建后台定时器，清理只在**启动时**与**写路径惰性触发**（距上次清理 > 6 小时）执行，与「默认零后台定时器」约束一致。
+**实现方式（ADR-0044）**：审计按龄清理由 scheduler 的内置任务 `builtin-audit-clean`（`plugin=kore`、`method=audit.clean`）执行，**复用既有单 ticker**（`internal/core/scheduler/`，30s 检查、到点执行），不新增 ticker / goroutine / 周期循环（G-19）。任务参数随任务落库：`params={"retention_seconds":…,"batch":…}`，来源 `audit.retention` / `audit.clean_batch`，周期来源 `audit.clean_interval`（默认 6h）；参数未变时重启不推迟 `next_run_at`（否则频繁重启的机器永远等不到第一次清理）。
 
-**实现现状（2026-11-23 核实）**：上述自动清理**尚未实现**——`tasks` bucket 只有建库定义、无读写方（`internal/core/store/store.go:49`、`:60`），`audit` 只有读取路径（`internal/core/store/audit.go:155` 的 `ForEach`）、无按龄删除；全仓无保留期常量与惰性清理触发器。因此下表 `tasks` / `audit` 两行的保留窗口是**目标**而非现状，落地前需手工清理或后续实现（G-06：不保留没人实现的承诺）。
+**取舍如实记录**：原设计意图是「启动时 + 写路径惰性触发、零后台定时器」。改为 scheduler 内置任务后，默认配置（`audit.clean_enabled: true`）下调度器会常驻一个 ticker——这是为解决审计无界增长刻意接受的代价，仍在 ADR-0019 的单 ticker 白名单内；要严格零 ticker 可设 `audit.clean_enabled: false`（代价是审计重新无界增长）。
+
+**单次上限与失败隔离**：单次最多删 `audit.clean_batch` 条（默认 1000，硬顶 10000）；未删完时结果 `more=true`，下个周期继续，避免一次长事务。删除只走 `Store.CleanAudit` 的单个写事务（游标升序，遇到第一条未过期记录即停）；键无法解析出年龄的坏键**不删**（不猜）。清理失败（参数非法 / 事务失败）只落一条 `failed` 的 `scheduler_runs` 记录 + WARN 日志，不阻塞调度、不影响其他任务；读取路径（`GET /api/v1/audit`、`kored audit`）不受影响。
+
+**可观测**：每次清理写一条审计 `action=audit.clean`（`subject=system`、`target=audit`、`result=ok|error`，detail=`{deleted,more,batch,retention_seconds[,error]}`）+ 一条 INFO 日志（deleted / more / retention_seconds / batch / cutoff）。审计写入失败只 WARN，不反向破坏清理。
+
+**bbolt 文件膨胀（明确结论）**：删键**不会缩小** `state.db`。bbolt 把删除的页放回 freelist 供后续写入复用，因此稳态下文件大小会**停在高水位**而不是随清理下降；突发写入把文件撑大后，即使审计被裁到 90 天，文件也不会自动退回小尺寸。本项目**不做在线 compaction**：bbolt 压缩要求独占文件（关闭当前句柄 → 换文件 → 重开），在运行中的守护进程里做会引入「压缩窗口内写入丢失 / 句柄换错」风险，收益不抵风险。要真缩文件走离线运维：停 `kored` → `bbolt compact -o state.db.new state.db` → `bbolt check` 校验 → 原子替换 → 启动。当前**没有** `kored db compact` 子命令（`kored db` 系列尚未实现，勿按旧文照敲）。结论：清理的作用是**把增长封顶**，不是「让文件变小」；容量按高水位 + 90 天审计量估算。
 
 | 数据 | 规则 | 触发点 |
 | --- | --- | --- |
-| `tasks` | **目标**保留 30 天；**当前未实现**（bucket 无写入方、无按龄删除） | 无（需手工/后续实现） |
+| `tasks` | 预留 bucket，无写入方 → **不定义保留窗口**（不承诺天数） | 无（写入方落地时再定义规则） |
 | `sessions` | 过期不主动删除，仅读时判定失效（`expires_at < now` 或越过 `created+30d` 均拒绝）；删除只发生在登出 / 吊销 / 改口令 | 读时（无启动清扫、无惰性清理） |
-| `audit` | **目标**保留 90 天；**当前未实现**（只有 `ForEach` 读取，无按龄删除） | 无（需手工/后续实现） |
+| `audit` | 保留 `audit.retention`（默认 90 天）：删除键中时间戳早于 `now - retention` 的记录，单次 ≤ `audit.clean_batch`（默认 1000） | scheduler 内置任务 `builtin-audit-clean`（每 `audit.clean_interval`，默认 6h；`audit.clean_enabled=false` 时禁用） |
 | 旧插件版本 | 保留当前 + 上一版本 | 升级成功后同步清理 |
 | 插件日志 | 轮转 10 MiB × 2 | 写入路径 |
-| bbolt 空闲页 | 卸载/升级后 `db.View(tx.WriteTo)` 或下次启动 compaction 不自动做；体积异常时 `kored db compact` 手动执行 | 手动 |
+| bbolt 空闲页 | 删键只释放页、不缩文件，稳态停在高水位；不做在线 compaction，缩文件需停服用 bbolt CLI 离线压缩（见上） | 手动 |
 
 卸载语义：卸载插件默认**保留** `/var/lib/kore/plugins/<id>/` 下的数据目录；只有 `--purge` 才删除，且必须二次确认（HTTP 带 `?confirm=<id>`、CLI 交互输入 id）并写审计 `plugin.uninstall_purge`；删除后不可恢复，备份不自动包含该目录。
 

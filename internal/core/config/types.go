@@ -95,11 +95,20 @@ type Store struct {
 	AllowUnsigned bool
 }
 
-// Audit 是审计写入面配置。
+// Audit 是审计写入面与保留策略配置。
 type Audit struct {
 	// InvokeAll 为 true 时审计全部 invoke（含只读方法），用于调试；
 	// 默认 false 只审计需要 admin 能力的写/管理类方法，避免日志爆炸。
 	InvokeAll bool
+	// Retention 是审计记录保留期（audit.retention，默认 90 天）；
+	// 由 scheduler 内置任务 builtin-audit-clean 按龄删除（DATA-MODEL §11）。
+	Retention time.Duration
+	// CleanEnabled 为 false 时不注册按龄清理内置任务（audit.clean_enabled）。
+	CleanEnabled bool
+	// CleanInterval 是清理周期（audit.clean_interval，默认 6h）。
+	CleanInterval time.Duration
+	// CleanBatch 是单次清理删除上限（audit.clean_batch，默认 1000）。
+	CleanBatch int
 }
 
 // RateLimit 是登录限速参数。
@@ -172,7 +181,15 @@ func defaultsFor(profile string) *Snapshot {
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true, ResidentMax: 2},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
 		Security:  Security{LoginRateLimit: RateLimit{Attempts: 5, Window: 60 * time.Second, Lock: 300 * time.Second}},
-		Audit:     Audit{InvokeAll: false},
+		Audit: Audit{
+			InvokeAll: false,
+			// 审计无限增长是真实运维问题：默认保留 90 天，清理走 scheduler
+			// 内置任务（单 ticker、单次 ≤1000 条），见 DATA-MODEL §11。
+			Retention:     90 * 24 * time.Hour,
+			CleanEnabled:  true,
+			CleanInterval: 6 * time.Hour,
+			CleanBatch:    1000,
+		},
 		CertRenew: CertRenew{Enabled: false, Interval: 6 * time.Hour},
 	}
 }

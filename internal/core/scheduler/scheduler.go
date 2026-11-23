@@ -45,6 +45,14 @@ type Options struct {
 	CertRenewEnabled bool
 	// CertRenewInterval 对应配置 cert_renew.interval（默认 6h）。
 	CertRenewInterval time.Duration
+	// AuditRetention 对应配置 audit.retention：审计记录保留期；0 表示不注册清理任务。
+	AuditRetention time.Duration
+	// AuditCleanEnabled 对应配置 audit.clean_enabled：false 时不注册内置清理任务。
+	AuditCleanEnabled bool
+	// AuditCleanInterval 对应配置 audit.clean_interval（默认 6h）。
+	AuditCleanInterval time.Duration
+	// AuditCleanBatch 对应配置 audit.clean_batch：单次删除上限（默认 1000）。
+	AuditCleanBatch int
 }
 
 // Service 是内核唯一的周期执行器：单实例、单 ticker、任务表在 state.db。
@@ -58,6 +66,12 @@ type Service struct {
 
 	certEnabled  bool
 	certInterval time.Duration
+
+	// 审计按龄清理（内置任务 builtin-audit-clean）：复用同一 ticker，不新增定时器。
+	auditEnabled   bool
+	auditRetention time.Duration
+	auditInterval  time.Duration
+	auditBatch     int
 	// baseCtx 是调度循环的生命周期根：不能绑定请求 ctx（响应写完即取消，ticker 会秒退）。
 	baseCtx context.Context
 
@@ -78,7 +92,11 @@ func New(opts Options) (*Service, error) {
 		store: opts.Store, invoker: opts.Invoker, builtin: opts.Builtin,
 		log: opts.Logger, now: opts.Now, tick: opts.Tick,
 		certEnabled: opts.CertRenewEnabled, certInterval: opts.CertRenewInterval,
-		baseCtx: context.Background(), running: map[string]bool{},
+		auditEnabled:   opts.AuditCleanEnabled && opts.AuditRetention > 0,
+		auditRetention: opts.AuditRetention,
+		auditInterval:  opts.AuditCleanInterval,
+		auditBatch:     opts.AuditCleanBatch,
+		baseCtx:        context.Background(), running: map[string]bool{},
 	}
 	if service.log == nil {
 		service.log = slog.Default()
@@ -91,6 +109,12 @@ func New(opts Options) (*Service, error) {
 	}
 	if service.certInterval <= 0 {
 		service.certInterval = 6 * time.Hour
+	}
+	if service.auditInterval <= 0 {
+		service.auditInterval = 6 * time.Hour
+	}
+	if service.auditBatch <= 0 {
+		service.auditBatch = 1000
 	}
 	return service, nil
 }
@@ -152,9 +176,12 @@ func (s *Service) RunNow(ctx context.Context, id string) (Run, error) {
 	return s.execute(ctx, task), nil
 }
 
-// Start 恢复任务状态（错过不补跑）、注册内置 cert_renew 任务并启动单 ticker。
+// Start 恢复任务状态（错过不补跑）、注册内置 cert_renew 与审计清理任务并启动单 ticker。
 func (s *Service) Start(ctx context.Context) error {
 	if err := s.syncCertRenewTask(); err != nil {
+		return err
+	}
+	if err := s.syncAuditCleanTask(); err != nil {
 		return err
 	}
 	tasks, err := s.loadTasks()

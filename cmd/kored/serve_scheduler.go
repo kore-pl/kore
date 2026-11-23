@@ -21,7 +21,8 @@ func (s *service) stopScheduler() {
 	}
 }
 
-// builtinTask 是 scheduler 的内置任务处理器（当前只有 cert.renew_due）。
+// builtinTask 是 scheduler 的内置任务处理器（装配层只处理 cert.renew_due；
+// audit.clean 由 scheduler 直接执行，因为需要状态库句柄，见 DATA-MODEL §11）。
 //
 // 诚实披露（ADR-0019 技术债）：bus 的事件投递面尚未落地，这里只记录"到点执行"，
 // 返回 published=false；不伪造"已广播给插件"。

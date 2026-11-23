@@ -46,10 +46,15 @@ const (
 	maxRuns = 100
 	// builtinCertRenewID 是迁移进来的内置任务 id（原 cert_renew 定时器）。
 	builtinCertRenewID = "builtin-cert-renew"
+	// builtinAuditCleanID 是审计按龄清理的内置任务 id（ADR-0044）。
+	builtinAuditCleanID = "builtin-audit-clean"
 	// BuiltinPlugin 是内置任务使用的伪插件名（由装配层注入的处理函数接管）。
 	BuiltinPlugin = "kore"
 	// CertRenewMethod 是内置任务到点执行的方法名。
 	CertRenewMethod = "cert.renew_due"
+	// AuditCleanMethod 是审计按龄清理内置任务的方法名（由 scheduler 直接执行，
+	// 不经插件调用面；DATA-MODEL §11）。
+	AuditCleanMethod = "audit.clean"
 )
 
 // 任务字段校验用的语法：插件 id 与插件方法名（与 PLUGIN-PROTOCOL §7.2 同口径）。

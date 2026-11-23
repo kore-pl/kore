@@ -182,6 +182,20 @@ func coldChanged(dst, src *Snapshot) []string {
 		// 保留旧值并提示重启，避免「配置显示 1、实际仍按 2 跑」。
 		keys = append(keys, "resources.resident_max")
 	}
+	// 审计保留策略在 scheduler.New 时装配为内置任务（DATA-MODEL §11），
+	// 改值需重启才能重建任务参数与周期，热更会留下「配置新、任务旧」。
+	if dst.Audit.Retention != src.Audit.Retention {
+		keys = append(keys, "audit.retention")
+	}
+	if dst.Audit.CleanEnabled != src.Audit.CleanEnabled {
+		keys = append(keys, "audit.clean_enabled")
+	}
+	if dst.Audit.CleanInterval != src.Audit.CleanInterval {
+		keys = append(keys, "audit.clean_interval")
+	}
+	if dst.Audit.CleanBatch != src.Audit.CleanBatch {
+		keys = append(keys, "audit.clean_batch")
+	}
 	return keys
 }
 

@@ -180,6 +180,26 @@ func (p *parser) decodeAudit(n *yaml.Node, out *Audit) error {
 			return err
 		}
 	}
+	if v := m["retention"]; v != nil {
+		if out.Retention, err = p.duration(v, "audit.retention"); err != nil {
+			return err
+		}
+	}
+	if v := m["clean_enabled"]; v != nil {
+		if out.CleanEnabled, err = p.boolean(v, "audit.clean_enabled"); err != nil {
+			return err
+		}
+	}
+	if v := m["clean_interval"]; v != nil {
+		if out.CleanInterval, err = p.duration(v, "audit.clean_interval"); err != nil {
+			return err
+		}
+	}
+	if v := m["clean_batch"]; v != nil {
+		if out.CleanBatch, err = p.integer(v, "audit.clean_batch"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

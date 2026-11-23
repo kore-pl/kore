@@ -20,6 +20,7 @@ func (p *parser) validate(s *Snapshot) error {
 	validatePlugins(s, add)
 	validateSecurity(s, add)
 	validateCertRenew(s, add)
+	validateAudit(s, add)
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -149,5 +150,19 @@ func validateSecurity(s *Snapshot, add func(string, string)) {
 func validateCertRenew(s *Snapshot, add func(string, string)) {
 	if msg := durationRange(s.CertRenew.Interval, time.Hour, 24*time.Hour); msg != "" {
 		add("cert_renew.interval", msg)
+	}
+}
+
+// validateAudit 校验审计保留策略：保留期 1 天–1 年、清理周期 30s–7 天、
+// 单次上限 1–10000 条（与 scheduler.maxAuditCleanBatch 同口径）。
+func validateAudit(s *Snapshot, add func(string, string)) {
+	if msg := durationRange(s.Audit.Retention, 24*time.Hour, 365*24*time.Hour); msg != "" {
+		add("audit.retention", msg)
+	}
+	if msg := durationRange(s.Audit.CleanInterval, 30*time.Second, 7*24*time.Hour); msg != "" {
+		add("audit.clean_interval", msg)
+	}
+	if s.Audit.CleanBatch < 1 || s.Audit.CleanBatch > 10000 {
+		add("audit.clean_batch", "必须在 1–10000 之间")
 	}
 }

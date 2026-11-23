@@ -146,6 +146,59 @@ type AuditFilter struct {
 	Limit   int
 }
 
+// AuditCleanReport 是一次按龄清理的结果（DATA-MODEL §11：单次删除受上限约束）。
+type AuditCleanReport struct {
+	// Deleted 本次实际删除的条数。
+	Deleted int `json:"deleted"`
+	// More 为 true 表示仍有早于 Cutoff 的记录未删（被 limit 截断，下次继续）。
+	More bool `json:"more"`
+	// Cutoff 本次的截止时刻：键中时间戳早于它的记录才删。
+	Cutoff time.Time `json:"cutoff"`
+}
+
+// CleanAudit 删除键中时间戳早于 cutoff 的审计记录，单次最多删 limit 条。
+//
+// 键格式 `%020d-%06d` 字典序 = 时间序（DATA-MODEL §5），因此游标升序扫描到
+// 第一条不早于 cutoff 的记录即可停止，不遍历全桶。无法解析年龄的坏键**不删**
+// （宁可留证据，不猜年龄）。单事务内用 Cursor.Delete 边删边走，不做嵌套事务。
+// limit 必须为正：上限是保护，缺省即调用方错误，不静默当成无限。
+func (s *Store) CleanAudit(cutoff time.Time, limit int) (AuditCleanReport, error) {
+	report := AuditCleanReport{Cutoff: cutoff}
+	if limit <= 0 {
+		return report, fmt.Errorf("%w: 清理上限 %d 必须为正数", ErrAuditInvalid, limit)
+	}
+	cutoffNano := cutoff.UnixNano()
+	err := s.Update(func(tx *Tx) error {
+		b, err := tx.bucket(bucketAudit)
+		if err != nil {
+			return err
+		}
+		cursor := b.Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			ts, _, ok := parseAuditKey(string(key))
+			if !ok {
+				continue
+			}
+			if ts >= cutoffNano {
+				break
+			}
+			if report.Deleted >= limit {
+				report.More = true
+				break
+			}
+			if err := cursor.Delete(); err != nil {
+				return err
+			}
+			report.Deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return AuditCleanReport{Cutoff: cutoff}, fmt.Errorf("按龄清理审计记录失败: %w", err)
+	}
+	return report, nil
+}
+
 // ListAudit 按时间升序（键序）列出审计记录，可按 subject/action/plugin 过滤。
 // 只读事务内解析，值在事务末失效前已 copy 到返回切片；Key 一并回填供核对键格式。
 // 单条损坏记录只 WARN 跳过，不因一条坏值中断整个查询。
