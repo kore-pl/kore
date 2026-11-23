@@ -1,6 +1,6 @@
 /* kore 主壳 · 文件管理 L2 操作（web/files-l2.js）
    由 web/files.js 首次执行 L2 动作时懒加载，导出 window.KoreFilesL2.bind(ctx)。
-   覆盖 file.upload / download / extract / compress / chmod / move 与批量删除：
+   覆盖 file.upload / download / extract / compress / chmod / move / copy 与批量删除：
    所有失败都原样展示后端 code + message + detail，并附本页的可执行提示。
    单帧可承载约 5.95 MiB（8 MiB 帧上限 − 64 KiB 余量，base64 膨胀 4/3），
    因此前端在 5 MiB 处先拦截，不把必然失败的请求打到后端。 */
@@ -259,13 +259,82 @@
         }
       });
     }
+    // copy 走「目录选择器」：在弹层里浏览目录并选目标，不让人手写路径（复用 file.list）。
+    function copy(entry) {
+      var mask = el('div', 'kore-modal');
+      mask.setAttribute('role', 'dialog'); mask.setAttribute('aria-modal', 'true');
+      var box = add(mask, el('form', 'kore-modal-box'));
+      add(box, el('div', 'kore-modal-title', '复制到 · ' + entry.name));
+      add(box, el('p', 'kore-modal-text',
+        '源：' + ctx.disp(entry.path) + '。选择目标目录后复制为同名副本；目标已存在时需要勾选「覆盖同名」。'));
+      var target = ctx.state.path || '';
+      var nav = add(box, el('div', 'files-actions'));
+      var pathText = add(nav, el('span', 'files-selected muted', ''));
+      var up = add(nav, el('button', 'btn btn-ghost', '上一级')); up.type = 'button';
+      var browser = add(box, el('div', 'files-list-host'));
+      var sureLine = add(box, el('label', 'field field-check'));
+      var overwrite = add(sureLine, el('input', 'files-checkbox')); overwrite.type = 'checkbox';
+      add(sureLine, el('span', null, '覆盖同名目标'));
+      var msg = add(box, el('div', 'kore-modal-msg')); msg.setAttribute('role', 'alert');
+      var ops = add(box, el('div', 'kore-modal-actions'));
+      var cancel = add(ops, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
+      var ok = add(ops, el('button', 'btn btn-primary', '复制到这里')); ok.type = 'submit';
+      function close() { document.removeEventListener('keydown', esc); if (mask.parentNode) mask.parentNode.removeChild(mask); }
+      function esc(ev) { if (ev.key === 'Escape') close(); }
+      cancel.addEventListener('click', close);
+      mask.addEventListener('click', function (ev) { if (ev.target === mask) close(); });
+      document.addEventListener('keydown', esc);
+      up.addEventListener('click', function () {
+        if (!target) return;
+        var slash = target.lastIndexOf('/');
+        target = slash >= 0 ? target.slice(0, slash) : '';
+        render();
+      });
+      function render() {
+        pathText.textContent = '目标目录：' + ctx.disp(target);
+        up.disabled = !target;
+        browser.textContent = '';
+        ctx.invoke('file.list', { path: target || '.' }).then(function (data) {
+          var dirs = (data.entries || []).filter(function (item) { return item.is_dir; })
+            .sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'zh-CN'); });
+          if (!dirs.length) {
+            add(browser, el('div', 'panel-empty', '这个目录下没有子目录；可直接点「复制到这里」。'));
+            return;
+          }
+          dirs.forEach(function (dir) {
+            var row = add(browser, el('div', 'files-actions'));
+            var btn = add(row, el('button', 'btn btn-ghost', '进入 ' + dir.name + '/')); btn.type = 'button';
+            btn.addEventListener('click', function () { target = dir.path; render(); });
+          });
+        }, function (err) {
+          add(browser, el('div', 'panel-empty', '目录读取失败：' + ctx.errText(err)));
+        });
+      }
+      box.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var dst = target ? target + '/' + entry.name : entry.name;
+        if (dst === entry.path) { msg.textContent = '目标与原路径相同，请换一个目录'; return; }
+        ok.disabled = true; msg.textContent = '';
+        ctx.invoke('file.copy', { src: entry.path, dst: dst, overwrite: !!overwrite.checked }).then(function (res) {
+          ctx.setStatus('已复制 ' + ctx.disp(res.from) + ' → ' + ctx.disp(res.to) +
+            '（' + (res.kind === 'dir' ? res.entries + ' 项' : ctx.fmtSize(res.bytes)) + '）', 'ok');
+          close(); ctx.refresh();
+        }, function (err) {
+          ok.disabled = false;
+          msg.textContent = ctx.errText(err) + (ctx.hintFor('copy', err) ? ' ' + ctx.hintFor('copy', err) : '');
+        });
+      });
+      render();
+      document.body.appendChild(mask);
+      ok.focus();
+    }
     function removeMany(entries) {
       if (!entries || !entries.length) { ctx.setStatus('请先勾选要删除的条目', 'fail'); return Promise.resolve(); }
       var names = entries.slice(0, 8).map(function (e) { return ctx.disp(e.path); }).join('、');
       if (entries.length > 8) names += ' 等 ' + entries.length + ' 项';
       return dialog({
-        title: '批量删除确认', action: 'delete', okLabel: '删除',
-        text: '将删除：' + names + '。此操作不可撤销。',
+        title: '移入回收站确认', action: 'delete', okLabel: '移入回收站',
+        text: '将把：' + names + ' 移入回收站，可在「回收站」里恢复。彻底删除需要到回收站里再操作一次。',
         fields: [{ key: 'recursive', type: 'check', value: false, label: '递归删除非空目录（连同目录内全部内容）', hint: '不勾选时非空目录会返回 E_CONFLICT 并跳过' }],
         onSubmit: function (values, ui) {
           var failed = [], chain = Promise.resolve();
@@ -281,10 +350,10 @@
             ctx.state.checked = {};
             return ctx.refresh().then(function () {
               if (!failed.length) {
-                ctx.setStatus('已删除 ' + entries.length + ' 项', 'ok');
+                ctx.setStatus('已移入回收站：' + entries.length + ' 项（可在「回收站」恢复）', 'ok');
                 return false;
               }
-              ctx.setStatus('删除完成：成功 ' + (entries.length - failed.length) + ' 项，失败 ' + failed.length + ' 项', 'fail');
+              ctx.setStatus('删除完成：成功 ' + (entries.length - failed.length) + ' 项进回收站，失败 ' + failed.length + ' 项', 'fail');
               ui.msg.textContent = '失败明细：' + failed.join('；');
               return true;
             });
@@ -294,7 +363,7 @@
     }
     return {
       uploadFiles: uploadFiles, download: download, compress: compress, extract: extract,
-      chmod: chmod, move: move, removeMany: removeMany
+      chmod: chmod, move: move, copy: copy, removeMany: removeMany
     };
   }
   window.KoreFilesL2 = { bind: bind };
