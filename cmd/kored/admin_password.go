@@ -226,8 +226,16 @@ func generateAdminPassword(n int) (string, error) {
 	return string(out), nil
 }
 
-// firstRunAuthGuide 在缺管理员口令时给出可操作提示：
-// stdin 是 TTY 就直接引导交互设置；非 TTY 只提示、不阻塞（systemd 场景）。
+// firstRunAuthGuide 在缺管理员口令时只打一行提示：不读终端、不拦启动、不写配置。
+//
+// 产品口径（单管理员 + 本机管理，G-11 不做多用户 RBAC）：本机身份就是操作系统
+// 用户身份——UDS 由 socket 权限（0600）认证，浏览器由 loopback 认证，**不需要
+// 第二套账号口令**。所以首启**不再**要求输入两次口令：那等于把本机用户当成
+// 未认证的远程访客，既多余又违反「账号管理不应要求再次输入口令」的裁决。
+//
+// 口令只剩一个用途：从**其他机器**访问面板（非 loopback）。这种需求才会用到
+// `kored admin-password --generate`；没设口令时远程登录一律被拒（auth.Manager.Verify
+// 在哈希为空时直接 false），不会静默放行。已有 hash 的实例行为不变。
 func firstRunAuthGuide(cfg *config, stderr io.Writer) {
 	if cfg == nil || cfg.snapshot == nil {
 		return
@@ -235,37 +243,7 @@ func firstRunAuthGuide(cfg *config, stderr io.Writer) {
 	if strings.TrimSpace(cfg.snapshot.Auth.AdminPasswordHash) != "" {
 		return
 	}
-	if !adminTTY() {
-		fmt.Fprintln(stderr, "提示：还没有管理员口令，面板将无法登录（非交互环境不阻塞启动）。")
-		fmt.Fprintln(stderr, "  执行 `kored admin-password --generate` 生成一个，或 `kored admin-password --set` 自己设置；")
-		fmt.Fprintln(stderr, "  systemd / 容器部署请先离线设置口令，再重启 kored。")
-		return
-	}
-	fmt.Fprintln(stderr, "还没有管理员口令，面板无法登录。现在设置一个（直接回车跳过，稍后用 `kored admin-password --generate`）。")
-	plain, ok := promptNewPassword(stderr)
-	if !ok {
-		return
-	}
-	hash, err := auth.HashPassword(plain)
-	if err != nil {
-		fmt.Fprintf(stderr, "生成口令哈希失败: %v\n", err)
-		return
-	}
-	source := cfg.snapshot.Source
-	if strings.TrimSpace(source) == "" {
-		source = cfg.opts.config
-	}
-	path, err := adminPasswordConfigPath(source)
-	if err != nil {
-		fmt.Fprintf(stderr, "配置路径解析失败: %v\n", err)
-		return
-	}
-	if err := writeAdminPasswordHash(path, hash); err != nil {
-		fmt.Fprintf(stderr, "写入配置失败: %v\n", err)
-		return
-	}
-	cfg.reload()
-	fmt.Fprintf(stderr, "已写入 %s（权限 0600），本次启动即用新口令登录。\n", path)
+	fmt.Fprintln(stderr, "提示：本机访问无需口令（身份＝当前系统用户；UDS / 本机回环免密）；如需从其他机器访问本面板，请先执行 `kored admin-password --generate` 设置远程凭据。")
 }
 
 // adminPasswordConfigPath 按与 serve 相同的语义解析配置文件并归一为绝对路径。

@@ -273,59 +273,61 @@ func TestUpsertAdminHashKeepsCommentsAndOtherKeys(t *testing.T) {
 	}
 }
 
-// TestFirstRunAuthGuideNonTTYPrintsHint 覆盖首启引导：非 TTY 只提示、不阻塞、不建配置。
-func TestFirstRunAuthGuideNonTTYPrintsHint(t *testing.T) {
+// TestFirstRunAuthGuidePrintsOneLineHint 覆盖首启引导的新口径：缺口令时**只打一行
+// 提示、不读终端、不写配置**——本机用户不该被要求再输一次口令（账号管理裁决）。
+func TestFirstRunAuthGuidePrintsOneLineHint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.yaml")
 	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
 	if err != nil {
 		t.Fatalf("加载默认配置失败: %v", err)
 	}
 	cfg := buildConfig(snap, serveOptions{config: path})
-	withAdminFakes(t, false)
+	// 即便 stdin 是 TTY 也不再交互：给 TTY=true 且不预置任何口令答案，
+	// 一旦实现仍然读口令就会走到 adminPrompt 的"没有更多预置口令"错误。
+	withAdminFakes(t, true)
 
 	var stderr bytes.Buffer
 	firstRunAuthGuide(&cfg, &stderr)
 	out := stderr.String()
-	if !strings.Contains(out, "admin-password --generate") || !strings.Contains(out, "非交互") {
-		t.Fatalf("首启提示不可操作:\n%s", out)
+	if !strings.Contains(out, "本机访问无需口令") || !strings.Contains(out, "admin-password --generate") {
+		t.Fatalf("首启提示未说明本机免密与远程可选口令:\n%s", out)
+	}
+	if strings.Contains(out, "请输入") || strings.Contains(out, "再输入一次") {
+		t.Fatalf("首启引导不应再要求输入口令:\n%s", out)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("非 TTY 引导不应写配置，stat err=%v", err)
+		t.Fatalf("首启引导不应写配置，stat err=%v", err)
+	}
+	if cfg.snapshot.Auth.AdminPasswordHash != "" {
+		t.Fatal("首启引导不应写入哈希")
 	}
 }
 
-// TestFirstRunAuthGuideTTYSetsPassword 覆盖首启引导：TTY 下交互设置并落盘 0600。
-func TestFirstRunAuthGuideTTYSetsPassword(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
+// TestFirstRunAuthGuideKeepsExistingHashSilent 覆盖「不破坏已有实例」：已有哈希时
+// 一行提示都不打（行为与升级前一致）。
+func TestFirstRunAuthGuideKeepsExistingHashSilent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	hash, err := auth.HashPassword("existing-pass")
+	if err != nil {
+		t.Fatalf("生成哈希失败: %v", err)
+	}
+	if err := writeAdminPasswordHash(path, hash); err != nil {
+		t.Fatalf("写配置失败: %v", err)
+	}
 	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
 	if err != nil {
-		t.Fatalf("加载默认配置失败: %v", err)
+		t.Fatalf("加载配置失败: %v", err)
 	}
 	cfg := buildConfig(snap, serveOptions{config: path})
-	withAdminFakes(t, true, "first-run-pass", "first-run-pass")
+	withAdminFakes(t, true)
 
 	var stderr bytes.Buffer
 	firstRunAuthGuide(&cfg, &stderr)
-	if strings.Contains(stderr.String(), "first-run-pass") {
-		t.Fatal("首启引导输出泄露了口令明文")
+	if stderr.Len() != 0 {
+		t.Fatalf("已有口令时不应输出首启提示:\n%s", stderr.String())
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("首启引导应写出配置: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("配置权限必须 0600，实际 %04o", perm)
-	}
-	if cfg.snapshot.Auth.AdminPasswordHash == "" {
-		t.Fatal("重载后快照里没有哈希")
-	}
-	ok, err := auth.VerifyPassword(cfg.snapshot.Auth.AdminPasswordHash, "first-run-pass")
-	if err != nil || !ok {
-		t.Fatalf("首启设置的口令未通过校验: ok=%v err=%v", ok, err)
-	}
-	if !strings.Contains(stderr.String(), "已写入") {
-		t.Fatalf("首启引导未给出写入成功提示:\n%s", stderr.String())
+	if cfg.snapshot.Auth.AdminPasswordHash != hash {
+		t.Fatal("已有哈希被改动")
 	}
 }
 

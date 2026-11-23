@@ -26,7 +26,7 @@
 
 | 威胁 | 场景 | 影响 | 缓解 | 残余风险 |
 | --- | --- | --- | --- | --- |
-| 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时口令走明文 |
+| 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；本机 UDS/loopback 以操作系统身份免密（§3.2，ADR-0041），**远程**仍需 PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时远程口令走明文 |
 | 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（进程内存全局桶，见 §3.5）、恒定时间比较 | 慢速低频爆破（单机场景收益低）；锁定期随重启清零 |
 | CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token + `X-Kore-CSRF` + Origin 校验 | 同站 XSS 可绕过全部三层 |
 | 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、12h 滑动 TTL、登出即删、绑 UA 指纹哈希 | 同机 root 可读浏览器进程内存 |
@@ -70,9 +70,21 @@
 
 **取舍与复审条件**：PBKDF2 无内存硬化，对 GPU/ASIC 离线爆破的抵抗弱于内存硬 KDF。当前可接受的前提是三条同时成立：单管理员账号、默认只绑 UDS 或 `127.0.0.1`、无公网暴露面；再叠加 60s 内 5 次失败锁 300s 的限速，在线爆破不可行，离线爆破的前置是攻击者已能读 `0600 root:root` 的配置（等价 root）。**复审条件**：默认暴露公网、出现多用户/多租户、或 `auth.admin_password_hash` 进入非 root 可读的备份路径时，必须改用内存硬 KDF（**Argon2id**）并开新 ADR 显式放宽依赖白名单（新增 `golang.org/x/crypto`），同时给出哈希迁移与双格式兼容方案。
 
-### 3.2 首启口令
+### 3.2 本机免密与远程凭据（ADR-0041）
 
-`auth.admin_password_hash` 为空时生成 24 字符口令（`crypto/rand`，base32 字母表去掉 `0/O/1/I`），**只打印到 stderr/tty 一次**，随后写入哈希并置 `auth.initialized: true`。口令本身永不进日志文件，日志只记 `auth.admin_initialized`。二次启动不再打印；口令遗失只能由 root 删除 `auth.admin_password_hash` 后重启重置。
+kore 是**单管理员、本机管理**的产品（G-11：不做多用户 RBAC）。**本机身份 = 操作系统用户身份**，口令不是本机使用的前置条件：
+
+| 场景 | 需要口令吗 | 凭据是什么 |
+| --- | --- | --- |
+| 本机 CLI（UDS `<run>/kore.sock`） | **不需要** | 文件系统权限：socket `0600`、属主＝运行 kored 的用户；`root` 亦可（`SO_PEERCRED` 校验 uid） |
+| 本机浏览器（`127.0.0.1` loopback） | **不需要** | 本机 loopback 可达性（只认 TCP 层 `RemoteAddr`，不读 `X-Forwarded-For`）+ CSRF 双提交 |
+| **其他机器访问面板** | **需要** | `kored admin-password --generate/--set` 写入 `auth.admin_password_hash` 的远程凭据 |
+
+口径：**本机免密 = 「能登进这台机器且是运行 kore 的那个用户，就能管 kore」**，与 docker / systemd 的信任模型一致；这**不是多用户 RBAC**，没有账号列表、没有第二套账号体系的角色。
+
+- **没设口令时远程登录一律不可用**：`auth.Manager.Verify` 在哈希为空时直接返回 `false`（`session.go`），**绝不用空串比对通过**；非 loopback 请求仍走原有会话鉴权，未认证即 401。
+- **口令只剩一个用途**：从其他机器访问面板。首启（`auth.admin_password_hash` 为空）**只打印一行提示**（本机免密 + 如需远程再执行 `kored admin-password --generate`），不读终端、不拦启动、不写配置；TTY 下也不再要求输入两次口令。
+- **已有实例不破坏**：配置文件里已有 `auth.admin_password_hash` 时读入行为与升级前一致（校验算法仍是 PBKDF2-HMAC-SHA256 / 600,000 次，见 §3.1）；`admin-password` 命令的 `--generate/--set/--hash` 语义不变。首启生成的明文口令永不进日志，只打印一次。
 
 ### 3.3 会话
 
@@ -345,3 +357,29 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 6. **root ↔ 非 root 切换**：先以 root 运行（目录已 chown 给 `kore-<id>`）再以非 root 运行会因目录不可进入而启动失败；未做自动回切，仅保证错误可见（清单读取失败现在会给出 chown/chmod 可操作提示，不再只打"未安装"）。
 7. **共享组 `kore` 的回收**：`kore uninstall` 目前按前缀清理 `kore-<id>` 用户/组，**共享组 `kore` 的删除未纳入**（空组无害，但属残留）；跨发行版 groupadd/usermod 的 busybox 形态未实测。
 8. **通道抗重放/限流**：通道复用 root-action 的 confirm/审计，但没有独立速率限制；同组内恶意插件可高频触发被拒请求（仅产生 WARN/审计噪音，不越权）。
+
+### 15.5 root 提权为何不需要口令（结论：系统级 root 服务）
+
+用户裁决：「root 管理本来也是这个软件的功能的一部分，不应该有任何一次输入账号密码确认」。ADR-0018 只定了「谁来执行」（内核经 `systemd-run --uid=0` 的 transient unit），**没定「谁来授权」**——默认 polkit 策略下 `org.freedesktop.systemd1.manage-units` 是 `auth_admin`，于是普通用户跑 `kored` 时每个 root 动作都弹管理员口令框（实测：`systemd-run --uid=0 --pipe true` → `Failed to start transient service unit: Access denied`，journal 记 `FAILED to authenticate to gain authorization`）。这是产品级否决。
+
+**结论（ADR-0042，方案 B）**：`kored` 以**系统级 root 服务**运行（`/etc/systemd/system/kore.service`，`User=root`），特权动作由内核经 `systemd-run --uid=0` 执行——**uid=0 不进入 polkit 判定**，systemd 对已授权的 root 直接放行。于是运行期**不存在授权判定这一步**，也不可能出现口令输入；这与 `dockerd` 以 root 运行、`docker run` 从不要口令同构。插件仍是独立低权进程（`kore-<id>`），G-04 与 ADR-0018「插件低权、内核代理特权动作」原意不变。方案对比、代价（root 进程面、目录属主迁移、两实例互斥）与复审条件见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)；安装走 `scripts/install-system-service.sh`（幂等、`--dry-run`，只写 ADR-0023 §3.5 豁免 #1 的 unit）。
+
+**为什么不是"配一条 polkit 规则"**：规则只是把弹框改成静默 YES，**每次操作仍过一次 authorization check**；规则丢失/被覆盖/被收紧时会退回弹框，违反用户「任何时候都不应该有本机账号密码的输入」这条绝对约束；而且规则本身是一个静默提权面（等价于该用户可免密以任意 uid 起 `kore-root-*` 单元），需要新增 ADR-0023 豁免项。因此 polkit 规则只保留为**降级路径 A**：
+
+
+#### 降级路径 A：polkit 免密规则（仅当必须普通用户运行服务时）
+
+`scripts/install-polkit-rule.sh` 写入一条 polkit 规则（默认 `/etc/polkit-1/rules.d/49-kore.rules`，目录按本机实际存在性选择），只对**调用方指定的 kore 服务用户**放行 `manage-units`，且必须同时满足 5 条收紧条件（action id / `subject.user` / `subject.local && active` / `verb ∈ {start,kill,stop,reset-failed}` / unit 名匹配 `^kore-root-<plugin>-<action>(-<8hex>)?\.service$`）；其余一律 `polkit.Result.NOT_HANDLED`，交回系统默认 `auth_admin`，**不写无条件 YES，也不写 NO**。
+
+- **等价于什么**：该服务用户可**免口令**、以**任意 uid（含 uid=0）**启动/终止 `kore-root-*` 前缀的 transient unit。这本身是提权，不是"配置小改"。
+- **与 ADR-0018 的关系**：授权发生点从「每次操作弹框」前移到「安装时一次性显式执行脚本」；授权范围由 unit 名前缀白名单收敛；执行面不变（仍是内核代理 + 固定 argv + 审计 fail-closed）。
+- **审计**：unit 名携带插件 id + 动作 id（`kore-root-<plugin>-<action>-<rand8>`），`journalctl -u <unit>` 看 stdout/stderr，`journalctl _COMM=systemd-run` / `polkitd` 看发起者与授权结果，kored 的 `root.action` 审计（`actor/plugin_id/action_id/unit/decision/exit_code`）看业务侧；三方可对上。
+- **撤销**：`sudo bash scripts/install-polkit-rule.sh --remove`（幂等），polkitd 监听规则目录自动重载；`--dry-run` / `--check` 可非 root 只读校验（`--check` 用假 polkit 沙箱跑 13 条断言）。
+- **最小权限的边界**：仍默认拒绝同用户对其他 unit（`nginx.service`、`kore.service`）的任何 manage-units 操作；`disable`/`mask`/`edit`/`set-property` 等危险 verb 不放行；`unit` 名带 shell 注入字符不匹配正则即拒。
+- **与 G-11「多用户 RBAC 不做」的关系**：本条**不是** RBAC。`subject.user` 是安装时钉死的单个服务身份，没有角色、没有按用户分权、没有授权表；它只回答"本机这台 kore 的服务用户能否免口令执行自己的 root-action 白名单"，与"多用户各自权限"无关。多用户 RBAC 仍明确不做。
+
+**（仅方案 A）这条规则要不要进 ADR-0023 §3.5 豁免清单？——要。** 它新增了一处安装目录外写入（`/etc/polkit-1/rules.d/49-kore.rules`，0 字节代码、1 个文件），按 G-31「新增任何安装目录外写入必须先改 ADR-0023」必须列为豁免项。建议文案（由 ADR 维护方落笔，本轨不改 ADR-0023）：
+
+> | 5 | polkit 免口令规则（可选，仅 systemd 环境） | `/etc/polkit-1/rules.d/49-kore.rules`（或 `/usr/share/polkit-1/rules.d/`） | `kore uninstall` / `scripts/install-polkit-rule.sh --remove`（删文件，polkitd 自动重载） | 仅当选择"root 提权零口令"安装时写入；规则按 `subject.user` + `kore-root-*` unit 名前缀收敛，卸载后立即恢复口令授权 |
+
+> 未入豁免清单前，本脚本按"用户批准的可选安装步骤"执行、默认不运行；拒绝接受此提权的用户继续走每次弹口令的 `auth_admin` 路径（功能可用，体验降级）。
