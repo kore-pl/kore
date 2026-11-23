@@ -885,3 +885,9 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 - **事实**：lead 判断 PID 1978871 是"孤儿进程"要 kill，agent 核对后发现它是 G-29 允许的隔离测试实例（`/tmp/kore-p2/config.yaml`、端口 18871、独立 state/run），杀它会破坏正在跑的验收。
 - **判断**：**指令正确性不因发出者而豁免核对**；隔离实例与孤儿进程在 `ps` 里长得一样，必须看配置路径 + 端口 + 启动参数。
 - **规则**：`kill` / `rm -rf` / `userdel` 前必须核对三件：配置路径（`--config` / `KORE_HOME`）、监听端口/socket、启动参数；对不上任何一条就停下来问，不执行。
+
+#### 教训：setsid 不脱离 cgroup，工具调用收尾会连带杀掉服务（2026-11-23）
+
+- **事实**：agent 在工具调用里用 `setsid nohup ./bin/kored serve … &` 重启主实例（pid 3796220），5 分钟后该 bash 调用的 systemd transient scope（`dsh-subprocess-3949643-546ed4477b74.scope`）被 DSH 清理，journal 显示 "on client request" 对整 scope 发 SIGTERM → kored + site + terminal 全灭；kored 日志只有「插件进程意外退出 signal: terminated」，无正常关闭路径。
+- **判断**：`setsid`/`nohup` 只改会话与控制终端，**不脱离 cgroup v2**；「后台运行」≠「脱离工具调用的生命周期」。服务必须落进独立 unit（`systemd-run --user --unit=kored-local`），否则每次工具调用结束都可能顺手杀掉它。
+- **规则**：本地/开发机重启 kored 一律用 `systemd-run --user --unit=kored-local --collect …` 或 `systemctl --user restart kored-local`（RUNBOOK §1 步骤 6）；重启后必须核对 `cat /proc/<MainPID>/cgroup` 不含 `dsh-subprocess`。**MEMORY.md 2026-11-22 已有 live-games 的同款教训，但 kore RUNBOOK 未落流程——教训记在记忆里不落文件等于没记。**

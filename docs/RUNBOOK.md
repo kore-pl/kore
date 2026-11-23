@@ -69,10 +69,34 @@ strings bin/kored | grep -c "${NEW_KEY:0:8}"    # 判据：≥ 1
 
 ```bash
 systemctl restart kore && systemctl is-active kore            # 生产：判据 active
-pkill -f 'bin/kored serve'; ./bin/kored serve --config ./.kore-local.yaml &   # 本地
+
+# 本地（开发机）：必须用独立 systemd user unit，禁止 setsid/nohup 后台启动
+# 首次创建 unit（4 个 KORE_* 在 kill 旧进程前从 /proc/<pid>/environ 取；缺失会导致
+# SSL / 日志 / 备份页读不到数据，且启动后无法补）
+P=$(ss -ltnp '( sport = :8787 )' | grep -o 'pid=[0-9]*' | cut -d= -f2)
+eval "$(python3 - "$P" <<'PY'
+import sys,shlex
+want=['KORE_SSL_CERT_DIR','KORE_LOGS_SOURCES','KORE_BACKUP_DIR','KORE_BACKUP_ALLOW_ROOTS']
+env=dict(it.decode().split('=',1) for it in open(f'/proc/{sys.argv[1]}/environ','rb').read().split(b'\0') if b'=' in it)
+for k in want: print(f'export {k}={shlex.quote(env[k])}')
+PY
+)"
+kill -TERM "$P"
+systemd-run --user --unit=kored-local --collect \
+  --working-directory="$PWD" \
+  --setenv=KORE_SSL_CERT_DIR="$KORE_SSL_CERT_DIR" \
+  --setenv=KORE_LOGS_SOURCES="$KORE_LOGS_SOURCES" \
+  --setenv=KORE_BACKUP_DIR="$KORE_BACKUP_DIR" \
+  --setenv=KORE_BACKUP_ALLOW_ROOTS="$KORE_BACKUP_ALLOW_ROOTS" \
+  "$PWD/bin/kored" serve --config "$PWD/.kore-local.yaml"
+
+# 之后重启直接复用 unit（env 已固化在 unit 里）
+systemctl --user restart kored-local && systemctl --user is-active kored-local
 ```
 
-判据：PID 变化 + 启动日志出现 `kore ready`。旧进程内存里还是旧公钥，这步省不掉。
+判据：PID 变化 + 启动日志出现 `kore ready`；`cat /proc/$(systemctl --user show kored-local -p MainPID --value)/cgroup` **不得含 `dsh-subprocess`**（见下）。旧进程内存里还是旧公钥，这步省不掉。
+
+> **禁止 `setsid nohup ./bin/kored serve … &`（2026-11-23 18:13 事故）**：`setsid`/`nohup` 只改会话与控制终端，**不脱离 cgroup v2**。在 agent 工具调用里这样启的 kored 仍留在该调用的 transient scope（`dsh-subprocess-*.scope`）里，调用收尾/超时被清理时整 scope 收到 SIGTERM，kored 与全部插件一起被杀——日志只有「插件进程意外退出 signal: terminated」，没有正常关闭记录。`systemd-run --user --unit=kored-local` 让 kored 落在自己的 unit cgroup，才算真正脱离。
 
 ### 步骤 7 — 验证 GET /api/v1/store/plugins == 200 且条数正确
 
