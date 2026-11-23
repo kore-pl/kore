@@ -4,11 +4,12 @@
 // 调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
 // 一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。
 // 安装需要 package_path 时才在该卡片内展开路径输入，不在页面顶部常驻技术字段；
-// 卸载端点未实现时只提供「停用」，并用「待支持」轻量标签说明，不假装卸载成功。
+// 卸载走 DELETE /api/v1/plugins/{id}（停进程 + 删程序文件，幂等）；老内核（404/405/501）直接禁用按钮，不做点了才报错的假按钮。
 (function () {
   'use strict';
   var U = { plugins: '/api/v1/store/plugins', presets: '/api/v1/store/presets',
-    install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/', enable: '/api/v1/plugins/' };
+    install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/',
+    enable: '/api/v1/plugins/', uninstall: '/api/v1/plugins/' };
   // 图标映射：按 id 固定线性 SVG 路径（viewBox 20×20，stroke 1.6 圆角，与 shell.js 导航同线型），
   // 21 个插件两两可区分（无外链、无字体依赖、颜色继承 --kore-text-2）。
   var SVG_NS = 'http://www.w3.org/2000/svg';
@@ -209,6 +210,21 @@
     if (label) i.setAttribute('aria-label', label);
     return i;
   }
+  // 文案优先走 i18n 表（新键 store.uninstall.*），缺项回退中文，不显示键名。
+  function T(key, fallback) {
+    var fn = window.KoreI18n && window.KoreI18n.t;
+    var v = fn ? fn(key) : '';
+    return v || fallback;
+  }
+  // 危险操作按钮：卸载不可撤销 → 红边红字，与「停用」（中性灰）视觉区分。
+  // 只用既有设计令牌，不新增 CSS（写域不含 style.css）。
+  function dangerBtn(text, cls) {
+    var b = el('button', 'btn store-btn-danger' + (cls ? ' ' + cls : ''), text);
+    b.type = 'button';
+    b.style.color = 'var(--kore-danger)';
+    b.style.borderColor = 'var(--kore-danger)';
+    return b;
+  }
 
   function renderPresets() {
     var box = el('section', 'store-presets');
@@ -273,8 +289,15 @@
     status.setAttribute('role', 'status');
     var ops = add(card, el('div', 'store-ops'));
     if (ins) {
-      var unsupported = add(ops, el('span', 'tag tag-muted', '待支持'));
-      unsupported.title = '当前版本暂不支持卸载，可先停用插件';
+      // 卸载：DELETE /api/v1/plugins/{id}。老内核已探测到不支持时按钮直接禁用。
+      var uni = add(ops, dangerBtn(T('store.uninstall.btn', '卸载'), 'store-btn-uninstall'));
+      if (S.uninstallOff) {
+        uni.disabled = true;
+        uni.title = T('store.uninstall.unsupported', '当前内核版本不支持卸载插件');
+      } else {
+        uni.title = '卸载插件：停止进程并删除程序文件，业务数据保留（需二次确认）';
+        on(uni, function () { showUninstallConfirm(card, p); });
+      }
       if (state === 'upgradable') {
         // 可升级：主按钮从「重装」改为「升级到 vX」，走 force 覆盖 + 保留期望态。
         var upgrade = add(ops, el('button', 'btn btn-primary store-btn-upgrade',
@@ -459,6 +482,35 @@
       close();
       runUpgrade(p, ins).then(function (upgraded) { if (upgraded) loadInstalled(); });
     });
+    on(cancel, function () { close(); });
+    var status = card.querySelector('.store-card-status');
+    card.insertBefore(box, status);
+  }
+
+  // 卸载二次确认：插件名 + 删除范围 + 不可撤销；确认键用危险色，正文可折行不溢出。
+  function showUninstallConfirm(card, p) {
+    if (S.grid) {
+      var live = S.grid.querySelector('.store-card[data-plugin-id="' + p.id + '"]');
+      if (live) card = live;
+    }
+    if (card.querySelector('.store-confirm')) return;
+    var name = p.name || p.id;
+    var box = el('div', 'store-pkg-inline store-confirm');
+    box.style.maxWidth = '100%';
+    var title = add(box, el('strong', 'store-confirm-title',
+      T('store.uninstall.confirmTitle', '确认卸载 {name}').replace('{name}', name)));
+    title.style.display = 'block';
+    var body = add(box, el('p', 'store-pkg-inline-label',
+      T('store.uninstall.confirmBody', '将停止该插件并删除其程序文件（data/plugins/' + p.id +
+        '/ 下所有版本）。插件业务数据（安装目录外）不受影响。此操作不可撤销。')));
+    body.style.wordBreak = 'break-word';
+    var actions = add(box, el('div', 'store-pkg-inline-actions'));
+    var cancel = add(actions, el('button', 'btn btn-ghost', T('store.uninstall.cancel', '取消')));
+    cancel.type = 'button';
+    var ok = dangerBtn(T('store.uninstall.confirmOk', '确认卸载'), 'store-confirm-ok');
+    actions.insertBefore(ok, cancel);
+    function close() { if (box.parentNode) box.parentNode.removeChild(box); }
+    on(ok, function () { close(); doUninstall(p, p.id); });
     on(cancel, function () { close(); });
     var status = card.querySelector('.store-card-status');
     card.insertBefore(box, status);
@@ -690,11 +742,64 @@
       setStatus(id, 'note', '已停用（可随时再启用）'); return loadInstalled();
     }).catch(function (err) { setStatus(id, 'fail', '停用失败：' + (err && err.message ? err.message : '网络错误')); });
   }
+  // DELETE 写请求：CSRF 双提交与 POST 同一条中间件链，不做 POST 伪装。
+  function deleteJson(url) {
+    var token = readCookie('kore_csrf');
+    if (!token) return Promise.reject(new Error('缺少 CSRF 令牌（kore_csrf），请刷新页面或重新登录'));
+    return request(url, { method: 'DELETE', headers: { 'X-Kore-CSRF': token } });
+  }
+  // 一次性能力探测（G-19：无定时器、无轮询）：用永不安装的 id 探 DELETE，
+  // 老内核回 404/405/501 → 直接禁用按钮；新内核回 200 already_absent（无副作用）。
+  function probeUninstall() {
+    if (S.probedUninstall) return;
+    S.probedUninstall = true;
+    deleteJson(U.uninstall + 'kore-uninstall-probe').then(function (res) {
+      if (res.status === 404 || res.status === 405 || res.status === 501) {
+        S.uninstallOff = true;
+        renderGrid();
+      }
+    }, function () { /* 网络故障不降级：避免把暂时性错误误判为内核不支持 */ });
+  }
+  // 卸载结果六种人话：成功 / 已不在（非错误）/ 409 停不下来（原状未变）/ 503 已整体回滚 /
+  // 400 原样 message / 501 内核不支持；404·405 视为老内核并禁用按钮。
+  function doUninstall(p, id) {
+    setStatus(id, 'busy', '卸载中…');
+    deleteJson(U.uninstall + encodeURIComponent(id)).then(function (res) {
+      var d = res.data || {};
+      if (res.ok && res.status === 200) {
+        if (d.already_absent === true) setStatus(id, 'ok', T('store.uninstall.absent', '该插件已不在，列表已同步'));
+        else setStatus(id, 'ok', T('store.uninstall.ok', '已卸载 {name}').replace('{name}', p.name || id));
+        return loadInstalled(); // 复用既有刷新函数，不新增轮询
+      }
+      if (res.status === 404 || res.status === 405) {
+        S.uninstallOff = true;
+        return setStatus(id, 'fail', T('store.uninstall.unsupported', '当前内核版本不支持卸载插件'));
+      }
+      if (res.status === 409) {
+        return setStatus(id, 'fail', T('store.uninstall.conflict',
+          '插件停不下来，未做任何删除；请查看插件日志或稍后重试'));
+      }
+      if (res.status === 503) {
+        return setStatus(id, 'fail', T('store.uninstall.audit',
+          '审计写入失败，操作已整体回滚，插件仍完好'));
+      }
+      if (res.status === 501) {
+        S.uninstallOff = true;
+        return setStatus(id, 'fail', T('store.uninstall.unsupportedHint', '当前内核版本不支持卸载'));
+      }
+      if (res.status === 401) return setStatus(id, 'fail', '登录已过期，请重新登录');
+      return setStatus(id, 'fail', '卸载失败：' + errText(res)); // 400 等输入错误原样显示
+    }, function (err) {
+      setStatus(id, 'fail', '卸载失败：' + (err && err.message ? err.message : '网络错误'));
+    });
+  }
+
   function loadInstalled() {
     return request(U.installed).then(function (res) {
       S.installed = Object.create(null);
       if (res.ok && res.data && res.data.plugins) res.data.plugins.forEach(function (p) { S.installed[p.id] = p; });
       renderGrid();
+      probeUninstall(); // 首轮加载探一次卸载能力（只读语义的幂等 DELETE，不轮询）
     }, function () { /* 已安装列表失败不阻塞商店主视图 */ });
   }
 

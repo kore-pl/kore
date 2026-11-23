@@ -558,6 +558,24 @@
     }
     ops.appendChild(actionBtn);
 
+    // 卸载：DELETE /api/v1/plugins/{id}（停进程 + 删程序文件，幂等）。危险色与「停用」灰区分；
+    // 老内核探测到 404/405/501 后按钮直接禁用，不做点了才报错的假按钮。
+    var uninstallBtn = el('button', 'btn plugin-uninstall-btn', '卸载');
+    uninstallBtn.type = 'button';
+    uninstallBtn.style.color = 'var(--kore-danger)';
+    uninstallBtn.style.borderColor = 'var(--kore-danger)';
+    if (state.pluginsUninstallOff === true) {
+      uninstallBtn.disabled = true;
+      uninstallBtn.title = '当前内核版本不支持卸载插件';
+    } else {
+      uninstallBtn.title = '卸载插件：停止进程并删除程序文件，业务数据保留（需二次确认）';
+      uninstallBtn.addEventListener('click', function () {
+        confirmRowUninstall(plugin, tr, note, uninstallBtn);
+      });
+      if (state.pluginsUninstallOff === undefined) probeRowUninstall();
+    }
+    ops.appendChild(uninstallBtn);
+
     var ping = pingState(id);
     var pingBtn = el('button', 'btn', '调用 ping');
     pingBtn.type = 'button';
@@ -632,6 +650,99 @@
     cancel.addEventListener('click', function () { replaceRow(plugin); });
     note.appendChild(ok);
     note.appendChild(cancel);
+  }
+
+  // 卸载能力一次性探测（G-19：无定时器、无轮询）：用永不存在的 id 探 DELETE，
+  // 老内核 404/405/501 → 之后所有行内按钮直接禁用。新内核回 200 already_absent，无副作用。
+  var uninstallProbing = false;
+  function probeRowUninstall() {
+    if (uninstallProbing) return Promise.resolve();
+    uninstallProbing = true;
+    return ensureCsrf().then(function (token) {
+      return request(ENDPOINTS.plugins + '/kore-uninstall-probe',
+        { method: 'DELETE', headers: { 'X-Kore-CSRF': token } });
+    }).then(function (res) {
+      uninstallProbing = false;
+      if (res.status === 404 || res.status === 405 || res.status === 501) {
+        state.pluginsUninstallOff = true;
+        renderDashboard();
+        return;
+      }
+      state.pluginsUninstallOff = false;
+    }, function () { uninstallProbing = false; });
+  }
+
+  // 行内卸载：与商店同一份确认文案、同一 API；成功即移除该行并刷新一次列表。
+  function confirmRowUninstall(plugin, tr, note, btn) {
+    btn.disabled = true;
+    note.className = 'row-note row-note-warn';
+    note.textContent = '';
+    var head = el('strong', null, '确认卸载 ' + (plugin.name || plugin.id));
+    head.style.display = 'block';
+    note.appendChild(head);
+    note.appendChild(document.createTextNode('将停止该插件并删除其程序文件（data/plugins/' +
+      plugin.id + '/ 下所有版本）。插件业务数据（安装目录外）不受影响。此操作不可撤销。 '));
+    var ok = el('button', 'btn plugin-uninstall-ok', '确认卸载');
+    ok.type = 'button';
+    ok.style.color = 'var(--kore-danger)';
+    ok.style.borderColor = 'var(--kore-danger)';
+    var cancel = el('button', 'btn btn-ghost', '取消');
+    cancel.type = 'button';
+    ok.addEventListener('click', function () {
+      note.className = 'row-note';
+      note.textContent = '卸载中…';
+      ok.disabled = true; cancel.disabled = true;
+      uninstallRowPlugin(plugin).then(function (r) {
+        if (!r.ok) {
+          if (r.unsupported) { renderDashboard(); return; } // 已降级：整表重绘后按钮为禁用态
+          note.className = 'row-note row-note-fail';
+          note.textContent = r.message;
+          ok.disabled = false; cancel.disabled = false; btn.disabled = false;
+          return;
+        }
+        // 成功：行移除 + 一次列表刷新（复用既有 refresh 入口，不新增轮询）。
+        if (tr.parentNode) tr.parentNode.removeChild(tr);
+        state.plugins = state.plugins.filter(function (x) { return !x || x.id !== plugin.id; });
+        state.notice = r.message;
+        refreshPluginsView();
+      });
+    });
+    cancel.addEventListener('click', function () { replaceRow(plugin); });
+    note.appendChild(ok);
+    note.appendChild(cancel);
+  }
+
+  // DELETE 卸载（不做 POST 伪装）；结果按状态码给六种人话，与商店页同一口径。
+  function uninstallRowPlugin(plugin) {
+    return ensureCsrf().then(function (token) {
+      if (!token) return { ok: false, message: '缺少 CSRF 令牌（kore_csrf），请刷新页面或重新登录后重试' };
+      return request(ENDPOINTS.plugins + '/' + encodeURIComponent(plugin.id),
+        { method: 'DELETE', headers: { 'X-Kore-CSRF': token } }).then(function (res) {
+        var d = res.data || {};
+        if (res.status === 200 && res.ok) {
+          return { ok: true, message: d.already_absent === true ? '该插件已不在，列表已同步'
+            : '已卸载 ' + (plugin.name || plugin.id) };
+        }
+        if (res.status === 404 || res.status === 405) {
+          state.pluginsUninstallOff = true;
+          return { ok: false, unsupported: true, message: '当前内核版本不支持卸载插件' };
+        }
+        if (res.status === 409) return { ok: false, message: '插件停不下来，未做任何删除；请查看插件日志或稍后重试' };
+        if (res.status === 503) return { ok: false, message: '审计写入失败，操作已整体回滚，插件仍完好' };
+        if (res.status === 501) {
+          state.pluginsUninstallOff = true;
+          return { ok: false, unsupported: true, message: '当前内核版本不支持卸载' };
+        }
+        if (res.status === 401) {
+          state.authed = false;
+          renderLogin('会话已过期，请重新登录');
+          return { ok: false, message: '会话已过期，请重新登录' };
+        }
+        return { ok: false, message: '卸载失败：' + describeError(res) };
+      });
+    }, function (err) {
+      return { ok: false, message: '卸载失败：' + (err && err.message ? err.message : '网络错误') };
+    });
   }
 
   // lazy 语义：lifecycle=lazy 的插件按需拉起、空闲退出以省资源，stopped 是正常空闲而非故障。

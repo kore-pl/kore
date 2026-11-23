@@ -59,6 +59,14 @@
     'settings.language.hint': 'Chinese is the default. English is optional and untranslated text falls back to Chinese. Takes effect immediately and is remembered.',
     'settings.language.zh': '中文（简体）',
     'settings.language.en': 'English',
-    'settings.language.failed': 'Switch failed; Chinese is kept'
+    'settings.language.failed': 'Switch failed; Chinese is kept'    ,
+    'store.uninstall.title': 'Uninstall plugin',
+    'store.uninstall.btn': 'Uninstall',
+    'store.uninstall.unsupported': 'This kernel version does not support uninstalling plugins',
+    'store.uninstall.confirmTitle': 'Confirm uninstall of {name}',
+    'store.uninstall.confirmOk': 'Uninstall',
+    'store.uninstall.cancel': 'Cancel',
+    'store.uninstall.ok': 'Uninstalled {name}',
+    'store.uninstall.absent': 'Plugin was already absent; list resynced',
   };
 })(typeof window !== 'undefined' ? window : globalThis);

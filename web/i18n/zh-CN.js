@@ -59,6 +59,14 @@
     'settings.language.hint': '中文是默认语言；英文可选，未翻译文案回退中文。切换后立即生效并记住。',
     'settings.language.zh': '中文（简体）',
     'settings.language.en': 'English',
-    'settings.language.failed': '切换失败，已保持中文'
+    'settings.language.failed': '切换失败，已保持中文'    ,
+    'store.uninstall.title': '卸载插件',
+    'store.uninstall.btn': '卸载',
+    'store.uninstall.unsupported': '当前内核版本不支持卸载插件',
+    'store.uninstall.confirmTitle': '确认卸载 {name}',
+    'store.uninstall.confirmOk': '确认卸载',
+    'store.uninstall.cancel': '取消',
+    'store.uninstall.ok': '已卸载 {name}',
+    'store.uninstall.absent': '该插件已不在，列表已同步',
   };
 })(typeof window !== 'undefined' ? window : globalThis);
