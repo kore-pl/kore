@@ -26,7 +26,7 @@ window.KORE_DOCS = [
     "status": "draft"
   },
   {
-    "title": "Gitee 镜像仓库（GitHub 为主）",
+    "title": "Gitee 镜像仓库（Gitea 权威源 · 三端镜像推送）",
     "path": "../GITEE-MIRROR.md",
     "category": "愿景与设计",
     "status": "active"
