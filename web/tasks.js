@@ -335,6 +335,11 @@
   // runTask 立即执行：确认 → 同步调用 cron.run（最长 60s）→ 结果面板。
   function runTask(entry) {
     if (S.locked) return;
+    // 停用任务后端会拒绝（E_CONFLICT）：这里先给人话指引，不把裸错误甩给用户。
+    if (entry.enabled === false) {
+      setStatus('该任务已停用，先点「启用」再执行', 'fail');
+      return;
+    }
     confirmBox('将立即执行第 ' + entry.index + ' 条任务（同步，最长 60 秒）：' + entry.command, function (close, msg, ok) {
       ok.textContent = '执行中…';
       invoke('cron.run', { index: entry.index }).then(function (data) {
@@ -398,10 +403,12 @@
   // 行内启停：cron.enable / cron.disable（不弹窗，直接写当前用户 crontab）。
   function toggleTask(entry, button) {
     if (S.locked) return;
-    var next = !entry.enabled;
+    var next = !entry.enabled, previous = entry.enabled;
     var action = next ? 'cron.enable' : 'cron.disable';
-    button.disabled = true;
-    button.textContent = next ? '启用中…' : '停用中…';
+    // 乐观更新：先翻转行状态并置灰，失败再回滚到原状态（不假装成功）。
+    entry.enabled = next;
+    paintList();
+    setStatus('正在' + (next ? '启用' : '停用') + '第 ' + entry.index + ' 条任务…');
     invoke(action, { index: entry.index }).then(function (data) {
       var enabled = data.entry && typeof data.entry.enabled === 'boolean' ? data.entry.enabled : next;
       setStatus('第 ' + entry.index + ' 条任务已' + (enabled ? '启用' : '停用') +
@@ -410,10 +417,10 @@
       showBackup(data.backup_path);
       load();
     }, function (err) {
-      button.disabled = false;
-      button.textContent = next ? '启用' : '停用';
+      entry.enabled = previous;
+      paintList();
       var perm = permissionProblem(err.message);
-      setStatus((next ? '启用' : '停用') + '失败：' + err.message +
+      setStatus((next ? '启用' : '停用') + '失败，已恢复原状态：' + err.message +
         (perm ? '（按 RUNBOOK §5 以 root 启动 kored 后重试）' : ''), 'fail');
     });
   }
@@ -447,6 +454,10 @@
     var body = add(table, el('tbody'));
     S.entries.forEach(function (entry) {
       var tr = add(body, el('tr'));
+      if (entry.enabled === false) {
+        tr.style.opacity = '0.55';
+        tr.title = '该任务已停用（定义仍保留在 crontab 注释中）';
+      }
       var index = add(tr, el('td', 'task-index', String(entry.index)));
       index.dataset.label = '索引';
       var type = add(tr, el('td')); type.dataset.label = '类型';
