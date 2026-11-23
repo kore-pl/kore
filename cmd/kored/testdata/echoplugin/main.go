@@ -25,6 +25,9 @@ var (
 	extraMethod   = ""
 )
 
+// postUpgradeMarker 是升级后置动作探针落盘的文件名（相对插件进程工作目录）。
+const postUpgradeMarker = "post_upgrade_ran"
+
 // helloParams 是 kore.hello 请求参数（PLUGIN-PROTOCOL §5）。
 type helloParams struct {
 	PluginID     string   `json:"plugin_id"`
@@ -130,6 +133,14 @@ func serve(conn net.Conn) error {
 			response.Result = json.RawMessage(`{"status":"ready"}`)
 		case "ping", "echo.ping":
 			response.Result = json.RawMessage(`{"pong":true}`)
+		case "echo.postupgrade":
+			// 升级后置动作探针：内核按清单声明调用时，在插件工作目录留标记文件，
+			// 供 cmd/kored 的测试断言"lazy 插件从未被手动调用也会被拉起执行"。
+			if err := os.WriteFile(postUpgradeMarker, []byte("1"), 0o644); err != nil {
+				response.Error = &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: err.Error()}
+				break
+			}
+			response.Result = json.RawMessage(`{"ok":true}`)
 		default:
 			if extraMethod != "" && request.Method == extraMethod {
 				response.Result = json.RawMessage(`{"pong":true,"method":"` + extraMethod + `"}`)

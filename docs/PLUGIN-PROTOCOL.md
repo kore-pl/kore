@@ -72,6 +72,7 @@
 | root_actions | object[] | 否 | `[]` | 固定 argv 的提权动作清单（见 §3.1.3）；非空时必须同时 `requires_root:true`；上限 16 条 |
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
 | protocol_minor | int | 否 | 0 | 见 §13 |
+| post_upgrade | string | 否 | 无 | **升级后置动作**：完整方法名 `<id>.<action>`，域必须等于本插件 id；内核在安装/升级重载成功后调用一次（见 §12 第 6 步）。内核只校验形态与归属，不校验动作是否实现、不维护动词表（G-01）；失败不阻断安装但必须可见（WARN + 告警） |
 | web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
 
 > 口径说明：`idle_timeout_s` 默认 60s 为 M2 实现口径（更早释放空闲 lazy 进程，贴合资源零侵占锚点）；配置可设 60–1800，需 300s 语义时显式配置。**不做 300s 下限**：该字段是 lazy 进程的**资源释放旋钮**，取小更贴合「资源零侵占」，加下限会让文档化的 60s 默认值变成非法配置，并让空闲 lazy 进程多占 5 倍内存；1Panel 的「min 300s」是**会话空闲**超时语义（对应 `auth.session_ttl`），不属于本字段（裁决见 `.agents/LOG/DECISIONS.md` 2026-11-23 条）。
@@ -416,6 +417,8 @@
 3. 切换 bus 路由到新 socket（registry 单写锁内一次替换），尝试 `kore.ping` 确认可用（2s）。失败：路由回切旧 socket，SIGKILL 新进程，回 `E_UPSTREAM`。
 4. 向旧进程发 `kore.shutdown{reason:"upgrade",grace_ms:5000}`，等其退出（超时 SIGKILL）；旧 socket 删除、临时 socket 重命名为正式路径、状态 `ready`、记升级审计；删除更早版本目录，保留当前与上一版本并写 `plugin_state.last_upgrade_at`。
 
+6. **升级后置动作**：重载成功后，若新清单声明了 `post_upgrade`，内核经 bus 按声明调用一次（15s 上限），让插件迁移宿主侧的存量引用（如写进 crontab 的二进制版本路径）。lazy 插件为此会被冷启一次，动作完成后仍由 `idle_timeout_s` 回收，不改变常驻配额与状态机。动作失败不回滚安装（新版本已可用），但写 WARN 日志 + 告警中心一条记录，禁止静默；插件必须保证该动作**幂等**。
+
 回滚兜底：第 3 步之后若新进程在 60s 内心跳失败且重启超限，回滚到上一版本一次（重新走 2–5 步拉起旧版本），仍失败则 `failed` 并暴露错误。升级全过程不允许两个进程同时监听正式 socket，避免请求乱序。
 
 ## 13. 版本协商
@@ -461,7 +464,8 @@ func (e *echo) Ping(context.Context) (pluginapi.PingResponse, error) { return pl
 ## 16. 演进规则
 
 1. 加字段必须可选且有默认值；删字段、改语义/类型/枚举含义 → 升主版本（`kore.plugin.v2`），旧版本并存一个 M 周期后下线，各仓库独立 tag、插件不强制跟随 kore（R4）。
-2. 事件只增不改：已有事件字段只能追加可选字段，新事件用新 `event` 名；新方法只增（未注册返回 `E_NOTFOUND`），错误码只增且必须给 HTTP 映射与调用方处置；编码只在 `kore.hello.encoding` 内会话级协商，破坏性变更必须先在 `docs/DECISIONS/` 留 ADR。
+2. **`post_upgrade` 属加字段演进**（可选、有默认值、缺省不调用），按 §16.1 不构成破坏性协议改动：不升 `kore.plugin.v2`、不升 kore 主版本；老内核忽略该字段时插件行为必须不变（插件侧保留启动期兜底）。判断与代价见 [ADR-0048](./DECISIONS/0048-post-upgrade-hook.md)。
+3. 事件只增不改：已有事件字段只能追加可选字段，新事件用新 `event` 名；新方法只增（未注册返回 `E_NOTFOUND`），错误码只增且必须给 HTTP 映射与调用方处置；编码只在 `kore.hello.encoding` 内会话级协商，破坏性变更必须先在 `docs/DECISIONS/` 留 ADR。
 
 ## 17. 跨平台传输与身份校验
 

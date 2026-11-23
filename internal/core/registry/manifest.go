@@ -136,6 +136,12 @@ type Manifest struct {
 	SizeBytes int64 `json:"size_bytes,omitempty"`
 	// DepthLevel 深度等级：production 或 basic（G-20）。
 	DepthLevel string `json:"depth_level,omitempty"`
+	// PostUpgrade 是「升级后置动作」（可选）：完整方法名 `<id>.<action>`。
+	//
+	// 内核在安装/升级重载成功后按此声明调用一次，让插件有机会迁移宿主侧的存量
+	// 引用（例如写进 crontab 的二进制版本路径）。内核只做「读声明 → 交给 bus 调用」，
+	// 不认识动作语义、不维护动词表（G-01）；失败不阻断安装但必须可见。
+	PostUpgrade string `json:"post_upgrade,omitempty"`
 	// IdleTimeoutS 空闲退出秒数，仅 lifecycle=lazy 生效，范围 60–1800。
 	IdleTimeoutS int `json:"idle_timeout_s,omitempty"`
 	// Web 插件前端清单段（FRONTEND §4.2）；nil 表示插件无 UI。

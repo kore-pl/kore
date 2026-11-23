@@ -34,6 +34,9 @@ type pluginSpec struct {
 	// RequiresRoot / RootActions 用于 root-action 通道的端到端断言（ADR-0018）。
 	RequiresRoot bool
 	RootActions  []map[string]any
+	// PostUpgrade 是清单声明的升级后置动作（完整方法名）；空表示不声明。
+	// 用于断言"内核按声明调用、不硬编码插件业务"（PLUGIN-PROTOCOL §3.1）。
+	PostUpgrade string
 }
 
 // harness 是进程内装配的端到端测试环境。

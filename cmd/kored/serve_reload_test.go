@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/store"
@@ -179,4 +182,43 @@ func newTestInstaller(t *testing.T, stateDir string, db *store.Store, force bool
 		t.Fatalf("构造安装器失败: %v", err)
 	}
 	return inst
+}
+
+// TestReloadOneRunsDeclaredPostUpgrade 是「升级后 lazy 插件静默不迁移」缺口的核心断言：
+// 插件声明了 post_upgrade 时，即使它从未被手动调用，内核也在升级重载后拉起并执行一次。
+//
+// 反例：不实现该机制时本测试 FAIL——标记文件不会被创建（插件没被拉起）。
+func TestReloadOneRunsDeclaredPostUpgrade(t *testing.T) {
+	stateDir := t.TempDir()
+	logger := discardLogger()
+	installSpecs(t, stateDir, logger, []pluginSpec{
+		{ID: "echo", Lifecycle: "lazy", PostUpgrade: "echo.postupgrade"},
+	})
+	cfg := testConfig(stateDir)
+	app := newPlatform(t, cfg)
+	db := openState(t, stateDir, logger)
+	svc, code := buildService(cfg, app, db)
+	if code != exitOK {
+		t.Fatalf("装配 service 失败，退出码 %d", code)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = svc.manager.Stop(ctx, "echo")
+	})
+	// 只标记 desired=enabled（lazy 的 Enable 不拉起进程），模拟"用户装完/升级完但没打开页面"。
+	if err := svc.backend.Enable(context.Background(), "echo"); err != nil {
+		t.Fatalf("enable echo 失败: %v", err)
+	}
+	result, err := svc.reloadOne("echo")
+	if err != nil {
+		t.Fatalf("reloadOne 失败: %v", err)
+	}
+	if result != reloadRestarted {
+		t.Fatalf("重载结果 = %q，期望 %q", result, reloadRestarted)
+	}
+	marker := filepath.Join(svc.pluginRootDir, "echo", "post_upgrade_ran")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("升级后置动作未被调用（lazy 插件升级后仍停在旧状态）: %v", err)
+	}
 }

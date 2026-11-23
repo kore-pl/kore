@@ -32,6 +32,10 @@ const restoreTimeout = 5 * time.Second
 // reloadStopTimeout 是热重载前等待旧进程退出的上限（Stop 内 5s 宽限 + 2s SIGKILL 兜底）。
 const reloadStopTimeout = 5 * time.Second
 
+// postUpgradeTimeout 是升级后置动作的执行上限：动作可能读写宿主文件（如 crontab），
+// 给足 15s 但不无限等待；超时按失败处理并告警，不阻断安装结果。
+const postUpgradeTimeout = 15 * time.Second
+
 // reloadOne 的结果分类，随 POST /store/install 的 reload 字段返回。
 const (
 	reloadFailed     = "failed"
@@ -310,8 +314,45 @@ func (s *service) reloadOne(id string) (string, error) {
 	if err := s.backend.Enable(ctx, id); err != nil {
 		return reloadFailed, fmt.Errorf("重载后按 desired=enabled 启动 %s 失败: %w", id, err)
 	}
+	// 6) 升级后置动作：按清单声明执行一次（PLUGIN-PROTOCOL §3.1）。
+	// 顺序在 Enable 之后：先确保新版本已登记/可拉起，再让插件处理自己的存量迁移。
+	s.runPostUpgrade(id, manifest.PostUpgrade)
 	slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRestarted)
 	return reloadRestarted, nil
+}
+
+// runPostUpgrade 执行清单声明的升级后置动作。
+//
+// G-01 边界：方法名完全来自插件清单，内核只做「读取声明 → bus 调用」——不认识
+// cron、不认识迁移语义，也不维护任何业务动词表。lazy 插件会因此被冷启一次
+// （bus.Ensure 的既有语义），动作完成后由 idle 计时器正常回收，不改变常驻配额。
+//
+// 失败不阻断安装（新版本已落位、其余功能可用），但必须可见：WARN 日志 + 告警中心
+// 一条记录，避免「动作没执行」再次变成静默失效。
+func (s *service) runPostUpgrade(id, method string) {
+	if method == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), postUpgradeTimeout)
+	defer cancel()
+	if _, err := s.bus.Call(ctx, id, method, nil, "r-post-upgrade"); err != nil {
+		slog.Warn("升级后置动作未完成（新版本已安装，动作需重试或人工处理）",
+			"plugin_id", id, "method", method, "err", err)
+		s.alertPostUpgradeFailure(id, method, err)
+		return
+	}
+	slog.Info("升级后置动作完成", "plugin_id", id, "method", method)
+}
+
+// alertPostUpgradeFailure 把后置动作失败落进告警中心（用户不打开插件页也能看到）。
+func (s *service) alertPostUpgradeFailure(id, method string, cause error) {
+	if s.db == nil {
+		return
+	}
+	if _, err := s.db.PutAlert("warning", "plugin",
+		"插件 "+id+" 升级后置动作未完成", method+"："+cause.Error()); err != nil {
+		slog.Warn("写升级后置动作告警失败", "plugin_id", id, "err", err)
+	}
 }
 
 // noteGrantExtension 把升级新增能力的授予扩展写进审计（installer 无审计通道）。

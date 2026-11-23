@@ -83,6 +83,7 @@ func (m *Manifest) validate() error {
 		m.validateIdentity,
 		m.validateRuntime,
 		m.validateMethodCapabilities,
+		m.validatePostUpgrade,
 		m.validateResources,
 		m.validateTriggers,
 		m.validateExtras,
@@ -161,6 +162,28 @@ func (m *Manifest) validateCapabilities() error {
 			return errf(pluginapi.E_INVALID,
 				"capability=%q 的能力域 %q 必须等于插件 id %q，或使用 6 项特权能力", capability, domain, m.ID)
 		}
+	}
+	return nil
+}
+
+// validatePostUpgrade 校验可选的升级后置动作声明：完整方法名 `<id>.<action>`。
+//
+// 只校验形态与归属（域必须等于自身 id），不校验动作是否已实现——内核不持有
+// 插件方法清单，也不维护业务动词表（G-01）；"声明了却没实现"由插件自带测试守护。
+func (m *Manifest) validatePostUpgrade() error {
+	if m.PostUpgrade == "" {
+		return nil
+	}
+	prefix := m.ID + "."
+	action, ok := strings.CutPrefix(m.PostUpgrade, prefix)
+	if !ok {
+		return errf(pluginapi.E_INVALID,
+			"post_upgrade=%q 必须以本插件 id 前缀 %q 开头", m.PostUpgrade, prefix)
+	}
+	if !methodActionPattern.MatchString(action) {
+		return errf(pluginapi.E_INVALID,
+			"post_upgrade=%q 的动作段 %q 不合法（段首小写字母，段内字母/数字/下划线，可点分）",
+			m.PostUpgrade, action)
 	}
 	return nil
 }

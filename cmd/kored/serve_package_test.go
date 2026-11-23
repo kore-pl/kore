@@ -48,6 +48,9 @@ func buildPackage(t *testing.T, spec pluginSpec) string {
 	if len(spec.RootActions) > 0 {
 		info["root_actions"] = spec.RootActions
 	}
+	if spec.PostUpgrade != "" {
+		info["post_upgrade"] = spec.PostUpgrade
+	}
 	if spec.Web {
 		info["web"] = map[string]any{
 			"entry": "web/index.js", "styles": []string{"web/index.css"},

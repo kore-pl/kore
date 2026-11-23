@@ -251,3 +251,32 @@ func TestParseIdleTimeoutBoundary(t *testing.T) {
 		}
 	}
 }
+
+// TestParsePostUpgrade 验证可选的升级后置动作声明：缺省为空、合法保留、非法拒绝。
+//
+// 内核只校验形态（<id>.<action>），不认识动作语义——G-01 薄壳红线的直接体现。
+func TestParsePostUpgrade(t *testing.T) {
+	if got := parse(t, baseManifest()); got.PostUpgrade != "" {
+		t.Fatalf("未声明时应为空，实际 %q", got.PostUpgrade)
+	}
+	withHook := baseManifest()
+	withHook["post_upgrade"] = "site.migrateStale"
+	if got := parse(t, withHook); got.PostUpgrade != "site.migrateStale" {
+		t.Fatalf("合法声明应原样保留，实际 %q", got.PostUpgrade)
+	}
+	cases := []struct{ name, value string }{
+		{"前缀不是本插件 id", "cron.migrate"},
+		{"缺动作段", "site."},
+		{"动作段不合法", "site.Migrate"},
+		{"协议保留域", "kore.post_upgrade"},
+	}
+	for _, c := range cases {
+		manifest := baseManifest()
+		manifest["post_upgrade"] = c.value
+		if _, err := registry.Parse(encode(t, manifest)); err == nil {
+			t.Fatalf("%s：%q 应被拒绝", c.name, c.value)
+		} else if code := codeOf(t, err); code != pluginapi.E_INVALID {
+			t.Fatalf("%s：错误码 = %s，期望 %s", c.name, code, pluginapi.E_INVALID)
+		}
+	}
+}
