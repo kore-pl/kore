@@ -10,12 +10,12 @@
 | 作用 | 回答"每个能力域现在是什么水平、离能用差哪些动作、先补哪个"，作为后续补全的唯一依据 |
 | 不作用 | 不替代 [FEATURE-PARITY.md](./FEATURE-PARITY.md)（对标归属）、[PARITY-GAP.md](./PARITY-GAP.md)（差距账）、[PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md)（字段规格） |
 | 盘点方法 | 逐仓读 `info.json` / `CHANGELOG.md` / `methods.go` / `internal/*/call.go`，再核对真实副作用（`os/exec`、真实文件读写、网络连接、非 `noopExecutor`）；**不采信 README / tag message / CHANGELOG 的级别自述**，以 **git HEAD** 为准、未提交工作树不计入 |
-| 盘点基线 | 24 个 `kore-plugin-*` 仓、**175 个业务方法**（`§6` 命令口径 = case 字面量；不含 `config.get/set`；`site` 走 `verbRegistry` 另计 19、`redis` 用 `methodTable` 注册表另计 16 → **完整方法面 210**）、主壳 **20 视图 / 四组导航**、**9 个仓有配置契约**（`site` / `logs` / `backup` / `db-mysql` / `db-postgres` / `redis` / `dns` / `ssh-guard` / `waf`）、**17 个仓有方法级 `method_capabilities`**（`grep -l method_capabilities ../kore-plugin-*/info.json` 实测）；`echo` 为验证件，不参与 L 分级 |
+| 盘点基线 | 24 个 `kore-plugin-*` 仓、**完整方法面 220**（`§6` 实测：case 字面量 184 + `site` verbRegistry 20 + `redis` methodTable 16；不含 `config.get/set`）、主壳 **21 导航项 / 19 懒加载视图模块**（两个指标，别混用）、**9 个仓有配置契约**、**23 个仓有方法级 `method_capabilities`**（`grep -l` 实测；`echo` 验证件不计）；`echo` 不参与 L 分级 |
 | 竞品口径 | 宝塔面板 / 1Panel 专业版**公开功能**的常识描述；无法确认的项标"待核实"，不臆造 |
 | 盘点范围 | 任务给定的 **24 个** `kore-plugin-*` 仓；`discover` 自 Round 2 起纳入，不留在表外 |
-| 盘点时刻 | **2026-11-23 19:05 +08:00**。HEAD 实测版本：`site` 0.4.1 / `file` 0.3.1 / `db-mysql` 0.3.2 / `dns` 0.3.2 / `ssl` 0.5.0 / `redis` 0.5.0 / `container` 0.4.1 / `db-postgres` 0.3.1 / `integrity` 0.3.2 / `logs` 0.4.1 / `cron` 0.4.1 / `ssh-guard` 0.2.3 / `waf` 0.3.1 / `runtime-node` 0.2.4 / `runtime-python` 0.2.4 / `runtime-php` 0.2.2 / `echo` 0.1.4（全部 `depth_level: production`，`basic` 已清零），一律按 **HEAD** 计、未提交工作树不计；**索引对齐与方法数都是滚动量，§6 命令实测为准** |
+| 盘点时刻 | **2026-11-23 20:35 +08:00**。HEAD 实测版本：`site` 0.4.3 / `file` 0.3.2 / `db-mysql` 0.4.1 / `db-postgres` 0.3.3 / `dns` 0.3.2 / `ssl` 0.5.1 / `redis` 0.5.0 / `container` 0.4.1 / `integrity` 0.3.3 / `logs` 0.4.2 / `cron` 0.4.1 / `firewall` 0.2.6 / `process` 0.2.2 / `ssh-guard` 0.2.3 / `waf` 0.3.1 / `runtime-node` 0.2.4 / `runtime-python` 0.2.4 / `runtime-php` 0.2.2 / `app-deploy` 0.2.2 / `echo` 0.1.4（全部 `depth_level: production`，`basic` 0），按 **HEAD** 计；索引对齐与方法数都是滚动量，以 §6 命令实测为准 |
 
-**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**，上一版「L0 2 / L1 1」不成立。真缺口只剩 **1 条**：**插件凭据不能跨插件传递**（§5 #8）；**插件降权已落地**（#13，`6ceeba8`：`kore-<id>` + `SysProcAttr.Credential` + 降级矩阵）；**方法级 capability 仍是部分补**（#12，17/24 仓声明，内核侧已就绪）。`depth_level`：24/24 仓均 `production`，**`basic` 0**。索引对齐是滚动量：以 ``§6`` 版本比对命令实测为准（本轮盘点见 §6）。
+**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**。§3.5 的 v1.0 硬缺口 **#8 已补（一期，ADR-0026 方案 A）**，剩余 1 条部分补（#5 下划线命名约束，已文档化）。**插件降权已落地**（#13，`6ceeba8`；阶段 C 数据根契约 `KORE_PLUGIN_DATA` 已注入，site/ssl/app-deploy 三仓落地）；**方法级 capability 23/24**（#12，`echo` 验证件不计）。`depth_level`：24/24 仓均 `production`，**`basic` 0**。索引对齐：**22/24 已收录**，`db-mysql` 0.4.1 / `db-postgres` 0.3.3 **待入索引**（刚发版，等重签/索引同步）。
 
 ### 0.1 文档声明 vs 代码事实（本轮重判）
 
@@ -28,7 +28,7 @@
 | 5 | §3.5 #12 写「只读方法也按 **admin 类**进审计」、声明「**3/24** 仓」 | **审计记录根本没有 capability 字段**：修复前只读也写一条 `invoke.*`（判定来源是插件级 admin），修复后 `needAdmin=false` 时**连记录都不写**（= 完全不落库）；已声明仓为 **17/24** | `internal/core/store/audit.go:36-44`（无 capability 字段）、`httpapi/audit_http.go:137`（审计门）、`httpapi/invoke_capability.go:165-177`（判定/回退）、`.agents/verify/r5-12-method-capability.md` §3/§4（18875 vs 18876 A/B） | #12 改部分补 + **措辞纠正为"只读完全不落库 vs 写调用落库"** |
 | 6 | `ssl` L1.5（10 方法已列） | 与代码一致；expiring / renew.set / acme.status / acme.issue 均在 | `../kore-plugin-ssl/methods.go:139,150,161,171` | 维持 L1.5（ACME 仍骨架） |
 | 7 | `process`「缺优先级」 | HEAD 0.2.1：protect + renice 已提交、tag 已推，**并补了 5 条方法级 capability**（list/detail/tree=`proc:read`，kill/renice=`proc:write`） | `../kore-plugin-process/CHANGELOG.md` 0.2.1、`methods.go:46` | 计入（索引待重签） |
-| 8 | 主壳 **16 视图** | **20 视图**（`waf` 视图入导航）：旧表漏计 `runtimes`（业务组）与 `integrity`（平台组）两个早已存在的视图，再加上已接入导航的 `container`（资源组）；`process` 视图已完成 0.2.1 适配（`c43aed6`） | `web/shell.js:60-63`（四组 ids 共 20 个） | §3.3.1 重写为 20（不是 17；`waf` 入导航后 +1） |
+| 8 | 主壳 **16 视图**（旧口径） | **21 导航项 / 19 懒加载视图模块**：导航项 = `NAV_GROUPS` 四组 ids（运维 5 + 业务 5 + 资源 4 + 平台 7，`dns` 已入平台组）；懒加载视图模块 = `make frontend` 的 19 个视图模块（`render: lazyView` 注册）。**两个指标不要混用** | `web/shell.js` NAV_GROUPS + `Makefile` 前端打包计数 | §3.3.1 重写为 21 导航项 |
 | 9 | §3.5 #10「`runtime-php` / `runtime-python` 0.2.0 未入索引」 | 两仓已入索引（#10 结案）；索引对齐是滚动量，盘点时刻 14/24 | §6 版本比对命令（读 HEAD） | #10 改"已补" |
 | 10 | §3.3.2「告警/通知中心 无」「长任务进度 伪」 | **均已落地**：铃铛 + 抽屉 + 3 端点 + 服务端埋点；SSE 真实阶段进度 | `httpapi/handlers_alerts.go:19`、`httpapi/sse.go`、`web/shell.js:395-449`、`ui-alerts-progress.md`（双端截图） | 两行改"已达标" |
 | 11 | 配置契约 **6 个仓** | **9 个仓**：另含 `dns` / `ssh-guard` / `waf` | §6 `grep -rl '"config.get"'` | 口径更新 |
@@ -50,6 +50,9 @@
 
 **判级纪律**：级别只认代码事实（`file:line`）；"能编译 + 单测绿"不进任何一级的判据；L2 的"双端页面"指 PC 与手机各一张实拍图，接口 200 不算。只读域（`monitor` / `logs` / `dns`）读侧接线完成即记 L1.5，但须在级别列注明"只读"。未提交的工作树改动**不计入**任何一级。
 
+| 15 | 主壳「**20 视图**」（上一版盘点） | **21 导航项 / 19 懒加载视图模块**：导航项按 `NAV_GROUPS` 四组 ids 计（平台组已含 `dns`），懒加载模块按 `make frontend` 计；两个指标不可混用 | `web/shell.js` NAV_GROUPS；`Makefile` 打包计数 | §3.3.1 与矩阵行 8 重写 |
+| 16 | §3.5 #8「插件凭据无法跨插件传递 = 仍在」 | **已补（一期）**：ADR-0026 方案 A 落地（credential 包 + 5 端点 + env 注入 + 审计 fail-closed），db-mysql 0.4.1 / db-postgres 0.3.3 已采用 | `internal/core/credential/`、`internal/core/httpapi/handlers_credentials.go` | #8 改「已补（一期）」并写剩余挂账 |
+| 17 | §3.5 #12「方法级 capability 17/24」 | **23/24**（firewall 0.2.6 补全量 7 条；echo 验证件不计） | `grep -l method_capabilities ../kore-plugin-*/info.json` 实测 23 | #12 收口 |
 ## 2. 功能矩阵（3.2，24 个插件仓）
 
 **depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**；`echo` 0.1.4 为**最后一个**升 production 的仓（`basic` 已清零），`file` 0.3.1 同批。G-20 判据：`tests/fault/` + dist 可复现——本盘点只实测 `info.json` 版本与方法面，**fault 测试未复跑**（各仓证据以仓库内 `tests/fault/` 与 CHANGELOG 为准，不在此文冒充已证）。方法总数见 §6 实测（175 + site 19 + redis 16 = 210）。
@@ -85,7 +88,7 @@
 
 ## 3. 主壳（前端）成熟度（3.3）
 
-### 3.3.1 四组导航 · 20 视图
+### 3.3.1 四组导航 · 21 导航项（19 懒加载视图模块）
 
 | 导航组 | 视图（id） | 数量 |
 | --- | --- | --- |
@@ -138,54 +141,54 @@
 | # | 缺口 | 状态 | 代码事实 / 证据 | 处置 |
 | --- | --- | --- | --- | --- |
 | 1 | `discover` 报的是**客户端版本** | **已补** | `probe/server_version.go:29` 直连探测（MySQL `SELECT VERSION()` / PG `SHOW server_version` / Redis `INFO server` / nginx `-v`），`version_source=server`；探不到降级 client/unknown | 结案；凭据降级见 #8 |
-| 2 | `db-mysql` 缺建库/删库/改密/备份/导入导出 | **部分补** | 0.3.0 已有 11 方法 + `web/db-l2.js` 双端页面；**改密仍缺**（`mysqlop/client_admin.go:146` 明示"改密需要单独方法"） | 改密进 R5-3③；备份归 `backup` |
+| 2 | `db-mysql` 缺建库/删库/改密/备份/导入导出 | **已补（结案）** | 0.3.0 起建库/删库/用户/授权/导入导出；**0.4.0 补 `changePassword`**（改密）；0.4.1 起优先读内核凭据 env 并回 `credential_source`；`web/db-l2.js` 双端页面 | 0.4.1 方法面 13（含 changePassword + slowlog） |
 | 3 | `backup` 缺定时备份/保留策略/异地存储 | **已补** | 0.4.0 11 方法：retention/stats + schedule.set/get（交内核 scheduler，零 ticker）+ download + jobs 进度 + dimensions；异地按 G-11 不做 | 结案；**前端接线另列** |
 | 4 | `cron` 缺任务类型/执行日志/立即执行 | **已补** | 三类型 `croncore/tasktype.go:11`；日志 `methods.go:131`；立即执行 `:142`（`cron-l3.md` 隔离实例实测）；启停随后补于 0.4.0（`81e84d8`） | 结案 |
 | 5 | `ssl` 缺 ACME 自动申请与续期 | **部分补（骨架）** | 0.4.0 共 14 方法：ACME 探测/显式调用（ADR-0020，本机无客户端故真机签发未验证）+ 新建 `bind.*` 站点归属与 `https.status`；续期前备份 | 结案骨架部分；强制 HTTPS 下发与真机签发待补验 |
 | 6 | 站点容器模式 `site_dir_exists` 只看宿主路径 | **已补** | `sitedir.go:60` 容器内 `docker exec <c> test -d`（固定 argv、20s）；`get.go:48` 三态 `site_dir_state` + `site_dir_reason`，unknown 不误报 absent；保留旧布尔字段兼容 | 结案（site 0.3.0） |
 | 7 | 主壳缺全局搜索/审计入口/告警中心/长任务进度 | **已补** | `web/search.js`；`web/audit.js` + `GET /api/v1/audit`；`web/alerts.js` + 3 端点 + 服务端埋点；`sse.go` + `store.js` 真实进度；证据 `round4-audit.md`、`ui-alerts-progress.md` | 结案 |
-| 8 | 插件凭据无法跨插件传递 | **仍在** | `grep -rn password_env internal cmd` 零命中（本轮复核仍为零）；`discover` 探服务端版本仍需 `MYSQL_PWD` / `REDISCLI_AUTH`；候选见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md) §6.1 候选 A | v1.0 前必须做，与 #12 最小权限模型同批评审 |
+| 8 | 插件凭据无法跨插件传递 | **已补（一期，ADR-0026 方案 A）** | `internal/core/credential/`（0600/0700、越权 `E_NEED_GRANT`、授权/删除审计 fail-closed）+ **5 端点**（POST/GET/POST grants/DELETE grants/DELETE）+ supervisor `env` 注入（实测：owner 侧可见、grantee 授权后可见、revoke 后重启消失）；`db-mysql` 0.4.1 / `db-postgres` 0.3.3 已优先读 kernel env 并返回 `credential_source`。**剩余挂账**：`redis` 未采用、凭据 UI 刚接线未截图、无删除租约/轮换（方案 D 留 v1.1） | v1.0 硬缺口已关闭（一期） |
 | 9 | `resident` 占满槽位后 lazy 饿死 | **已补** | `resident_max=2` + lazy 保底 1 槽（`supervisor/{manager,lazy}.go`）；第 3 个 resident 返 `E_RATELIMIT`；`resident_slots_test.go` 覆盖 2+1 与 2+3；隔离实例 18851 实测。**诚实披露：显式 `resident_max=3` 会放弃保护** | 结案；候选 B/C 未采用（§2.6） |
 | 10 | `runtime-php` / `runtime-python` 0.2.0 未入索引 | **已补** | 两仓 0.2.0 已入索引（本条结案）；索引对齐是滚动量（§6 实测：盘点时刻 14/24，10 个刚发版仓待重签） | 结案；余项归重签收口 |
 | 11 | 提权只验证了拒绝路径 | **已补** | `r5-1-privilege-success.md`：真 root `systemd-run --uid=0` → ufw 全动作跑通、stdout/exit code 完整、幂等、回滚后 `ufw show added` 为空且 `iptables -S` 与基线 diff=0、两阶段 `root.action` 审计、非 root 403+hint 回归；并修掉 `--pipe`+file: 导致的输出恒空阻断缺陷 | 结案；**未证项**：ufw 活动状态下的数据面效果、插件降权组合（→#13） |
-| 12 | 插件级 capability 让只读方法也进审计 | **部分补** | 语义已纠正：**只读调用完全不落库**（`audit_http.go:137` 的 `needAdmin=false` 直接 return；`audit.invoke_all` 默认 false；记录无 capability 字段 `store/audit.go:36-44`），写调用落 1 条 `invoke.*`；判定/回退 `invoke_capability.go:165-177`（方法级命中优先，未命中回退插件级取最高要求）。已声明 **17/24 仓**。证据：`r5-12-method-capability.md` §3（6 个只读方法审计增量 0、写 +1、回退 +1/+0）、§4（`e1e804a` vs `ff92f6c` A/B：同一 `site.list` 修复前 +1 / 修复后 +0） | 剩 7 仓按仓补声明（内核侧不再改） |
-| 13 | **root 内核下插件未降权**（本轮新增） | **已补** | `6ceeba8`（P0 插件降权，16 文件）：`supervisor/demote.go` + `SysProcAttr.Credential` 落地，插件进程降到 `kore-<id>`；降权不可用时走降级矩阵并显式声明，不静默；与 ADR-0018 身份模型一致 | 结案；**未证项**：真 root 端到端在降权后尚未复验（R5-1 后续单列）：插件可绕过通道与审计直接执行 `ufw`/`nginx -s reload`，通道不是安全边界 |
+| 12 | 插件级 capability 让只读方法也进审计 | **已补（23/24）** | 语义已纠正：只读调用完全不落库；方法级 `method_capabilities` 覆盖 **23/24**（`firewall` 0.2.6 补全量 7 条；`echo` 为验证件不计）；缺声明时按插件级 capability 兜底并显式标注 | `grep -l method_capabilities ../kore-plugin-*/info.json` 实测 23 |
+| 13 | **root 内核下插件未降权**（本轮新增） | **已补（阶段 C 数据根契约）** | `6ceeba8` 降权（`kore-<id>` + `SysProcAttr.Credential`）；**阶段 C** 新事实：插件数据根契约 `KORE_PLUGIN_DATA` / `KORE_INSTALL_DIR` 已注入（0700、属主 `kore-<id>`），ADR-0023 阶段 C 落地 `site` 0.4.3 / `ssl` 0.5.1 / `app-deploy` 0.2.2 三仓；`ssl` 证书仍留系统路径（web server 读取，属 ADR-0023 §3.5 豁免 #3） | 写域审计：插件只写 `KORE_PLUGIN_DATA` 下 |
 | 14 | **SDK 发布链缺 root_actions schema**（本轮新增） | **已补** | `pkg/pluginapi/v0.1.2` tag 已发（`git show pkg/pluginapi/v0.1.2:pkg/pluginapi/rootaction.go` 存在），`root_actions` schema + 白名单随 tag 固化；插件侧 `ssh-guard` 已 bump 到 v0.1.2 并加 schema 自检 | 结案 |
 
 **回退样本选型的教训**：验证「无方法级声明时按插件级判定」**不能拿 `logs` 当反例**——它插件级只声明 `system:read`，回退后同样不审计；必须选**插件级含 write/admin** 的仓（本轮 A/B 用的是 `process` 0.2.0 的 `proc:write`；HEAD 下同类样本可用 `db-postgres` / `runtime-php` 的 `system:admin`）。
 
 **命名约束（写方法时的硬限制）**：内核 `methodActionPattern` = `^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`（`internal/core/registry/validate.go:55`）——**不支持下划线**。所以 `integrity.verify_file` 无法写进 `method_capabilities`（integrity 0.3.0 的声明里只有 baseline / baseline.list / check / status / schedule.*），这类方法只能回退插件级能力。**新方法名一律用 camelCase**（如 `verifyFile`），否则永远拿不到方法级审计收益。
 
-汇总：**14 条 = 已补 10（#1 #3 #4 #6 #7 #9 #10 #11 #13 #14）/ 部分补 3（#2 #5 #12）/ 仍在 1（#8）**；v1.0 前必须 **1 条（#8）**；索引对齐为滚动量，以 §6 命令实测为准。
+汇总：**14 条 = 已补 13（#1 #2 #3 #4 #6 #7 #8 #9 #10 #11 #12 #13 #14）/ 部分补 1（#5：下划线命名约束，已文档化）/ 仍在 0**；v1.0 前**无硬缺口**（#8 一期已补，剩余挂账：`redis` 未采用 / 凭据 UI 未截图 / 无轮换=方案 D 留 v1.1）；索引对齐 22/24，待入索引 2 仓。
 
-## 6. 附录：24 仓方法清单（命令口径 **175** + `redis` 注册表 16 = 191；`site` verbRegistry 另计 19 → 完整 **210**）
+## 6. 附录：24 仓方法清单（命令口径 **184** + `site` verbRegistry 20 + `redis` methodTable 16 = **完整 220**；索引已收录 22/24，待入索引 `db-mysql` 0.4.1 / `db-postgres` 0.3.3）
 
 | 仓库 | 方法数 | 方法名 | 一句话职责 |
 | --- | --- | --- | --- |
-| `app-deploy` | 4 | templates / deploy / list / remove | 内置 4 模板经 docker 真部署、记录、回滚 |
-| `backup` | 11 | create / list / restore / delete / verify / retention / stats / download / jobs / schedule.set / schedule.get | 真实 tar.gz 打包/恢复/校验；保留策略、下载、作业进度、定时任务描述、站点/库维度 |
-| `container` | 12 | list / inspect / logs / start / stop / restart / stats / images / pull / rmi / update / health | 真实 docker CLI 列表、详情、日志、生命周期、统计；镜像拉取/删除、更新与健康检查 |
-| `cron` | 8 | list / add / remove / replace / logs / run / enable / disable | crontab 读写 + 三类任务 + 执行日志 + 立即执行 + 启停 |
-| `db-mysql` | 12 | instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / export / import | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 |
-| `db-postgres` | 10（另 config.get/set） | instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / changePassword | psql/docker exec 真连接；建库/删库/用户/授权/改密；只读 SQL 白名单 |
-| `discover` | 3 | services / ports / summary | 本机服务、监听端口、安装建议；服务端版本可探 |
-| `dns` | 7（另 config.get/set） | status / zones / records / query | 四引擎探测、区域与记录解析、真实查询（只读） |
-| `echo` | 5 | ping / echo / slow / timeout / crash | 验证件：协议回环、超时、崩溃重启计数 |
-| `file` | 21 | list / read / write / delete / mkdir / stat / upload / download / extract / compress / chmod / move / rename / copy / search / batch / trash.list / trash.restore / trash.purge | 配置根内真实文件操作；回收站、批量、搜索；19 条方法级 capability |
-| `firewall` | 5 | status / rules / allowPort / denyPort / deleteRule | 真实 ufw/iptables 状态、规则、放行/拒绝/删除；root 走内核通道 |
-| `integrity` | 5 | baseline / baseline.list / check / status / verify_file | 真实 sha256 基线、比对、单文件校验；基线多版本列表；基线 0600 原子写 |
-| `logs` | 7（另 config.get/set） | sources / tail / search / stats / download / follow / rotate | 白名单日志源、尾读、搜索、统计、导出、实时跟踪、切割 |
-| `monitor` | 4 | system / processes / disks / temperature | 真实 `/proc` 采集；结果体含 history 环形缓冲与 alerts 阈值，零 ticker |
-| `process` | 5 | list / detail / kill / tree / renice | 真实 procfs + 保护名单；kill/renice 为 `proc:write` |
-| `redis` | 16（另 config.get/set） | instances / info / keys / get / delete / keyInfo / memory / persistence / slowlog / set / ttl / expire / persist / bgsave / serverConfig.get / serverConfig.set | 注册表 `methodTable`（14 动词）+ 点分方法（2）；真实 RESP；危险命令拒绝表 |
-| `runtime-node` | 5 | versions / info / projects / doctor / paths | 真实探测 Node 版本、详情、项目扫描、健康检查、路径元信息 |
-| `runtime-php` | 5 | versions / info / projects / doctor / paths | 真实检测 PHP CLI、ini/扩展、项目、健康检查、路径元信息 |
-| `runtime-python` | 5 | versions / info / projects / doctor | 真实检测 Python、pip/site-packages、项目、健康检查 |
-| `site` | 0（`verbRegistry` 另计 16，另 config.get/set） | list / create / delete / status / get / bindSSL / unbindSSL / setRewrite / getRewrite / setProxy / unsetProxy / setRedirect / unsetRedirect / disable / enable / setIndex | 真实写 nginx vhost + test/reload，含容器 nginx；目录三态 |
-| `ssh-guard` | 6（另 config.get/set） | status / attempts / bans / ban.list / ban.add / ban.remove | 日志解析 + 防护源检测 + 封禁清单；封禁写当前只声明不执行 |
-| `ssl` | 14 | list / import / selfsign / renew / verify / issue / expiring / renew.set / acme.status / acme.issue / bind.set / bind.remove / bind.list / https.status | 证书落盘与 x509/TLS；到期聚合、续期任务、ACME 探测/显式调用；站点归属登记与 HTTPS 状态 |
-| `terminal` | 9 | create / write / resize / read / close / list / attach / history / history.clear | 真实 PTY；历史落盘、重连游标（attach + read.cursor） |
-| `waf` | 8 | status / rules / logs / toggle / ban / bans / unban / blockLog（别名） | nft 数据面 + 封禁集合 + 模式切换；7 条方法级 capability |
+| `app-deploy` | 4 | deploy / list / remove / templates | 内置 4 模板经 docker 真部署、记录、回滚 |
+| `backup` | 11 | create / delete / download / jobs / list / restore / retention / schedule.get / schedule.set / stats / verify | 真实 tar.gz 打包/恢复/校验；保留策略、下载、作业进度、定时任务描述、站点/库维度 |
+| `container` | 12 | health / images / inspect / list / logs / pull / restart / rmi / start / stats / stop / update | 真实 docker CLI 列表、详情、日志、生命周期、统计；镜像拉取/删除、更新与健康检查 |
+| `cron` | 8 | add / disable / enable / list / logs / remove / replace / run | crontab 读写 + 三类任务 + 执行日志 + 立即执行 + 启停 |
+| `db-mysql` | 13 | changePassword / createDatabase / createUser / databases / dropDatabase / dropUser / export / grant / import / instances / query / slowlog / status | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 |
+| `db-postgres` | 11（另 config.get/set） | changePassword / createDatabase / createUser / databases / dropDatabase / dropUser / grant / instances / query / slowlog / status | psql/docker exec 真连接；建库/删库/用户/授权/改密；只读 SQL 白名单 |
+| `discover` | 3 | ports / services / summary | 本机服务、监听端口、安装建议；服务端版本可探 |
+| `dns` | 7（另 config.get/set） | query / record.add / record.delete / records / record.update / status / zones | 四引擎探测、区域与记录解析、真实查询（只读） |
+| `echo` | 5 | crash / echo / ping / slow / timeout | 验证件：协议回环、超时、崩溃重启计数 |
+| `file` | 23 | batch / chmod / compress / copy / delete / download / extract / list / mkdir / move / read / readRange / rename / search / stat / trash.list / trash.purge / trash.restore / upload / uploadChunk / uploadStatus / write / writeRange | 配置根内真实文件操作；回收站、批量、搜索；19 条方法级 capability |
+| `firewall` | 7 | allowPort / deleteRule / denyPort / disable / enable / rules / status | 真实 ufw/iptables 状态、规则、放行/拒绝/删除；root 走内核通道 |
+| `integrity` | 6 | baseline / baseline.list / check / restore / status / verify_file | 真实 sha256 基线、比对、单文件校验；基线多版本列表；基线 0600 原子写 |
+| `logs` | 8（另 config.get/set） | aggregate / download / follow / rotate / search / sources / stats / tail | 白名单日志源、尾读、搜索、统计、导出、实时跟踪、切割 |
+| `monitor` | 4 | disks / processes / system / temperature | 真实 `/proc` 采集；结果体含 history 环形缓冲与 alerts 阈值，零 ticker |
+| `process` | 6 | detail / kill / list / ports / renice / tree | 真实 procfs + 保护名单；kill/renice 为 `proc:write` |
+| `redis` | 16（另 config.get/set） | bgsave / delete / expire / get / info / instances / keyInfo / keys / memory / persist / persistence / serverConfig.get / serverConfig.set / set / slowlog / ttl | 注册表 `methodTable`（14 动词）+ 点分方法（2）；真实 RESP；危险命令拒绝表 |
+| `runtime-node` | 5 | doctor / info / paths / projects / versions | 真实探测 Node 版本、详情、项目扫描、健康检查、路径元信息 |
+| `runtime-php` | 5 | doctor / info / paths / projects / versions | 真实检测 PHP CLI、ini/扩展、项目、健康检查、路径元信息 |
+| `runtime-python` | 5 | doctor / info / paths / projects / versions | 真实检测 Python、pip/site-packages、项目、健康检查 |
+| `site` | 20（另 config.get/set） | bindSSL / clearPassword / clone / create / delete / disable / enable / get / getRewrite / list / setIndex / setPassword / setProxy / setRedirect / setRewrite / status / traffic / unbindSSL / unsetProxy / unsetRedirect | 真实写 nginx vhost + test/reload，含容器 nginx；目录三态 |
+| `ssh-guard` | 6（另 config.get/set） | attempts / ban.add / ban.list / ban.remove / bans / status | 日志解析 + 防护源检测 + 封禁清单；封禁写当前只声明不执行 |
+| `ssl` | 18 | acme.auto / acme.builtin.issue / acme.builtin.renew / acme.builtin.status / acme.issue / acme.status / bind.list / bind.remove / bind.set / expiring / https.status / import / issue / list / renew / renew.set / selfsign / verify | 证书落盘与 x509/TLS；到期聚合、续期任务、ACME 探测/显式调用；站点归属登记与 HTTPS 状态 |
+| `terminal` | 9 | attach / close / create / history / history.clear / list / read / resize / write | 真实 PTY；历史落盘、重连游标（attach + read.cursor） |
+| `waf` | 8 | ban / bans / blockLog / logs / rules / status / toggle / unban | nft 数据面 + 封禁集合 + 模式切换；7 条方法级 capability |
 
 **证据复现命令**（任何人可重跑核对；一律读 HEAD，避免并发工作树干扰）：
 
