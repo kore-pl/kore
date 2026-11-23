@@ -89,6 +89,17 @@ func (s *Server) handleEnable(w http.ResponseWriter, r *http.Request) {
 	s.handleLifecycle(w, r, true)
 }
 
+// operatorSubject 取操作者 subject；未装配鉴权（探活/测试骨架）或解析为空时
+// 回落 admin，与单管理员模式一致，避免把空来源写进授予记录。
+func operatorSubject(r *http.Request, s *Server) string {
+	if s.auth != nil {
+		if subject, _ := s.capResolver(r); subject != "" {
+			return subject
+		}
+	}
+	return "admin"
+}
+
 // handleDisable 停止插件并返回当前视图；重复 disable 幂等。
 func (s *Server) handleDisable(w http.ResponseWriter, r *http.Request) {
 	s.handleLifecycle(w, r, false)
@@ -115,6 +126,16 @@ func (s *Server) handleLifecycle(w http.ResponseWriter, r *http.Request, enable 
 	if err != nil {
 		writeFailure(w, err)
 		return
+	}
+	// 启用即确认授予（SECURITY §5.1）：补齐缺失的授予记录、清空升级新增的待确认项。
+	// 装配层未实现该可选接口时跳过，不把「未确认」伪装成「已确认」。
+	if enable {
+		if confirmer, ok := s.opts.Backend.(CapabilityGrantConfirmer); ok {
+			if confirmErr := confirmer.ConfirmCapabilities(r.Context(), id, operatorSubject(r, s)); confirmErr != nil {
+				writeFailure(w, confirmErr)
+				return
+			}
+		}
 	}
 	status, ok, err := s.opts.Backend.Plugin(r.Context(), id)
 	if err != nil {

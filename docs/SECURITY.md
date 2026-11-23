@@ -37,7 +37,7 @@
 | 解压攻击 | zip-slip、symlink 条目、解压炸弹 | 覆盖宿主文件、撑爆磁盘 | 逐条目目标前缀校验、拒非 regular/dir、包与解压总量上限 | 高压缩率正常包可能被误拒 |
 | 资源耗尽 | 插件吃满内存/CPU/PID | 主壳与宿主不可用 | cgroup v2 `memory.max`/`cpu.max`/`pids.max` | 同机其他服务仍受低强度 thrash 影响 |
 | lazy 冷启动风暴 | 大量并发请求同时唤醒同一插件 | CPU 被打满、插件反复启停 | 单插件启动互斥 + 队列上限（默认 32）+ 超限 `E_RATELIMIT` | 已排队请求延迟上升 |
-| UDS 被同机用户连接 | `/run/kore` 权限过宽 | 无口令直连 API | 目录 `0700 root:root`、主壳 socket `0600`、插件 socket `0600`、`SO_PEERCRED` 校验 | 仅 root 可直连管理入口 |
+| UDS 被同机用户连接 | `/run/kore` 权限过宽 | 非属主本机用户可连到管理 socket（**仍需会话，登录门不被文件权限绕过**） | 目录 `0700 root:root`、主壳 socket `0600`、插件 socket `0600`、`SO_PEERCRED` 校验 | 仅 root 可连到 socket；**连上仍需会话**（ADR-0043） |
 | 日志泄密 | 口令/token/secret 进日志 | 凭据二次泄露 | 字段白名单 fail-closed + 丢弃非白名单字段 | 插件自写日志不受主壳控制 |
 | SSE 连接耗尽 | 大量 `/events` 长连接 | FD 与内存耗尽 | 单会话 1 条、全局上限 64、空闲 90s 断开 | 已认证用户可占满配额 |
 
@@ -127,8 +127,10 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 | 阶段 | 触发 | 校验内容 | 失败码 |
 | --- | --- | --- | --- |
 | 安装声明 | `POST /api/v1/plugins` 解析 `info.json` | 按 §5.2 顺序校验：非空（≥1 项）、语法合法、域为 6 特权之一或等于自身 id、无重复、≤16 项 | `E_INVALID` |
-| 启用授予 | `POST /api/v1/plugins/{id}/enable` | 展示声明清单并由用户确认，写入 `plugins` bucket 的 `granted_capabilities` 字段 | `E_CONFLICT`（升级新增能力未重新确认时） |
+| 启用授予 | `POST /api/v1/plugins/{id}/enable` | 确认授予记录：补齐缺失记录、清空升级新增的待确认项（`granted_by=enable:<subject>`，审计 `capability.grant_confirmed`） | 记录写入失败 → `500 E_INTERNAL`（不伪造确认） |
 | 调用校验 | 每个 `POST /api/v1/invoke/{plugin}/{method}` 帧 | 按目标插件 `capabilities` 的宿主前缀与动作级判定：`read` 任意已登录会话、`write/admin` 需 `system:admin`（或会话能力集含该项），未知宿主动作 fail-closed；内核不维护方法→业务能力映射表（G-01） | `403 E_UNAUTHORIZED`（未知宿主动作 `E_UNSUPPORTED`）+ 审计 `capability.denied` |
+
+授予记录写在 `plugins` bucket 的 `granted_capabilities`（`granted_by/granted_at/version/declaration_sha256/capabilities[]/added_capabilities[]`）：安装时按声明自动授予（`install:auto`）；升级新增能力时自动扩展并记 `upgrade:auto` + 待确认项 + WARN/审计 `capability.grant_extended`——**不阻断升级/启用**（默认放行是硬约束，「静默」由记录与审计消除）；启用动作确认并清空待确认项；存量库启动时按已装声明回填（`legacy:backfill`）。
 
 ### 5.2 能力模型（两段）
 
@@ -194,10 +196,10 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ## 7. UDS 本地攻击面
 
-- 主壳管理入口 `/run/kore/kore.sock` 属 `root:root`，**0600**；父目录 `/run/kore` 为 `0700 root:root`。只有 root 可直连——**文件权限即边界**，CLI 与运维脚本以 root 运行是刻意前提。
+- 主壳管理入口 `/run/kore/kore.sock` 属 `root:root`，**0600**；父目录 `/run/kore` 为 `0700 root:root`。只有 root 可直连——**文件权限即边界**，CLI 与运维脚本以 root 运行是刻意前提。**可达性 ≠ 授权**：连上管理 socket 仍需 `withAuth` 校验会话（ADR-0043），登录门不被文件权限绕过。
 - 插件 socket `/run/kore/plugins/<id>.sock` 由主壳 listen 后 `chown kore-<id>`、**0600**；accept 后取 `SO_PEERCRED`，对端 uid 必须等于 `kore-<id>`、pid 必须等于 hello 自报 pid，否则立即 close 并记审计。其它插件用户既读不到也连不上。
 - 启动时先 `Lstat` 校验 `/run/kore` 属主为 root 且非 symlink，再删除残留 socket 并 `bind`；父目录不可写使插件无法替换 socket。
-- 残余风险：root 可直连管理入口（等价宿主完全控制，不额外防御）；能读 `/etc/kore/config.yaml` 的账号已等同 root 级别。
+- 残余风险：root 可直连管理入口（等价宿主完全控制，不额外防御；**连上仍需 `withAuth` 会话**，ADR-0043）；能读 `/etc/kore/config.yaml` 的账号已等同 root 级别。
 
 ## 8. 输入校验与危险操作
 
@@ -286,7 +288,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 | 单插件 CPU | 0.5 核 | `resources.cpu_quota` | 超限被限流 |
 | 单插件 PID | 以 [RESOURCE-MODEL](./RESOURCE-MODEL.md) 为准（默认 128，范围 16–512） | `resources.pids_max` | 超限 fork 失败 |
 | swap | 0 | 不支持 | 防止内存挤压旁路 |
-| 主壳 socket 权限 | 0600 root:root | 不支持 | 仅 root 可直连管理入口 |
+| 主壳 socket 权限 | 0600 root:root | 不支持 | 仅 root 可直连管理入口；**连上仍需会话**（ADR-0043） |
 | 运行目录权限 | 0700 root:root | 不支持 | 非 root 无法枚举或替换 socket |
 | 插件 socket 权限 | 0600 | 不支持 | 降权才能收紧，不能放宽 |
 | 插件目录权限 | 见 §6 权限口径 | 不支持 | 同上 |

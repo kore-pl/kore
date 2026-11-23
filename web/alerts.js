@@ -149,7 +149,7 @@
         return (r.subject || 'unknown') + ' → ' + (r.plugin || '') + (r.target ? '/' + r.target : '');
       }).join('；');
       var detail = '涉及：' + who;
-      if (action === 'capability.denied') detail = '让管理员在设置里为该插件授权；' + detail;
+      if (action === 'capability.denied') detail = '内核按插件声明在安装/升级时授予能力，没有逐项授权开关；该操作需要管理员账号，请用管理员登录。' + detail;
       push(alerts, 'critical', HIGH_RISK[action] + '（' + hits.length + ' 次）',
         detail, hits[0].at, 'settings');
     });

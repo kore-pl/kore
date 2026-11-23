@@ -11,6 +11,7 @@ import (
 
 	"github.com/pengtang1024/kore/internal/core/bus"
 	"github.com/pengtang1024/kore/internal/core/httpapi"
+	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -55,11 +56,25 @@ func newDaemon(catalog *registry.Catalog, manager *supervisor.Manager, frameBus 
 // Plugins 返回全部已登记插件视图。
 func (d *daemon) Plugins(context.Context) ([]httpapi.PluginStatus, error) {
 	views := d.catalog.List()
+	// 授予记录一次事务批量读出：列表路径不为每个插件各开一次读事务。
+	grants, err := d.states.grants()
+	if err != nil {
+		return nil, err
+	}
 	plugins := make([]httpapi.PluginStatus, 0, len(views))
 	for _, view := range views {
-		status, err := d.status(view)
-		if err != nil {
-			return nil, err
+		grant, found := grants[view.ID]
+		if !found {
+			status, statusErr := d.status(view, nil)
+			if statusErr != nil {
+				return nil, statusErr
+			}
+			plugins = append(plugins, status)
+			continue
+		}
+		status, statusErr := d.status(view, &grant)
+		if statusErr != nil {
+			return nil, statusErr
 		}
 		plugins = append(plugins, status)
 	}
@@ -73,10 +88,18 @@ func (d *daemon) Plugin(_ context.Context, id string) (httpapi.PluginStatus, boo
 		return httpapi.PluginStatus{}, false, nil
 	}
 	state, _ := d.catalog.State(id)
+	grant, found, err := d.states.grant(id)
+	if err != nil {
+		return httpapi.PluginStatus{}, false, err
+	}
+	var grantRef *installer.Grant
+	if found {
+		grantRef = &grant
+	}
 	status, err := d.status(registry.View{
 		ID: manifest.ID, Name: manifest.Name, Version: manifest.Version,
 		Lifecycle: manifest.Lifecycle, State: state,
-	})
+	}, grantRef)
 	if err != nil {
 		return httpapi.PluginStatus{}, false, err
 	}
@@ -84,7 +107,11 @@ func (d *daemon) Plugin(_ context.Context, id string) (httpapi.PluginStatus, boo
 }
 
 // status 组装单插件视图，并在运行态变化时回写 plugin_state。
-func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
+//
+// grant 为 nil 表示授予记录缺失（存量库尚未回填）：此时回退到清单声明，
+// 前端桥与调用校验行为不变（默认放行）；一旦安装/启用/启动回填写入记录，
+// 视图展示的就是真实授予记录。
+func (d *daemon) status(view registry.View, grant *installer.Grant) (httpapi.PluginStatus, error) {
 	state, runtimeView, hasRuntime, err := d.update(view.ID, nil)
 	if err != nil {
 		return httpapi.PluginStatus{}, err
@@ -95,10 +122,10 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 		Lifecycle: string(view.Lifecycle), DepthLevel: manifest.DepthLevel,
 		State: state.Actual, Desired: state.Desired, Restarts: state.Restarts,
 		PID: runtimePID(runtimeView, hasRuntime), Enabled: view.State == registry.StateEnabled,
-		// Web / GrantedCapabilities 供前端桥按 FRONTEND §4 建帧与限权；
-		// store plugins bucket 的 capabilities 与 manifest 同源（installer.record 落库），
-		// 这里取内存中已登记清单，避免每次列表请求都读 bbolt（G-13 薄壳边界）。
-		GrantedCapabilities: append([]string(nil), manifest.Capabilities...),
+		// Web / GrantedCapabilities 供前端桥按 FRONTEND §4 建帧与限权。
+		// 已授予能力优先取 plugins bucket 的 granted_capabilities 记录（谁授的/何时/哪些）；
+		// 记录缺失时回退清单声明，保证存量库与单管理员路径行为不变。
+		GrantedCapabilities: grantedCapabilities(manifest.Capabilities, grant),
 		MethodCapabilities:  maps.Clone(manifest.MethodCapabilities),
 		RequiresRoot:        manifest.RequiresRoot,
 		RootActions:         append([]pluginapi.RootAction(nil), manifest.RootActions...),
@@ -109,7 +136,34 @@ func (d *daemon) status(view registry.View) (httpapi.PluginStatus, error) {
 			Styles: append([]string(nil), manifest.Web.Styles...),
 		}
 	}
+	if grant != nil {
+		status.GrantedBy = grant.GrantedBy
+		status.GrantedAt = grant.GrantedAt
+		status.PendingCapabilities = append([]string(nil), grant.AddedCapabilities...)
+	}
 	return status, nil
+}
+
+// grantedCapabilities 返回视图展示的已授予能力集：有记录用记录，无记录回退声明。
+func grantedCapabilities(declared []string, grant *installer.Grant) []string {
+	if grant != nil {
+		return append([]string(nil), grant.Capabilities...)
+	}
+	return append([]string(nil), declared...)
+}
+
+// ConfirmCapabilities 实现 httpapi.CapabilityGrantConfirmer：显式启用即确认授予。
+//
+// 只写授予记录（补齐缺失 / 清空升级新增的待确认项）并落审计，不改运行态；
+// 是否已安装由 catalog 判定，未安装返回 E_NOTFOUND。
+func (d *daemon) ConfirmCapabilities(_ context.Context, id, subject string) error {
+	if _, ok := d.catalog.Manifest(id); !ok {
+		return protocolError(pluginapi.E_NOTFOUND, "插件 %s 未安装", id)
+	}
+	if _, _, err := d.states.confirmGrant(id, subject); err != nil {
+		return protocolError(pluginapi.E_INTERNAL, "确认插件 %s 授予记录失败：%v", id, err)
+	}
+	return nil
 }
 
 // PluginCapabilities 实现 httpapi.PluginCapabilityLookup：只读内存清单的 capabilities。

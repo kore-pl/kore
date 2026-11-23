@@ -3,6 +3,7 @@ package installer
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/registry"
@@ -37,6 +38,9 @@ type pluginRecord struct {
 	RequiresKore string `json:"requires_kore"`
 	// Capabilities 声明的能力（授权由安装/启用/调用三处分别校验）。
 	Capabilities []string `json:"capabilities"`
+	// GrantedCapabilities 授予记录（谁授的 / 什么时候 / 授了哪些）。
+	// 老库安装的记录没有该字段（nil），由装配层启动时 BackfillGrant 回填。
+	GrantedCapabilities *Grant `json:"granted_capabilities,omitempty"`
 	// Resources 资源预算。
 	Resources registry.Resources `json:"resources"`
 	// InstalledAt 安装时间（RFC3339）。
@@ -80,29 +84,38 @@ func (in *Installer) record(manifest *registry.Manifest, sum string) error {
 	if in.store == nil {
 		return wrap(ErrStore, "状态库句柄为空")
 	}
-	previous, previousDesired, err := in.previous(manifest.ID)
+	previous, previousDesired, previousGrant, err := in.previous(manifest.ID)
 	if err != nil {
 		return err
 	}
+	grant, changed, added := nextGrant(previousGrant, manifest.Capabilities, manifest.Version, time.Now().UTC())
+	if changed && len(added) > 0 {
+		// 升级新增能力：默认放行（不阻断升级/启用），但必须留下可核对记录并告警。
+		in.logger.Warn("插件升级新增能力，已自动扩展授予并记录待确认项",
+			"plugin_id", manifest.ID, "version", manifest.Version,
+			"added", strings.Join(added, ","), "grant", describeGrant(grant))
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	pluginRaw, err := json.Marshal(pluginRecord{
-		ID:              manifest.ID,
-		Name:            manifest.Name,
-		Version:         manifest.Version,
-		Lifecycle:       string(manifest.Lifecycle),
-		IdleTimeoutS:    manifest.IdleTimeoutS,
-		Protocol:        manifest.Protocol,
-		RequiresKore:    manifest.RequiresKore,
-		Capabilities:    manifest.Capabilities,
-		Resources:       manifest.Resources,
-		InstalledAt:     now,
-		PackageSHA256:   sum,
-		Signed:          hasSignature(manifest.Dir),
-		Source:          sourceManual,
-		DependsOn:       manifest.DependsOn,
-		SizeBytes:       manifest.SizeBytes,
-		StoreVisibility: storeVisibility,
-		PrevVersion:     previous,
+		ID:           manifest.ID,
+		Name:         manifest.Name,
+		Version:      manifest.Version,
+		Lifecycle:    string(manifest.Lifecycle),
+		IdleTimeoutS: manifest.IdleTimeoutS,
+		Protocol:     manifest.Protocol,
+		RequiresKore: manifest.RequiresKore,
+		Capabilities: manifest.Capabilities,
+		// 授予记录与 plugins 记录同一事务落库：不会出现"有声明无授予"的中间态。
+		GrantedCapabilities: &grant,
+		Resources:           manifest.Resources,
+		InstalledAt:         now,
+		PackageSHA256:       sum,
+		Signed:              hasSignature(manifest.Dir),
+		Source:              sourceManual,
+		DependsOn:           manifest.DependsOn,
+		SizeBytes:           manifest.SizeBytes,
+		StoreVisibility:     storeVisibility,
+		PrevVersion:         previous,
 	})
 	if err != nil {
 		return wrap(ErrStore, "序列化插件记录失败：%v", err)
@@ -159,8 +172,8 @@ func PreviousVersion(p Persister, id string) (string, error) {
 	return version, nil
 }
 
-// previous 读已装版本与期望状态；不存在返回空串（首次安装）。
-func (in *Installer) previous(id string) (version, desired string, err error) {
+// previous 读已装版本、期望状态与既有授予记录；不存在返回空值（首次安装）。
+func (in *Installer) previous(id string) (version, desired string, grant *Grant, err error) {
 	err = in.store.View(func(tx *store.Tx) error {
 		raw, getErr := tx.Get(bucketPlugins, id)
 		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
@@ -172,6 +185,7 @@ func (in *Installer) previous(id string) (version, desired string, err error) {
 				return unmarshalErr
 			}
 			version = existing.Version
+			grant = existing.GrantedCapabilities
 		}
 		stateRaw, getStateErr := tx.Get(bucketPluginState, id)
 		if getStateErr != nil {
@@ -188,7 +202,7 @@ func (in *Installer) previous(id string) (version, desired string, err error) {
 		return nil
 	})
 	if err != nil {
-		return "", "", wrap(ErrStore, "读取已装记录失败：%v", err)
+		return "", "", nil, wrap(ErrStore, "读取已装记录失败：%v", err)
 	}
-	return version, desired, nil
+	return version, desired, grant, nil
 }

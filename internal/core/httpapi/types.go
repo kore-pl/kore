@@ -53,8 +53,15 @@ type PluginStatus struct {
 	Enabled bool `json:"enabled"`
 	// Web 插件前端清单段（info.json 的 web）；无 web 段时为 nil（JSON 省略，前端 fail-closed）。
 	Web *PluginWeb `json:"web,omitempty"`
-	// GrantedCapabilities 已授予能力集（来源 manifest capabilities / plugins bucket capabilities）。
+	// GrantedCapabilities 已授予能力集（来源 plugins bucket 的 granted_capabilities 记录；
+	// 存量库无记录时回退 manifest 声明，默认为放行）。
 	GrantedCapabilities []string `json:"granted_capabilities,omitempty"`
+	// GrantedBy 授予来源：install:auto / upgrade:auto / enable:<subject> / legacy:backfill。
+	GrantedBy string `json:"granted_by,omitempty"`
+	// GrantedAt 授予时间（RFC3339 UTC）。
+	GrantedAt string `json:"granted_at,omitempty"`
+	// PendingCapabilities 升级新增、尚未被显式启用确认的能力；非空即面板告警信号。
+	PendingCapabilities []string `json:"pending_capabilities,omitempty"`
 	// MethodCapabilities 方法级能力覆盖（来源 manifest method_capabilities）；nil 表示未声明。
 	// 键为完整方法名 `<id>.<action>`，值为 6 项特权能力之一。
 	MethodCapabilities map[string]string `json:"method_capabilities,omitempty"`
@@ -135,6 +142,15 @@ type RootActionLookup interface {
 type PluginCapabilityLookup interface {
 	// PluginCapabilities 返回目标插件声明的能力集；未安装返回 known=false。
 	PluginCapabilities(ctx context.Context, id string) ([]string, bool, error)
+}
+
+// CapabilityGrantConfirmer 是装配层可选实现的「启用即确认授予」动作（SECURITY §5.1）。
+//
+// 未实现时启用不追加确认动作：授予记录由安装/升级路径写入，httpapi 不伪造确认。
+// 实现方负责写授予记录（清空升级新增的待确认项）并落审计。
+type CapabilityGrantConfirmer interface {
+	// ConfirmCapabilities 确认目标插件当前授予记录；subject 为操作者账号。
+	ConfirmCapabilities(ctx context.Context, id, subject string) error
 }
 
 // PluginMethodCapabilityLookup 是装配层可选实现的「方法级能力」只读查询。

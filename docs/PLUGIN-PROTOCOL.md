@@ -116,7 +116,7 @@
 
 **特权能力**（内核唯一白名单，6 个、固定不可扩展）：`system:read` `system:admin` `net:read` `net:write` `proc:read` `proc:write`，对宿主有实际影响，由内核集中校验授权；**插件自有能力** `<plugin-id>:<action>`，域必须等于声明它的插件 id（`site` 可声明 `site:read`，`db-mysql` 不得声明 `site:write`）。
 
-**校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明、启用写 `granted_capabilities`、调用时 bus 方法级校验。
+**校验顺序**：语法 `^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`，非法 → `E_INVALID`；域 ∈ 特权集 → 允许；否则域必须 == `info.json.id`，不等 → `E_INVALID`（message 说明原因）；**必须非空（≥1 项）且 ≤16 项**，空数组、重复项或超限 → `E_INVALID`。**校验点三处**（与 SECURITY §5 一致）：安装校验声明并写入授予记录 `granted_capabilities`（`granted_by/granted_at/capabilities[]`；升级新增能力记 `added_capabilities[]` 并 WARN，不阻断启用）、启用确认授予（清空待确认项，`enable:<subject>`）、调用时按声明做方法级校验。
 
 **调用时校验（内核强制）**：`POST /api/v1/invoke/{plugin}/{method}` 在转发前，内核先验会话，再按目标插件 `info.json` 声明判定本次调用是否放行——**先查方法级 `method_capabilities`（命中即单独生效），未命中回退插件级 `capabilities`（多项取最高要求）**。规则**只看能力字符串的宿主前缀与动作级，不维护「方法 → 业务能力」映射表**（G-01）：
 

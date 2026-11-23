@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/store"
 )
@@ -86,6 +87,41 @@ func (r *stateRepo) save(id string, state persistedState) error {
 	})
 }
 
+// grant 读取单个插件的授予记录；未写入时第二返回值为 false。
+func (r *stateRepo) grant(id string) (installer.Grant, bool, error) {
+	return installer.GrantOf(r.db, id)
+}
+
+// grants 一次事务读出全部授予记录，供插件列表路径复用（避免 N 次读事务）。
+func (r *stateRepo) grants() (map[string]installer.Grant, error) {
+	return installer.GrantIndex(r.db)
+}
+
+// confirmGrant 处理启用即确认：补齐缺失的授予记录 / 清空升级新增的待确认项，
+// 并对实际写入的动作记审计（capability.grant_confirmed，fail-open：审计失败只 WARN）。
+func (r *stateRepo) confirmGrant(id, subject string) (installer.Grant, bool, error) {
+	grant, changed, err := installer.ConfirmGrant(r.db, id, subject)
+	if err != nil {
+		return installer.Grant{}, false, err
+	}
+	if !changed {
+		return grant, false, nil
+	}
+	record := store.AuditRecord{
+		Subject: subject, Action: "capability.grant_confirmed", Plugin: id,
+		Target: "capabilities", Result: store.AuditResultOK,
+		Detail: map[string]string{
+			"granted_by":   grant.GrantedBy,
+			"version":      grant.Version,
+			"capabilities": strings.Join(grant.Capabilities, ","),
+		},
+	}
+	if err := r.db.PutAudit(record); err != nil {
+		slog.Warn("授予确认审计写入失败", "plugin_id", id, "err", err)
+	}
+	return grant, true, nil
+}
+
 // installed 读出 plugins bucket 中的全部已装记录（id + version）。
 //
 // 事务内只做内存解析，坏记录收集到事务外再告警（DATA-MODEL §6：事务内禁止 IO）。
@@ -144,6 +180,16 @@ func loadCatalog(catalog *registry.Catalog, repo *stateRepo, root string) error 
 		}
 		if addErr := catalog.Add(manifest); addErr != nil {
 			slog.Warn("插件登记失败，跳过", "plugin_id", ref.ID, "err", addErr)
+			continue
+		}
+		// 存量库迁移：本层落地前安装的插件没有授予记录，按已装声明回填一次，
+		// 让「声明 = 授予」不再是无记录的隐式等价（幂等，已有记录不覆盖）。
+		if _, created, backfillErr := installer.BackfillGrant(repo.db, manifest.ID, manifest.Capabilities, manifest.Version); backfillErr != nil {
+			slog.Warn("回填授予记录失败（插件仍可用，记录待下次安装/启用补齐）",
+				"plugin_id", manifest.ID, "err", backfillErr)
+		} else if created {
+			slog.Info("已为存量插件回填授予记录", "plugin_id", manifest.ID,
+				"version", manifest.Version, "granted_by", installer.GrantSourceBackfill)
 		}
 	}
 	warnUnregistered(root, refs)

@@ -152,8 +152,12 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	// 调度器必须在 backend 之后装配：Invoker 就是 daemon.Invoke（oneshot 调用面）。
 	sched, err := scheduler.New(scheduler.Options{
 		Store: db, Invoker: svc.backend, Logger: slog.Default(), Builtin: svc.builtinTask,
-		CertRenewEnabled:  cfg.snapshot.CertRenew.Enabled,
-		CertRenewInterval: cfg.snapshot.CertRenew.Interval,
+		CertRenewEnabled:   cfg.snapshot.CertRenew.Enabled,
+		CertRenewInterval:  cfg.snapshot.CertRenew.Interval,
+		AuditRetention:     cfg.snapshot.Audit.Retention,
+		AuditCleanEnabled:  cfg.snapshot.Audit.CleanEnabled,
+		AuditCleanInterval: cfg.snapshot.Audit.CleanInterval,
+		AuditCleanBatch:    cfg.snapshot.Audit.CleanBatch,
 	})
 	if err != nil {
 		slog.Error("调度器装配失败", "err", err)
@@ -282,6 +286,9 @@ func (s *service) reloadOne(id string) (string, error) {
 	if err != nil {
 		return reloadFailed, fmt.Errorf("登记插件 %s@%s 失败: %w", id, ref.Version, err)
 	}
+	// 升级新增能力的授予扩展：installer 侧只有 WARN 日志，装配层补一条审计，
+	// 让「谁/何时/新增了哪些」在 audit bucket 可追溯（不阻断重载）。
+	s.noteGrantExtension(id)
 
 	// 5) desired_state 决定是否拉起；重装/升级不再无条件把插件打回 disabled。
 	state, found, err := s.states.load(id)
@@ -305,6 +312,33 @@ func (s *service) reloadOne(id string) (string, error) {
 	}
 	slog.Info("插件重载完成", "plugin_id", id, "version", ref.Version, "result", reloadRestarted)
 	return reloadRestarted, nil
+}
+
+// noteGrantExtension 把升级新增能力的授予扩展写进审计（installer 无审计通道）。
+//
+// 只在存在待确认新增项时写一条 capability.grant_extended；审计失败只 WARN，
+// 不阻断安装/重载（授予记录本身已与 plugins 记录同事务落库）。
+func (s *service) noteGrantExtension(id string) {
+	grant, found, err := s.states.grant(id)
+	if err != nil || !found || len(grant.AddedCapabilities) == 0 {
+		return
+	}
+	added := strings.Join(grant.AddedCapabilities, ",")
+	if value := []rune(added); len(value) > 200 {
+		added = string(value[:200]) // DATA-MODEL §9：detail 值 ≤256 字符
+	}
+	record := store.AuditRecord{
+		Subject: "system", Action: "capability.grant_extended", Plugin: id,
+		Target: "capabilities", Result: store.AuditResultOK,
+		Detail: map[string]string{
+			"granted_by": grant.GrantedBy,
+			"version":    grant.Version,
+			"added":      added,
+		},
+	}
+	if err := s.db.PutAudit(record); err != nil {
+		slog.Warn("授予扩展审计写入失败", "plugin_id", id, "err", err)
+	}
 }
 
 // disableForInstall 在强制重装前停用插件，返回安装前是否为 enabled。

@@ -1519,7 +1519,7 @@
   var OV_AUDIT = '/api/v1/audit';
   var OV_ALERT_WINDOW_MS = 5 * 60 * 1000;
   var OV_DENIED_BURST = 5;
-  var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝（让管理员在设置里为该插件授权）' };
+  var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝（需要管理员账号；能力由插件声明授予，无逐项授权开关）' };
   var OV_SEV_TEXT = { critical: '严重', warning: '警告', info: '提示' };
 
   function ovNum(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
