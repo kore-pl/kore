@@ -36,6 +36,7 @@ const (
 const (
 	ActionGrant  = "credential.grant"
 	ActionRevoke = "credential.revoke"
+	ActionDelete = "credential.delete"
 )
 
 // ACL 上限（防清单膨胀）。
@@ -396,11 +397,25 @@ func (s *Service) Delete(ctx context.Context, actor, id string) error {
 	if actor != "admin" && idx.Credentials[i].Owner != actor {
 		return &pluginapi.Error{Code: pluginapi.E_UNAUTHORIZED, Message: "只有 owner 或管理员可删除凭据"}
 	}
+	entry := idx.Credentials[i]
+	// fail-closed：先落审计；nil/失败一律拒绝，且不修改索引（与 Grant/Revoke 同口径）。
+	if s.auditor == nil {
+		return errAuditFailed
+	}
+	if err := s.auditor.Record(ctx, AuditEvent{Actor: actor, Action: ActionDelete,
+		CredentialID: id, Owner: entry.Owner, Grantee: entry.Owner, Decision: "allow"}); err != nil {
+		return errAuditFailed
+	}
 	idx.Credentials = append(idx.Credentials[:i], idx.Credentials[i+1:]...)
 	if err := s.saveLocked(idx); err != nil {
 		return err
 	}
 	if err := os.Remove(s.secretPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// 回滚索引：避免"索引已删、密文残留"的半删状态（保持与删除前一致）。
+		idx.Credentials = append(idx.Credentials, Entry{})
+		copy(idx.Credentials[i+1:], idx.Credentials[i:])
+		idx.Credentials[i] = entry
+		_ = s.saveLocked(idx)
 		return fmt.Errorf("credential: 删除密文: %w", err)
 	}
 	return nil

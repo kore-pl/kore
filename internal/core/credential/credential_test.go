@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 type fakeAuditor struct {
@@ -172,4 +174,80 @@ func TestSetValidation(t *testing.T) {
 		t.Fatalf("空库 EnvFor = %v, %v", env, err)
 	}
 	_ = time.Now
+}
+
+// testServiceDir 返回服务与其状态目录（测试秘密文件是否存在）。
+func testServiceDir(t *testing.T, auditor Auditor) (*Service, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "credentials")
+	svc, err := New(Options{Dir: dir, Auditor: auditor})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return svc, dir
+}
+
+// TestDeleteRemovesIndexAndSecret 验证删除同时清掉索引条目与密文，并写 credential.delete 审计。
+func TestDeleteRemovesIndexAndSecret(t *testing.T) {
+	auditor := &fakeAuditor{}
+	svc, dir := testServiceDir(t, auditor)
+	ctx := context.Background()
+	entry, err := svc.Set(ctx, "db-mysql", "db-mysql", "mysqlRoot", "MYSQL_PWD", []byte("s3cret"))
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	secretPath := filepath.Join(dir, entry.ID+".secret")
+	if _, err := os.Stat(secretPath); err != nil {
+		t.Fatalf("密文应存在: %v", err)
+	}
+	if err := svc.Delete(ctx, "admin", entry.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("密文应已删除: %v", err)
+	}
+	entries, err := svc.List(ctx, "admin", "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("索引应已删除，实际 %d 条", len(entries))
+	}
+	if len(auditor.events) == 0 || auditor.events[len(auditor.events)-1].Action != ActionDelete {
+		t.Fatalf("应写 credential.delete 审计，实际 %+v", auditor.events)
+	}
+}
+
+// TestDeleteAuditFailClosed 验证审计失败时不删（索引与密文都保留）。
+func TestDeleteAuditFailClosed(t *testing.T) {
+	auditor := &fakeAuditor{fail: true}
+	svc, dir := testServiceDir(t, auditor)
+	ctx := context.Background()
+	entry, err := svc.Set(ctx, "db-mysql", "db-mysql", "mysqlRoot", "MYSQL_PWD", []byte("s3cret"))
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// Set 之后的删除必须被审计失败拦住；先确认错误码。
+	err = svc.Delete(ctx, "admin", entry.ID)
+	apiErr, ok := err.(*pluginapi.Error)
+	if !ok || apiErr.Code != CodeAudit {
+		t.Fatalf("应返回 E_AUDIT，实际 %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, entry.ID+".secret")); err != nil {
+		t.Fatalf("审计失败时密文必须保留: %v", err)
+	}
+	entries, err := svc.List(ctx, "admin", "")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("审计失败时索引必须保留，实际 %d 条 err=%v", len(entries), err)
+	}
+}
+
+// TestDeleteNotFound 验证不存在 id 返回 E_NOTFOUND。
+func TestDeleteNotFound(t *testing.T) {
+	svc := testService(t, &fakeAuditor{})
+	err := svc.Delete(context.Background(), "admin", "cred-deadbeef")
+	apiErr, ok := err.(*pluginapi.Error)
+	if !ok || apiErr.Code != pluginapi.E_NOTFOUND {
+		t.Fatalf("应返回 E_NOTFOUND，实际 %v", err)
+	}
 }

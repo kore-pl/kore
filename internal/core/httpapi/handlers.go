@@ -74,6 +74,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/credentials", s.handleCredentialList)
 	s.mux.HandleFunc("POST /api/v1/credentials/{id}/grants", s.handleCredentialGrant)
 	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}/grants/{grantee}", s.handleCredentialRevoke)
+	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.handleCredentialDelete)
 	s.mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/v1/auth/session", s.handleSession)

@@ -7,7 +7,7 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// ADR-0026 §2 的 4 个端点：创建/列出/授权/撤销；全部要求 system:admin。
+// ADR-0026 §2 的 5 个端点：创建/列出/授权/撤销/删除；全部要求 system:admin。
 // 响应永不含 secret（List 只回元数据）。
 
 func (s *Server) authorizeCredentials(w http.ResponseWriter, r *http.Request) bool {
@@ -127,6 +127,23 @@ func (s *Server) handleCredentialRevoke(w http.ResponseWriter, r *http.Request) 
 		Revoked bool   `json:"revoked"`
 		Grantee string `json:"grantee"`
 	}{Revoked: true, Grantee: grantee})
+}
+
+// handleCredentialDelete 处理 DELETE /api/v1/credentials/{id}。
+// 审计由 credential.Service.Delete 先行写入（fail-closed），handler 不重复审计。
+func (s *Server) handleCredentialDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeCredentials(w, r) || !s.requireCredentials(w) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.opts.Credentials.Delete(r.Context(), "admin", id); err != nil {
+		writeCredentialError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Deleted bool   `json:"deleted"`
+		ID      string `json:"id"`
+	}{Deleted: true, ID: id})
 }
 
 // writeCredentialError 把凭据错误映射为 HTTP 状态码（E_NEED_GRANT/E_AUDIT 按 ADR-0026 §3）。
