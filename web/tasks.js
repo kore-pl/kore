@@ -18,6 +18,21 @@
     ['每分钟', '* * * * *'], ['每小时', '0 * * * *'],
     ['每天 3 点', '0 3 * * *'], ['每周一 3 点', '0 3 * * 1']
   ];
+  // 常用任务预设：一次点击填好类型 / 频率 / 命令或地址 / 备注，再点保存即完成（2 步）。
+  var QUICK_PRESETS = [
+    { id: 'backup', name: '每天备份站点', type: 'shell', schedule: '0 3 * * *',
+      command: 'tar czf /var/backups/site-$(date +%F).tar.gz /var/www', comment: '每日备份站点',
+      why: '每天 03:00 打包 /var/www 到 /var/backups' },
+    { id: 'cleanup', name: '每周清理日志', type: 'shell', schedule: '0 4 * * 0',
+      command: "find /var/log -name '*.log' -mtime +14 -delete", comment: '每周清理日志',
+      why: '每周日 04:00 删除 14 天前的 .log' },
+    { id: 'health', name: '每小时健康检查', type: 'http', schedule: '0 * * * *',
+      url: 'https://example.com/health', method: 'GET', comment: '每小时健康检查',
+      why: '每小时访问一次健康检查地址' },
+    { id: 'cert', name: '每月检查证书到期', type: 'http', schedule: '0 6 1 * *',
+      url: 'https://example.com', method: 'GET', comment: '每月检查证书到期',
+      why: '每月 1 日 06:00 检查 HTTPS 端点' }
+  ];
   var TYPES = [['shell', 'Shell 命令'], ['http', 'HTTP 请求'], ['plugin', '插件任务']];
   var HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'];
   // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
@@ -151,10 +166,29 @@
   }
 
   function hintForType(type, editIndex) {
-    if (editIndex !== null) return '编辑使用 cron.replace：只替换表达式与命令，原备注保留。';
-    if (type === 'http') return 'HTTP 任务会生成为固定参数、30 秒超时的 curl 命令写入当前用户的 crontab。';
-    if (type === 'plugin') return '插件任务由内核调度器执行：cron 插件只生成任务描述，随后直接创建 /api/v1/scheduler/tasks，不写 crontab。';
-    return '5 段 crontab 表达式；命令按原样写入当前用户的 crontab，系统 cron 到点执行。';
+    if (editIndex !== null) return '修改这条任务的时间与内容，原备注保留。';
+    if (type === 'http') return '按你设定的时间自动访问这个地址；访问失败会记为执行失败。';
+    if (type === 'plugin') return '按你设定的时间调用已安装插件里的动作。';
+    return '按你设定的时间自动执行这条命令。';
+  }
+
+  // applyQuickPreset：点一次卡片 = 填好全部字段（第 1 步），用户确认后点保存（第 2 步）。
+  function applyQuickPreset(preset) {
+    if (S.locked || !S.form) return;
+    S.editIndex = null;
+    S.form.comment.readOnly = false;
+    setType(preset.type);
+    S.form.schedule.value = preset.schedule;
+    S.form.comment.value = preset.comment || '';
+    if (preset.type === 'http') {
+      S.form.url.value = preset.url || '';
+      if (S.form.httpMethod) S.form.httpMethod.value = preset.method || 'GET';
+    } else {
+      S.form.command.value = preset.command || '';
+    }
+    S.form.panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    S.form.submit.focus();
+    setStatus('已填入「' + preset.name + '」：' + preset.why + '。检查后点「新增任务」即可（共 2 步）', 'ok');
   }
 
   function cancelEdit() {
@@ -445,7 +479,7 @@
       var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
       add(empty, el('p', 'empty-state-text', S.warning
         ? '当前环境读不到 crontab，暂无计划任务可显示'
-        : '还没有计划任务，用上方表单新增一条'));
+        : '还没有任务，先从上面挑一个常用任务'));
       return;
     }
     var table = add(S.listHost, el('table', 'tasks-table'));
@@ -572,7 +606,7 @@
       paintList();
       if (S.locked) setStatus('当前为只读：需要 root 权限才能读取/写入系统计划任务，见上方说明', 'fail');
       else if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
-      else setStatus(S.entries.length ? '计划任务已刷新' : '还没有计划任务，用上方表单新增一条', 'ok');
+      else setStatus(S.entries.length ? '计划任务已刷新' : '还没有任务，先从上面挑一个常用任务', 'ok');
     }, function (err) {
       var blocked = permissionProblem(err && (err.message + ' ' + (err.code || '')));
       if (blocked) {
@@ -639,10 +673,32 @@
   function build(root) {
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '计划任务'));
-    add(head, el('p', 'view-sub', '管理当前用户的 crontab（shell / http）；插件任务交给内核调度器执行。每次写入前插件都会备份原内容。'));
+    add(head, el('p', 'view-sub', '这里的任务会在固定时间自动执行；系统级任务由 Kore 内核调度。'));
+    var adv = add(head, el('details', 'task-advanced'));
+    adv.style.cssText = 'margin-top:6px;font-size:12px;color:var(--kore-text-3);';
+    add(adv, el('summary', null, '高级说明'));
+    add(adv, el('p', 'task-advanced-text',
+      '普通任务写入当前用户的系统计划任务表（crontab，shell / http），每次写入前会自动备份原内容；' +
+      '「插件任务」不写 crontab，而是生成内核调度器（/api/v1/scheduler/tasks）的任务描述。'));
     // 权限只读说明条：黄底 + 提权指引，位于表单之前（先看到原因，再看到被禁用的表单）。
     S.permHost = add(root, el('div', 'task-perm-host'));
     S.permHost.hidden = true;
+    var quickPanel = add(root, el('section', 'panel task-quick-panel'));
+    var quickHead = add(quickPanel, el('div', 'panel-head'));
+    add(quickHead, el('span', 'panel-title', '常用任务'));
+    add(quickHead, el('span', 'panel-meta', '点一下自动填好，确认保存即可'));
+    var quickGrid = add(quickPanel, el('div', 'task-quick-grid'));
+    quickGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:12px 16px;';
+    QUICK_PRESETS.forEach(function (preset) {
+      var card = add(quickGrid, el('button', 'btn task-quick-card'));
+      card.type = 'button';
+      card.setAttribute('aria-label', '使用预设：' + preset.name);
+      card.style.cssText = 'display:block;text-align:left;min-height:88px;padding:12px 14px;line-height:1.45;';
+      add(card, el('strong', null, preset.name));
+      var meta = add(card, el('span', 'task-quick-meta', preset.why));
+      meta.style.cssText = 'display:block;margin-top:6px;font-size:12px;color:var(--kore-text-3);';
+      on(card, function () { applyQuickPreset(preset); });
+    });
     var formPanel = add(root, el('section', 'panel task-form-panel'));
     var formHead = add(formPanel, el('div', 'panel-head'));
     add(formHead, el('span', 'panel-title', '任务表单'));
