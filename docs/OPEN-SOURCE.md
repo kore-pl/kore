@@ -89,7 +89,7 @@ DCO 的声明文本固定为：`Signed-off-by: 名字 <邮箱>`，含义是"我�
 | 文件 | 职责 | 硬要求 |
 | --- | --- | --- |
 | `CONTRIBUTING.md` | 本仓贡献入口 | 写清本仓 `make check` / `make dist` 命令、九件套不得手改、DCO（`git commit -s`）、安全披露指向根政策；不得把 `kore` 的 `.agents/` 协作流程整套复制过来（R5） |
-| `SECURITY.md` | 本仓披露政策 | 与根 `SECURITY.md` **同口径**：72 小时内确认 / 修复后协调披露默认 90 天；**不得**出现 48 小时、7 天、30 天这类旧时限 |
+| `SECURITY.md` | 本仓披露政策 | 与根 `SECURITY.md` **同口径**：72 小时内确认 / 修复后协调披露默认 90 天；**不得**回填旧版的短时限口径（两日内确认 / 一周内评估 / 一月内出补丁，均已废止） |
 | `CODE_OF_CONDUCT.md` | 行为准则 | 与 `kore` 同一份文本；举报渠道指向维护者邮箱，不指向公开 issue |
 | `AGENTS.md` | agent 入口 | **≤20 行（R5 硬约束）**；只写本仓事实（id / module / 构建与 `dist` / 只依赖 `pkg/pluginapi`）+ 指向 `kore` 的治理真源；超一行即违规 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板 | 必须留 `make check` 与两次 `make dist` sha 一致性的输出位，并有「是否改协议 / `info.json`」勾选项 |
