@@ -61,7 +61,7 @@ Sprint 1–3 覆盖 M1（Linux 内核 + SDK 独立 module + echo 跨仓库验证
 
 - **目标**：`kore` 能起（Linux 全功能）、`pkg/pluginapi` 拆成仓库内嵌套 module（ADR-0011）、`internal/platform` 五接口定义 + Linux 实现、echo 与索引仓库骨架就位。
 - **任务清单**：`cmd/kored`、`internal/core/{config,httpapi,auth,bus}`、`internal/platform` 五接口（`Listener` / `PeerIdentity` / `ProcessSupervisor` / `ResourceLimiter` / `ServiceManager`）+ Linux 实现；`pkg/pluginapi` 独立 `go.mod` + 版本变量；Makefile 增 `cross` / `compat-info`；建 `kore-plugin-echo`（`go.mod` 只 `require` `pkg/pluginapi` 的 tag）与 `kore-plugins`（空索引 + 校验脚本）。
-- **退出条件**：`make build` 0 且 `bin/kored` ≤25 MiB；`/-/healthz` 200、未登录 `/api/v1/self` 401；echo 仓库 `make build` 通过且 `go list -m all` 只含 SDK module；`kore-plugins` 空索引校验 0；`file bin/kored` static、`GOAMD64=v1` 可见。
+- **退出条件**：`make build` 0 且 `bin/kored` ≤25 MiB；`/-/healthz` 200、未登录 `/api/v1/auth/session` 401；echo 仓库 `make build` 通过且 `go list -m all` 只含 SDK module；`kore-plugins` 空索引校验 0；`file bin/kored` static、`GOAMD64=v1` 可见。
 - **风险**：SDK module 拆分导致 import 路径变更 → ADR-0011 + 单测锁版本；跨仓库联调依赖本地路径 → `go.work` 不提交。
 
 ### Sprint 2（M1-2）UDS 协议与 supervisor
@@ -75,7 +75,7 @@ Sprint 1–3 覆盖 M1（Linux 内核 + SDK 独立 module + echo 跨仓库验证
 
 - **目标**：内存、交叉编译、跨仓库隔离三项同时达标，补齐 M1 全部证据。
 - **任务清单**：`make mem` 自动采样；运行参数 `GOGC=100` + `GOMEMLIMIT=6MiB`（理由：GOMEMLIMIT 守上限，GOGC 调高反而放大堆峰值）；`scripts/compat-smoke.sh`（3 个 Linux 镜像，含无 systemd）；verifier 独立复跑九条退出条件。
-- **退出条件**：内存三件齐全且 ≤8192 KiB（GOGC 双档 × 60s×60 点中位数 × `smaps` 拆 `RssAnon`/`RssFile`）；`make cross` 五目标通过；3/3 镜像 smoke；`grep -rn "syscall\." internal/core` 零命中；**启动到就绪 ≤1s**（`kored` 进程启动 → `GET /-/healthz` 返回 200，不含插件 ready）；**API p95 ≤50ms（本地）**（`GET /api/v1/self` 或 `/api/v1/system/info` 连续 200 次）；lazy 冷启动 p95 ≤300ms 标注 M2 起生效（M1 echo 为 resident）。
+- **退出条件**：内存三件齐全且 ≤8192 KiB（GOGC 双档 × 60s×60 点中位数 × `smaps` 拆 `RssAnon`/`RssFile`）；`make cross` 五目标通过；3/3 镜像 smoke；`grep -rn "syscall\." internal/core` 零命中；**启动到就绪 ≤1s**（`kored` 进程启动 → `GET /-/healthz` 返回 200，不含插件 ready）；**API p95 ≤50ms（本地）**（`GET /api/v1/auth/session` 或 `/api/v1/system/info` 连续 200 次）；lazy 冷启动 p95 ≤300ms 标注 M2 起生效（M1 echo 为 resident）。
 - **风险**：超预算 → 降 `GOGC=50` 重测，禁止改预算口径；跨仓库验证走过场 → verifier 独立执行。
 
 ### Sprint 4（M2-1）installer + store 模块 + site 插件
@@ -242,7 +242,7 @@ Sprint 1–3 覆盖 M1（Linux 内核 + SDK 独立 module + echo 跨仓库验证
 | 空载 RSS | ≤8 MiB（目标 5–6；`GOGC=100` + `GOMEMLIMIT=6MiB`） | GOGC 双档（100 与 200）各跑一次 × 60s×60 点中位数 × `smaps` 拆 `RssAnon`/`RssFile`，三者齐全且 ≤8192 KiB | 每 Sprint 末 + 每次发布 |
 | 二进制体积 | ≤25 MiB | `stat -c%s bin/kored` | 每次构建 |
 | 启动到就绪 | ≤1s | `kored` 进程启动 → 首次 `GET /-/healthz` 返回 200（不含插件 ready） | 每 Sprint 末 |
-| API p95（本地） | ≤50ms | `GET /api/v1/self` 或 `/api/v1/system/info` 连续 200 次取 p95 | 每 Sprint 末 |
+| API p95（本地） | ≤50ms | `GET /api/v1/auth/session` 或 `/api/v1/system/info` 连续 200 次取 p95 | 每 Sprint 末 |
 | 插件拉起 | ≤300ms | spawn → `kore.hello` 完成 | M2 起每 Sprint |
 | 空闲 goroutine | ≤20 | `/api/v1/system/info` 暴露 `runtime.NumGoroutine` | 每 Sprint 末 |
 | 空载进程数 | 1 个主壳（插件进程另计 ≤3） | `pgrep -c kored` + 常驻插件进程计数 | 每 Sprint 末 + 每次发布 |

@@ -139,7 +139,7 @@ kore 仓库内部：cmd/kored → internal/core/* → internal/platform/*；core
 
 - **目标**：打通"内核可跑（Linux 全功能）→ SDK 独立 module → 插件仓库独立构建/打包 → kore 加载"，建立索引骨架，平台差异收敛到 `internal/platform` 五接口（本阶段只实现 Linux）。
 - **交付物**：`kore`（`cmd/kored`、`internal/core/*`、`internal/platform` 五接口 + Linux、`pkg/pluginapi` 嵌套 module、`web/` 壳、`bin/kored`、HTTP API 13 端点 + `/-/healthz`）；`kore-plugin-echo` 完整仓库；`kore-plugins` 空索引 + 校验脚本。
-- **退出条件**：二进制 ≤25 MiB；内存红队判据三件齐全且 ≤8192 KiB（GOGC 双档 × 60s×60 点中位数 × `smaps` 拆 `RssAnon`/`RssFile`）；`/-/healthz` 200 与未登录 401；echo 独立仓库 `make dist` + kore 安装后 `POST /api/v1/invoke/echo/ping` 返回 `pong`；改 `internal/core` 不影响 echo 编译；无 systemd 容器内可启动；交叉编译 windows/darwin 通过；`GOAMD64=v1` 可见；空载进程数 ≤1（仅 `kored`，echo 常驻另计 ≤1）、空闲 CPU ≤0.1%（60s 累计 ≤60ms）、goroutine ≤20；**启动到就绪 ≤1s**（`kored` 进程启动 → `GET /-/healthz` 返回 200，**不含插件 ready**——插件 lazy、按需拉起）；**API p95 ≤50ms（本地）**（对 `GET /api/v1/self` 或 `GET /api/v1/system/info` 连续 200 次取 p95）；lazy 冷启动 p95 ≤300ms（M1 无 lazy 插件、echo 为 resident，该判据 **M2 起生效**）。
+- **退出条件**：二进制 ≤25 MiB；内存红队判据三件齐全且 ≤8192 KiB（GOGC 双档 × 60s×60 点中位数 × `smaps` 拆 `RssAnon`/`RssFile`）；`/-/healthz` 200 与未登录 401；echo 独立仓库 `make dist` + kore 安装后 `POST /api/v1/invoke/echo/ping` 返回 `pong`；改 `internal/core` 不影响 echo 编译；无 systemd 容器内可启动；交叉编译 windows/darwin 通过；`GOAMD64=v1` 可见；空载进程数 ≤1（仅 `kored`，echo 常驻另计 ≤1）、空闲 CPU ≤0.1%（60s 累计 ≤60ms）、goroutine ≤20；**启动到就绪 ≤1s**（`kored` 进程启动 → `GET /-/healthz` 返回 200，**不含插件 ready**——插件 lazy、按需拉起）；**API p95 ≤50ms（本地）**（对 `GET /api/v1/auth/session` 或 `GET /api/v1/system/info` 连续 200 次取 p95）；lazy 冷启动 p95 ≤300ms（M1 无 lazy 插件、echo 为 resident，该判据 **M2 起生效**）。
 - **明确不做**：产品插件、商店、预设、macOS/Windows 运行时实现（只保证交叉编译）。
 - **风险与缓解**：SDK module 拆分导致 import 路径变更 → ADR-0011 + 单测；调优方向错判 → `GOMEMLIMIT=6MiB` 守上限，GOGC 调高反而放大堆峰值，实测仍超则降 `GOGC=50` 重测。
 

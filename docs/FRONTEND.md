@@ -41,7 +41,7 @@
 | `/plugins` | 插件总览与生命周期 | 上传安装、启用、禁用、升级、卸载、进入详情 | `GET /api/v1/plugins`、`POST /api/v1/plugins`、`POST /api/v1/plugins/{id}/enable`、`POST /api/v1/plugins/{id}/disable`、`POST /api/v1/plugins/{id}/upgrade`、`DELETE /api/v1/plugins/{id}` |
 | `/plugins/:id` | 单插件详情与调用 | 看 info/resources/triggers、改插件配置、调业务方法、看日志尾部 | `GET /api/v1/plugins`、`POST /api/v1/invoke/{plugin}/{method}` |
 | `/system` | 主壳与宿主态势 | 看版本/RSS/磁盘/插件进程、复制诊断包 | `GET /api/v1/system/info`、`GET /api/v1/events` |
-| `/settings` | 主壳设置 | 会话信息、日志级别、导出配置、登出 | `GET /api/v1/self`、`GET /api/v1/system/info`、`POST /api/v1/auth/logout` |
+| `/settings` | 主壳设置 | 会话信息、日志级别、导出配置、登出 | `GET /api/v1/auth/session`、`GET /api/v1/system/info`、`POST /api/v1/auth/logout` |
 
 **业务方法调用形态（硬约束）**：插件业务方法一律走 `POST /api/v1/invoke/<plugin-id>/<method>`，其中 `method` 必须是完整限定名 `<plugin-id>.<action>`——例如 `POST /api/v1/invoke/db-mysql/db-mysql.instances`，**不得**写成裸动词 `POST /api/v1/invoke/db-mysql/instances`。内核按 [PLUGIN-PROTOCOL](PLUGIN-PROTOCOL.md) §7.2 把 `method` 原样转发、不做方法名改写，裸动词只有插件自己保留的兼容层才认；插件一旦收紧命名（如 `db-mysql` 只认 `db-mysql.` 前缀），裸动词立即变成 `E_NOTFOUND 未知方法`。因此每个视图模块的文件头注释都要写明本条调用形态，方法段一律带域前缀（`file.list`、`site.status`、`db-mysql.query` 等）。
 
