@@ -156,7 +156,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 12 段 + 各插件 `make check`）；
+1. 本地门禁已是权威（`make check` 13 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
