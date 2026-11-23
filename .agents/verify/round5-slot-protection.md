@@ -28,7 +28,7 @@
 --- PASS: TestSystemInfoSupervisorSlots             # /system/info 暴露 resident_max=2 / lazy_slots=1
 ```
 
-全量：`go test -timeout 200s ./...` 退出码 **0**（12 个包全 ok）。
+全量：`go test -timeout 200s ./...` 退出码 **0**（14 个包全 ok）。
 
 ## 3. 真机回归（隔离实例 18851）
 
@@ -45,7 +45,7 @@ payload keys: cpu, disks, load, memory, network, sampled_at, schema, source, upt
 sample: {"schema":"monitor.system.v1","source":"proc","load":{"load1":4.67,...}}
 ```
 
-进程实测（`pgrep -af /tmp/kore-slot-18851/state/plugins/`）：`site`、`terminal`、`monitor` 三个进程同时在跑 —— **在 2 个 resident 占住配额后，第 11 个 lazy 类插件的唤醒不再 429**（事故的直接回归）。
+进程实测（`pgrep -af /tmp/kore-slot-18851/state/plugins/`）：`site`、`terminal`、`monitor` 三个进程同时在跑 —— **在 2 个 resident 占住配额后，任一 lazy 插件的唤醒不再 429**（事故的直接回归）。
 
 ### 3.2 第 3 个 resident 被拒（明确报错 + 当前列表）
 
@@ -86,8 +86,8 @@ POST /api/v1/invoke/monitor/system → HTTP 200
 
 | 命令 | 退出码 | 关键输出 |
 | --- | --- | --- |
-| `go test -timeout 200s ./...` | 0 | 12 个包全 ok |
-| `make docs-check` | 0 | 6 pass / 0 warn / 0 fail |
+| `go test -timeout 200s ./...` | 0 | 14 个包全 ok |
+| `make docs-check` | 0 | 5 pass / 1 warn / 0 fail（WARN 为 PLUGIN-PROTOCOL/RELEASE 行数，既有） |
 | `make check` | 0 | 11/11 段通过 |
 | `make secret-check` | 0 | 0 FAIL（证据占位符合规） |
 
