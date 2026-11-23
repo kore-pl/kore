@@ -35,8 +35,6 @@
   ];
   var TYPES = [['shell', 'Shell 命令'], ['http', 'HTTP 请求'], ['plugin', '插件任务']];
   var HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'];
-  // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
-  var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   // warning = 环境受限原因（供列表空态与只读判定），warnText = 灰底提示条的当前文案；两者不互相覆盖。
   var S = {
     entries: [], editIndex: null, warning: '', warnText: '', locked: false, lockReason: '',
@@ -97,6 +95,23 @@
     S.status.textContent = text;
     S.status.className = 'task-status ' + (tone === 'fail' ? 'row-note-fail' : tone === 'ok' ? 'row-note-ok' : 'muted');
   }
+  // root 权限提示：优先用共享组件（P0-2），组件缺失或原因为空时回退到不含内部实现词的人话。
+  function rootHint(reason, options) {
+    if (!reason) return null;
+    var ui = window.KoreUI;
+    if (!ui || typeof ui.rootErrorHint !== 'function') return null;
+    try { return ui.rootErrorHint(reason, options || {}); } catch (e) { return null; }
+  }
+  function appendRootHint(host, reason, options, fallbackText) {
+    var hint = rootHint(reason, options);
+    if (hint) { host.appendChild(hint); return; }
+    var note = document.createElement('p');
+    note.className = 'row-note';
+    note.textContent = fallbackText ||
+      '这项操作需要系统管理员权限：请让管理员为 Kore 服务授权后重试（部署手册有具体步骤）。';
+    host.appendChild(note);
+  }
+
   function showBackup(path) {
     if (!S.backup) return;
     S.backup.textContent = path ? '已备份：' + path : '';
@@ -143,7 +158,7 @@
       nodes.forEach(function (n) { if (n) n.disabled = S.locked; });
       S.form.cancel.hidden = S.locked && S.editIndex === null;
       S.form.hint.textContent = S.locked
-        ? '当前没有 root 权限：表单与立即执行已禁用，仅保留只读展示。'
+        ? '当前没有系统管理员权限：表单与立即执行已禁用，仅保留只读展示。'
         : hintForType(S.type, S.editIndex);
     }
     if (S.presets) S.presets.forEach(function (b) { b.disabled = S.locked; });
@@ -156,13 +171,11 @@
     S.permHost.textContent = '';
     S.permHost.hidden = !S.locked;
     if (!S.locked) return;
-    var box = add(S.permHost, el('div', 'fw-callout-warn task-perm-warn'));
+    var box = add(S.permHost, el('div', 'task-perm-warn'));
     box.setAttribute('role', 'status');
-    add(box, el('div', 'fw-callout-title', '当前无法读取系统计划任务'));
-    var p = add(box, el('p', 'fw-callout-text',
-      '当前无法读取系统计划任务：' + S.lockReason + '。需要 root 权限（kored 需以 root 运行）。 '));
-    var a = add(p, el('a', 'task-perm-link', '查看提权说明'));
-    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    appendRootHint(box, S.lockReason,
+      { retry: load, command: 'sudo systemctl restart kore' },
+      '当前没有读取系统计划任务的权限：请让管理员为 Kore 服务授权后重试（部署手册有具体步骤）。');
   }
 
   function hintForType(type, editIndex) {
@@ -454,8 +467,12 @@
       entry.enabled = previous;
       paintList();
       var perm = permissionProblem(err.message);
-      setStatus((next ? '启用' : '停用') + '失败，已恢复原状态：' + err.message +
-        (perm ? '（按 RUNBOOK §5 以 root 启动 kored 后重试）' : ''), 'fail');
+      setStatus((next ? '启用' : '停用') + '失败，已恢复原状态：' + err.message, 'fail');
+      if (perm) {
+        appendRootHint(S.status, err.message,
+          { command: 'sudo systemctl restart kore' },
+          '这项操作需要系统管理员权限：请让管理员为 Kore 服务授权后重试（部署手册有具体步骤）。');
+      }
     });
   }
 
