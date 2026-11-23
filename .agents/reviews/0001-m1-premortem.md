@@ -85,7 +85,7 @@
 - 早期信号：Sprint 1 第一天 echo 仓库 `go mod download` 报 `unknown revision`；随后 `git grep -n '^replace ' -- '*go.mod'` 出现命中。
 - 影响：E3 与 E5 无法在"无 replace"前提下执行；靠 replace 通过的那次验收是假绿，U2（跨仓库依赖）这个核心不确定性等于没被证伪。
 - 预案：先打 `v0.1.0-rc.1` 供 echo 依赖，M1 收尾打正式 `v0.1.0`；但 PLUGIN-PROTOCOL:90 明确拒绝 pre-release 匹配，二者冲突必须当场裁决（要么 `requires_kore` 接受 rc，要么 tag 策略改"先发 0.1.0 再回填 echo"）——写进 ADR，不许口头约定。
-- 检查方式：`git ls-files | grep -cE '^go\.work(\.sum)?$'` 必须 0；`git grep -n '^replace github.com/pengtang1024/kore' -- '*go.mod' | wc -l` 必须 0；干净目录 `d=$(mktemp -d) && git clone <echo-remote> "$d/echo" && (cd "$d/echo" && go mod download && echo download_ok)`。
+- 检查方式：`git ls-files | grep -cE '^go\.work(\.sum)?$'` 必须 0；`git grep -n '^replace github.com/kore-pl/kore' -- '*go.mod' | wc -l` 必须 0；干净目录 `d=$(mktemp -d) && git clone <echo-remote> "$d/echo" && (cd "$d/echo" && go mod download && echo download_ok)`。
 
 ### F-11 `requires_kore` 解析器写错 → 所有插件被判 `E_UNSUPPORTED`，或反过来谁都能装
 - 触发条件：G-02 禁第三方 semver，只能手写区间比较。典型错误：把 `">=0.1.0 <0.2.0"` 按字符串比较（`"0.10.0" < "0.2.0"` 为真）、漏掉 `<` 上界导致 0.3.0 也放行、把 pre-release 当正式版、解析失败静默当成"满足"。PLUGIN-PROTOCOL §3.1 只给两种合法写法，但没给用例表。
@@ -147,7 +147,7 @@
 - **G-14 定时器与 goroutine 双白名单**：`grep -rn 'time.NewTicker\|time.NewTimer\|time.AfterFunc' internal/ | grep -v cert_renew | wc -l` = 0；空闲 `goroutines ≤ 20`、`fd` 60 s 内在 ±2 内。防 F-12（空转与泄漏）。
 - **G-15 内存消融矩阵**：新增 `make mem-matrix`，对 GOGC ∈ {100,200} 各采 60 点中位数并打印 `RssAnon/RssFile` 拆分，任一组超 8192 KiB 即 fail。防 F-01（单点采样 + GOGC 方向错误）。
 - **G-16 干净 clone 可构建**：CI 加 `clean-clone` job：`git archive HEAD | tar -x -C $(mktemp -d)` 后跑 `go vet ./...`、`go test ./...`、`make build`，必须与本地行为一致；同时断言 `git ls-files web/dist | wc -l` 与 ADR 裁决一致。防 F-03（本地绿、CI 红）。
-- **G-17 跨仓库污染与文档唯一性**：`git ls-files | grep -cE '^go\.work(\.sum)?$'` = 0；`git grep -n '^replace github.com/pengtang1024/kore' -- '*go.mod'` = 0；`go list -deps ./cmd/kored | grep -c 'kore-plugin-'` = 0；关键数字唯一性（保留天数、解包上限、id 正则、socket 变量名各只允许 1 处真源），并把 docs-check 元信息正则改为 `里程碑: M[0-4]` 且与文件自报一致。防 F-10/F-13。
+- **G-17 跨仓库污染与文档唯一性**：`git ls-files | grep -cE '^go\.work(\.sum)?$'` = 0；`git grep -n '^replace github.com/kore-pl/kore' -- '*go.mod'` = 0；`go list -deps ./cmd/kored | grep -c 'kore-plugin-'` = 0；关键数字唯一性（保留天数、解包上限、id 正则、socket 变量名各只允许 1 处真源），并把 docs-check 元信息正则改为 `里程碑: M[0-4]` 且与文件自报一致。防 F-10/F-13。
 
 ## 6. 回报
 
@@ -160,4 +160,4 @@
 **我会拒绝放行 M1 的 2 条判据**
 
 1. **内存证据判据**：若 RSS 结论只有一次采样、或只测了 GOGC=200、或没有 `RssAnon/RssFile` 拆分 —— 拒绝。必须给：GOGC 100/200 双跑 × 60 点中位数 × smaps 拆分，三者齐全且 ≤8192 KiB。
-2. **跨仓库洁净判据**：若 echo 的构建依赖 `replace`、`go.work` 或一个尚不存在的 tag —— 拒绝。必须给：干净目录（无同级 kore 检出）里 `go mod download && make dist` 成功、`go list -m all` 只含 `github.com/pengtang1024/kore`、kore 侧 `git ls-files | grep -c go.work` = 0。
+2. **跨仓库洁净判据**：若 echo 的构建依赖 `replace`、`go.work` 或一个尚不存在的 tag —— 拒绝。必须给：干净目录（无同级 kore 检出）里 `go mod download && make dist` 成功、`go list -m all` 只含 `github.com/kore-pl/kore`、kore 侧 `git ls-files | grep -c go.work` = 0。

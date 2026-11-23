@@ -132,7 +132,7 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 ```ini
 [Unit]
 Description=kore 内核（kored）
-Documentation=https://github.com/pengtang1024/kore
+Documentation=https://github.com/kore-pl/kore
 After=network-online.target
 Wants=network-online.target
 

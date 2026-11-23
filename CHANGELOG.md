@@ -28,4 +28,4 @@
 
 - 安全漏洞披露流程见根 [SECURITY.md](SECURITY.md)；设计文档见 [docs/SECURITY.md](docs/SECURITY.md)。
 
-[0.1.0]: https://github.com/pengtang1024/kore/releases/tag/v0.1.0
+[0.1.0]: https://github.com/kore-pl/kore/releases/tag/v0.1.0

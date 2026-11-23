@@ -28,7 +28,7 @@
 
 包内结构固定：`info.json` + `bin/<id>`（0755 静态二进制）+ 可选 `web/`（标准 ES module，入口 `web/index.js`）与 `signature`，不含源码。
 
-`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库固定含 `main.go`（仅 import `github.com/pengtang1024/kore/pkg/pluginapi`）、`info.json`、可选 `web/`、`Makefile`（`build`/`dist`/`clean`）、`CHANGELOG.md`。
+`kore-plugin-<id>` 仓库自带 `Makefile`（R7），`make dist` 固定三件事：`CGO_ENABLED=0` + `GOOS/GOARCH` 交叉编译出 `bin/<id>`、按上面的结构打 `tar.gz`、`sha256sum > <id>-<version>.tar.gz.sha256`。仓库固定含 `main.go`（仅 import `github.com/kore-pl/kore/pkg/pluginapi`）、`info.json`、可选 `web/`、`Makefile`（`build`/`dist`/`clean`）、`CHANGELOG.md`。
 
 ### 2.2 解包与命名规则
 
@@ -406,7 +406,7 @@
 
 ## 15. 插件 SDK 最小接口
 
-Go 侧（`pkg/pluginapi`，import `github.com/pengtang1024/kore/pkg/pluginapi`；插件仓库只允许依赖该公开包，禁止 import `kore/internal/*`——Go 的 internal 规则在编译期直接拒绝）：
+Go 侧（`pkg/pluginapi`，import `github.com/kore-pl/kore/pkg/pluginapi`；插件仓库只允许依赖该公开包，禁止 import `kore/internal/*`——Go 的 internal 规则在编译期直接拒绝）：
 
 ```go
 type Handler interface {

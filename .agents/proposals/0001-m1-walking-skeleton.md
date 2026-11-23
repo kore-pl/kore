@@ -101,7 +101,7 @@
 ### 4.1 `pkg/pluginapi` 拆嵌套 module + 公开面（M1 冻结；破坏性改动按 R2）
 
 ```go
-// pkg/pluginapi/go.mod: module github.com/pengtang1024/kore/pkg/pluginapi
+// pkg/pluginapi/go.mod: module github.com/kore-pl/kore/pkg/pluginapi
 const Protocol = "kore.plugin.v1"
 const MaxFrameSize = 8 << 20
 type Error struct{ Code, Message string; Detail json.RawMessage }

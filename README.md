@@ -1,6 +1,6 @@
 # Kore
 
-[![CI](https://github.com/pengtang1024/kore/actions/workflows/ci.yml/badge.svg)](https://github.com/pengtang1024/kore/actions/workflows/ci.yml)
+[![CI](https://github.com/kore-pl/kore/actions/workflows/ci.yml/badge.svg)](https://github.com/kore-pl/kore/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
@@ -22,11 +22,11 @@ Kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件�
 
 | 仓库 | 定位 | module 路径 | 状态 |
 | --- | --- | --- | --- |
-| [`kore`](.) | 内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（唯一协作中枢） | `github.com/pengtang1024/kore` | M0 已建 |
-| `kore-plugins` | 纯静态索引（`index/plugins.json` + 校验脚本），不审核、不代管包、无账号 | `github.com/pengtang1024/kore-plugins` | M1 计划 |
-| `kore-plugin-echo` | 示例插件仓库：`main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md` | `github.com/pengtang1024/kore-plugin-echo` | M1 计划 |
-| `kore-plugin-site` | 站点类插件仓库 | `github.com/pengtang1024/kore-plugin-site` | M2 计划 |
-| `kore-plugin-backup` | 备份类插件仓库 | `github.com/pengtang1024/kore-plugin-backup` | M2 计划 |
+| [`kore`](.) | 内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（唯一协作中枢） | `github.com/kore-pl/kore` | M0 已建 |
+| `kore-plugins` | 纯静态索引（`index/plugins.json` + 校验脚本），不审核、不代管包、无账号 | `github.com/kore-pl/kore-plugins` | M1 计划 |
+| `kore-plugin-echo` | 示例插件仓库：`main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md` | `github.com/kore-pl/kore-plugin-echo` | M1 计划 |
+| `kore-plugin-site` | 站点类插件仓库 | `github.com/kore-pl/kore-plugin-site` | M2 计划 |
+| `kore-plugin-backup` | 备份类插件仓库 | `github.com/kore-pl/kore-plugin-backup` | M2 计划 |
 
 插件只依赖 `kore/pkg/pluginapi`；`kore` 不 import 任何插件仓库（依赖单向，见 [AGENTS.md](AGENTS.md) G-13）。
 
@@ -36,7 +36,7 @@ Kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件�
 
 | 平台 | 地址 | 说明 |
 | --- | --- | --- |
-| GitHub（主） | <https://github.com/pengtang1024/kore> | 开发、评审、发版基线；release 全量保留 |
+| GitHub（主） | <https://github.com/kore-pl/kore> | 开发、评审、发版基线；release 全量保留 |
 | Gitee（镜像） | <https://gitee.com/pengtang1024/kore> | 同步 `main` 与 tag；release 只保留最新 5 个 |
 
 26 个仓库（内核 + 插件中心 + 24 个插件仓）同一策略；推送约定、失败处理与清理脚本见 [docs/GITEE-MIRROR.md](docs/GITEE-MIRROR.md)。
@@ -201,7 +201,7 @@ go work use kore-plugins              # 需要联调索引脚本时再加
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/pengtang1024)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
+Kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/kore-pl)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
 
 - **如何贡献**：[CONTRIBUTING.md](CONTRIBUTING.md)——PR 即按 MIT 授权（inbound = outbound），**不要求 CLA**，签名用 `git commit -s`（DCO）；行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **安全披露**：[SECURITY.md](SECURITY.md)（披露流程）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。

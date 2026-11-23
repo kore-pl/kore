@@ -18,9 +18,9 @@ kore 是**多仓库项目**，依赖单向，内核不 import 任何插件：
 
 | 仓库 | 定位 | module |
 | --- | --- | --- |
-| `kore` | 内核 + `pkg/pluginapi` + 主壳前端 + 文档 | `github.com/pengtang1024/kore` |
-| `kore-plugins` | 纯静态索引与预设 | `github.com/pengtang1024/kore-plugins` |
-| `kore-plugin-<id>` | 每个插件一仓，只依赖 `pkg/pluginapi` | `github.com/pengtang1024/kore-plugin-<id>` |
+| `kore` | 内核 + `pkg/pluginapi` + 主壳前端 + 文档 | `github.com/kore-pl/kore` |
+| `kore-plugins` | 纯静态索引与预设 | `github.com/kore-pl/kore-plugins` |
+| `kore-plugin-<id>` | 每个插件一仓，只依赖 `pkg/pluginapi` | `github.com/kore-pl/kore-plugin-<id>` |
 
 本地联调用 `go.work`，**不要把跨仓 `replace => ../` 提交进仓库**：
 
@@ -85,7 +85,7 @@ go work sync
 
 ## 6. 如何新增插件
 
-1. **建仓**：新建 `kore-plugin-<id>` 独立仓库，module 为 `github.com/pengtang1024/kore-plugin-<id>`，只依赖 `kore/pkg/pluginapi`。
+1. **建仓**：新建 `kore-plugin-<id>` 独立仓库，module 为 `github.com/kore-pl/kore-plugin-<id>`，只依赖 `kore/pkg/pluginapi`。
 2. **填 `info.json`**：至少含 `depends_on` / `conflicts` / `scenario_tags` / `size_bytes` / `requires_kore` / `depth_level` / `lifecycle`；同时补 `Makefile` 的 `dist` 与 `CHANGELOG.md`。
 3. **发索引 PR**：向 `kore-plugins` 提交 `index/plugins.json` 条目与对应预设更新，跑通该仓校验脚本后提 PR。
 

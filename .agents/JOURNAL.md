@@ -95,7 +95,7 @@
 | --- | --- | --- |
 | 门禁 | `make check` | **9/9 段全绿**：docs 6 pass / 0 warn / 0 fail（55 文档 + 13 证据 + 260 链接）；dep 2 pass；thin-shell 4 pass（68 个可执行 .go）；repo 5 pass；canonical 9 pass；log 8 pass；wt 4 pass；oss 8 pass；case 5 pass；末行 `[OK] 门禁全部通过` |
 | 测试 | `go test -count=1 -timeout 200s ./...` | 10 个包全 `ok`（cmd/kored 2.515s、supervisor 2.991s、store 1.060s 为长尾），退出码 0；`go vet ./...` 与 `gofmt -l .` 无输出 |
-| SDK 测试（嵌套 module） | `cd pkg/pluginapi && go test -count=1 ./...` | `ok github.com/pengtang1024/kore/pkg/pluginapi 0.014s`（根模块 `./...` 不含嵌套 module，必须单独跑） |
+| SDK 测试（嵌套 module） | `cd pkg/pluginapi && go test -count=1 ./...` | `ok github.com/kore-pl/kore/pkg/pluginapi 0.014s`（根模块 `./...` 不含嵌套 module，必须单独跑） |
 | 端到端 11 步 | 见 `verify/m1-final-acceptance.md` §C | `make dist` → `echo-0.1.0.tar.gz` 1,258,020 B；`install` exit 0；`serve` 日志 `kore ready`；`/-/healthz` → `{"status":"ok"}`；enable → `state=ready pid=1602171 restarts=0`；invoke → `{"pong":true}` + `X-Request-Id`；`kill -9` → `state=failed restarts=1 pid=0`；disable → `stopped`；ghost → 404 `E_NOTFOUND`；未启用 invoke → 409 `E_CONFLICT`；SIGTERM → `kored_exit_code=0` 且 socket 清理 |
 | 空闲 | `make idle` | **5 pass / 0 fail / 0 n/a**：CPU **10 ms/60s**（≤60）· Threads **13**（≤20，前后差 0）· fd **7**（≤64）· 出站 **0** · Ticker/AfterFunc **零命中** |
 | 内存 | `make mem MEM_POINTS=60` | 中位 **9,664 KiB** · min 9,664 · max 9,744 · p95 9,744；RssAnon **3,040** / RssFile **6,624** KiB（源 `/proc/<pid>/status`，`smaps_rollup` 无这两个字段）；判定 `[WARN] 超出目标 8,192、未越红线 16,384`，退出码 0 |
@@ -104,7 +104,7 @@
 | goroutine | `SIGQUIT` 栈计数 | 20（无 pprof 端点，非门禁口径；G-19 用 Threads 13 判定，20 是参考值、已在指标表标注为边界趋势） |
 | 交叉编译 | `GOOS=windows GOARCH=amd64 go build ./...` / `GOOS=darwin GOARCH=arm64 go build ./...` | 均退出码 0（Tier B 冒烟；不做运行时验证） |
 | 预算聚合 | `make budget-check` | `4 pass, 1 warn, 0 skip, 0 fail`，退出码 0（warn = 主壳 VmRSS 超目标；idle / 进程数 1 / 二进制 7,573,666 B 三项 pass） |
-| 干净目录 SDK（P0） | `git clone ../kore-plugin-echo /tmp/x && cd /tmp/x && GOWORK=off go mod download` | **FAIL**：`github.com/pengtang1024/kore/pkg/pluginapi@v0.1.0: module declares its path as: github.com/kore-project/kore/pkg/pluginapi but was required as: github.com/pengtang1024/kore/pkg/pluginapi`；`GOWORK=off make dist` → `missing go.sum entry`，退出码非 0。本地 `go env GOWORK` = `../kore-plugin-echo/go.work`（`use ../kore/pkg/pluginapi`）即被掩盖 |
+| 干净目录 SDK（P0） | `git clone ../kore-plugin-echo /tmp/x && cd /tmp/x && GOWORK=off go mod download` | **FAIL**：`github.com/kore-pl/kore/pkg/pluginapi@v0.1.0: module declares its path as: github.com/kore-project/kore/pkg/pluginapi but was required as: github.com/kore-pl/kore/pkg/pluginapi`；`GOWORK=off make dist` → `missing go.sum entry`，退出码非 0。本地 `go env GOWORK` = `../kore-plugin-echo/go.work`（`use ../kore/pkg/pluginapi`）即被掩盖 |
 | 协议边界用例 | `go test -run 'Frame' ./pkg/pluginapi` | `8388608` 收、`8388609` 拒且零分配、`0`/`1` 拒、半包与粘包各 200 轮零错帧 |
 
 数据来源标注：内存主值 `ps -o rss=`（等价 `/proc/<pid>/status` 的 VmRSS），拆分 RssAnon/RssFile 取 `/proc/<pid>/status`（本机内核 `smaps_rollup` 已无这两项）；idle 五项取 `/proc/<pid>/stat`、`/proc/<pid>/status`、`/proc/<pid>/fd`、`ss -tnp` 与源码 grep；采样前 `pgrep -x kored | wc -l` = 0，采样后 `kill -TERM` 收尾并复核为 0。
