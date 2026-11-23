@@ -84,7 +84,13 @@
       '.term-hist-at{flex:0 0 auto;color:var(--kore-text-3);font-variant-numeric:tabular-nums}',
       '.term-hist-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--kore-text-2);word-break:break-all}',
       '@media (max-width:639px){.term-sess-ops{width:100%}.term-sess-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}' +
-        '.term-hist-ops{width:100%;margin-left:0}.term-hist-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}}'
+        '.term-hist-ops{width:100%;margin-left:0}.term-hist-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}' +
+        '.term-hist-item .btn{min-height:var(--kore-touch)}' +
+        '.term-hist-search{min-height:var(--kore-touch);font-size:16px}' +
+        '.term-input{position:fixed;left:0;right:0;bottom:0;height:var(--kore-touch);opacity:1;' +
+        'background:var(--kore-bg-1);color:var(--kore-text-1);border-top:1px solid var(--kore-border-2);' +
+        'caret-color:var(--kore-text-1);padding:0 12px;font-size:16px}' +
+        '.term-stage{padding-bottom:calc(var(--kore-touch) + 12px)}}'
     ].join('');
     var style = el('style', null, CSS);
     style.id = 'kore-terminal-extra-css';
@@ -197,9 +203,9 @@
   function render(container) {
     if (!container) return null;
     var S = { session: '', shell: '', pid: 0, cols: 80, rows: 24, poll: 0, reading: false,
-      connecting: false, eof: false, idleAt: '', maxSessions: 0,
+      connecting: false, eof: false, idleAt: '', maxSessions: 0, cursor: 0, reconnecting: false,
       sessions: null, histOpen: false, histData: null, histLoading: false, histError: '',
-      histMsg: '', clearArmed: false };
+      histMsg: '', clearArmed: false, histLines: null, histQuery: '', histCursor: -1, draftInput: '' };
     var term = null, decoder = new TextDecoder('utf-8'), destroyed = false, ro = null, debounce = 0,
       stage, screen, input, status, foot, retry, sessHost, histHost;
     container.textContent = '';
@@ -255,24 +261,66 @@
       return { cols: Math.max(20, Math.min(300, Math.floor(w / 8))), rows: Math.max(6, Math.min(120, Math.floor(h / 18))) };
     }
     function stopPoll() { if (S.poll) { clearInterval(S.poll); S.poll = 0; } }
-    function disconnect(msg) { stopPoll(); S.session = ''; retry.hidden = false; setStatus(msg || '已断开', 'fail'); setFoot(); }
     function tick() {
       if (S.reading || !S.session || destroyed) return;
       S.reading = true;
       invoke('terminal.read', { params: { session_id: S.session, max_bytes: 262144 } }).then(function (r) {
         S.reading = false;
         if (destroyed) return;
+        if (typeof r.cursor === 'number') S.cursor = r.cursor;
         if (r.data) {
           var text = decoder.decode(b64dec(r.data), { stream: true }); // 流式解码：容忍截断的多字节
           if (text) { term.feed(text); term.paint(screen); stage.scrollTop = stage.scrollHeight; }
         }
-        if (r.eof) disconnect('会话已退出');
+        if (r.eof) { stopPoll(); S.eof = true; setStatus('会话已退出（可新建会话）', 'fail'); setFoot(); }
       }, function (err) {
         S.reading = false;
-        if (!destroyed) disconnect(err.code === 'E_NOTFOUND' ? '会话已失效（可能被空闲回收）' : '读取失败：' + err.message);
+        if (!destroyed) reconnect(err); // 断线不销毁会话：带 cursor 走 attach 恢复
       });
     }
     function startPoll() { stopPoll(); S.poll = setInterval(tick, POLL_MS); }
+    // 断线重连状态机：读取失败 → 正在重连… → attach(cursor) → replay 补输出 → 已恢复（补了 N 行）；
+    // 会话已被回收/游标超出窗口 → 会话已过期，请新建（不再自动建，避免用户丢上下文）。
+    function countLines(text) { var n = 0; for (var i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++; return n || 1; }
+    function expireSession() {
+      stopPoll(); S.session = ''; S.cursor = 0; S.eof = false; retry.hidden = true;
+      setStatus('会话已过期，请新建', 'fail'); setFoot();
+    }
+    function reconnect(err) {
+      if (destroyed || !S.session || S.reconnecting) return;
+      stopPoll();
+      if (err && err.code === 'E_NOTFOUND') { expireSession(); return; } // 已被空闲回收
+      S.reconnecting = true; retry.hidden = true; setStatus('正在重连…');
+      var from = S.cursor;
+      invoke('terminal.attach', { params: { session_id: S.session, cursor: from } }).then(function (a) {
+        S.reconnecting = false;
+        if (destroyed || S.session !== a.session_id) return;
+        S.eof = !!a.eof; S.idleAt = a.idle_expires_at || '';
+        var replay = (typeof a.cursor === 'number' && a.cursor > from)
+          ? invoke('terminal.read', { params: { session_id: S.session, cursor: from, max_bytes: 1048576 } })
+          : Promise.resolve(null);
+        replay.then(function (r) {
+          if (destroyed || S.session !== a.session_id) return;
+          var added = 0;
+          if (r && r.data) {
+            var text = decoder.decode(b64dec(r.data));
+            if (text) { added = countLines(text); term.feed(text); term.paint(screen); stage.scrollTop = stage.scrollHeight; }
+            if (typeof r.cursor === 'number') S.cursor = r.cursor;
+          }
+          setStatus(added > 0 ? '已恢复（补了 ' + added + ' 行）' : '已恢复', 'ok');
+          setFoot();
+          if (!S.eof) startPoll();
+        }, function () {
+          setStatus('已恢复（补读失败，后续输出仍会继续）', 'ok');
+          if (!S.eof) startPoll();
+        });
+      }, function (aerr) {
+        S.reconnecting = false;
+        if (destroyed) return;
+        if (aerr.code === 'E_NOTFOUND' || aerr.code === 'E_CONFLICT' || aerr.code === 'E_UNAUTHORIZED') { expireSession(); return; }
+        setStatus('重连失败：' + aerr.message + '（可点「重连」再试）', 'fail'); retry.hidden = false;
+      });
+    }
     function closeSession() {
       var id = S.session;
       S.session = ''; stopPoll(); retry.hidden = false; setStatus('已关闭', 'ok'); setFoot();
@@ -365,6 +413,7 @@
         if (destroyed) return;
         S.session = a.session_id; S.shell = a.shell; S.pid = a.pid;
         S.cols = a.cols; S.rows = a.rows; S.eof = !!a.eof; S.idleAt = a.idle_expires_at || '';
+        S.cursor = typeof a.cursor === 'number' ? a.cursor : 0;
         decoder = new TextDecoder('utf-8'); term = new Term(a.cols, a.rows);
         screen.textContent = ''; hideSess();
         setStatus(a.eof ? '会话已结束' : '已恢复会话', a.eof ? 'fail' : 'ok'); setFoot();
@@ -379,6 +428,7 @@
           if (r && r.data) {
             var text = decoder.decode(b64dec(r.data));
             if (text) { term.feed(text); term.paint(screen); stage.scrollTop = stage.scrollHeight; }
+            if (typeof r.cursor === 'number') S.cursor = r.cursor;
           }
           if (S.eof) return; // 已结束：只回放，不起轮询
           startPoll();
@@ -408,6 +458,42 @@
         return s.length > 160 ? s.slice(0, 160) + '…' : s;
       } catch (e) { return '（这条记录解码失败）'; }
     }
+    // 历史里的原始命令（保留多行，去掉行尾换行），用于「填入输入框」与方向键检索。
+    function histCommand(b64) {
+      try {
+        var raw = new TextDecoder('utf-8').decode(b64dec(b64));
+        return raw.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+      } catch (e) { return ''; }
+    }
+    function fillHistory(cmd) {
+      if (!cmd) return;
+      input.value = cmd; S.histCursor = -1;
+      if (input.focus) input.focus();
+      var end = input.value.length; if (input.setSelectionRange) input.setSelectionRange(end, end);
+      setStatus('已填入输入框（按 Enter 才会执行）', 'ok');
+    }
+    // 首次按上/下键时拉一次历史并缓存；插件侧 history 只读，不落任何本地存储。
+    function ensureHistLines(done) {
+      if (S.histLines) { done(); return; }
+      invoke('terminal.history', { params: { limit: 100 } }).then(function (r) {
+        S.histLines = (r.entries || []).map(function (e) { return histCommand(e.data); }).filter(function (v) { return v; });
+        done();
+      }, function () { done(); });
+    }
+    function stepHistory(dir) {
+      ensureHistLines(function () {
+        var lines = S.histLines || [];
+        if (!lines.length) return;
+        if (S.histCursor < 0) S.draftInput = input.value;
+        var next;
+        if (dir < 0) next = Math.min(lines.length - 1, S.histCursor + 1);
+        else next = S.histCursor - 1;
+        if (next < -1) next = -1;
+        S.histCursor = next;
+        input.value = next < 0 ? (S.draftInput || '') : lines[next];
+        var end = input.value.length; if (input.setSelectionRange) input.setSelectionRange(end, end);
+      });
+    }
     function toggleHist() {
       if (S.histOpen) { S.histOpen = false; histHost.hidden = true; return; }
       S.histOpen = true; histHost.hidden = false;
@@ -418,7 +504,9 @@
       S.histLoading = true; S.histError = ''; renderHist();
       invoke('terminal.history', { params: { limit: 50 } }).then(function (r) {
         if (destroyed) return;
-        S.histLoading = false; S.histData = r; renderHist();
+        S.histLoading = false; S.histData = r;
+        S.histLines = (r.entries || []).map(function (e) { return histCommand(e.data); }).filter(function (v) { return v; });
+        S.histCursor = -1; renderHist();
       }, function (err) {
         if (destroyed) return;
         S.histLoading = false; S.histError = err.message; renderHist();
@@ -457,6 +545,15 @@
       headOps.appendChild(refresh); headOps.appendChild(clear); headOps.appendChild(shut);
       head.appendChild(headOps);
       box.appendChild(head);
+      var search = el('input', 'term-hist-search');
+      search.type = 'search'; search.placeholder = '搜索历史命令（输入即筛选）';
+      search.value = S.histQuery; search.setAttribute('aria-label', '搜索历史命令');
+      search.addEventListener('input', function () {
+        S.histQuery = search.value; renderHist();
+        var again = histHost.querySelector('.term-hist-search');
+        if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+      });
+      box.appendChild(search);
       if (S.clearArmed) box.appendChild(el('div', 'muted term-hist-sub',
         '再点一次「确认清空？」删除全部输入历史；点「收起」放弃。'));
       if (S.histMsg) box.appendChild(el('div', 'term-hist-ok', S.histMsg));
@@ -477,11 +574,24 @@
         box.appendChild(el('div', 'muted', '还没有输入历史：在下方终端里敲几条命令就有了。'));
         histHost.appendChild(box); return;
       }
-      entries.slice().reverse().forEach(function (e) {
+      var query = (S.histQuery || '').toLowerCase();
+      var shown = entries.slice().reverse().filter(function (e) {
+        return !query || histText(e.data).toLowerCase().indexOf(query) >= 0;
+      });
+      if (!shown.length) {
+        box.appendChild(el('div', 'muted', '没有匹配的历史命令：换个关键词，或点「清空历史」重置。'));
+        histHost.appendChild(box); return;
+      }
+      shown.forEach(function (e) {
         var row = el('div', 'term-hist-item');
         row.appendChild(el('span', 'term-hist-at', fmtClock(e.at)));
         row.appendChild(el('span', 'term-hist-text', histText(e.data) +
           (e.truncated ? '（太长已截断）' : '')));
+        var rowOps = el('span', 'term-hist-ops');
+        var fill = el('button', 'btn btn-ghost', '填入');
+        fill.type = 'button'; fill.title = '只填入输入框，不会自动执行';
+        fill.addEventListener('click', function () { fillHistory(histCommand(e.data)); });
+        rowOps.appendChild(fill); row.appendChild(rowOps);
         box.appendChild(row);
       });
       histHost.appendChild(box);
@@ -496,10 +606,19 @@
       if (!S.session || !term) return;
       var payload = text.replace(/\r\n/g, '\r').replace(/\n/g, '\r');
       invoke('terminal.write', { params: { session_id: S.session, data: b64enc(new TextEncoder().encode(payload)) } })
-        .catch(function (err) { if (err.code === 'E_NOTFOUND') disconnect('会话已失效'); });
+        .catch(function (err) { if (err.code === 'E_NOTFOUND') expireSession(); else setStatus('发送失败：' + err.message, 'fail'); });
     }
     function onKey(ev) {
       if (ev.isComposing) return;
+      // ↑/↓ 检索输入历史：仅在光标贴边且单行输入时拦截，避免抢走 shell 的方向键。
+      if (!ev.ctrlKey && !ev.altKey && !ev.metaKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
+          input.value.indexOf('\n') < 0) {
+        var atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+        var atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+        if ((ev.key === 'ArrowUp' && atStart) || (ev.key === 'ArrowDown' && atEnd)) {
+          ev.preventDefault(); stepHistory(ev.key === 'ArrowUp' ? -1 : 1); return;
+        }
+      }
       var bytes = null;
       if (ev.ctrlKey && !ev.altKey && !ev.metaKey && !ev.shiftKey && /^[a-z]$/i.test(ev.key)) {
         bytes = String.fromCharCode(ev.key.toUpperCase().charCodeAt(0) - 64); // Ctrl+A=0x01
@@ -537,10 +656,18 @@
     }
     btnNew.addEventListener('click', newSession); btnClose.addEventListener('click', closeSession);
     btnHist.addEventListener('click', toggleHist);
-    retry.addEventListener('click', connect);
+    retry.addEventListener('click', function () { if (S.session) reconnect(); else connect(); });
     screen.addEventListener('click', function () { input.focus(); });
     stage.addEventListener('click', function () { input.focus(); });
     input.addEventListener('keydown', onKey); input.addEventListener('input', onInput);
+    input.addEventListener('paste', function (ev) {
+      var clip = ev.clipboardData ? ev.clipboardData.getData('text') : '';
+      if (!clip) return;
+      var lines = clip.split('\n').length;
+      if (clip.length > 2000 || lines > 30) {
+        if (!window.confirm('内容较大（' + clip.length + ' 字符 / ' + lines + ' 行），确认粘贴到终端？')) ev.preventDefault();
+      }
+    });
     document.addEventListener('visibilitychange', function () { // 后台停轮询，回前台恢复
       if (document.hidden) stopPoll(); else if (S.session && !S.poll && !destroyed) startPoll();
     });
