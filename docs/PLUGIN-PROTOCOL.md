@@ -63,10 +63,11 @@
 | resources.cpu_quota | string | 是 | — | `"10%"`–`"100%"`，映射 `cpu.max` |
 | resources.pids_max | int | 是 | — | 16–512 |
 | triggers | string[] | 是 | — | 元素 `<type>:<name>`，`type` ∈ `event` \| `schedule` \| `invoke`；`event` 的 `name` 匹配 `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`；`invoke` 允许单段动词或任意段点分名 `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`（如 `invoke:restart`、`invoke:site.restart`）；`schedule` M1 只校验非空（M2 解析表达式）；缺 `:`、类型不在枚举、name 非法 → `E_INVALID`；空数组合法 |
-| depends_on | string[] | 否 | `[]` | 依赖的插件 id；安装时拓扑排序，缺失依赖拒绝安装；循环依赖直接拒绝并回 `E_INVALID`（`detail.cycle` 给环路径） |
-| conflicts | string[] | 否 | `[]` | 冲突插件 id；与已装插件冲突时拒绝安装，回 `E_CONFLICT` |
-| scenario_tags | string[] | 否 | `[]` | 枚举固定 5 值 `web`/`data`/`ops`/`sec`/`app`（**能力族标签，不等于 preset 名**）；空数组合法（不进商店分类），非空时每值必须在枚举内；写成 `dev`/`minimal`/`full` 等 preset 名 → `E_INVALID` |
-| size_bytes | int | 否 | `0` | 由 `make dist` 打包时回填；仓库内可为 `0`；安装后为实际占用字节数（商店展示与磁盘预检），须 ≥ 0 |
+| depends_on | string[] | 是* | `[]` | 依赖的插件 id；安装时拓扑排序，缺失依赖拒绝安装；循环依赖直接拒绝并回 `E_INVALID`（`detail.cycle` 给环路径） |
+| conflicts | string[] | 是* | `[]` | 冲突插件 id；与已装插件冲突时拒绝安装，回 `E_CONFLICT` |
+| scenario_tags | string[] | 是* | `[]` | 枚举固定 5 值 `web`/`data`/`ops`/`sec`/`app`（**能力族标签，不等于 preset 名**）；空数组合法（不进商店分类），非空时每值必须在枚举内；写成 `dev`/`minimal`/`full` 等 preset 名 → `E_INVALID` |
+| size_bytes | int | 是* | `0` | 由 `make dist` 打包时回填；仓库内可为 `0`；安装后为实际占用字节数（商店展示与磁盘预检），须 ≥ 0 |
+| depth_level | string | 是 | — | G-20：插件深度等级，枚举 `production` \| `basic`；`basic` 不得被预设标为「开箱可用」、商店 UI 必须展示；`production` 必须过 `tests/fault/` 故障注入 |
 | requires_root | bool | 否 | `false` | ADR-0018：插件是否需要宿主 root 权限；只影响降级提示与 `root_actions` 合法性，内核不据此判断业务语义 |
 | root_actions | object[] | 否 | `[]` | 固定 argv 的提权动作清单（见 §3.1.3）；非空时必须同时 `requires_root:true`；上限 16 条 |
 | store_visibility | string | 否 | `public` | `public` \| `hidden`（内部依赖插件不出现在商店列表） |
@@ -80,7 +81,29 @@
 - 失败行为：不匹配 → 拒绝安装/加载并回 `E_UNSUPPORTED`，`message` 同时带 kore 版本、`requires_kore`、`<id>@<version>`。
 - `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。
 - 与 `protocol` 的关系：`protocol` 是协议主版本、`requires_kore` 是内核版本区间，两者都要过；`protocol` 不变而 `requires_kore` 收窄是合法发布。REPOS 版本矩阵（0.2.x → `">=0.1.0 <0.3.0"`、1.0.x → `">=0.1.0 <2.0.0"`）符合上述规则。
-- **必填口径（与代码逐字对齐）**：**9 个必填** = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`；**3 个可选** = `lifecycle`（缺省 `lazy`，G-14）、`scenario_tags`（缺省 `[]`）、`size_bytes`（缺省 `0`，`make dist` 回填）；另有 ADR-0018 增补的 2 个可选字段 `requires_root`（缺省 `false`）与 `root_actions`（缺省 `[]`），以及方法级能力字段 `method_capabilities`（缺省无，见 §3.1.2.1）；依据 `internal/core/registry/manifest.go` 的 `requiredKeys` 与 `validateRootActions` / `validateMethodCapabilities`。
+- **必填口径（唯一真源，其它文档只引用不复制）**：**14 个必填** = 协议本表 9 项（`id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`）∪ AGENTS.md G-17 的 5 项（`depends_on` `conflicts` `scenario_tags` `size_bytes` `requires_kore`，与前者去重 1 项）∪ G-20 的 `depth_level`。判据是**键必须存在**；值为空数组 / `0` / `false` 合法（逐项语义见上表「约束」列）。上表 `必填=是*` 的 4 项即 G-17 增补项：**商店收录必填**，内核解析期仍按默认值放行（`[]` / `0`）。
+- **必填字段来源归属（改判据只改这里）**：
+
+| # | 字段 | 来源 | 一句话口径 |
+| --- | --- | --- | --- |
+| 1 | `id` | 协议 §3.1 | 唯一标识，匹配 §2.2 正则且 == 目录名后缀 `kore-plugin-<id>`（G-27） |
+| 2 | `name` | 协议 §3.1 | 展示名，1–64 字符，中文允许；同时承担「一句话说明」 |
+| 3 | `version` | 协议 §3.1 | 语义化版本，须 == `manifest.json.version`（发版一致性） |
+| 4 | `protocol` | 协议 §3.1 | 协议主版本，MVP 只接受 `kore.plugin.v1` |
+| 5 | `entry` | 协议 §3.1 | 包内可执行路径，固定 `bin/<id>` |
+| 6 | `capabilities` | 协议 §3.1 | 能力声明，≥1 项、≤16 项（见 §3.1.2） |
+| 7 | `resources` | 协议 §3.1 | 资源预算，三子键 `memory_mb` / `cpu_quota` / `pids_max` 均必填 |
+| 8 | `requires_kore` | 协议 §3.1 + G-17 + G-14 | 内核版本区间；三处同源，G-14 另要求加载时校验 |
+| 9 | `triggers` | 协议 §3.1 | 触发声明 `<type>:<name>`，空数组合法 |
+| 10 | `depends_on` | G-17 | 依赖插件 id 列表；安装时拓扑排序，成环 → `E_INVALID` |
+| 11 | `conflicts` | G-17 | 冲突插件 id 列表；与已装插件冲突 → `E_CONFLICT` |
+| 12 | `scenario_tags` | G-17 | 能力族标签，5 值枚举；空数组合法（不进商店分类） |
+| 13 | `size_bytes` | G-17 | 包体积字节数，`make dist` 回填；仓库内可为 `0` |
+| 14 | `depth_level` | G-20 | `production` / `basic` 深度等级；商店 UI 必须展示 |
+
+- **两个执行点，一套清单（不许出现第四份口径）**：①**仓库提交 / 商店收录**（`scripts/store-check.sh` 的 `REQ_FIELDS`）= 上表 14 项，缺任一即 FAIL；②**内核解析**（`internal/core/registry/manifest.go` 的 `requiredKeys`）= 9 项最小集，缺省值见上表「默认」列——②是①的严格子集，仓库提交必须满足①。`AGENTS.md` G-17 / §5 与 `.agents/QUALITY-GATES.md` 只引用本节，**不再各自维护字段清单**。
+- **其余为可选**：`lifecycle`（缺省 `lazy`，G-14）、`idle_timeout_s`、`method_capabilities`（§3.1.2.1）、`requires_root` 与 `root_actions`（ADR-0018）、`store_visibility`、`protocol_minor`、`web`。
+- **描述类字段不做必填**：`description` / `title` / `summary` / `name` 四选一即可，全缺只 WARN；`name` 已在必填 9 项内，故该条实际几乎不触发。
 
 ### 3.1.1 依赖解析（安装时）
 

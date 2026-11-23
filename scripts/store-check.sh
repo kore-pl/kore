@@ -6,10 +6,12 @@
 #
 # 逐仓检查（判据来源 G-17 / G-27，不改判据、不为变绿放宽）：
 #   1) 三件套：info.json / Makefile 内含 dist 目标 / CHANGELOG.md
-#   2) info.json 必填 9 字段：id version depends_on conflicts scenario_tags
-#      size_bytes requires_kore depth_level capabilities
-#      （G-17 原文 5 项 + id/version（G-27 与发版一致性）+ depth_level（G-20）
-#        + capabilities（PLUGIN-PROTOCOL §3.1 必填 9 项之一））
+#   2) info.json 必填 14 字段（唯一真源 = docs/PLUGIN-PROTOCOL.md §3.1 必填口径）：
+#      id name version protocol entry capabilities resources requires_kore triggers
+#      + depends_on conflicts scenario_tags size_bytes（G-17 增补）
+#      + depth_level（G-20）
+#      = 协议 §3.1 的 9 项 ∪ G-17 的 5 项 ∪ G-20 的 depth_level，去重后 14 项。
+#      REQ_FIELDS 必须与协议 §3.1 逐字一致；改清单先改协议。
 #   2b) 描述类字段四选一：description / title / summary / name
 #      （协议 §3.1 的 name 是必填展示名；G-17 与协议顶层 schema 都不要求
 #        description，因此四者全缺只报 WARN、不判 FAIL——2026-11-23 对账）
@@ -68,11 +70,19 @@ import os
 import re
 import sys
 
-# 必填字段（G-17 原文 5 项 + id/version/depth_level/capabilities 的既有依据）
-# description 不在其中：G-17 未要求，PLUGIN-PROTOCOL §3.1 顶层字段表也没有它
+# 必填字段：唯一真源 = docs/PLUGIN-PROTOCOL.md §3.1「必填口径」
+# = 协议 9 项（id name version protocol entry capabilities resources requires_kore triggers）
+#   ∪ G-17 的 5 项（depends_on conflicts scenario_tags size_bytes requires_kore）
+#   ∪ G-20 的 depth_level，去重后 14 项。description 不在其中。
+# 与本清单不一致 = 第四份口径，禁止；改判据先改协议 §3.1。
 REQ_FIELDS = [
-    "id", "version", "depends_on", "conflicts",
-    "scenario_tags", "size_bytes", "requires_kore", "depth_level", "capabilities",
+    # 协议 §3.1 必填 9 项
+    "id", "name", "version", "protocol", "entry",
+    "capabilities", "resources", "requires_kore", "triggers",
+    # G-17 增补 4 项（requires_kore 与上面去重）
+    "depends_on", "conflicts", "scenario_tags", "size_bytes",
+    # G-20 增补
+    "depth_level",
 ]
 # 描述类字段四选一即可（name 是协议 §3.1 的必填展示名，等价承担「一句话说明」；
 # title / summary 为向前兼容的等价命名）。全缺只 WARN，不 FAIL。
@@ -135,7 +145,7 @@ for raw in sys.argv[1:]:
                 problems.append(f"info.json 缺必填字段 {field}")
 
         # 描述类字段：四选一（description / title / summary / name），全缺只 WARN。
-        # 依据：G-17 未要求 description；PLUGIN-PROTOCOL §3.1 必填 9 项里只有 name。
+        # 依据：description 不在协议 §3.1 必填 14 项内（name 在其中，承担展示名）。
         desc_src = None
         for f in DESC_FIELDS:
             v = info.get(f)
@@ -206,8 +216,9 @@ for raw in sys.argv[1:]:
         print(f"[WARN] {name}: {item}")
 
 print("")
-print("检查范围: 三件套 + info.json 必填 9 字段 + 描述类字段四选一(WARN) + "
-      "id/目录一致(G-27) + info/manifest 版本一致 + go.mod replace 跨仓拦截")
+print("检查范围: 三件套 + info.json 必填 14 字段(协议 §3.1 ∪ G-17 ∪ G-20) + "
+      "描述类字段四选一(WARN) + id/目录一致(G-27) + info/manifest 版本一致 + "
+      "go.mod replace 跨仓拦截")
 print(f"store-check: {n_pass} pass, {n_fail} fail, {n_warn} warn")
 sys.exit(1 if n_fail else 0)
 PY
