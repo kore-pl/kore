@@ -122,6 +122,8 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
+> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：GitHub CI 只在 `push main` / tag（`v*`、`pkg/pluginapi/v*`）/ `pull_request` / `workflow_dispatch` 时跑；Gitea 与 24 个插件仓**不配 CI**。日常反馈用本地 `make check`。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
+
 ## 6. 细则索引
 
 - [.agents/README.md](.agents/README.md)（体系与反模式）、[.agents/ROLES.md](.agents/ROLES.md)（6 张角色卡 / 冲突仲裁 / 不可兼任）、[.agents/WORKFLOW.md](.agents/WORKFLOW.md)（Kore Loop 七阶段 / 讨论协议 / 状态机）。

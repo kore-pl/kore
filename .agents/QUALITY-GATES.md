@@ -133,3 +133,33 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
    > **唯一例外（G-30 明文凭据）**：凭据值不是「判定对象」，是必须脱敏的泄露面；只允许把凭据字面量替换为 `***`，不得删改证据结论。
 
 5. 每条门禁的负责人：G1/G2/G4 由 implementer 自跑，G3/G5/G6/G7/G8/G9/G10 由 verifier 复跑；verifier 不复用实现者输出。
+
+## 6. CI 执行策略（2026-11-23 用户要求：CI 要少执行）
+
+### 为什么少跑
+
+本地 `make check` 已覆盖 **12 段门禁**（docs / 明文凭据 / 依赖白名单 / 兼容基线 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 + 零侵入），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+
+### 触发规则（`kore`）
+
+| 事件 | 是否跑 | 说明 |
+| --- | --- | --- |
+| `push` 到 `main` | ✅ | 主干必须始终可构建 |
+| 打 tag（`v*` / `pkg/pluginapi/v*`） | ✅ | 发布物必须过门禁 |
+| `pull_request` | ✅ | 合入兜底 |
+| `workflow_dispatch` | ✅ | 手动触发（排查 CI 自身） |
+| 日常 feature 分支 push | ❌ | 本地 `make check` 即可，不占 runner |
+
+**被否决的触发方案**：①保留全触发（每次 push 都跑，重复劳动）；②用 `[skip ci]` 提交标记逐次控制（依赖人工纪律，会漏）；③只配 Gitea CI（见下）。
+
+### Gitea 不配 CI
+
+自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
+
+1. 本地门禁已是权威（`make check` 12 段 + 各插件 `make check`）；
+2. Gitea 是内网自建，跑 CI 会占用本机资源；
+3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
+
+### 插件仓不配 CI
+
+24 个插件仓**不配置 CI**。发布前门禁由发版流程保证：`gofmt -l` + `go vet` + `go test` + `make dist` 两次 sha 一致 + 干净树复现（见 [docs/RELEASE.md](../docs/RELEASE.md)）。

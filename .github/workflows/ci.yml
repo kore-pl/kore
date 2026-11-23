@@ -1,9 +1,14 @@
 name: CI
 
-# 触发：所有 push 与 PR 都跑；门禁不绿不得合并。
+# 触发（2026-11-23 用户要求：CI 要少执行，见 .agents/QUALITY-GATES.md §6）：
+#   push main / tag（v*、pkg/pluginapi/v*）/ PR / 手动；日常 feature 分支 push 不跑。
+#   本地 `make check`（12 段）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
 on:
   push:
+    branches: [main]
+    tags: ['v*', 'pkg/pluginapi/v*']
   pull_request:
+  workflow_dispatch:
 
 # 说明：CI 只跑能在托管 runner 上稳定复现的门禁。
 # `make idle` / `make budget-check` 依赖真实 kored 进程、systemd/cgroup 与 60s 空闲采样，
