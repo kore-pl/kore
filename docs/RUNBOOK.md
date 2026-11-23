@@ -160,42 +160,51 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 ### 5.1 systemd unit 示例（`/etc/systemd/system/kore.service`）
 
 ```ini
+# /etc/systemd/system/kore.service — 与 scripts/install-system-service.sh 的 render_unit() 一致
+# 等价于 `bash scripts/install-system-service.sh --dry-run --install-root /opt/kore` 打印的内容
+# 手工改动会在下次安装时被覆盖；卸载：sudo bash scripts/install-system-service.sh --remove
 [Unit]
-Description=kore 内核（kored）
-Documentation=https://github.com/kore-pl/kore
+Description=kore 内核（kored，root 服务；特权动作零交互）
+Documentation=file:///opt/kore/docs/ARCHITECTURE.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/kored serve
-Restart=on-failure
-RestartSec=2s
-# 状态 / 运行 / 日志目录（与 config 的 paths.* 对齐）
-RuntimeDirectory=kore
-StateDirectory=kore
-LogsDirectory=kore
 NoNewPrivileges=false
+Environment=KORE_HOME=/opt/kore
+ExecStart=/opt/kore/bin/kored serve
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+TimeoutStartSec=30
+KillMode=mixed
+Delegate=yes
+LimitNOFILE=65536
+UMask=0022
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+**为什么没有 `RuntimeDirectory=` / `StateDirectory=` / `LogsDirectory=`**：v1.0 之前的示例曾列这三项，它们会写 `/run/kore`、`/var/lib/kore`、`/var/log/kore`——这三个路径被 ADR-0023 §3.5 逐字列为「清单外一切写入 = 违规」，G-31 之下本安装形态的安装目录外写入只有 `kore.service` + enable 软链（豁免 #1）。状态 / socket / 日志因此全部留在 `KORE_HOME`（默认 `/opt/kore`）内，stdout/stderr 由 journald 收集。**如需这三个目录，必须按 ADR-0023 §3.5 #3 登记为「用户批准的宿主变更」**（写 `<install>/data/changes.jsonl`、可回滚）后才允许加，不得直接塞回 unit。
+
 ```bash
-sudo install -m 0755 bin/kored /usr/local/bin/kored
-sudo systemctl daemon-reload
-sudo systemctl enable --now kore
+make build
+# 默认安装形态：脚本一次性写 unit + enable（幂等；--dry-run 只预览、零变更）
+sudo bash scripts/install-system-service.sh --install-root /opt/kore
 systemctl is-active kore                 # 判据：active
+systemctl show -p User --value kore      # 判据：root
 ps -o user= -C kored                     # 判据：root
 ```
 
-**为什么必须 root**：`systemd-run --uid=0` 由非 root 调用会走 polkit 交互认证；本机实测 `--no-ask-password` 被拒。以 root 启动 kored 后，transient unit 由已授权的 systemd 直接拉起，不需要交互。
+**为什么必须 root**：`systemd-run --uid=0` 由非 root 调用会走 polkit 交互认证；本机实测 `--no-ask-password` 被拒。以 root 启动 kored 后，transient unit 由已授权的 systemd 直接拉起，**uid=0 不进入 polkit 判定、`systemd-run --uid=0` 没有 authorization check**，所以运行期不需要任何交互（ADR-0042 方案 B；对照降级路径 A，每次操作仍过一次判定、只是规则返回 YES 不弹框）。
 
 ### 5.2 通道验证（root 环境）
 
 ```bash
-J=/tmp/kore.jar; S=/run/kore/kore.sock
+J=/tmp/kore.jar; S=/opt/kore/run/kore.sock   # portable：socket 在 KORE_HOME 内（unit 不含 RuntimeDirectory=）
 curl -sS --unix-socket $S -c $J -H 'Content-Type: application/json' \
   -d '{"password":"<管理员口令>"}' http://kore/api/v1/auth/login
 # 1) 看插件声明了哪些动作（requires_root / root_actions 随插件视图返回）

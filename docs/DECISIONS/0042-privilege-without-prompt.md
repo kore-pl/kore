@@ -1,4 +1,4 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-23 · 里程碑: M5 · 关联: [0018-privilege-model](./0018-privilege-model.md)、[0023-zero-intrusion](./0023-zero-intrusion.md)、[SECURITY](../SECURITY.md) §15、[RUNBOOK](../RUNBOOK.md) §5
+> 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5 · 关联: [0018-privilege-model](./0018-privilege-model.md)、[0023-zero-intrusion](./0023-zero-intrusion.md)、[SECURITY](../SECURITY.md) §15、[RUNBOOK](../RUNBOOK.md) §5
 
 # ADR-0042: root 提权零交互——kored 以系统级 root 服务运行（不做运行期授权判定）
 
@@ -91,3 +91,58 @@ journalctl -u polkit --since -5min | grep -c manage-units   # 期望 0
 3. 出现"root 进程被利用"的安全事件或审计要求内核必须非 root（如强制 capability 拆分）。
 4. systemd / polkit 对 uid=0 的隐式放行语义发生变化（升级后 `journalctl -u polkit` 出现 `manage-units` 判定即视为失效信号）。
 5. 若未来引入"按动作的能力拆分（capability 化内核）"，需重新评估是否仍需整进程 root。
+
+## 实施记录（2026-11-23，accepted）
+
+> 本节为**追加记录**：上方「背景 / 两个候选 / 方案 B 的后果 / 实现 / 复审条件 1–5」原文一字未改。状态由 `proposed` 转 `accepted` 的依据是 lead 2026-11-23 裁决——**方案 B（系统级 root 服务）为默认安装形态**，方案 A（polkit 规则）保留为「用户坚持用普通用户跑」时的降级路径。
+
+### 1. 落地件清单（均已提交，实现 commit `e1980a3`）
+
+| 产物 | 状态 | 核对事实 |
+| --- | --- | --- |
+| `scripts/install-system-service.sh` | 已落地（225 行） | 幂等（渲染结果与既有 unit `cmp` 一致即不写、打印「幂等」）；`--dry-run` 零变更预览并打印完整 unit；`--remove` 停服务 + 删 unit + `daemon-reload`（幂等）；**用户级实例冲突检测**（`systemctl --user is-active kored-local` 命中 → `[BLOCKED]` exit 4，`--force` 只跳过检查、不代停）；非 root 真装/卸载 `exit 3` 并打印需执行的 `sudo` 命令 |
+| `scripts/install-polkit-rule.sh` | 已落地，**降级路径 A**，不在默认安装链里调用 | 规则功能自检 **13/13 PASS**（假 polkit 沙箱，PASS/FAIL 逐条打印；证据 `.agents/verify/root-nopass-polkit.md`）；`--dry-run` / `--check` 非 root 只读，`--remove` 幂等，polkitd 监听目录自动重载 |
+| `docs/SECURITY.md` §15.5 | 已落地 | 写清「为什么不需要口令」的机制链、方案 A 的等价提权面与 5 条收紧条件、A 的豁免归属（ADR-0023 §3.5 需新增第 5 项）、撤销路径与「与 G-11 多用户 RBAC 无关」的边界 |
+| `docs/RUNBOOK.md` §5.1 | 本次对齐 | unit 示例改为与本脚本生成结果一致（见第 2 节），并修正 §5.2 的 socket 路径为安装根内 `<install>/run/kore.sock` |
+| `e1980a3` | 实现提交 | `[agent:root-nopass-polkit] feat(privilege): 系统级 root 服务实现提权零交互（ADR-0042，polkit 规则降为降级路径）`——4 文件 / +831 行：本 ADR、两个安装器、验收报告 |
+
+### 2. unit 模板的关键字段（取自 `scripts/install-system-service.sh` 的 `render_unit()` 实际值，非文档推测）
+
+| 字段 | 实际值 | 为什么是它 |
+| --- | --- | --- |
+| `User=` | `root` | 本 ADR 的核心一行：内核以 uid=0 运行，特权动作由内核代表调用方发起 |
+| `NoNewPrivileges=` | `false` | 内核本身要执行特权动作，禁止提权会让 `systemd-run --uid=0` 失效；插件侧低权靠 supervisor 写 `SysProcAttr.Credential` 降 uid（ADR-0018 §15.1），不靠这一项 |
+| `KillMode=` | `mixed` | `stop` 时先只对主进程发 TERM，让内核有机会回收插件子进程，超时才杀整个 cgroup；用 `control-group` 会与插件的收尾逻辑抢时序 |
+| `Restart=` | `on-failure` | 崩溃 / 非零退出自动拉起；正常 `systemctl stop` 不重启，保留运维意图（`RestartSec=2`、`TimeoutStartSec=30`、`TimeoutStopSec=15` 随之固定） |
+| `LimitNOFILE=` | `65536` | 管理面 UDS + 每插件 socket + 提权通道并发连接的 fd 余量（`Delegate=yes` + `UMask=0022` 同时输出） |
+
+其余随脚本输出的字段：`Type=simple`、`Environment=KORE_HOME=$INSTALL_ROOT`、`ExecStart=$BIN serve [--config …]`、`[Unit] After/Wants=network-online.target`、`[Install] WantedBy=multi-user.target`。
+
+**为什么不含 `RuntimeDirectory=` / `StateDirectory=` / `LogsDirectory=`（G-31 零侵入）**：这三项分别会写 `/run/kore`、`/var/lib/kore`、`/var/log/kore`，而 ADR-0023 §3.5 把这三个路径**逐字列为「清单外一切写入 = 违规」**；G-31 之下本安装形态允许的安装目录外写入只有豁免 #1 的 `/etc/systemd/system/kore.service` + enable 软链。因此状态 / socket / 日志全部留在 `KORE_HOME`（`<install>`）内，stdout/stderr 由 journald 收集（与上文「方案 B 的后果」第 5 条一致）。确有需要时按 ADR-0023 §3.5 #3 登记为「用户批准的宿主变更」（写 `<install>/data/changes.jsonl`、可回滚），不得直接加进 unit。
+
+### 3. 为什么运行期不需要口令（一条链路）
+
+`kored` 以 `User=root` 运行（uid=0）→ 特权动作由内核调 `systemd-run --uid=0` → **systemd 对 uid=0 直接放行、不进入 polkit 判定** → 该调用不产生 `org.freedesktop.systemd1.manage-units` 的 authorization check → **运行期没有「授权判定」这一步，所以不存在口令输入**。这是结构性消除，不是「把弹框关掉」：方案 A 下每次操作仍有一次 authorization check，规则返回 YES 才不弹。
+
+### 4. accepted 的边界（显式，不得省略）
+
+**accepted 的范围 = 默认安装形态已确定 + 落地脚本与单元模板已就绪 + 静态校验通过；不等于产线已验证。**
+
+未实测项（诚实记录，不得当成已通过）：
+
+- **真装系统服务未执行**、**root 特权动作零交互未观测**：本沙箱 `NoNewPrivs=1`（`sudo: The "no new privileges" flag is set`）、`/etc/systemd/system` 不可写，`sudo` 被内核阻断。
+- 已完成的只是静态 / 只读校验：`--dry-run` 的 unit 逐字段核对、`bash -n` 语法检查、用户级实例检测分支、polkit 规则 13/13 假沙箱断言。
+
+**闭环命令（在有 root 的真实环境按序执行一次即可闭环）**：
+
+```bash
+sudo bash scripts/install-system-service.sh --install-root /opt/kore   # 期望 exit 0，打印 [OK] 已写入 /etc/systemd/system/kore.service
+systemctl show -p User --value kore                                    # 期望输出 root
+journalctl -u polkit --since -5min | grep -c manage-units              # 期望 0
+```
+
+第三条判据的含义：装上 root 服务并跑过一次 root 动作后，polkit 日志里**不应**出现新的 `manage-units` 判定；出现即说明「uid=0 不进入 polkit」这一前提在本机不成立（同时触发下文复审条件 6 的第 4 项）。
+
+### 5. 复审条件（在上文 1–5 之外追加第 6 条）
+
+6. **若将来要把服务改回普通用户运行**（portable / 无 systemd / 托管环境），必须**同时**满足三项：① 启用降级路径 A（`scripts/install-polkit-rule.sh`）；② 在 **ADR-0023 §3.5 新增第 5 项豁免**（`/etc/polkit-1/rules.d/49-kore.rules`）；③ 在文档与 UI 显式提示「本机授权由 polkit 规则承担」。只做其中一项即退回「运行期可能再次出现本机口令输入」的状态，违反用户绝对约束。
