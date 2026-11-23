@@ -203,7 +203,7 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
 | --- | --- |
 | firewall 0.2.3 之后 tag 漂移，下次发版必须 bump（同类：process / redis / ssl / waf） | kore-pl/kore#1 |
 | 零侵入阶段 B：`kored uninstall` + `userdel` 清理 | kore-pl/kore#2 |
-| 主壳前端接线：10 个后端方法无 UI 入口 | kore-pl/kore#3 |
+| ~~主壳前端接线：10 个后端方法无 UI 入口~~ **已闭环（2026-11-23）**：`terminal.*` `12f2210`、`integrity.*` / `cron.*` `69d317d`、`process.renice` `c43aed6`；Gitea #3 已 close（评论含 4 commit 对照表） | kore-pl/kore#3 ✅ closed |
 | module 路径是否迁移到 kore-pl（当前决策：不改，需 ADR 才改） | kore-pl/kore#4 |
 | 协议约束：下划线命名方法无法进 `method_capabilities`（`verify_file`） | kore-pl/kore#5 |
 | echo 补故障注入测试以升 production | kore-pl/kore-plugin-echo#1 |
