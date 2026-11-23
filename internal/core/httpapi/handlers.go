@@ -74,7 +74,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/v1/auth/session", s.handleSession)
 	s.mux.HandleFunc("/api/v1/auth/", s.handleUnsupported)
-	s.mux.HandleFunc("/api/v1/events", s.handleUnsupported)
+	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	s.mux.HandleFunc("/", s.handleNotFound)
 }

@@ -106,6 +106,9 @@ type Options struct {
 	// PluginAuth 校验插件 bearer token（root-action 通道）：返回插件 id 与已授予能力。
 	// nil 表示不接受插件身份（只有管理会话可调提权端点）。
 	PluginAuth PluginTokenAuth
+	// TaskEvents 是安装/升级任务进度的进程内扇出中心（GET /api/v1/events 的 SSE 源）。
+	// nil 时端点仍可连接但不产生事件；进度只存内存，不落库、不跨重启。
+	TaskEvents *TaskEvents
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
@@ -246,6 +249,7 @@ type Server struct {
 	metrics        MetricsCollector
 	privilege      RootActionExecutor
 	pluginAuth     PluginTokenAuth
+	taskEvents     *TaskEvents
 	mu             sync.Mutex
 	listeners      []net.Listener
 }
@@ -259,6 +263,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
+		taskEvents: opts.TaskEvents,
 	}
 	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {

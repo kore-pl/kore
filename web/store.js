@@ -413,7 +413,7 @@
   // 返回 Promise<boolean>；同时把进度写进卡片状态条，批量与单点共用。
   function runUpgrade(p, ins) {
     var target = p.version;
-    var stop = beginProgress(p.id);
+    var stop = beginProgress(p.id, target);
     setStatus(p.id, 'busy', '升级中…');
     return postJson(U.install, { id: p.id, version: target, download: true, force: true })
       .then(function (res) {
@@ -477,7 +477,7 @@
 
   // 重装：download=true + force=true，允许覆盖已装同版本；仍走索引摘要与包校验。
   function doReinstall(p, card) {
-    var stop = beginProgress(p.id);
+    var stop = beginProgress(p.id, p.version);
     setStatus(p.id, 'busy', '重装中…');
     var body = { id: p.id, version: p.version, download: true, force: true };
     postJson(U.install, body).then(function (res) {
@@ -498,27 +498,68 @@
     });
   }
 
-  // 安装默认走索引自动下载（download:true）；后端未就绪时降级为本地包路径。
-  // 进度按请求耗时给出阶段提示（后端当前无分阶段事件），结束后立刻收敛为成功/失败。
-  function beginProgress(id) {
-    setStatus(id, 'busy', '下载中…');
+  // 安装/升级进度：优先订阅 GET /api/v1/events（SSE，请求级连接），显示真实阶段 + 百分比；
+  // SSE 不可用（浏览器不支持 / 401 / 501 / 断网）时静默降级为按耗时的伪进度，不报错。
+  var SSE_URL = '/api/v1/events';
+  var PHASES = { download: '正在下载…', verify: '正在校验签名…', extract: '正在解包…',
+    register: '正在登记插件…', reload: '正在重载插件…' };
+  function phaseLabel(phase) { return PHASES[phase] || '安装中…'; }
+  function parseEvent(raw) {
+    try { return JSON.parse(raw || '{}'); } catch (e) { return null; }
+  }
+  // task_id 与后端同口径：<plugin-id>@<version>，用于过滤并发安装事件。
+  function beginProgress(id, version) {
+    var taskId = String(id) + '@' + String(version);
+    var real = false, stopped = false, es = null;
     var timers = [
-      setTimeout(function () {
-        var st = S.status[id];
-        if (st && st.kind === 'busy' && st.text === '下载中…') setStatus(id, 'busy', '校验中…');
-      }, 2500),
-      setTimeout(function () {
-        var st = S.status[id];
-        if (st && st.kind === 'busy' && st.text === '校验中…') setStatus(id, 'busy', '安装中…');
-      }, 7000)
+      setTimeout(function () { if (!real && !stopped) setStatus(id, 'busy', '校验中…'); }, 2500),
+      setTimeout(function () { if (!real && !stopped) setStatus(id, 'busy', '安装中…'); }, 7000)
     ];
-    return function stop() {
+    function clearFake() {
       for (var i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      timers = [];
+    }
+    function show(text) {
+      var st = S.status[id];
+      if (st && st.kind === 'busy') setStatus(id, 'busy', text);
+    }
+    if (window.EventSource) {
+      try {
+        es = new window.EventSource(SSE_URL);
+        es.addEventListener('task.progress', function (ev) {
+          var d = parseEvent(ev.data);
+          if (!d || d.task_id !== taskId) return;
+          real = true;
+          clearFake();
+          show(phaseLabel(d.phase) + ' ' + (typeof d.percent === 'number' ? d.percent : 0) + '%');
+        });
+        es.addEventListener('task.failed', function (ev) {
+          var d = parseEvent(ev.data);
+          if (!d || d.task_id !== taskId) return;
+          real = true;
+          clearFake();
+          var where = d.phase ? '（' + phaseLabel(d.phase) + '阶段）' : '';
+          setStatus(id, 'fail', '安装失败' + where + '：' + (d.message || '未知错误'));
+          if (es) { es.close(); es = null; }
+        });
+        es.addEventListener('error', function () {
+          // 未收到任何真实事件就出错：判定 SSE 不可用，关闭连接并让伪进度继续。
+          if (real || stopped) return;
+          if (es) { es.close(); es = null; }
+        });
+      } catch (err) {
+        es = null;
+      }
+    }
+    return function stop() {
+      stopped = true;
+      clearFake();
+      if (es) { es.close(); es = null; }
     };
   }
 
   function doInstall(p, card, path) {
-    var stop = beginProgress(p.id);
+    var stop = beginProgress(p.id, p.version);
     var body = { id: p.id, version: p.version };
     if (path) body.package_path = path;
     else body.download = true;

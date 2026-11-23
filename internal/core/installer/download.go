@@ -73,7 +73,9 @@ func (in *Installer) InstallFromURL(ctx context.Context, id, version, rawURL, wa
 		}
 	}()
 	path := filepath.Join(dir, ref.ID+"-"+ref.Version+packageSuffix)
-	actual, err := in.download(ctx, rawURL, path)
+	actual, err := in.download(ctx, rawURL, path, func(percent int) {
+		in.report(ref, "download", percent, "正在下载插件包…")
+	})
 	if err != nil {
 		return err
 	}
@@ -136,7 +138,7 @@ func (in *Installer) newDownloadDir() (string, error) {
 //
 // 上限判定两层：Content-Length 超限即拒（不浪费流量），正文用 LimitReader 多放 1 字节兜底
 // ——服务端谎报或不给长度时也能在第 limit+1 字节处中止，磁盘不会被写爆。
-func (in *Installer) download(ctx context.Context, rawURL, path string) (string, error) {
+func (in *Installer) download(ctx context.Context, rawURL, path string, report func(percent int)) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -161,7 +163,14 @@ func (in *Installer) download(ctx context.Context, rawURL, path string) (string,
 	}
 	defer func() { _ = file.Close() }()
 	hasher := sha256.New()
-	written, err := io.Copy(io.MultiWriter(file, hasher), io.LimitReader(resp.Body, limit+1))
+	var body io.Reader = io.LimitReader(resp.Body, limit+1)
+	if report != nil && resp.ContentLength > 0 {
+		body = &progressReader{r: body, total: resp.ContentLength, report: report}
+	}
+	if report != nil {
+		report(3)
+	}
+	written, err := io.Copy(io.MultiWriter(file, hasher), body)
 	if err != nil {
 		return "", wrap(ErrUpstream, "下载包中断：%v", err)
 	}
@@ -172,4 +181,32 @@ func (in *Installer) download(ctx context.Context, rawURL, path string) (string,
 		return "", wrap(ErrStateDir, "写入临时包文件失败：%v", err)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// progressReader 把下载进度折算进 3–40% 区间（每跨 4% 回调一次，避免刷屏）。
+//
+// 只在服务端给出 Content-Length 时启用；总长未知时由上层保留 3% 与 40% 两个锚点。
+type progressReader struct {
+	r      io.Reader
+	total  int64
+	read   int64
+	last   int
+	report func(percent int)
+}
+
+// Read 读取一段并上报折算后的总体进度。
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if p.total > 0 {
+		percent := 3 + int(p.read*37/p.total)
+		if percent > 40 {
+			percent = 40
+		}
+		if percent >= p.last+4 {
+			p.last = percent
+			p.report(percent)
+		}
+	}
+	return n, err
 }

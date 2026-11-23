@@ -41,6 +41,10 @@ type Options struct {
 	// Force 为 true 时允许覆盖已存在的同 id 同版本目录（修复/重装）：
 	// 先把旧目录原子备份，安装失败回滚，成功才删除备份。
 	Force bool
+	// Progress 是安装阶段进度回调；nil 表示不上报（CLI 与测试）。
+	// 阶段固定为 download / verify / extract / register，percent 是 0–100 的总体进度；
+	// reload 阶段在装配层（安装返回后重载 registry/supervisor）上报。
+	Progress ProgressFunc
 	// HTTPClient 覆盖 InstallFromURL 的下载客户端；nil 用内置客户端。
 	// 内置客户端固定 60 s 总超时并禁用 keep-alive（G-19：安装后不残留空闲连接）。
 	// 注入面只给"自定义代理 / 私有 CA 信任 / 测试 TLS 服务器"，超时仍受 ctx 60 s 约束。
@@ -58,7 +62,11 @@ type Installer struct {
 	store       Persister
 	client      *http.Client
 	force       bool
+	progress    ProgressFunc
 }
+
+// ProgressFunc 上报一次安装进度；id/version 是任务标识，message 面向用户。
+type ProgressFunc func(id, version, phase string, percent int, message string)
 
 // Result 是一次成功安装的结果。
 type Result struct {
@@ -102,6 +110,7 @@ func New(opts Options) (*Installer, error) {
 		store:       opts.Store,
 		client:      client,
 		force:       opts.Force,
+		progress:    opts.Progress,
 	}, nil
 }
 
@@ -117,6 +126,7 @@ func (in *Installer) Install(path string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	in.report(ref, "verify", 40, "正在校验包摘要…")
 	sum, err := fileSHA256(path)
 	if err != nil {
 		return nil, wrap(ErrInvalid, "计算包 sha256 失败：%v", err)
@@ -124,6 +134,7 @@ func (in *Installer) Install(path string) (*Result, error) {
 	if err := checkExpectedSHA256(path, sum, in.expectedSHA); err != nil {
 		return nil, err
 	}
+	in.report(ref, "verify", 45, "包摘要校验通过")
 	staging, err := in.newStaging(ref)
 	if err != nil {
 		return nil, err
@@ -133,12 +144,15 @@ func (in *Installer) Install(path string) (*Result, error) {
 			in.logger.Warn("清理安装临时目录失败", "dir", staging, "err", cleanupErr)
 		}
 	}()
+	in.report(ref, "extract", 60, "正在安全解包…")
 	if err := extractTarGz(path, staging, in.limits); err != nil {
 		return nil, err
 	}
+	in.report(ref, "extract", 72, "正在校验包内文件清单…")
 	if err := verifySHA256SUMS(staging); err != nil {
 		return nil, err
 	}
+	in.report(ref, "extract", 78, "文件清单校验通过")
 	manifest, err := loadManifest(staging)
 	if err != nil {
 		return nil, err
@@ -146,5 +160,19 @@ func (in *Installer) Install(path string) (*Result, error) {
 	if err := in.checkManifest(ref, manifest); err != nil {
 		return nil, err
 	}
-	return in.commit(staging, manifest, sum)
+	in.report(ref, "register", 82, "正在登记插件…")
+	result, err := in.commit(staging, manifest, sum)
+	if err != nil {
+		return nil, err
+	}
+	in.report(ref, "register", 95, "插件已落盘")
+	return result, nil
+}
+
+// report 上报一次阶段进度；Progress 未装配时是空操作。
+func (in *Installer) report(ref pkgRef, phase string, percent int, message string) {
+	if in.progress == nil {
+		return
+	}
+	in.progress(ref.ID, ref.Version, phase, percent, message)
 }

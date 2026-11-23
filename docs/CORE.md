@@ -60,7 +60,7 @@
 ### 2.4 `internal/core/httpapi`
 
 - **职责**：路由表、固定顺序中间件链（§3）、JSON 编解码、错误码→HTTP 状态映射、静态与插件资产托管入口、SSE 入口。路由用 Go 1.22+ `net/http.ServeMux` 的方法+路径模式，不引入 Web 框架。
-- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：业务 `POST /auth/login`、`POST /auth/logout`、`GET /auth/session`、`GET /plugins`、`GET /plugins/{id}`、`POST /plugins`（501 占位，M2 实现）、`POST /plugins/{id}/enable`、`POST /plugins/{id}/disable`、`POST /plugins/{id}/root-action`、`GET /plugins/{id}/root-action/{action_id}/confirm-token`、`POST /invoke/{plugin}/{method}`、`GET /system/info`、`GET /system/metrics`、`GET /audit`（M4-C 操作审计查询，`since` 必填）、`GET /events`（501 占位）；商店：`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`GET /store/jobs/{id}`。共 **22 个端点**（15 业务 + 7 store，其中 2 个 501 占位）；另有 `GET /-/healthz` 与 2 条静态前缀（`GET /{$}`、`GET /assets/*`）。`GET /api/v1/system/info` 在 capability report 之外附带 `supervisor{resident,restarts,resident_max,lazy_slots}`（常驻插件数 / 历史累计重启 / resident 独占上限 / 仍可供 lazy 使用的槽位）与 `paths{state_dir,run_dir,log_dir,index_dir,plugin_dir}`（归一化后的绝对路径，排障用）。
+- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：业务 `POST /auth/login`、`POST /auth/logout`、`GET /auth/session`、`GET /plugins`、`GET /plugins/{id}`、`POST /plugins`（501 占位，M2 实现）、`POST /plugins/{id}/enable`、`POST /plugins/{id}/disable`、`POST /plugins/{id}/root-action`、`GET /plugins/{id}/root-action/{action_id}/confirm-token`、`POST /invoke/{plugin}/{method}`、`GET /system/info`、`GET /system/metrics`、`GET /audit`（M4-C 操作审计查询，`since` 必填）、`GET /events`（SSE 任务进度推送）；商店：`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`GET /store/jobs/{id}`。共 **22 个端点**（15 业务 + 7 store，其中 1 个 501 占位：`POST /plugins`）；另有 `GET /-/healthz` 与 2 条静态前缀（`GET /{$}`、`GET /assets/*`）。`GET /api/v1/system/info` 在 capability report 之外附带 `supervisor{resident,restarts,resident_max,lazy_slots}`（常驻插件数 / 历史累计重启 / resident 独占上限 / 仍可供 lazy 使用的槽位）与 `paths{state_dir,run_dir,log_dir,index_dir,plugin_dir}`（归一化后的绝对路径，排障用）。
 - **失败模式与处理**：未知路由 → 404 `E_NOTFOUND`；方法不符 → 405 `E_INVALID`；body 超限 → 413 `E_INVALID`（同时断开连接，不读完剩余字节）；handler panic → recover 记堆栈，500 `E_INTERNAL`；`invoke` 目标插件不存在 → 404 `E_NOTFOUND`，未启用 → 409 `E_CONFLICT`，插件超时 → 504 `E_UPSTREAM`。**`POST /invoke` 转发前按目标插件声明的能力做调用校验**：先查方法级 `method_capabilities[<id>.<method>]`（命中即单独生效），未命中回退插件级 `capabilities`（多项取最高）；内核只认 `system:`/`net:`/`proc:` 前缀，`read` 动作任意已登录会话可调、`write/admin` 动作需 `system:admin`（或会话能力集含该项），宿主前缀下的未知动作 fail-closed；不足 → 403 `E_UNAUTHORIZED`（message 写明所需能力）并写审计 `capability.denied`，插件自有 `<id>:<action>` 不由内核解释（G-01）。**审计按最终生效能力收口**：只有 `write`/`admin` 类写 `invoke.*`，解析为 `*:read` 的方法不写；单用户模式下会话恒持全权、授权仍全放行，方法级能力此时只在审计侧生效。
 - **明确不做什么**：不做业务参数校验（交插件）；不直连 bbolt；不直接 `exec` 进程（只调 supervisor）；不实现 WebSocket（SSE 是唯一推送通道）；不做 CORS（同源部署，跨源是设计外）。
 
@@ -100,12 +100,12 @@
 - **失败模式与处理**：插件 web 目录不存在 → 404 `E_NOTFOUND`；路径穿越（`..`、编码后的 `%2e%2e`）→ 400 `E_INVALID`；embed 缺失（构建期未跑 `make frontend`）→ 500 `E_INTERNAL` 且日志提示构建命令；文件读失败 → 503 `E_UPSTREAM`。
 - **明确不做什么**：不做 CDN/反向代理；不做动态 gzip（预压缩是构建期职责）；不做目录列表；不托管插件之外的用户文件。
 
-### 2.10 `internal/core/sse`（httpapi 内的独立包）
+### 2.10 `internal/core/httpapi/sse.go`（任务进度推送，httpapi 包内文件）
 
-- **职责**：`GET /api/v1/events` 长连接；`text/event-stream`；支持 `Last-Event-ID` 补发；心跳 `: ping` 每 15 s；全局并发上限 64；内核关闭时广播 `event: shutdown`。
-- **输入输出**：输入已鉴权会话 + 可选 `Last-Event-ID`；输出事件流帧 `id: <n>` / `event: <type>` / `data: <json>` + 空行。
-- **失败模式与处理**：客户端写阻塞 > 30 s → 断开该连接（慢消费者不拖垮内核）；事件缺口（请求 id 早于缓冲最旧） → 发 `event: resync` 让前端全量刷新；超 64 连接 → 429 `E_RATELIMIT`；关闭时 5 s 内未 flush 完成 → 直接断开。
-- **明确不做什么**：不做 WebSocket/双向通道；不做事件持久化；不做按插件粒度的订阅过滤（M2 有真实需求再走 ADR）；不做断线自动重连（前端负责）。
+- **职责**：`GET /api/v1/events` 的 SSE 入口；只推送**本进程内**的安装/升级任务进度（`task.progress` / `task.done` / `task.failed`），事件源是 `chan` + 进程内扇出中心 `TaskEvents`，不落库、不跨重启、不转发插件事件（插件事件仍走 bus）。
+- **输入输出**：输入已鉴权会话；输出 `event: <type>` + `data: {"task_id","phase","percent","message"}` + 空行，`task_id` 固定为 `<plugin-id>@<version>`。阶段由 installer 上报：`download`(0–40) → `verify`(40–60) → `extract`(60–80) → `register`(80–95) → `reload`(95–100)。
+- **失败模式与处理**：无 `http.Flusher` 或装配层未注入 `TaskEvents` → 501 `E_UNSUPPORTED`；订阅者通道满（16 帧）→ 丢弃该帧，不阻塞安装主流程；客户端断开 → `r.Context().Done()` 退订并关闭通道，连接级回收。
+- **明确不做什么**：不做 WebSocket/双向通道；不做 `Last-Event-ID` 补发与心跳定时器（G-19：禁止后台 goroutine 续命）；不做并发上限与 429（连接随请求生命周期结束）；不做事件持久化或跨进程广播。
 
 ### 2.11 `cmd/kored/envprobe`（启动期探测，非内核规则）
 

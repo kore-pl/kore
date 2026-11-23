@@ -221,6 +221,7 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 		job, installErr = svc.Install(req.ID, req.Version, req.PackagePath)
 	}
 	if installErr != nil {
+		s.taskEvents.publishFailed(req.ID, req.Version, taskFailureMessage(installErr))
 		writeFailure(w, installErr)
 		return
 	}
@@ -228,13 +229,20 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 	// 新方法 404。回调失败不吞——返回 500 显式暴露"重载未完成"，避免假装成功埋雷。
 	var reload string
 	if s.installRefresh != nil {
+		s.taskEvents.PublishProgress(req.ID, req.Version, "reload", 95, "正在重载插件…")
 		result, err := s.installRefresh(req.ID)
 		if err != nil {
 			slog.Error("安装后重载插件失败", "plugin_id", req.ID, "result", result, "err", err)
+			s.taskEvents.publishFailed(req.ID, req.Version, taskFailureMessage(err))
 			writeFailure(w, err)
 			return
 		}
 		reload = result
+	}
+	if job != nil && job.Message != "" {
+		s.taskEvents.publishDone(req.ID, req.Version, job.Message)
+	} else {
+		s.taskEvents.publishDone(req.ID, req.Version, "安装完成")
 	}
 	writeJSON(w, http.StatusOK, storeInstallResponse{InstallJob: job, Reload: reload})
 }

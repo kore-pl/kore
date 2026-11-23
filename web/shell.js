@@ -328,6 +328,104 @@
     'border-radius:3px;padding:0 4px}' +
     '@media (max-width:639px){.kore-search-trigger-label,.kore-search-trigger kbd{display:none}' +
     '.kore-search-trigger{min-width:44px;min-height:44px;justify-content:center;padding:0}}';
+  /* ===== 告警中心入口：首屏只放铃铛 + 红点，alerts.js 懒加载（不进首屏预算） =====
+     与搜索入口同一挂点（.conn），app.js 重绘顶栏后由同一 MutationObserver 重新挂回。
+     红点只表达「有告警 / 有严重告警」，具体条数与四类来源由 alerts.js 聚合后回传。 */
+  var BELL_CSS = '.kore-alert-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;' +
+    'min-width:32px;min-height:32px;padding:0 6px;border:1px solid var(--kore-border-1);border-radius:4px;' +
+    'background:var(--kore-bg-2);color:var(--kore-text-2);cursor:pointer}' +
+    '.kore-alert-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+    '.kore-alert-trigger svg{width:16px;height:16px;flex:0 0 auto}' +
+    '.kore-alert-badge{position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;' +
+    'border-radius:8px;background:var(--kore-danger);color:var(--kore-text-1);font-size:10px;' +
+    'line-height:16px;text-align:center;font-variant-numeric:tabular-nums}' +
+    '.kore-alert-badge.is-warn{background:var(--kore-warning);color:var(--kore-bg-0)}' +
+    '.kore-alert-badge[hidden]{display:none}' +
+    '@media (max-width:639px){.kore-alert-trigger{min-width:44px;min-height:44px}}';
+  function ensureBellCss() {
+    if (document.getElementById('kore-alert-trigger-css')) return;
+    var s = el('style'); s.id = 'kore-alert-trigger-css'; s.textContent = BELL_CSS;
+    document.head.appendChild(s);
+  }
+  var alertTrigger = null;
+  var alertCount = 0;
+  var alertCritical = false;
+  var alertListening = false;
+  function updateAlertBadge(count, critical) {
+    alertCount = count || 0;
+    alertCritical = !!critical;
+    if (!alertTrigger) return;
+    var dot = alertTrigger.querySelector('.kore-alert-badge');
+    if (!dot) return;
+    if (alertCount > 0) {
+      dot.hidden = false;
+      dot.textContent = alertCount > 99 ? '99+' : String(alertCount);
+      dot.className = 'kore-alert-badge' + (alertCritical ? '' : ' is-warn');
+      alertTrigger.setAttribute('aria-label', '告警中心（' + alertCount + ' 条，点击查看）');
+      alertTrigger.title = alertCount + ' 条告警' + (alertCritical ? '（含严重）' : '');
+    } else {
+      dot.hidden = true;
+      dot.textContent = '';
+      alertTrigger.setAttribute('aria-label', '告警中心（无告警）');
+      alertTrigger.title = '告警中心';
+    }
+  }
+  function openAlerts() {
+    ensureLazy('/assets/alerts.js', 'KoreAlerts', function (mod) {
+      return mod && typeof mod.open === 'function';
+    }).then(function (mod) {
+      mod.open();
+    }, function (err) {
+      if (alertTrigger) alertTrigger.title = '告警中心不可用：' + (err && err.message ? err.message : '模块加载失败');
+    });
+  }
+  // 首屏之后才加载 alerts.js 探测一次：不占首屏预算，也不做定时轮询。
+  function probeAlerts() {
+    ensureLazy('/assets/alerts.js', 'KoreAlerts', function (mod) {
+      return mod && typeof mod.probe === 'function';
+    }).then(function (mod) {
+      mod.probe();
+    }, function () { /* 探测失败保持无红点，不打扰用户 */ });
+  }
+  function buildAlertTrigger() {
+    if (alertTrigger) return alertTrigger;
+    alertTrigger = el('button', 'kore-alert-trigger');
+    alertTrigger.type = 'button';
+    alertTrigger.id = 'kore-alert-trigger';
+    alertTrigger.setAttribute('aria-label', '告警中心（无告警）');
+    alertTrigger.setAttribute('aria-haspopup', 'dialog');
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.6');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    var bell = document.createElementNS(SVG_NS, 'path');
+    bell.setAttribute('d', 'M5 8a5 5 0 0 1 10 0c0 4 1.5 5 1.5 5h-13S5 12 5 8z');
+    var clapper = document.createElementNS(SVG_NS, 'path');
+    clapper.setAttribute('d', 'M8.5 16a1.5 1.5 0 0 0 3 0');
+    svg.appendChild(bell);
+    svg.appendChild(clapper);
+    alertTrigger.appendChild(svg);
+    var dot = el('span', 'kore-alert-badge');
+    dot.hidden = true;
+    alertTrigger.appendChild(dot);
+    alertTrigger.addEventListener('click', openAlerts);
+    updateAlertBadge(alertCount, alertCritical);
+    return alertTrigger;
+  }
+  function placeAlertTrigger() {
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    var conn = top.querySelector('.conn');
+    if (!conn) { setTimeout(placeAlertTrigger, 60); return; }
+    var btn = buildAlertTrigger();
+    if (btn.parentNode === conn) return;
+    // 紧跟在搜索入口之后（同一 .conn 组，手机端与桌面端同一位置）。
+    var anchor = searchTrigger && searchTrigger.parentNode === conn ? searchTrigger.nextSibling : conn.firstChild;
+    conn.insertBefore(btn, anchor);
+  }
   function ensureSearchCss() {
     if (document.getElementById('kore-search-trigger-css')) return;
     var s = el('style'); s.id = 'kore-search-trigger-css'; s.textContent = SEARCH_CSS;
@@ -373,12 +471,14 @@
   }
   function watchTopbar() {
     ensureSearchCss();
+    ensureBellCss();
     placeSearchTrigger();
+    placeAlertTrigger();
     if (!window.MutationObserver) return;
     if (searchObserver) searchObserver.disconnect();
     var top = document.getElementById('kore-topbar');
     if (!top) return;
-    searchObserver = new MutationObserver(placeSearchTrigger);
+    searchObserver = new MutationObserver(function () { placeSearchTrigger(); placeAlertTrigger(); });
     searchObserver.observe(top, { childList: true, subtree: true });
   }
   function onGlobalKey(ev) {
@@ -504,7 +604,16 @@
       document.addEventListener('keydown', onGlobalKey);
       searchListening = true;
     }
+    if (!alertListening) {
+      document.addEventListener('kore:alerts-count', function (ev) {
+        var d = (ev && ev.detail) || {};
+        updateAlertBadge(d.count, d.critical);
+      });
+      alertListening = true;
+    }
     watchTopbar();
+    // 首屏渲染完成后懒探测一次告警；不做 setInterval，打开面板时 alerts.js 会再查。
+    setTimeout(probeAlerts, 800);
     if (!drawerListening) {
       document.addEventListener('keydown', onDrawerKey);
       drawerListening = true;

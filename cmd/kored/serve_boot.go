@@ -64,6 +64,8 @@ func bootstrap(cfg config) (*platform.Platform, envprobe.Report, int) {
 
 // startHTTP 装配并启动 httpapi，返回退出码（绑定失败 = 5）。
 func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *service) (*httpapi.Server, int) {
+	// 任务进度扇出中心：安装器写、SSE 端点读，纯内存（G-19：无后台 goroutine）。
+	events := httpapi.NewTaskEvents()
 	server := httpapi.New(httpapi.Options{
 		Version:           version,
 		Report:            report,
@@ -73,7 +75,8 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Backend:           svc.backend,
 		Auth:              svc.auth,
 		LoginLimiter:      loginLimiter(cfg),
-		Market:            buildMarket(cfg, svc),
+		Market:            buildMarket(cfg, svc, events),
+		TaskEvents:        events,
 		AuditLister:       &auditListerFromStore{db: svc.db},
 		AuditRecorder:     &httpAuditRecorderFromStore{db: svc.db},
 		AuditInvokeAll:    cfg.snapshot != nil && cfg.snapshot.Audit.InvokeAll,
@@ -93,7 +96,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 // buildMarket 装配商店：本地索引目录 + 内置公钥验签 + 安装触发器（走现有 installer）。
 //
 // 信任边界：AllowUnsigned 仅来自显式配置（coreconfig 零值 false），不在默认配置放行。
-func buildMarket(cfg config, svc *service) *market.Service {
+func buildMarket(cfg config, svc *service, events *httpapi.TaskEvents) *market.Service {
 	if cfg.snapshot == nil {
 		return nil
 	}
@@ -105,20 +108,22 @@ func buildMarket(cfg config, svc *service) *market.Service {
 		IndexDir:      dir,
 		PresetsDir:    os.Getenv("KORE_PRESETS_DIR"), // 预设目录（可选；空则 presets 返回空列表），不写进默认配置
 		AllowUnsigned: cfg.snapshot.Store.AllowUnsigned,
-		Installer:     installerAdapter(cfg, svc),
+		Installer:     installerAdapter(cfg, svc, events),
 	}
 	return market.New(opts)
 }
 
 // installerAdapter 把现有 installer 包装成 market.Installer：
 // 每次安装按索引声明的 expectedSHA 新建 installer（ExpectedSHA256 是构造参数）。
-func installerAdapter(cfg config, svc *service) marketInstaller {
-	return marketInstaller{cfg: cfg, svc: svc}
+func installerAdapter(cfg config, svc *service, events *httpapi.TaskEvents) marketInstaller {
+	return marketInstaller{cfg: cfg, svc: svc, events: events}
 }
 
 type marketInstaller struct {
 	cfg config
 	svc *service
+	// events 是任务进度扇出中心；nil 时安装照常进行、不上报进度（测试/CLI）。
+	events *httpapi.TaskEvents
 }
 
 func (m marketInstaller) Install(path, expectedSHA string) error {
@@ -251,6 +256,10 @@ func (m marketInstaller) newInstaller(expectedSHA string, force bool) (*installe
 	if m.svc == nil || m.svc.db == nil {
 		return nil, fmt.Errorf("状态库未装配，无法安装")
 	}
+	var progress installer.ProgressFunc
+	if m.events != nil {
+		progress = m.events.PublishProgress
+	}
 	return installer.New(installer.Options{
 		StateDir:       m.cfg.StateDir,
 		PluginDir:      m.cfg.snapshot.Paths.PluginDir,
@@ -259,6 +268,7 @@ func (m marketInstaller) newInstaller(expectedSHA string, force bool) (*installe
 		Force:          force,
 		Logger:         slog.Default(),
 		Store:          m.svc.db,
+		Progress:       progress,
 	})
 }
 

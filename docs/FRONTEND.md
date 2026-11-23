@@ -254,13 +254,13 @@ find web/dist/assets -name '*.js' -o -name '*.css' | xargs -r gzip -9 -c | wc -c
 - **mock 策略**：`web/mock/` 下按 URL 命名存放 JSON（如 `plugins.get.json`），vite 插件按 `import.meta.env.DEV` 分支挂中间件；生产构建时该分支被 tree-shake，mock 不进产物。
 - **类型来源**：API 与帧类型以 `pkg/pluginapi` 的 Go 类型为唯一真源。M1 起用 `tygo` 生成 `web/src/types/pluginapi.d.ts`，生成物入库，禁止手改；前端不从后端复制类型。
 - 提交前本地门禁：`pnpm -C web typecheck`（`vue-tsc --noEmit`）、`pnpm -C web build`、预算自检。
-- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **十四个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js`），`make frontend` 打包二十五个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；另有七个按需子模块：`files-l2.js`（文件上传/下载/压缩/解压/改权限/移动）、`site-edit.js`（SSL/伪静态/反代/重定向/默认文档）、`config-panel.js`（日志/备份页「设置」打开的通用插件配置面板，见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)）、`db-l2.js`（数据库页的建库/删库/建用户/授权/导入导出，首次写操作或展开「用户与授权」时注入）、`monitor-cards.js`（监控页的卡片/面板/表格渲染构件，进入监控视图时才注入）、`search.js`（全局搜索命令面板：页面/已装插件/商店/操作四源，顶栏入口或 Ctrl/Cmd+K 首次唤起时注入）与 `audit.js`（设置页「操作审计」tab，首次切到该 tab 时注入；列表/筛选/分页）。上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
+- **M2 已落地 `web/` 壳**：当前主壳前端为零依赖静态产物，**首屏四件套**（`index.html` / `style.css` / `app.js` / `shell.js`）+ **十四个按需视图模块**（`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js`），`make frontend` 打包二十六个文件到 `web/dist` 并由 `scripts/frontend-check.sh` 按 §7 口径只卡首屏四件套 gzip ≤ 300 KiB；另有八个按需子模块：`files-l2.js`（文件上传/下载/压缩/解压/改权限/移动）、`site-edit.js`（SSL/伪静态/反代/重定向/默认文档）、`config-panel.js`（日志/备份页「设置」打开的通用插件配置面板，见 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)）、`db-l2.js`（数据库页的建库/删库/建用户/授权/导入导出，首次写操作或展开「用户与授权」时注入）、`monitor-cards.js`（监控页的卡片/面板/表格渲染构件，进入监控视图时才注入）、`search.js`（全局搜索命令面板：页面/已装插件/商店/操作四源，顶栏入口或 Ctrl/Cmd+K 首次唤起时注入）、`alerts.js`（顶栏铃铛的告警中心：首屏后懒探测一次、点铃铛才注入；四类来源本地聚合，不落库）与 `audit.js`（设置页「操作审计」tab，首次切到该 tab 时注入；列表/筛选/分页）。上表 Vue/UnoCSS 工具链为后续迭代目标，非当前产物形态。
 - **视图清单**：概览（`app.js`）、软件商店（`store.js`）、已装插件（`app.js`）——商店卡片与已装插件行按索引版本呈现四态（未安装 / 已安装最新 / 可升级 `v旧 → v新` / 索引未收录），提供单个升级与「一键全部升级」汇总条（进度 N/M、失败列出）；升级走 `store/install {force:true}` 并保留配置与启用状态；文件管理（`files.js` + 懒加载 `files-l2.js`）、网站（`sites.js` + 懒加载 `site-edit.js`）、计划任务（`tasks.js`）、监控（`monitor.js`）、设置（`settings.js`）、终端（`terminal.js`）、**数据库（`db.js`）**、**日志（`logs.js`）**、**进程（`process.js`）**、**SSL 证书（`ssl.js`）**、**备份（`backups.js`）**、**Redis（`redis.js`）**、**防火墙（`firewall.js`）**。数据库页打开先调 `discover.discover.services`，命中本机 MySQL/MariaDB 时显示「自动检测横幅 + 一键连接」，host/port/user 预填并标「已自动填入」，保存只填密码，随后自动验证并展示实例卡；探测不到时给安装指引与手动配置入口（`db-mysql.config.get/set` + `db-mysql.instances` / `databases` / `query` / `status`）；日志页提供来源卡、tail/关键字过滤/全文件搜索与统计条；进程页提供可排序表格、详情抽屉、进程树与二次确认的信号投递；SSL 页提供证书列表（到期天数/issuer/密钥/指纹）、真实 TLS 握手验证、自签、导入与续期，ACME 入口明确置灰；备份页提供打包、校验、恢复到空目录与删除，恢复/删除均为页面内二次确认；Redis 页同样先自动检测并支持一键连接（`redis.config.get/set`，host/port 预填，只需填密码），再提供实例可达性/版本、内存与命中率、keyspace、键扫描与按类型取值、批量删除；防火墙页提供后端/启用态/默认入站/规则表，放行/拒绝/删除统一先 `dry_run` 预览命令再确认，非 root 时降级为黄底说明且禁用真实写操作。
 
 ## 9. 构建与 embed（已落地）
 
 ```text
-web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|monitor-cards.js|settings.js|terminal.js|db.js|db-l2.js|logs.js|process.js|ssl.js|backups.js|redis.js|firewall.js|search.js|audit.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
+web/index.html|app.js|style.css|shell.js|store.js|files.js|sites.js|tasks.js|monitor.js|monitor-cards.js|settings.js|terminal.js|db.js|db-l2.js|logs.js|process.js|ssl.js|backups.js|redis.js|firewall.js|search.js|audit.js|alerts.js ──make frontend──► web/dist ──go:embed──► kore 单二进制 ──net/http──► 浏览器
 ```
 
 **状态：已落地**（M2-D 零依赖静态壳，R4 扩到二十五文件）。当前主壳前端是二十五文件静态产物，不依赖 Vite / Vue 工具链；下表 Vue / UnoCSS 相关预算（§7）为后续迭代目标，非当前形态。
@@ -274,7 +274,7 @@ package web
 
 import "embed"
 
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/search.js dist/audit.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/search.js dist/audit.js dist/alerts.js
 var Dist embed.FS
 ```
 
