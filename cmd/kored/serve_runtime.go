@@ -152,12 +152,8 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	// 调度器必须在 backend 之后装配：Invoker 就是 daemon.Invoke（oneshot 调用面）。
 	sched, err := scheduler.New(scheduler.Options{
 		Store: db, Invoker: svc.backend, Logger: slog.Default(), Builtin: svc.builtinTask,
-		CertRenewEnabled:   cfg.snapshot.CertRenew.Enabled,
-		CertRenewInterval:  cfg.snapshot.CertRenew.Interval,
-		AuditRetention:     cfg.snapshot.Audit.Retention,
-		AuditCleanEnabled:  cfg.snapshot.Audit.CleanEnabled,
-		AuditCleanInterval: cfg.snapshot.Audit.CleanInterval,
-		AuditCleanBatch:    cfg.snapshot.Audit.CleanBatch,
+		CertRenewEnabled:  cfg.snapshot.CertRenew.Enabled,
+		CertRenewInterval: cfg.snapshot.CertRenew.Interval,
 	})
 	if err != nil {
 		slog.Error("调度器装配失败", "err", err)
