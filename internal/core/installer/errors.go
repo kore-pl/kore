@@ -19,6 +19,10 @@ var (
 	ErrStateDir = errors.New("installer: 状态目录不可用")
 	// ErrStore 表示状态库未注入或写入失败（映射退出码 4）。
 	ErrStore = errors.New("installer: 状态库写入失败")
+	// ErrStop 表示卸载前停进程失败（supervisor 拒绝或超时），此时不做任何删除。
+	ErrStop = errors.New("installer: 停止插件进程失败")
+	// ErrAudit 表示审计写入失败（fail-closed：卸载已整体还原）。
+	ErrAudit = errors.New("installer: 卸载审计写入失败")
 	// ErrUpstream 表示包下载或下载内容与索引声明不一致（对外映射 E_UPSTREAM）。
 	// 摘要不符时同时满足 errors.Is(err, ErrChecksum)：语义是"上游内容不可信"，不是请求非法。
 	ErrUpstream = errors.New("installer: 上游包下载失败")

@@ -183,6 +183,19 @@ func (c *Catalog) Disable(id string) error {
 	return nil
 }
 
+// Remove 从登记表移除插件（卸载用）；未登记时返回 false，不报错（幂等）。
+//
+// 只删内存登记项：dist 目录与 store 记录的清理归 installer，本包不碰文件系统。
+func (c *Catalog) Remove(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.items[id]; !ok {
+		return false
+	}
+	delete(c.items, id)
+	return true
+}
+
 // List 按 id 字典序返回全部插件视图（稳定顺序，便于前端与测试比对）。
 func (c *Catalog) List() []View {
 	c.mu.RLock()

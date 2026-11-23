@@ -178,9 +178,21 @@ func hasCapability(granted []string, need string) bool {
 	return false
 }
 
-// isManagementPath 判断是否为插件管理端点（enable/disable）。
+// isManagementPath 判断是否为插件管理端点（enable/disable/uninstall）。
+//
+// 卸载（DELETE /api/v1/plugins/{id}）与 enable/disable 同级：都改变插件运行态，
+// 一律要求 system:admin（卸载更不可逆，不能降级为普通会话可调用）。
 func isManagementPath(path string) bool {
-	return strings.HasSuffix(path, "/enable") || strings.HasSuffix(path, "/disable")
+	return strings.HasSuffix(path, "/enable") || strings.HasSuffix(path, "/disable") || isPluginUninstallPath(path)
+}
+
+// isPluginUninstallPath 判断是否是 /api/v1/plugins/<id>（恰好一段、非空）。
+func isPluginUninstallPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, pluginsPath+"/")
+	if !ok || rest == "" {
+		return false
+	}
+	return !strings.Contains(rest, "/")
 }
 
 // pluginIDFromPath 从 /api/v1/plugins/{id}/... 取插件 id。
@@ -198,6 +210,10 @@ func managementPluginID(path string) string { return pluginIDFromPath(path) }
 
 // managementAction 从 /api/v1/plugins/{id}/enable|disable 取动作名（审计 target 用）。
 func managementAction(path string) string {
+	// 卸载路径没有动作后缀（DELETE 方法本身即动作），单独识别。
+	if isPluginUninstallPath(path) {
+		return "uninstall"
+	}
 	for _, action := range [...]string{"enable", "disable"} {
 		if strings.HasSuffix(path, "/"+action) {
 			return action

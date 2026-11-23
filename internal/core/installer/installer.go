@@ -45,6 +45,12 @@ type Options struct {
 	// 阶段固定为 download / verify / extract / register，percent 是 0–100 的总体进度；
 	// reload 阶段在装配层（安装返回后重载 registry/supervisor）上报。
 	Progress ProgressFunc
+	// Stop 是卸载时的停进程回调（supervisor.Manager.Stop）；nil 表示不尝试停进程。
+	// 装配层（kored）必须注入，保证"运行中卸载先优雅停止"。
+	Stop StopFunc
+	// Audit 是卸载审计写入回调（fail-closed）；nil 表示审计通道未装配（CLI 本地路径）。
+	// 装配层（kored）必须注入，保证"审计写不进去就中止，不留半删状态"。
+	Audit AuditFunc
 	// HTTPClient 覆盖 InstallFromURL 的下载客户端；nil 用内置客户端。
 	// 内置客户端固定 60 s 总超时并禁用 keep-alive（G-19：安装后不残留空闲连接）。
 	// 注入面只给"自定义代理 / 私有 CA 信任 / 测试 TLS 服务器"，超时仍受 ctx 60 s 约束。
@@ -63,6 +69,8 @@ type Installer struct {
 	client      *http.Client
 	force       bool
 	progress    ProgressFunc
+	stopPlugin  StopFunc
+	auditFn     AuditFunc
 }
 
 // ProgressFunc 上报一次安装进度；id/version 是任务标识，message 面向用户。
@@ -125,6 +133,8 @@ func New(opts Options) (*Installer, error) {
 		client:      client,
 		force:       opts.Force,
 		progress:    opts.Progress,
+		stopPlugin:  opts.Stop,
+		auditFn:     opts.Audit,
 	}, nil
 }
 

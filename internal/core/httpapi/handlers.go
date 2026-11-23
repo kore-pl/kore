@@ -59,6 +59,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+pluginsPath, s.handleUnsupported)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/enable", s.handleEnable)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/disable", s.handleDisable)
+	// 卸载：停进程 + 删 dist + 移除记录 + 审计（fail-closed）；未装 id 回 200 already_absent。
+	s.mux.HandleFunc("DELETE "+pluginsPath+"/{id}", s.handlePluginUninstall)
 	s.mux.HandleFunc("POST "+pluginsPath+"/{id}/root-action", s.handleRootAction)
 	s.mux.HandleFunc("GET "+pluginsPath+"/{id}/root-action/{action_id}/confirm-token", s.handleConfirmToken)
 	s.mux.HandleFunc("POST /api/v1/invoke/{plugin}/{method}", s.handleInvoke)
