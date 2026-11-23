@@ -6,8 +6,13 @@
 #
 # 逐仓检查（判据来源 G-17 / G-27，不改判据、不为变绿放宽）：
 #   1) 三件套：info.json / Makefile 内含 dist 目标 / CHANGELOG.md
-#   2) info.json 必填 10 字段：id version description depends_on conflicts
-#      scenario_tags size_bytes requires_kore depth_level capabilities
+#   2) info.json 必填 9 字段：id version depends_on conflicts scenario_tags
+#      size_bytes requires_kore depth_level capabilities
+#      （G-17 原文 5 项 + id/version（G-27 与发版一致性）+ depth_level（G-20）
+#        + capabilities（PLUGIN-PROTOCOL §3.1 必填 9 项之一））
+#   2b) 描述类字段四选一：description / title / summary / name
+#      （协议 §3.1 的 name 是必填展示名；G-17 与协议顶层 schema 都不要求
+#        description，因此四者全缺只报 WARN、不判 FAIL——2026-11-23 对账）
 #   3) id 匹配 ^[a-z][a-z0-9-]*$ 且等于目录名后缀 kore-plugin-<id>
 #   4) info.json.version == manifest.json.version（manifest 存在时）
 #   5) go.mod 的 replace 只拦 `=> ../` 与绝对路径（`=> ./` 允许，G-17 原文）
@@ -63,17 +68,22 @@ import os
 import re
 import sys
 
-# G-17 三件套 + 必填字段（判据原文，不得增删）
+# 必填字段（G-17 原文 5 项 + id/version/depth_level/capabilities 的既有依据）
+# description 不在其中：G-17 未要求，PLUGIN-PROTOCOL §3.1 顶层字段表也没有它
 REQ_FIELDS = [
-    "id", "version", "description", "depends_on", "conflicts",
+    "id", "version", "depends_on", "conflicts",
     "scenario_tags", "size_bytes", "requires_kore", "depth_level", "capabilities",
 ]
+# 描述类字段四选一即可（name 是协议 §3.1 的必填展示名，等价承担「一句话说明」；
+# title / summary 为向前兼容的等价命名）。全缺只 WARN，不 FAIL。
+DESC_FIELDS = ("description", "title", "summary", "name")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 DIST_RE = re.compile(r"^dist\s*:", re.M)
 PREFIX = "kore-plugin-"
 
 n_pass = 0
 n_fail = 0
+n_warn = 0
 
 def load_json(path):
     with open(path, encoding="utf-8") as fh:
@@ -89,6 +99,7 @@ for raw in sys.argv[1:]:
         continue
 
     problems = []
+    warnings = []
 
     # 1) 三件套
     info_path = os.path.join(repo, "info.json")
@@ -122,6 +133,20 @@ for raw in sys.argv[1:]:
         for field in REQ_FIELDS:
             if field not in info:
                 problems.append(f"info.json 缺必填字段 {field}")
+
+        # 描述类字段：四选一（description / title / summary / name），全缺只 WARN。
+        # 依据：G-17 未要求 description；PLUGIN-PROTOCOL §3.1 必填 9 项里只有 name。
+        desc_src = None
+        for f in DESC_FIELDS:
+            v = info.get(f)
+            if isinstance(v, str) and v.strip():
+                desc_src = f
+                break
+        if desc_src is None:
+            warnings.append(
+                "info.json 无描述类字段（description/title/summary/name 全缺）——"
+                "建议补 description，当前不阻断（G-17 未要求该字段）"
+            )
 
         pid = info.get("id")
         if isinstance(pid, str):
@@ -171,11 +196,18 @@ for raw in sys.argv[1:]:
             print(f"[FAIL] {name}: {item}")
     else:
         n_pass += 1
-        print(f"[OK] {name}")
+        if desc_src is not None:
+            print(f"[OK] {name} (desc-source: {desc_src})")
+        else:
+            print(f"[OK] {name}")
+
+    for item in warnings:
+        n_warn += 1
+        print(f"[WARN] {name}: {item}")
 
 print("")
-print("检查范围: 三件套 + info.json 必填 10 字段 + id/目录一致(G-27) + "
-      "info/manifest 版本一致 + go.mod replace 跨仓拦截")
-print(f"store-check: {n_pass} pass, {n_fail} fail")
+print("检查范围: 三件套 + info.json 必填 9 字段 + 描述类字段四选一(WARN) + "
+      "id/目录一致(G-27) + info/manifest 版本一致 + go.mod replace 跨仓拦截")
+print(f"store-check: {n_pass} pass, {n_fail} fail, {n_warn} warn")
 sys.exit(1 if n_fail else 0)
 PY
