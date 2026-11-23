@@ -1,6 +1,6 @@
 # .agents · 质量门禁
 
-> 状态: draft · 归属: scribe · 更新: 2026-11-23 · 里程碑: M0
+> 状态: draft · 归属: scribe · 更新: 2026-11-24 · 里程碑: M0
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
@@ -30,6 +30,10 @@
 | G-28 | UI 交付双端证据 | 触发：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，在声明"完成"前；取证：`.agents/verify/screenshots/` 下同时存在 `<场景>-desktop-*.png`（1440×900 或 1280×800，full-page）与 `<场景>-mobile-*.png`（390×844），并用 `file <png>` / `identify -format '%wx%h'` 读实际宽高；另附一段产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前是"可用"还是"占位"） | 三件套齐备，分辨率与命名匹配；自评三段齐全、不出现"应该是 / 大概"式措辞 | 缺任一项即不得声明完成：补截图（不得缩放糊弄分辨率、不得拿桌面图裁成手机图）或补自评；证据缺失时任务记 BLOCKED，不记 PASS | implementer 取证 + verifier 核对 | 检查点（UI 交付） |
 | G-29 | 运行态写边界 | 触发：任务涉及 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` / `bin/kored` 或任何被运行中 `kored` 持有的文件（`git status` 看不出，untracked）。取证：① `curl -s localhost:8787/api/v1/system/info \| jq .paths.index_dir` 必须**逐字等于**配置里的 `kore-plugins/index`（不得指向 `.kore-local-state/` 下任何索引快照）② 商店 `/api/v1/store/plugins` 返回的插件版本必须等于 `kore-plugins/index/plugins.json` 里的版本 ③ 验收报告必须显式声明"本轮是否改动过主实例的运行态配置"，改过则附回切 + 重启 + 复核三行证据 ④ 测试要"不同索引 / 配置 / 状态"时附隔离实例命令（独立 `--config` + state/run/log 落 `/tmp`）⑤ 运行态资产必须进 `.gitignore`——`.kore-local*` 覆盖 yaml/state/run/log/index 全系列，`git check-ignore` 对 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` 必须全部命中（否则一次 `git add .` 就把 123 MiB 的 state.db 带进提交） | ①② 必须相等（`paths.index_dir` == `kore-plugins/index`、商店版本 == 索引版本）；③ 声明齐全且与事实一致；④ 有隔离实例证据或写明"未触碰主实例"。防的事故：2026-11-23 为测试把 `index_dir` 指向 `signed-index` 快照（04:53:06），恰逢另一轮重签完成（04:53:40），04:59:59 回切前 8787 商店把 discover 0.2.0 显示成 0.1.0——配置回写了、主实例读到的仍是旧数据 | 任一不符即判未完成：回切 + 重启 + 复核后再验一次；未回切或只改配置文件不验 `/api/v1/system/info` 的，任务记 BLOCKED，不记 PASS；workaround 无过期条件（"当 X 发生时失效"）的，记 WARN 并要求补写 | implementer 取证 + verifier 独立复跑 | 检查点（运行态变更） |
 | G-30 | 明文凭据入库 | 触发：任何写 `docs/` 或 `.agents/verify/` 的提交 / 验收报告；取证：`make secret-check`，扫描 `MYSQL_ROOT_PASSWORD=` / `MYSQL_PWD=` / `REDIS_PASSWORD=` / `REDISCLI_AUTH=` / `KORE_MYSQL_PASSWORD=` / `KORE_REDIS_PASSWORD=` / `ADMIN_PASSWORD=` 以及 JSON 的 `"password"` / `"secret"` / `"token"` 键 | 非占位值零命中；占位只允许 `***` / `[REDACTED]` / `$VAR` / `<placeholder>` / `********` / `...` / `…`。防的事故：2026-11-23 `.agents/verify/round3-live.md` 把 `common-mysql` 的 root 明文口令写进验收报告并推送公开仓库（`3fa40f2`） | 命中即阻断：把凭据字面量替换为 `***` 后重跑；**禁止**为了让门禁变绿删证据或改判定结论——本门禁扫 `.agents/verify/` 是 §5.6 豁免规则的唯一例外，只许替换凭据字面量 | implementer 自跑 + verifier 复跑 | 检查点 |
+
+> **F-2 边界（第 17 段 / G13 兼容性，即 G-16 交叉编译门禁的覆盖范围，勿误读）**：`make check` 第 17 段（`make cross-build` 复用 `make cross`）证明的是**主程序** `./cmd/kored` 的依赖闭包在五目标下可编译，**不是**全仓每个包在五目标下可编译——全仓口径是 `go build ./...`，**当前未纳入第 17 段**。因此「17 段绿」只等于「主程序可跨平台」，不等于「全仓可跨平台」；只被测试 / 工具 / 未来入口引用、不在 `cmd/kored` 依赖闭包内的包，不会被该段拦住（2026-11-23 的 `cmd/kored/uninstall.go` 事故是同一类"只验参数不真编译"，本段防的是"真编译了但只编译了一个入口"）。
+>
+> **扩到全仓的代价（2026-11-24 实测，供后续决策；本卡不实施）**：fresh `GOCACHE` 冷编译五目标，`./cmd/kored` 18.7s vs `go build ./...` 19.1s（+0.35s，+1.9%）；热缓存下 `./cmd/kored` 五目标 0.24s vs `./...` 0.96s（每目标 +~0.15s，合计 +0.72s）。**时间代价可忽略**，且本次实测全仓五目标均 rc=0（当前全仓已可交叉编译）。若扩展，真正的成本不是编译时间，而是「非主程序包的平台专有代码必须收进 build tag / `internal/platform`」的治理成本，以及测试包在五目标下的处理口径。结论：值得另开卡扩展，但不在本卡实施。
 
 ### 1.1 G-17（插件仓规范）/ G-18（预设一致性）判据与严重级别
 

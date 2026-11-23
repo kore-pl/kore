@@ -1,6 +1,6 @@
 # kore — 极简内核驱动 · 插件定义能力 · 资源零侵占
 # M0 骨架构建入口：只有骨架与门禁，无业务代码。
-# 契约：主壳空载 RSS ≤ 8 MiB（目标 5–6；默认 GOGC=100 + GOMEMLIMIT=6MiB，另跑 GOGC 双档对照）· 常驻插件单 ≤ 12 MiB / 合计 ≤ 24 MiB · 单二进制 ≤ 25 MiB · 前端首屏 ≤ 300 KiB gzip
+# 契约（ADR-0016）：硬红线 主壳空载 RSS ≤ 16 MiB · 单常驻插件 ≤ 24 MiB · 合计 ≤ 48 MiB · 同时常驻 ≤ 3；目标 主壳 8 MiB · 单插件 12 MiB · 合计 24 MiB · 单二进制 ≤ 25 MiB · 前端首屏 ≤ 300 KiB gzip · 运行时锚点（ADR-0015）默认 GOGC=50 + GOMEMLIMIT=6MiB + GOMAXPROCS=8（可被同名环境变量覆盖做消融对照，门禁见 canonical-check 规则 2）
 # 约定：所有 recipe 必须 tab 缩进；输出统一 [OK]/[SKIP]/[N/A]/[FAIL] 前缀。
 
 # ── 兼容性基线（ADR-0009 落地 · G-16）──

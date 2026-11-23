@@ -3,7 +3,8 @@
 # 规则1 ：48 MiB 只允许与「红线」同行（ADR-0016 起 48 MiB = 常驻合计硬红线）
 # 规则1b：目标语境的 MiB 值不得 >24（48 出现在目标语境即旧口径残留）
 # 规则1c：合计语境的红线不得写成 24 MiB（24 是目标，不是红线）—— WARN
-# 规则2 ：GOGC=200 零命中（默认档由 ADR 定，双档对照不写字面量）
+# 规则2 ：运行时默认 GOGC / GOMEMLIMIT / GOMAXPROCS == ADR-0015 规定值（校验实际值，不拦魔数；ADR 改则门禁跟着改）
+# 规则2b：GOGC=200 字面量零命中（文档不得把对照档写成默认档）
 # 规则3 ：旧字段 type: resident|oneshot 零命中（字段名已改 lifecycle）
 # 规则4 ：幽灵插件 id edge(/gateway(/sec( 零命中
 # 规则5 ：AGENTS.md / RESOURCE-MODEL.md / V1-GOALS.md 三份各自都要含 24 MiB / 12 MiB / 推荐 ≤2
@@ -110,7 +111,72 @@ else
   done
 fi
 
-# ---------------- 规则2：GOGC=200 零命中 ----------------
+# ---------------- 规则2：运行时锚点默认值 == ADR 规定值（不拦魔数） ----------------
+# 口径真源：ADR-0015「运行时默认改为 GOGC=50、GOMEMLIMIT=6MiB、GOMAXPROCS=8」。
+# ADR-0016 只定预算红线/目标（16/8 MiB 等），不写 GOGC 默认值——GOGC 的 ADR 真源是 0015。
+# 断言：从 ADR 解析期望值、从代码常量解析实际值，两者必须相等。
+#   ADR 改 → 期望值跟着改；代码漂了（默认值被改成 100/200）→ FAIL。
+# 历史缺口：旧规则只 forbid 字面量 `GOGC=200`，拦不到 Makefile 写 `GOGC=100` 而代码实为 50 的漂移。
+ADR_ANCHORS="docs/DECISIONS/0015-runtime-resource-anchors.md"
+LIMITS_GO="cmd/kored/serve_limits.go"
+MAKEFILE_CONTRACT=$(grep -m1 '^# 契约' Makefile 2>/dev/null || true)
+
+adr_default() { # $1=GOGC|GOMEMLIMIT|GOMAXPROCS：从 ADR 决策句解析期望值（纯数字，MiB 去掉单位）
+  printf '%s\n' "$ADR_LINE" | grep -oE "$1=[0-9]+(MiB)?" | head -1 | sed -E "s/^$1=//; s/MiB$//"
+}
+
+if [ ! -f "$ADR_ANCHORS" ]; then
+  bad "规则2 找不到 ADR-0015（运行时锚点真源）: $ADR_ANCHORS"
+elif [ ! -f "$LIMITS_GO" ]; then
+  bad "规则2 找不到运行时锚点实现: $LIMITS_GO"
+else
+  ADR_LINE=$(grep -m1 '运行时默认改为' "$ADR_ANCHORS" || true)
+  EXPECT_GOGC=$(adr_default GOGC || true)
+  EXPECT_MEM=$(adr_default GOMEMLIMIT || true)
+  EXPECT_PROCS=$(adr_default GOMAXPROCS || true)
+  ACT_GOGC=$(grep -oE 'defaultGOGC[[:space:]]*=[[:space:]]*[0-9]+' "$LIMITS_GO" | head -1 | grep -oE '[0-9]+$' || true)
+  ACT_MEM=$(grep -oE 'defaultMemLimit[[:space:]]+int64[[:space:]]*=[[:space:]]*[0-9]+' "$LIMITS_GO" | head -1 | grep -oE '[0-9]+$' || true)
+  ACT_PROCS=$(grep -oE 'maxProcs[[:space:]]*=[[:space:]]*[0-9]+' "$LIMITS_GO" | head -1 | grep -oE '[0-9]+$' || true)
+
+  PARSE_FAIL=0
+  if [ -z "$EXPECT_GOGC" ] || [ -z "$EXPECT_MEM" ] || [ -z "$EXPECT_PROCS" ]; then
+    bad "规则2 无法从 ADR-0015 解析默认锚点（fail-closed）：GOGC='${EXPECT_GOGC}' GOMEMLIMIT='${EXPECT_MEM:-?}MiB' GOMAXPROCS='${EXPECT_PROCS}'"
+    PARSE_FAIL=1
+  fi
+  if [ -z "$ACT_GOGC" ] || [ -z "$ACT_MEM" ] || [ -z "$ACT_PROCS" ]; then
+    bad "规则2 无法从 ${LIMITS_GO} 解析实际锚点常量（fail-closed）"
+    PARSE_FAIL=1
+  fi
+
+  if [ "$PARSE_FAIL" -eq 0 ]; then
+    for pair in "GOGC:${ACT_GOGC}:${EXPECT_GOGC}" "GOMEMLIMIT:${ACT_MEM}:${EXPECT_MEM}" "GOMAXPROCS:${ACT_PROCS}:${EXPECT_PROCS}"; do
+      name=${pair%%:*}; rest=${pair#*:}; act=${rest%%:*}; exp=${rest#*:}
+      if [ "$act" = "$exp" ]; then
+        ok "规则2 运行时默认 ${name}=${act} == ADR-0015 规定值"
+      else
+        bad "规则2 运行时默认 ${name}=${act} != ADR-0015 规定的 ${exp}（改代码或改 ADR；ADR 是真源）"
+      fi
+    done
+
+    MF_GOGC=$(printf '%s\n' "$MAKEFILE_CONTRACT" | grep -oE 'GOGC=[0-9]+' | head -1 | cut -d= -f2 || true)
+    MF_MEM=$(printf '%s\n' "$MAKEFILE_CONTRACT" | grep -oE 'GOMEMLIMIT=[0-9]+MiB' | head -1 | sed -E 's/^GOMEMLIMIT=([0-9]+)MiB$/\1/' || true)
+    if [ -z "$MF_GOGC" ] || [ -z "$MF_MEM" ]; then
+      warn "规则2 Makefile 契约行未声明 GOGC=值 / GOMEMLIMIT=值（Makefile:3 是门禁入口注释）"
+    else
+      if [ "$MF_GOGC" = "$EXPECT_GOGC" ]; then
+        ok "规则2 Makefile 契约行 GOGC=${MF_GOGC} 与 ADR-0015 一致"
+      else
+        bad "规则2 Makefile 契约行 GOGC=${MF_GOGC} 与 ADR-0015 规定的 ${EXPECT_GOGC} 不一致（2026-11-24 漂移：注释写 100，实际 50）"
+      fi
+      if [ "$MF_MEM" = "$EXPECT_MEM" ]; then
+        ok "规则2 Makefile 契约行 GOMEMLIMIT=${MF_MEM}MiB 与 ADR-0015 一致"
+      else
+        bad "规则2 Makefile 契约行 GOMEMLIMIT=${MF_MEM}MiB 与 ADR-0015 规定的 ${EXPECT_MEM}MiB 不一致"
+      fi
+    fi
+  fi
+fi
+
 forbid() {
   local desc="$1"
   local pattern="$2"
@@ -127,7 +193,7 @@ forbid() {
   fi
 }
 
-forbid "规则2 默认 GOGC=200"                   'GOGC=200'
+forbid "规则2b GOGC=200 字面量"                'GOGC=200'
 forbid "规则3 旧字段 type: resident|oneshot"   'type:[[:space:]]*(resident|oneshot)'
 forbid "规则4 幽灵插件 id edge(/gateway(/sec(" '(^|[^[:alnum:]_])(edge|gateway|sec)\('
 
