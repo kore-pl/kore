@@ -11,8 +11,9 @@
 # -buildvcs=false：不把构建机 git 状态（commit / 脏标记）编进二进制，保证可复现。
 # 五目标矩阵（ADR-0009/0010）：linux/amd64 · linux/arm64 · windows/amd64 · darwin/arm64 · darwin/amd64。
 #   Linux 为 Tier A；Windows 10 1809+ / macOS 12+ 为 Tier B（降级支持，隔离与限额降级）。
-# 产物：make build → bin/kored（本机）；make cross → bin/kored-<os>-<arch>[.exe]；
-# 阻断门禁：make cross-build（复用 cross 五目标真编译，已并入 make check 第 17 段）；信息核对见 make compat-info。
+# 产物：make build → bin/kored（本机）；make cross → 五目标「全仓 go build ./...」+ bin/kored-<os>-<arch>[.exe]；
+# 阻断门禁：make cross-build（复用 cross 五目标全仓真编译，已并入 make check 第 17 段）；信息核对见 make compat-info。
+# 覆盖边界：go build 不编译 _test.go —— 测试包的跨平台类型检查见 make cross-vet（信息入口，实测热 +1.7s，故不入第 17 段）。
 
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -58,7 +59,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross cross-build compat-info vet test web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check check clean fmt
+.PHONY: help build cross cross-build cross-vet compat-info vet test web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -94,8 +95,27 @@ build: web-dist ## 构建主壳二进制（本机 GOOS/GOARCH；cmd/kored 未就
 	CGO_ENABLED=0 GOAMD64=$(GOAMD64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BIN) $(CMD); \
 	echo "[OK] 构建完成: $(BIN)"
 
-cross: web-dist ## 交叉编译五目标：linux/amd64·linux/arm64·windows/amd64·darwin/arm64·darwin/amd64
-	@if [ ! -d "$(CMD)" ]; then echo "[SKIP] cmd/kored 未就绪（M0 阶段正常），M1 实现"; exit 0; fi; \
+# 全仓可编译口径（G-16 补全）：go build ./... 覆盖全部**非测试**包——含只被测试 / 工具 / 未来入口引用、
+# 不在 $(CMD) 依赖闭包内的包（旧口径只编译 $(CMD) 闭包，这类包漏检）。
+# 【不要用 `go build -o <dir>/ ./...` 代替】实测（go1.26.8）：多包 + `-o <目录>/` 只产出 main 包二进制，
+# **静默跳过非 main 包的编译错误**（注入 undefined 探针：`go build ./...` rc=1，`-o dir/` rc=0）——那是假绿门禁。
+# 所以必须用无 `-o` 的 `go build ./...`；它会把 main 包产物写到 cwd，构建立刻按 go list 算出的 main 包名清掉
+# （不写死 kored / kored.exe：未来新增 cmd 子命令也自动覆盖）。产物名来自 `go list` 而非硬编码，避免漏删污染工作树。
+CROSS_TRIPLES ?= linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64
+
+cross: web-dist ## 交叉编译五目标：全仓 go build ./... + kored 五产物
+	@if [ ! -f go.mod ]; then echo "[SKIP] go.mod 未就绪（M0 阶段正常），M1 实现"; exit 0; fi; \
+	mains=$$($(GO) list -f '{{if eq .Name "main"}}{{.Dir}}{{end}}' ./... | while read -r d; do [ -n "$$d" ] && basename "$$d"; done); \
+	for t in $(CROSS_TRIPLES); do \
+	  os=$${t%/*}; arch=$${t#*/}; \
+	  echo "[..] 全仓编译 $$os/$$arch"; \
+	  rc=0; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOAMD64=$(GOAMD64) GOARM64=$(GOARM64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) ./... || rc=$$?; \
+	  for m in $$mains; do rm -f "./$$m" "./$$m.exe"; done; \
+	  if [ $$rc -ne 0 ]; then echo "[FAIL] 全仓编译失败: $$os/$$arch（平台专有符号收进 internal/platform 或按 build tag 收口）"; exit 1; fi; \
+	done; \
+	echo "[OK] 全仓五目标可编译（go build ./...，不含 _test.go）"; \
+	if [ ! -d "$(CMD)" ]; then echo "[SKIP] $(CMD) 未就绪（M0 阶段正常），五产物跳过"; exit 0; fi; \
 	mkdir -p $(dir $(BIN)); \
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=$(GOAMD64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o ./bin/kored-linux-amd64 $(CMD); \
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=$(GOARM64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o ./bin/kored-linux-arm64 $(CMD); \
@@ -104,13 +124,13 @@ cross: web-dist ## 交叉编译五目标：linux/amd64·linux/arm64·windows/amd
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 GOAMD64=$(GOAMD64) GOFLAGS="$(GOFLAGS)" $(GO) build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o ./bin/kored-darwin-amd64 $(CMD); \
 	echo "[OK] 交叉产物: linux-amd64 · linux-arm64 · windows-amd64.exe · darwin-arm64 · darwin-amd64"
 
-cross-build: ## 交叉编译门禁（G-16 阻断级）：复用 cross 五目标真编译，失败即阻断（make check 第 17 段）
-	@echo "[INFO] 复用 make cross 的五目标真编译：windows/amd64 + darwin/arm64（G-16 两条判据）+ linux/amd64 + linux/arm64 + darwin/amd64"; \
+cross-build: ## 交叉编译门禁（G-16 阻断级）：复用 cross 五目标全仓真编译，失败即阻断（make check 第 17 段）
+	@echo "[INFO] 复用 make cross：五目标「全仓 go build ./...」+ kored 五产物；windows/amd64 + darwin/arm64 为 G-16 两条明文判据"; \
 	start=$$(date +%s%N); \
 	if out=$$($(MAKE) --no-print-directory cross 2>&1); then \
 	  printf '%s\n' "$$out" | sed 's/^/       /'; \
 	  ms=$$(( ($$(date +%s%N) - start) / 1000000 )); \
-	  echo "[OK] 交叉编译五目标全通过（exit 0，耗时 $${ms}ms）"; \
+	  echo "[OK] 全仓交叉编译五目标全通过（exit 0，耗时 $${ms}ms）"; \
 	else \
 	  rc=$$?; \
 	  ms=$$(( ($$(date +%s%N) - start) / 1000000 )); \
@@ -137,7 +157,21 @@ compat-info: ## 打印构建参数与产物兼容信息（G-16 信息入口；�
 	    echo "         ($(BIN) 不存在，跳过构建信息)"; \
 	  fi; \
 	fi; \
-	if [ -d "$(CMD)" ]; then echo "[INFO] 交叉编译冒烟（五目标）:"; $(MAKE) --no-print-directory cross; else echo "[N/A] cmd/kored 未就绪（M0 阶段正常），交叉编译冒烟跳过，M1 起生效"; fi
+	if [ -f go.mod ]; then echo "[INFO] 交叉编译冒烟（五目标全仓 ./... + 五产物）:"; $(MAKE) --no-print-directory cross; else echo "[N/A] go.mod 未就绪（M0 阶段正常），交叉编译冒烟跳过，M1 起生效"; fi
+
+# 测试包跨平台类型检查（信息入口，不入第 17 段）：go build 不编译 _test.go，`go vet` 会类型检查测试包，
+# 这是「全仓可跨平台」之外唯一能覆盖测试包的本地手段。实测代价：热 +1.7s（windows 1.06s + darwin 0.69s）、
+# 冷 +4.0s——与第 17 段本体同量级（会让该段热态翻倍），不塞进每次 check，改测试包时显式运行。
+cross-vet: web-dist ## 测试包跨平台类型检查（信息入口）：GOOS=windows/darwin go vet ./...（含 _test.go，不入第 17 段）
+	@if [ ! -f go.mod ]; then echo "[SKIP] go.mod 未就绪（M0 阶段正常），M1 实现"; exit 0; fi; \
+	for t in windows/amd64 darwin/arm64; do \
+	  os=$${t%/*}; arch=$${t#*/}; \
+	  echo "[..] vet ./...（含测试包） $$os/$$arch"; \
+	  if ! CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOAMD64=$(GOAMD64) GOARM64=$(GOARM64) GOFLAGS="$(GOFLAGS)" $(GO) vet ./...; then \
+	    echo "[FAIL] 测试包跨平台类型检查失败: $$os/$$arch（测试里的平台专有用法要加 build tag）"; exit 1; \
+	  fi; \
+	done; \
+	echo "[OK] 测试包跨平台类型检查通过（windows/amd64 · darwin/arm64，go vet 含 _test.go）"
 
 vet: web-dist ## go vet 静态检查（源码未就绪时 SKIP）
 	@if [ ! -f go.mod ] || { [ ! -d ./cmd ] && [ ! -d ./internal ]; }; then echo "[SKIP] 源码未就绪（无 go.mod 或 cmd/internal 缺失），M1 实现"; exit 0; fi; \
@@ -421,7 +455,7 @@ check: ## 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[RUN ] 16/17 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \
 	if ! bash scripts/pubkey-sync-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 17/17 交叉编译（G-16 阻断级：五目标真编译，windows/amd64 + darwin/arm64 为 G-16 明文判据；判据只验证文本=漏检）"; \
+	echo "[RUN ] 17/17 交叉编译（G-16 阻断级：五目标「全仓 go build ./...」+ kored 五产物真编译，windows/amd64 + darwin/arm64 为 G-16 明文判据；判据只验证文本=漏检；go build 不含 _test.go，测试包见 make cross-vet）"; \
 	if ! $(MAKE) --no-print-directory cross-build; then fail=1; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \

@@ -122,7 +122,7 @@
 
 | 门禁 | commit | 关键点 / 证据 |
 | --- | --- | --- |
-| **第 17 段交叉编译（G-16 真编译）** | `6bd09ee` | `Makefile:350,424-425`：复用 `make cross` 五目标真编译（含 G-16 明文的 windows/amd64 + darwin/arm64），失败贴首个编译错误并阻断。历史缺口正是「只 grep 目标名字、从不编译」。本轮实测 exit 0 / **244 ms**（热缓存） |
+| **第 17 段交叉编译（G-16 真编译）** | `6bd09ee`（2026-11-24 扩全仓） | `Makefile`：复用 `make cross` 五目标**全仓** `go build ./...` + `kored` 五产物真编译（含 G-16 明文的 windows/amd64 + darwin/arm64），失败贴首个编译错误并阻断。历史缺口正是「只 grep 目标名字、从不编译」。2026-11-24 扩全仓后实测 exit 0：热 1.61–1.88s / 冷 19.67s（旧口径只编译 `cmd/kored` 闭包，稳态 0.24s）；测试包边界由 `make cross-vet` 补位（信息入口，不入 17 段） |
 | **`presets-check` 的 `depth_level` 一致性 + `out_of_box`** | `45685a2` | `scripts/presets-check.sh:326-377`（索引↔仓库；清单内 WARN、新增不一致 FAIL、陈旧条目 WARN）+ `:470-483`（`out_of_box=true` 不得引用非 production）。清单 `scripts/depth-level-pending.txt` 8 行 |
 | **`store-check` 的 `DIST_SHA_DIFF`** | `c569e12`（实现）+ `e172fde`（文档口径同步） | `scripts/store-check.sh:21-30,307-315`：本地 `dist/<id>-<ver>.tar.gz` sha 与索引账本比对，输出 `DIST_SHA_DIFF <id> <ver> index=… dist=…`，**WARN 不阻断**；比对**全部版本**而非只比当前版本（防 0.2.3 野产物在 bump 后漏检）。本轮 `store-check: 24 pass, 0 fail, 0 warn`——本地 161 个 dist 包中，索引账本可对照的全部一致，0 条 `DIST_SHA_DIFF`（索引未记录该版本 / dist 不存在的按设计静默跳过） |
 | **`gitee-release-prune.sh` 改按 tag 语义版本判序 + 两道护栏** | `22962bc` | 按 `sort -V` 判序，**不用 `created_at` / release id**（事故 `33088d9`：integrity v0.4.0 版本第 2 新却被误删）；护栏 ① 删除后剩余 == `--keep` ② 被删版本全部严格小于保留集最小版本；同版本多前缀歧义→整仓跳过不删（`scripts/gitee-release-prune.sh:5-22`） |
