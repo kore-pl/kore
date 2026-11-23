@@ -325,6 +325,21 @@ func nftPatterns() []CommandPattern {
 		}
 		patterns = append(patterns, CommandPattern{Tokens: tokens, Note: "加链规则"})
 	}
+
+	// 受控追加形态（ADR-0022 增补，2026-11-23）：固定语句头 + 运行时追加表达式 token。
+	// 红线：追加 token 必须逐位是 nft 表达式形状（shapeNftExpr 已禁 `;`/引号/反引号/`$`/换行
+	// 与 include/define），且最多 28 个 ⇒ 只能拼成**一条**规则，不能拼出第二条语句。
+	patterns = append(patterns, CommandPattern{
+		Tokens:     []TokenSpec{lit("add"), lit("rule"), fam, table, chain},
+		Tail:       []ArgShape{shapeNftExpr},
+		TailRepeat: true,
+		Note:       "加链规则（固定头 + 追加表达式 token，单语句）",
+	})
+	patterns = append(patterns, CommandPattern{
+		Tokens: []TokenSpec{lit("delete"), lit("rule"), fam, table, chain, lit("handle")},
+		Tail:   []ArgShape{shapeNftHandle},
+		Note:   "按 handle 删链规则",
+	})
 	return patterns
 }
 
@@ -422,11 +437,23 @@ var shapeNftPolicy = ArgShape{Name: "nft-policy",
 // 换行（这些是「把追加参数拼成第二语句」的唯一通道）。首字符不得是 `-`，否则会被
 // nft 当成自己的选项（如 `-f` 读脚本文件）。
 var shapeNftExpr = ArgShape{Name: "nft-expr-token",
-	Pattern: regexp.MustCompile(`^[A-Za-z0-9_.:@/\[\]{}()!<>=&|+,*~][A-Za-z0-9_.:@/\[\]{}()!<>=&|+,*~-]{0,63}$`)}
+	Pattern: regexp.MustCompile(`^[A-Za-z0-9_.:@/\[\]{}()!<>=&|+,*~][A-Za-z0-9_.:@/\[\]{}()!<>=&|+,*~-]{0,63}$`),
+	Check: func(value string) bool {
+		// `include` / `define` 是 nft 的**指令**关键字，不是规则表达式：放进规则里会读文件/展开宏。
+		switch value {
+		case "include", "define":
+			return false
+		}
+		return true
+	}}
 
 // shapeNftTimeout 是 nft 集合元素超时（1s..999999d）。
 var shapeNftTimeout = ArgShape{Name: "nft-timeout",
 	Pattern: regexp.MustCompile(`^[1-9][0-9]{0,5}(?:s|m|h|d)$`)}
+
+// shapeNftHandle 是 nft 规则的 handle（`nft -a list` 里的编号），正整数。
+var shapeNftHandle = ArgShape{Name: "nft-handle",
+	Pattern: regexp.MustCompile(`^[1-9][0-9]{0,9}$`)}
 
 // shapeIfaceName 是网络接口名。
 var shapeIfaceName = ArgShape{Name: "iface-name",
@@ -520,6 +547,13 @@ func validateRootArgv(declared, appended []string) error {
 	if !ok {
 		return fmt.Errorf("argv[0]=%q 不在受控命令白名单内（允许：%s）", declared[0], allowedCommandNames())
 	}
+	// 追加参数先做控制字符拒绝：FlattenArgs 会把换行/制表按空白切开，
+	// 否则看似一个参数、实际被展开成多个 token。含控制字符的一律拒绝。
+	for _, value := range appended {
+		if strings.ContainsAny(value, "\n\r\t") {
+			return fmt.Errorf("追加参数含控制字符（换行/制表）被拒绝：%q", value)
+		}
+	}
 	declaredTokens := declared[1:]
 	appendedTokens := appended
 	if policy.FlattenArgs {
@@ -577,12 +611,18 @@ func validateRootArgv(declared, appended []string) error {
 }
 
 // checkTail 校验追加参数是否匹配命中的 pattern 的 Tail。
+// maxTailRepeat 是 TailRepeat 形状允许的追加参数上限（nft 表达式 token 至多 28 个）。
+const maxTailRepeat = 28
+
 func checkTail(name string, pattern CommandPattern, appended []string) error {
 	if len(appended) == 0 {
 		return nil
 	}
 	if len(pattern.Tail) == 0 {
 		return fmt.Errorf("%s 的该形状不接受追加参数（收到 %q）", name, appended)
+	}
+	if pattern.TailRepeat && len(appended) > maxTailRepeat {
+		return fmt.Errorf("%s 的该形状最多 %d 个追加参数（收到 %d 个）", name, maxTailRepeat, len(appended))
 	}
 	if !pattern.TailRepeat && len(appended) != len(pattern.Tail) {
 		return fmt.Errorf("%s 的该形状要求 %d 个追加参数（收到 %d 个：%q）",

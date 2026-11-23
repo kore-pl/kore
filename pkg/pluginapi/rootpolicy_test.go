@@ -34,6 +34,8 @@ func TestRootArgvLegalShapes(t *testing.T) {
 		{"nginx", "-t"},
 		{"nginx", "-V"},
 		{"/usr/sbin/nginx", "-s", "reload"},
+		{"nft", "add", "rule", "inet", "kore_waf", "input", "ip", "saddr", "1.2.3.4", "drop"},
+		{"nft", "delete", "rule", "inet", "kore_waf", "input", "handle"},
 		{"ufw", "status"},
 		{"ufw", "status", "verbose"},
 		{"ufw", "show", "added"},
@@ -101,6 +103,12 @@ func TestRootArgvRejectsUnknownOrUnshaped(t *testing.T) {
 		{"不是规范化的绝对路径", []string{"/usr/bin/../bin/nft", "list", "ruleset"}},
 		// 子命令必须被锁定。
 		{"不在受控形状内", []string{"ufw", "enable", "--force"}},
+		{"不在受控形状内", []string{"nft", "add", "rule", "inet", "kore_waf", "input", "ip", "saddr", "1.2.3.4", "drop", ";", "flush", "ruleset"}},
+		{"不在受控形状内", []string{"nft", "add", "rule", "inet", "kore_waf", "input", "-f", "/tmp/x"}},
+		{"不在受控形状内", []string{"nft", "add", "rule", "inet", "kore_waf", "input", "include", "/etc/nftables.conf"}},
+		{"不在受控形状内", []string{"nft", "delete", "rule", "inet", "kore_waf", "input", "handle", "abc"}},
+		{"不在受控形状内", []string{"nft", "delete", "rule", "inet", "kore_waf", "input", "handle", "0"}},
+		{"不在受控形状内", []string{"nft", "add", "rule", "inet", "host_table", "input", "drop"}},
 		{"不在受控形状内", []string{"nginx", "-s", "stop"}},
 		{"不在受控形状内", []string{"systemctl", "restart", "sshd"}},
 		{"不在受控形状内", []string{"iptables", "-A", "INPUT", "-j", "DROP"}},
@@ -289,3 +297,45 @@ func TestRootCommandAllowlistDerived(t *testing.T) {
 
 // commandNamePattern 是裸命令名语法（与 resolveCommandName 的判定一致）。
 var commandNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+
+// TestNftControlledAppendShapes 覆盖 ADR-0022 增补：add rule 固定头 + 表达式追加、
+// delete rule handle。红线是「追加 token 只能拼成一条规则」，不能拼出第二语句。
+func TestNftControlledAppendShapes(t *testing.T) {
+	header := []string{"nft", "add", "rule", "inet", "kore_waf", "input"}
+	if err := ValidateRootAppendedArgv(header, []string{"ip", "saddr", "1.2.3.4", "drop"}); err != nil {
+		t.Fatalf("合法追加应通过：%v", err)
+	}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"分号拼接第二语句", []string{"drop", ";", "flush", "ruleset"}},
+		{"读文件选项", []string{"-f", "/tmp/x"}},
+		{"include 指令", []string{"include", "/etc/nftables.conf"}},
+		{"引号注入", []string{`"drop"`}},
+		{"换行注入", []string{"drop\nflush ruleset"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateRootAppendedArgv(header, tc.args); err == nil {
+				t.Fatalf("应拒绝：%v", tc.args)
+			}
+		})
+	}
+	many := make([]string, 29)
+	for i := range many {
+		many[i] = "drop"
+	}
+	if err := ValidateRootAppendedArgv(header, many); err == nil {
+		t.Fatalf("29 个追加 token 应被上限拒绝")
+	}
+	del := []string{"nft", "delete", "rule", "inet", "kore_waf", "input", "handle"}
+	if err := ValidateRootAppendedArgv(del, []string{"42"}); err != nil {
+		t.Fatalf("合法 handle 应通过：%v", err)
+	}
+	for _, bad := range []string{"abc", "0", "-1", "12a"} {
+		if err := ValidateRootAppendedArgv(del, []string{bad}); err == nil {
+			t.Fatalf("handle=%q 应被拒绝", bad)
+		}
+	}
+}

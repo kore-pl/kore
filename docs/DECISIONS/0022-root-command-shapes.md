@@ -65,3 +65,20 @@ R5-1 之后要接的真实后端（waf 的 `nft`、dns 的 `resolvectl` / `unbou
 - `nft` 表达式 token 形状被绕过（例如 nft 新版本引入新的读文件/执行语法）；
 - 插件 SDK 提供等价（更严格）的声明期校验能力，可把形状表下移到 SDK 单点实现；
 - 降权（ADR-0018 实现计划第 3 条）落地后，插件不再以 root 运行——届时仍需本 ADR 的形状表（通道的另一端仍是 uid=0）。
+
+## 增补（2026-11-23）：nft 动态规则的两条受限形状
+
+**背景**：waf 插件需要在自有 `table inet kore_waf` 里增删/启停规则，而既有模型只能表达「固定 argv + 有 Tail 的形状」；原有 `add rule` 形状把 1..28 个表达式 token 枚举在**声明 argv** 里、`Tail` 为空，`delete rule` 完全没有形状，因此运行时表达式无法进入 nft。
+
+**增补的是形状，不是新命令**（仍受 `RootCommandPolicies["nft"]` 约束）：
+
+1. `delete rule <family> <kore_table> <chain> handle` 作为声明 argv（6 个 token），`Tail: [shapeNftHandle]`（`^[1-9][0-9]{0,9}$`）承载运行时 handle。
+2. `add rule <family> <kore_table> <chain>` 作为声明 argv（5 个 token），`Tail: [shapeNftExpr]`、`TailRepeat: true` 承载运行时表达式 token。
+
+**红线（缺一不可）**：
+- `shapeNftExpr` 的字符集禁 `;`、引号、反引号、`$`、空白；`Check` 额外拒绝 `include` / `define` 指令关键字；
+- 追加参数先拒绝控制字符（换行/制表），避免 `FlattenArgs` 把单个参数摊成多个 token；
+- `TailRepeat` 追加上限 **28**（`maxTailRepeat`）；配合 `shapeNftExpr` 已禁 `;`，单条动作**不可能拼出第二条 nft 语句**；
+- 表名仍走 `shapeKoreNftTable`（必须 `kore_` 前缀），逐位匹配后才执行。
+
+**测试**：`TestNftControlledAppendShapes`（正例两条；反例：`; flush ruleset`、`-f /tmp/x`、`include`、引号、换行、29 个 token、handle 非数字）与 `TestRootArgvLegalShapes` / `TestRootArgvRejectsUnknownOrUnshaped` 的增补用例。
