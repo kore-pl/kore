@@ -22,7 +22,7 @@ type lazyEnv struct {
 }
 
 // newLazyEnv 在 t.TempDir() 下装配 N 个指定 lifecycle 的插件；mutate 可覆盖 Options。
-func newLazyEnv(t *testing.T, ids []string, lifecycle string, idle time.Duration) *lazyEnv {
+func newLazyEnv(t *testing.T, ids []string, lifecycle string, idle time.Duration, mutate ...func(*supervisor.Options)) *lazyEnv {
 	t.Helper()
 	root := t.TempDir()
 	catalog := registry.NewCatalog()
@@ -58,10 +58,14 @@ func newLazyEnv(t *testing.T, ids []string, lifecycle string, idle time.Duration
 	if err != nil {
 		t.Skipf("当前平台无运行期实现: %v", err)
 	}
-	manager, err := supervisor.New(supervisor.Options{
+	opts := supervisor.Options{
 		Transport: plat.Transport, Manifests: catalog, RunDir: runDir,
 		Version: "0.1.0", IdleTimeout: idle,
-	})
+	}
+	for _, fn := range mutate {
+		fn(&opts)
+	}
+	manager, err := supervisor.New(opts)
 	if err != nil {
 		t.Fatalf("构造 supervisor 失败: %v", err)
 	}

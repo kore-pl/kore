@@ -29,6 +29,9 @@ const (
 	defaultQueueLimit    = 32
 	// defaultMaxSlots 是同时常驻槽位上限：resident + 活跃 lazy ≤3（提案 §4 / G-03）。
 	defaultMaxSlots = 3
+	// defaultResidentMaxSlots 是 resident 插件独占配额上限：lazy 至少保留
+	// MaxSlots-2=1 个槽位（RESOURCE-MODEL §2.6 候选 A，事故 CS-20261123-01）。
+	defaultResidentMaxSlots = 2
 	// defaultIdleTimeout 是 lazy 冷启后的空闲退出时长（G-19，任务指定 60s）。
 	defaultIdleTimeout = 60 * time.Second
 )
@@ -40,7 +43,8 @@ type Manager struct {
 	mu      sync.Mutex
 	plugins map[string]*instance
 	gates   map[string]*gate
-	// slotMu 串行 lazy 的槽位准入 + 冷启，保证并发唤醒不突破 maxSlots。
+	// slotMu 串行全部槽位准入 + 冷启（resident enable/invoke 与 lazy 唤醒），
+	// 保证并发启用/唤醒既不突破 maxSlots，也不突破 resident 独占配额。
 	slotMu sync.Mutex
 	// useSeq 是全局单调使用序号，供 lazy LRU 比较；零值即可用。
 	useSeq atomic.Uint64
@@ -52,6 +56,10 @@ func New(opts Options) (*Manager, error) {
 		return nil, errf(pluginapi.E_INTERNAL, "supervisor 缺少 Transport/Manifests/RunDir")
 	}
 	opts.withDefaults()
+	if opts.ResidentMax >= opts.MaxSlots {
+		opts.Logger.Warn("槽位保护已关闭：resident_max 等于 max_slots，lazy 可能被 resident 饿死",
+			"resident_max", opts.ResidentMax, "max_slots", opts.MaxSlots)
+	}
 	return &Manager{
 		opts:    opts,
 		logger:  opts.Logger,
@@ -82,9 +90,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return nil // lazy/oneshot：enable 不拉起进程，首次 invoke 才冷启
 	}
 	recovering := inst.currentState() == StateFailed
-	err = m.gate(id).do(ctx, func(ctx context.Context) error {
-		return m.startIfNeeded(ctx, inst)
-	})
+	err = m.startResident(ctx, inst)
 	if !recovering {
 		event := AuditEvent{
 			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
@@ -95,6 +101,15 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			event.Detail = detail("err", err.Error())
 		}
 		m.record(ctx, event)
+		return err
+	}
+	// 从 failed 重试的正常起停由 start() 记 plugin.retry；只有配额拒绝没进入
+	// start()，这里补一条 enable 失败审计，保证「拒绝启用」留痕。
+	if err != nil {
+		m.record(ctx, AuditEvent{
+			Subject: AuditSubjectAdmin, Action: AuditEnable, Plugin: id,
+			Result: AuditResultError, Detail: detail("err", err.Error()),
+		})
 	}
 	return err
 }
@@ -114,9 +129,9 @@ func (m *Manager) Ensure(ctx context.Context, id string) (net.Conn, error) {
 		if err := m.ensureLazy(ctx, inst); err != nil {
 			return nil, err
 		}
-	} else if err := m.gate(id).do(ctx, func(ctx context.Context) error {
-		return m.startIfNeeded(ctx, inst)
-	}); err != nil {
+	} else if err := m.startResident(ctx, inst); err != nil {
+		// resident 的 invoke 冷启与 enable 走同一准入闸门：绕过 enable 直接调用
+		// 也不能突破 resident 配额或总槽位上限。
 		return nil, err
 	}
 	inst.mu.Lock()
@@ -130,6 +145,42 @@ func (m *Manager) Ensure(ctx context.Context, id string) (net.Conn, error) {
 		m.rearmIdleLocked(inst)
 	}
 	return inst.conn, nil
+}
+
+// startResident 是 resident 的唯一拉起闸门：enable 与 invoke 冷启都走这里。
+//
+// 准入（resident 配额 + 总槽位）只在 slotMu 内做一次占位，随后释放锁进入每插件
+// 冷启动闸门——同插件的并发请求仍按队列上限排队，不会因串行化把 429 变成全成功。
+// 已在 ready 的实例直接放行；占位在该次启动结束（成功或失败）后释放。
+func (m *Manager) startResident(ctx context.Context, inst *instance) error {
+	m.slotMu.Lock()
+	if inst.currentState() == StateReady {
+		m.slotMu.Unlock()
+		return nil
+	}
+	if !inst.slotReserved {
+		if err := m.admitResident(inst); err != nil {
+			m.slotMu.Unlock()
+			return err
+		}
+		inst.slotReserved = true
+	}
+	m.slotMu.Unlock()
+
+	err := m.gate(inst.manifest.ID).do(ctx, func(ctx context.Context) error {
+		return m.startIfNeeded(ctx, inst)
+	})
+
+	m.slotMu.Lock()
+	inst.slotReserved = false
+	m.slotMu.Unlock()
+	return err
+}
+
+// SlotLimits 返回槽位上限配置：maxSlots（resident + 活跃 lazy 总数）与
+// residentMax（resident 独占上限），供 /api/v1/system/info 展示。
+func (m *Manager) SlotLimits() (maxSlots, residentMax int) {
+	return m.opts.MaxSlots, m.opts.ResidentMax
 }
 
 // nextSeq 返回下一个全局使用序号。

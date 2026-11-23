@@ -99,7 +99,7 @@
 | **R5-2 方法级 capability 声明** | ① `info.json` 增加**方法级** capability（只读 `system:read` / 写 `system:admin`）② 内核授权与审计按方法粒度取用（守住 G-01：只认 6 个 `system:`/`net:`/`proc:` 能力与 `<id>:<action>`，不维护业务词表）③ `db-mysql` 只读方法不再被审计 + 回归测试 | R5-1（提权通道的授权口径先稳定） | 当前是**插件级** `system:admin`：`db-mysql.instances` 这类只读调用也按 admin 类进审计（round4-audit §6），噪声会盖住真实写操作——审计可信度依赖方法级声明 |
 | **R5-3 数据库前端** | ① `db-postgres` 前端（实例 / 库 / 查询 / 状态 + 配置面板，复用 `db.js` 组件）② `db-mysql` / `db-postgres` 统一数据库视图（引擎切换，不复制两套页面）③ 改密方法与二次确认 | R5-2（写方法按方法级 capability 授权） | `db-postgres` 有后端无前端（`web/` 零 `db-postgres.*` 调用），装了也用不上；统一视图防止两套页面漂移 |
 | **R5-4 备份 / 任务 / 证书闭环** | ① `backup` 定时 + 保留策略 + 下载 ② `cron` 任务类型（备份/URL）+ 执行日志 + 立即执行 ③ `ssl` ACME 签发与自动续期（先出 ADR 定客户端与 DNS-01/HTTP-01） | R5-1（调度与证书续期都走 root 动作）；② 依赖 ① 的调度模型 | 三件事共用"调度 + 失败通知"模型，一次定模型省两套；ACME 不定客户端就会各写各的 |
-| **R5-5 槽位保护** | ① `MaxSlots` 内 resident 单独限 2、lazy 独占至少 1 槽（[RESOURCE-MODEL.md](./RESOURCE-MODEL.md) §2.6 候选 A）② 第 3 个 resident `enable` 返回明确错误 + 可操作提示 ③ `lazy_slots_test.go` 增「3 resident + 1 lazy 仍可唤醒」 | 无 | 设计债已造成 11 个 lazy 插件全 429 的 P1 事故（`CS-20261123-01`）；靠插件作者自觉声明 lifecycle 不可靠，结构性保证必须 v1.0 前落地 |
+| **R5-5 槽位保护** | ① `MaxSlots` 内 resident 单独限 2、lazy 独占至少 1 槽（[RESOURCE-MODEL.md](./RESOURCE-MODEL.md) §2.6 候选 A）② 第 3 个 resident `enable` 返回明确错误 + 可操作提示 ③ `resident_slots_test.go` 增「2 resident + 1 lazy 仍可唤醒」 | 无 | ✅ **已落地**（见 §3.5 #9）：设计债已造成 11 个 lazy 插件全 429 的 P1 事故（`CS-20261123-01`）；结构性保证不依赖插件作者自觉声明 lifecycle |
 
 **不做清单（G-11 复述，避免 Round 5 漂移）**：多用户 RBAC、集群/多机、模板市场、厂商云存储深度集成、拖拽建站、多语言 i18n；另不做容器编排、多租户 SaaS、移动 App、重型主题。
 
@@ -117,12 +117,12 @@
 | 6 | 站点容器模式 `site_dir_exists` 只看宿主路径 | 仍在 | `inspect.go:74` 仍 `os.Stat(root)`；容器内 root 在宿主不存在会误报 false | 单列任务（`docker exec test -d` 或返回三态 `unknown`），不塞进 R5 任一批 |
 | 7 | 主壳缺全局搜索/审计入口/告警中心/长任务进度 | **部分补** | 搜索（`web/search.js` 四源 + Ctrl/Cmd+K）与审计入口（`web/audit.js` + `GET /api/v1/audit`，`round4-audit.md`）已交付；告警中心与长任务进度仍无（`store.js:275` 仍是伪进度） | 告警/进度不单独造底座，随 R5-4 的备份/任务失败通知先落最小模型 |
 | 8 | 插件凭据无法跨插件传递 | 仍在 | kored 无 `password_env` 注入（`grep -rn password_env internal cmd` 零命中）；`discover` 探服务端版本仍需 `MYSQL_PWD` / `REDISCLI_AUTH`；按 [PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md) §6.1 候选 A | v1.0 前必须做，与 R5-2 的最小权限模型同批评审 |
-| 9 | `resident` 占满槽位后 lazy 饿死 | **部分补** | `monitor` 0.2.1 改 `lazy` 止血（`CS-20261123-01`，11 个 lazy 插件调用恢复 200）；但 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md) §2.6 候选 A 未落地，`lazy.go:26` 仍是 resident 不可驱逐 | R5-5（resident 限 2 + lazy 独占 1 槽） |
+| 9 | `resident` 占满槽位后 lazy 饿死 | **已补** | R5-5 落地候选 A：`resident_max=2` + lazy 保底 1 槽（`internal/core/supervisor/{manager,lazy}.go` 的 `startResident`/`admitResident`）；第 3 个 resident 的 enable/invoke 返 `E_RATELIMIT` + 当前 resident 列表；`resources.resident_max` 可配 1–3；`resident_slots_test.go` 覆盖 2+1 事故回归与 2+3 交替；隔离实例 18851 实测 2 resident + monitor lazy → `monitor.system` 200。**诚实披露：显式 `resident_max=3` 会放弃保护、事故仍可复现** | 结案；候选 B/C 未采用（见 §2.6） |
 | 10 | **`runtime-php` / `runtime-python` 0.2.0 未入索引** | 仍在 | 逐仓比对：24 条里 22 条 `info.json.version == index.version`；两仓 `info.json` / `manifest.json` 均 0.2.0、tag `v0.2.0` 已在远端，索引仍是 0.1.1（未重签） | 第二十七次重签并入 `CS-R4-01` 后续提交；重签前商店装到的是 0.1.1（旧方法面） |
 | 11 | **提权只验证了拒绝路径** | 仍在 | round3-closeout：非 root 下 `firewall.status` 200 + `error_code=E_NEED_ROOT`、`firewall.rules` 403；`root-action` 成功路径（真 root）未跑过；`waf` / `dns` 真实后端同样要 root | R5-1 |
 | 12 | **插件级 capability 让只读方法也进审计** | 仍在 | `round4-audit.md` §6：`db-mysql` 只声明 `system:admin`，`db-mysql.instances` 也按 admin 类落审计；协议当前不支持方法级声明，内核不得维护业务词表（G-01） | R5-2（方法级 capability 声明） |
 
-汇总：**12 条 = 已补 1（#1）/ 部分补 3（#2 #7 #9）/ 仍在 8（#3 #4 #5 #6 #8 #10 #11 #12）**；其中 v1.0 前必须 3 条（#8 #9 #10），#10 是发布链阻断项。
+汇总：**12 条 = 已补 2（#1 #9）/ 部分补 2（#2 #7）/ 仍在 8（#3 #4 #5 #6 #8 #10 #11 #12）**；其中 v1.0 前必须 2 条（#8 #10），#10 是发布链阻断项。
 
 ## 6. 附录：24 仓方法清单（127 个业务方法）
 

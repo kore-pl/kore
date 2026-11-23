@@ -56,6 +56,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `resources.defaults.cpu_quota` | string | `"50%"` | `"10%"`–`"100%"` |
 | `resources.defaults.pids_max` | int | `128` | 16–512 |
 | `resources.enforce` | bool | `true` | false = 监控模式，不写 cgroup 限额 |
+| `resources.resident_max` | int | `2` | 1–3；resident 插件独占上限，3 = 放弃槽位保护（lazy 无保底槽）；需重启生效；必须 ≤ max_slots(3) |
 | `plugins.allow_unsigned` | bool | `true` | MVP true；M4 起默认 false |
 | `plugins.autostart` | string[] | `[]` | 元素必须是已安装插件 id；启动时按序拉起。默认不硬编码任何插件：`site` 由 M2 安装流程显式写入 |
 | `store.allow_unsigned` | bool | `false`（零值，**不在 `Default()` 中设置**） | 仅显式配置；为 `true` 时允许未签名/验签失败的索引（M2 索引级 ed25519 签名）；与 `plugins.allow_unsigned`（插件包签名，M4）完全独立，勿混用 |
@@ -105,6 +106,7 @@ resources:
     cpu_quota: "50%"
     pids_max: 128
   enforce: true                 # false = 只监控不阻断（无 cgroup 时自动降级）
+  resident_max: 2               # resident 独占上限（1–3；2 = lazy 至少保留 1 槽；3 = 放弃保护，需重启生效）
 
 plugins:
   allow_unsigned: true          # 插件包签名（M4）：MVP 允许无签名；M4 起默认 false

@@ -102,7 +102,11 @@ func validateLog(s *Snapshot, add func(string, string)) {
 	}
 }
 
-// validateResources 校验插件缺省资源。
+// residentMaxSlotsLimit 是 resources.resident_max 的取值上限，必须与
+// supervisor 的 max_slots（defaultMaxSlots = 3）保持一致（G-03 / RESOURCE-MODEL §2.6）。
+const residentMaxSlotsLimit = 3
+
+// validateResources 校验插件缺省资源与槽位配额。
 func validateResources(s *Snapshot, add func(string, string)) {
 	if msg := intRange(s.Resources.Defaults.MemoryMB, 4, 12); msg != "" {
 		add("resources.defaults.memory_mb", msg)
@@ -112,6 +116,9 @@ func validateResources(s *Snapshot, add func(string, string)) {
 	}
 	if msg := intRange(s.Resources.Defaults.PidsMax, 16, 512); msg != "" {
 		add("resources.defaults.pids_max", msg)
+	}
+	if msg := intRange(s.Resources.ResidentMax, 1, residentMaxSlotsLimit); msg != "" {
+		add("resources.resident_max", msg+"（3 表示放弃槽位保护）")
 	}
 }
 

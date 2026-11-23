@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
 	"github.com/pengtang1024/kore/internal/platform"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // restoreTimeout 是启动期恢复已启用插件的单插件上限（覆盖 hello 2s + 进程创建）。
@@ -80,6 +82,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
 		KernelSocket: socketPath(app),
+		ResidentMax:  cfg.snapshot.Resources.ResidentMax,
 		Auditor:      &storeAuditor{db: db},
 	})
 	if err != nil {
@@ -143,6 +146,14 @@ func (s *service) restoreEnabled() {
 		err = s.backend.Enable(ctx, view.ID)
 		cancel()
 		if err != nil {
+			var perr *pluginapi.Error
+			if errors.As(err, &perr) && perr.Code == pluginapi.E_RATELIMIT {
+				// 槽位保护拒绝第 3 个 resident：只 WARN，不阻止整个启动
+				// （RESOURCE-MODEL §2.6 候选 A 的启动路径口径）。
+				slog.Warn("槽位保护拒绝恢复常驻插件（继续启动其余插件，不阻止内核）",
+					"plugin_id", view.ID, "err", err)
+				continue
+			}
 			slog.Warn("恢复已启用插件失败", "plugin_id", view.ID, "err", err)
 		}
 	}

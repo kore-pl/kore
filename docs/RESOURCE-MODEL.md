@@ -22,7 +22,7 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 | 主壳 `kored` | 常驻，空载 | 硬红线 ≤16 MiB | 目标 8 MiB | **7688 KiB**（min 7608 / max 7688） | `ps -o rss= -p <pid>`（KiB/1024），60s 中位数 | 查 goroutine/缓冲/依赖，再调 GC；不得靠隐藏功能达标 |
 | 主壳空闲 CPU | 常驻 | 60s CPU 时间 ≤ 60ms（≤0.1%） | 10–40ms | **0ms/60s** | `/proc/<pid>/stat` 的 `utime+stime` 两次差值（tick 通常 10ms） | 查定时器/轮询/GC；按 §2.4 门禁定位 |
 | 空载 goroutine | 常驻 | ≤ 20 | 8–16 | —（Threads 12 仅旁证） | `/system/info.goroutines`（`runtime.NumGoroutine`） | 查泄漏 goroutine，禁止每插件一循环 |
-| 同时常驻插件数 | 进程 | ≤ 3（resident + 活跃 lazy） | 1–2 | **0** | supervisor 配额 + `pgrep -f '/plugins/<id>/'` | 超配额时最久未用 resident 降级为 lazy，或拒绝启用并提示 |
+| 同时常驻插件数 | 进程 | ≤ 3（resident + 活跃 lazy） | 1–2 | **0** | supervisor 配额 + `pgrep -f '/plugins/<id>/'` | resident 单独限 2：第 3 个 resident 启用被拒（`E_RATELIMIT` + 当前 resident 列表）；lazy 满槽时驱逐最久未用 lazy |
 | resident 插件（单个） | 常驻 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid，60s 中位数 | 定位泄漏或缓存；仍超则拒绝该版本上架 |
 | 常驻插件合计（含活跃 lazy） | 常驻 | 硬红线 ≤48 MiB | 目标 24 MiB | — | 各插件 RSS 求和 | 停用或降级；内核不代偿 |
 | lazy 插件（活跃时） | 按需 | 硬红线 ≤24 MiB | 目标 12 MiB | — | 按插件 pid | 同 resident |
@@ -102,21 +102,28 @@ M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **768
 
 ### 2.5 为什么 22 个插件不会变成 22 个进程
 
-绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制——启用第 4 个 resident 时，按 `last_active_at` 把最久未用的 resident 降级为 lazy（先 draining 再 idle），或拒绝启用并提示用户停用其它插件。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由**宿主调度器**（systemd timer / cron.d / launchd / Task Scheduler）触发 `kored invoke`，kore 不自带 scheduler；`cron` 插件是 lazy。
+绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制，且 **`resident` 单独限 2（`resources.resident_max`，默认 2），lazy 至少保留 1 槽**：第 3 个 resident 的 `enable` 直接拒绝并列出当前常驻（`E_RATELIMIT`，不静默降级）；lazy 唤醒遇 3 槽全满时驱逐最久未用的 **lazy**，`resident` 永不驱逐。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由**宿主调度器**（systemd timer / cron.d / launchd / Task Scheduler）触发 `kored invoke`，kore 不自带 scheduler；`cron` 插件是 lazy。
 
-### 2.6 槽位分配保护（设计债 · **v1.0 前必须做**）
+### 2.6 槽位分配保护（已实现 · Round 5 / R5-5）
 
-**问题（2026-11-23 实测 P1 事故）**：`MaxSlots` 是「`resident` + 活跃 `lazy`」的**合并**上限（默认 3，`internal/core/supervisor/manager.go:31`），而 `admitSlot` 对 `resident` **永不驱逐**——全是 resident 时直接拒绝唤醒（`internal/core/supervisor/lazy.go:26` 注释与实现一致）。3 个 resident 并存即把 lazy 的槽位永久占死：`monitor` 声明 `resident` 后与 `site`、`terminal` 占满 3 槽，`db-mysql` / `file` / `backup` / `redis` / `logs` / `firewall` / `cron` / `ssl` / `process` / `discover` / `container` 共 **11 个 lazy 插件的所有调用全部 429**（`E_RATELIMIT`「常驻槽位已满（上限 3，均为 resident）」）。§2.5 描述的「启用第 4 个 resident 时按 `last_active_at` 降级最久未用者」**在实现中并不存在**（即候选 B 未落地），这正是事故能发生的前提。
+**背景（2026-11-23 实测 P1 事故 `CS-20261123-01`）**：`MaxSlots` 是「`resident` + 活跃 `lazy`」的**合并**上限（默认 3），而 `admitSlot` 对 `resident` **永不驱逐**。`monitor` 曾误声明 `resident`，与 `site`、`terminal` 占满 3 槽后，`db-mysql` / `file` / `backup` / `redis` / `logs` / `firewall` / `cron` / `ssl` / `process` / `discover` / `container` 共 **11 个 lazy 插件的所有调用全部 429**（`E_RATELIMIT`「常驻槽位已满（上限 3，均为 resident）」）。止血只是把 `monitor` 改回 `lazy`，结构性缺陷仍在——任何插件误声明 `resident` 都能复现。
 
-| 候选 | 做法 | 代价 | 风险 |
-| --- | --- | --- | --- |
-| **A（推荐）** | `MaxSlots` 内对 `resident` 单独限 2，`lazy` 独占至少 1 槽 | 新增 resident 计数与准入分支（约 30 行）+ 新错误码/提示 | 3 个「确需常驻」的场景会被拒，需给出可操作提示 |
-| B | resident 可主动驱逐（proactive eviction），并定义「谁先被踢」 | draining 状态机 + 在途请求中断语义 | 正在处理长连接/流式会话的 resident 被踢会丢会话；优先级规则难向用户解释 |
-| C | `MaxSlots` 可配置（`resources.max_slots`），按机器调 | 配置 schema + SIGHUP 白名单 + 预设预算联动 | 用户调大后可突破「常驻合计 ≤ 48 MiB」红线，必须联合校验合计 RSS |
+**已实现（候选 A）**：把「lazy 永远有位置」变成**结构性保证**，不再依赖插件作者自觉声明正确。
 
-**推荐 A**：最简单、最安全——把「lazy 永远有位置」变成**结构性保证**，而不是靠插件作者自觉声明正确。B 涉及在途请求语义，v1 前不引入；C 可作为 A 之后的增强（默认仍 3，且必须与「常驻合计 ≤ 48 MiB」**红线**联合校验）。
+| 路径 | 行为 | 代码落点 |
+| --- | --- | --- |
+| 常量 | `MaxSlots=3`（总数）/ `residentMaxSlots=2`（resident 独占） | `internal/core/supervisor/{manager,options}.go` |
+| enable | resident 数 ≥ `resident_max` 时**明确拒绝**：`E_RATELIMIT` + 「常驻插件已达上限 2（推荐 ≤2）；如需启用请先停用其他常驻插件：<当前 resident 列表>」；lazy 永远允许（不占 resident 配额） | `Manager.Start` → `startResident` → `admitResident` |
+| invoke 冷启 | 与 enable 走**同一准入闸门**，绕过 enable 直接调用也不能突破配额（`bus.Call` → `Manager.Ensure`） | `Manager.Ensure` → `startResident` |
+| lazy 唤醒 | 总槽位满（3）时驱逐最久未用的 **lazy**；`resident` 永不驱逐。`resident_max < max_slots` 时 lazy 恒有 `max_slots-resident_max` 个保底槽 | `ensureLazy` / `admitSlot` |
+| 启动恢复 | 按 `plugin_state.desired` 串行恢复；超限的 resident 只记 WARN 并跳过，**不阻止内核启动** | `cmd/kored/serve_runtime.go` `restoreEnabled` |
+| 观测 | `/api/v1/system/info` 的 `supervisor` 增加 `resident_max`（配置值）与 `lazy_slots`（`max_slots − 当前 resident`，即可供 lazy 使用的槽位） | `internal/core/httpapi/types.go`、`cmd/kored/serve_daemon_actions.go` |
 
-**验收判据**：3 个插件同时声明 `resident` 时，第 3 个的 `enable` 返回明确错误（禁止静默降级）；此后任一 lazy 插件唤醒仍满足 300ms 冷启门禁；`lazy_slots_test.go` 增补「3 resident + 1 lazy 仍可唤醒」用例。**★ 必须 v1.0 之前落地**：否则任何插件（含未来第三方）误声明 `resident` 都会复现同类事故，且现场表现为「一堆无关插件同时 429」，定位成本极高。
+**配置（`resources.resident_max`）**：默认 2，范围 1–3；1 更保守，3 等于**显式放弃保护**（lazy 不再有保底槽）。该值在 `supervisor.New` 时固化，SIGHUP 只提示「需重启内核」，避免配置显示值与运行值漂移。
+
+**测试**：`internal/core/supervisor/resident_slots_test.go` 覆盖 3 resident 拒绝（含错误码与 resident 列表）、2 resident + 1 lazy 唤醒成功（事故回归）、2 resident + 3 lazy 交替唤醒不 429、`resident_max=1` 拒第 2 个、`resident_max=3` 允许 3 个且 lazy 429、invoke 不能绕过配额、满槽启动 resident 驱逐 idle lazy；`internal/core/config/resident_max_test.go` 覆盖解析/校验/不热更；隔离实例 18851 真机回归见 [`../.agents/verify/round5-slot-protection.md`](../.agents/verify/round5-slot-protection.md)。
+
+**诚实披露（这是保护，不是根治）**：若用户把 `resources.resident_max` 显式设为 3（放弃保护），3 个 resident 仍会占满槽位、lazy 唤醒仍 429。内核在 `resident_max == max_slots` 时启动打 WARN。候选 B（resident 主动驱逐）涉及在途请求中断语义，v1 不引入；候选 C（`max_slots` 可配置）未实现，且必须与「常驻合计 ≤ 48 MiB」红线联合校验。
 
 ## 3. cgroup v2 落地
 

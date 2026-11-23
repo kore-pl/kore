@@ -51,6 +51,11 @@ type instance struct {
 
 	// oneshotIdle 是调用串行令牌（容量 1、预填 1）：Ensure 取走、本次调用回收后归还。
 	oneshotIdle chan struct{}
+
+	// slotReserved 表示该 resident 已通过槽位准入、正在排队/冷启动，尚未进入
+	// starting 状态。由 Manager.slotMu 保护（读写都必须持锁），供并发 enable/invoke
+	// 不重复占位，也供 lazy 准入把「正在起来的 resident」计入总槽位。
+	slotReserved bool
 }
 
 // isLazy 报告该实例是否为惰性生命周期。

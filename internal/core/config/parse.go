@@ -15,7 +15,7 @@ var (
 	storeKeys     = []string{"allow_unsigned"}
 	logKeys       = []string{"level", "rotate"}
 	rotateKeys    = []string{"max_size_mb", "max_backups"}
-	resourcesKeys = []string{"defaults", "enforce"}
+	resourcesKeys = []string{"defaults", "enforce", "resident_max"}
 	defaultsKeys  = []string{"memory_mb", "cpu_quota", "pids_max"}
 	pluginsKeys   = []string{"allow_unsigned", "autostart"}
 	securityKeys  = []string{"login_rate_limit"}

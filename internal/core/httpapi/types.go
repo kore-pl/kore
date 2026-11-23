@@ -66,10 +66,14 @@ type PluginStatus struct {
 
 // SupervisorStats 是 /api/v1/system/info 的 supervisor 统计。
 type SupervisorStats struct {
-	// Resident 当前有进程的 resident 插件数（ready/starting/draining）。
+	// Resident 当前有进程的 resident 插件数（ready/starting/draining）；活跃 lazy 不计入。
 	Resident int `json:"resident"`
 	// Restarts 全部插件重启计数之和。
 	Restarts int `json:"restarts"`
+	// ResidentMax 是 resident 插件独占配额上限（默认 2，见 resources.resident_max）。
+	ResidentMax int `json:"resident_max"`
+	// LazySlots 是当前 resident 之外仍可供 lazy 使用的槽位数（max_slots − resident）。
+	LazySlots int `json:"lazy_slots"`
 }
 
 // metricsBody 是 GET /api/v1/system/metrics 的成功响应体。

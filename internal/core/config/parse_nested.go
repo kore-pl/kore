@@ -58,6 +58,11 @@ func (p *parser) decodeResources(n *yaml.Node, out *Resources) error {
 			return err
 		}
 	}
+	if v := m["resident_max"]; v != nil {
+		if out.ResidentMax, err = p.integer(v, "resources.resident_max"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

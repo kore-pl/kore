@@ -39,6 +39,9 @@ type Options struct {
 	QueueLimit int
 	// MaxSlots 是同时常驻槽位上限（resident + 活跃 lazy），默认 3（G-03 / 提案 §4）。
 	MaxSlots int
+	// ResidentMax 是 resident 插件独占配额上限，默认 2（lazy 至少保留 1 槽）。
+	// 必须 ≤ MaxSlots；等于 MaxSlots 表示放弃槽位保护（仅排障用，会 WARN）。
+	ResidentMax int
 	// IdleTimeout 是 lazy 空闲退出时长，默认 60s；清单 idle_timeout_s 优先。
 	IdleTimeout time.Duration
 	// Auditor 是审计出口（M3-C）；nil 表示不审计。由装配层注入 store 实现，
@@ -61,6 +64,13 @@ func (o *Options) withDefaults() {
 	}
 	if o.MaxSlots <= 0 {
 		o.MaxSlots = defaultMaxSlots
+	}
+	if o.ResidentMax <= 0 {
+		o.ResidentMax = defaultResidentMaxSlots
+	}
+	if o.ResidentMax > o.MaxSlots {
+		// 配置层已拒绝越界值；这里兜底防止直接调 New 时绕过保护。
+		o.ResidentMax = o.MaxSlots
 	}
 	if o.IdleTimeout <= 0 {
 		o.IdleTimeout = defaultIdleTimeout

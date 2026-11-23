@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/pengtang1024/kore/internal/core/httpapi"
+	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -66,19 +67,28 @@ func (d *daemon) Invoke(ctx context.Context, plugin, method string, params json.
 	return reply.Result, nil
 }
 
-// Stats 汇总常驻插件数与总重启数；读取时会顺带完成崩溃对账。
+// Stats 汇总 resident 插件数、槽位余量与总重启数；读取时会顺带完成崩溃对账。
 func (d *daemon) Stats(ctx context.Context) (httpapi.SupervisorStats, error) {
 	plugins, err := d.Plugins(ctx)
 	if err != nil {
 		return httpapi.SupervisorStats{}, err
 	}
-	stats := httpapi.SupervisorStats{}
+	maxSlots, residentMax := d.manager.SlotLimits()
+	stats := httpapi.SupervisorStats{ResidentMax: residentMax}
 	for _, plugin := range plugins {
-		switch plugin.State {
-		case string(supervisor.StateReady), string(supervisor.StateStarting), string(supervisor.StateDraining):
-			stats.Resident++
+		// Resident 只数 resident 生命周期的在跑实例：活跃 lazy 占的是总槽位，
+		// 不是常驻配额，混在一起会让前端把「2 常驻 + 1 活跃 lazy」显示成 3/2。
+		if plugin.Lifecycle == string(registry.LifecycleResident) {
+			switch plugin.State {
+			case string(supervisor.StateReady), string(supervisor.StateStarting), string(supervisor.StateDraining):
+				stats.Resident++
+			}
 		}
 		stats.Restarts += plugin.Restarts
+	}
+	stats.LazySlots = maxSlots - stats.Resident
+	if stats.LazySlots < 0 {
+		stats.LazySlots = 0
 	}
 	return stats, nil
 }

@@ -171,7 +171,7 @@
 | 配置要点 | 首装按"resident → lazy → oneshot"三批顺序安装，每批完成即校验；`resources.profile: standard` |
 | 离线 | ✅（快照 + 索引缓存） |
 
-**`full` 为什么不超预算**：常驻只由 **2 个** resident 插件占（`site`+`monitor`），`full` 装的是"全部能力"，不是"全部常驻"。20 个插件里 12 个 lazy（含 `cron`；用才起、闲 300 s 退）、6 个 oneshot（用完整进程消失）。若未来新增第 4 个 resident，`full` 必须改为**分批激活**：默认只启用 3 个 resident，其余 resident 在"启用时提示需先停用某个"，这正是 [ARCHITECTURE.md](./ARCHITECTURE.md) §3.1 的配额仲裁。
+**`full` 为什么不超预算**：常驻只由 **2 个** resident 插件占（`site`+`monitor`），`full` 装的是"全部能力"，不是"全部常驻"。20 个插件里 12 个 lazy（含 `cron`；用才起、闲 300 s 退）、6 个 oneshot（用完整进程消失）。若未来新增第 3 个 resident，默认会被拒绝（`resources.resident_max=2`）；确需第 3 个常驻必须在配置显式设为 3（放弃 lazy 保底槽）并重新核对 48 MiB 红线——这正是 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md) §2.6 的槽位保护口径。
 
 ## 4. 首次安装流程
 

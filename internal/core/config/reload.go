@@ -5,9 +5,9 @@ import "log/slog"
 // Reload 重新解析配置并只应用白名单字段，返回合并后的新快照。
 //
 // 解析或校验失败时返回错误且不修改旧快照，调用方必须继续使用旧快照。
-// 白名单：log.*、resources.*、security.login_rate_limit.*、audit.invoke_all、
-// plugins.allow_unsigned、cert_renew.*、auth.session_ttl、auth.admin_password_hash；
-// 其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
+// 白名单：log.*、resources.*（resident_max 除外，需重启）、security.login_rate_limit.*、
+// audit.invoke_all、plugins.allow_unsigned、cert_renew.*、auth.session_ttl、
+// auth.admin_password_hash；其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
 func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 	next, warnings, err := load(opts)
 	if err != nil {
@@ -176,6 +176,11 @@ func coldChanged(dst, src *Snapshot) []string {
 	}
 	if stringsDiffer(dst.Plugins.Autostart, src.Plugins.Autostart) {
 		keys = append(keys, "plugins.autostart")
+	}
+	if dst.Resources.ResidentMax != src.Resources.ResidentMax {
+		// 槽位配额在 supervisor.New 时固化，运行中改值无法热更；
+		// 保留旧值并提示重启，避免「配置显示 1、实际仍按 2 跑」。
+		keys = append(keys, "resources.resident_max")
 	}
 	return keys
 }

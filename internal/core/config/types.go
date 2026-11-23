@@ -73,6 +73,9 @@ type Resources struct {
 	Defaults Defaults
 	// Enforce 为 false 时只监控不写限额。
 	Enforce bool
+	// ResidentMax 是 resident 插件独占配额上限（默认 2，范围 1–3）。
+	// 等于 max_slots（3）表示放弃槽位保护，仅排障时使用。
+	ResidentMax int
 }
 
 // Plugins 是插件安装与启动配置。
@@ -164,7 +167,7 @@ func Default() *Snapshot {
 			IndexDir: "/var/lib/kore/index",
 		},
 		Log:       Log{Level: "info", Rotate: Rotate{MaxSizeMB: 10, MaxBackups: 5}},
-		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true},
+		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true, ResidentMax: 2},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
 		Security:  Security{LoginRateLimit: RateLimit{Attempts: 5, Window: 60 * time.Second, Lock: 300 * time.Second}},
 		Audit:     Audit{InvokeAll: false},

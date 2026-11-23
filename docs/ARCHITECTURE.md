@@ -117,7 +117,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 | 谁唤醒 lazy | 四种：① bus 转发调用前查 supervisor，未运行 → 冷启动并**排队**（上限 32，超限 `E_RATELIMIT`）；② 事件订阅命中；③ 显式 `enable`；④ **宿主调度器触发**——`cron` 插件写入的 `systemd timer` / `/etc/cron.d/kore-*` / launchd / Task Scheduler 到点调用 `kored invoke <plugin> <method>`，主壳自身**无 ticker** |
 | 空闲判定 | supervisor 记 `last_used_at`；空闲满 **300 s** 进入 drain：停接新调用 → 等在途 ≤2 s → `kore.shutdown` → 5 s → `SIGKILL` |
 | 冷启动互斥 | 同一插件同时只允许 1 次 cold start，其余请求并入等待队列；hello 失败则整队返回 `E_UPSTREAM` |
-| 配额（resident） | **推荐 ≤2 个（`site`+`monitor`，16 MiB）**；硬上限同时 3 个、合计 ≤24 MiB、单个 ≤12 MiB。启用第 4 个时按 LRU 提示"需先停用 <id>"，**不自动踢人** |
+| 配额（resident） | **默认 ≤2 个（`site`+`monitor`，16 MiB，`resources.resident_max=2`）**；总数硬上限 3（resident + 活跃 lazy）、合计 ≤24 MiB、单个 ≤12 MiB。**第 3 个 resident 启用直接拒绝**（`E_RATELIMIT` + 当前 resident 列表），resident **不自动踢人**；lazy 至少保留 1 槽 |
 | 配额（lazy/oneshot） | 不计入常驻配额；但并发冷启动总数 ≤4（防止一次点开 20 个页面把机器打满） |
 | 低配降级 | `resources.profile=compact` 时常驻配额降为 1、合计 ≤12 MiB（见 [COMPATIBILITY.md](./COMPATIBILITY.md) §7） |
 | **M1 范围** | `lifecycle` 三值（`resident`/`lazy`/`oneshot`）解析、校验并落盘；**运行期只实现 `resident`**，遇 `lazy`/`oneshot` 返回 `E_UNSUPPORTED` + message 写明"M2 支持"——契约先定型、能力后补齐，不允许 M1 出现半成品 lazy |
