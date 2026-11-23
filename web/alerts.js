@@ -20,7 +20,7 @@
   var FD_WARN = 56;             // 红线 64
   var DENIED_BURST = 5;         // 5 分钟内 denied > 5 条算激增
   var AUDIT_WINDOW_MS = 5 * 60 * 1000;
-  var HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '能力校验被拒绝' };
+  var HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝' };
   var SEV = { critical: '严重', warning: '警告', info: '提示' };
   var HISTORY_LIMIT = 100;
   var S = { root: null, backdrop: null, panel: null, body: null, head: null,
@@ -148,8 +148,10 @@
       var who = hits.slice(0, 3).map(function (r) {
         return (r.subject || 'unknown') + ' → ' + (r.plugin || '') + (r.target ? '/' + r.target : '');
       }).join('；');
+      var detail = '涉及：' + who;
+      if (action === 'capability.denied') detail = '让管理员在设置里为该插件授权；' + detail;
       push(alerts, 'critical', HIGH_RISK[action] + '（' + hits.length + ' 次）',
-        '涉及：' + who, hits[0].at, 'settings');
+        detail, hits[0].at, 'settings');
     });
     return true;
   }
@@ -188,8 +190,8 @@
     if (!res.ok || !res.data || !res.data.supervisor) return false;
     var resident = Number(res.data.supervisor.resident || 0);
     if (resident >= MAX_SLOTS) {
-      push(alerts, 'warning', '常驻槽位已满（' + resident + ' / ' + MAX_SLOTS + '）',
-        '同时常驻已达硬上限，启用新插件需先停用一个', now(), 'plugins');
+      push(alerts, 'warning', '常驻名额已满（最多 ' + MAX_SLOTS + ' 个插件同时常驻）',
+        '已达到同时常驻上限，启用新插件需先停用一个', now(), 'plugins');
     }
     return true;
   }

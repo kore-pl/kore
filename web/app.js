@@ -533,7 +533,7 @@
     tr.appendChild(cell('版本', plugin.version));
     tr.appendChild(cell('最新版本', latestCell(plugin, upState)));
     tr.appendChild(cell('深度', plugin.depth_level));
-    tr.appendChild(cell('生命周期', plugin.lifecycle));
+    tr.appendChild(cell('运行方式', plugin.lifecycle));
     tr.appendChild(cell('状态', statusTag(pluginStateTag(plugin))));
 
     var ops = el('td', 'cell-ops');
@@ -804,7 +804,7 @@
     var table = el('table', 'plugin-table');
     var thead = el('thead');
     var headRow = el('tr');
-    var cols = ['插件', '版本', '最新版本', '深度', '生命周期', '状态', '操作'];
+    var cols = ['插件', '版本', '最新版本', '深度', '运行方式', '状态', '操作'];
     for (var c = 0; c < cols.length; c++) {
       var th = el('th', null, cols[c]);
       // 状态列表头带 lazy 语义说明：绿=运行中 / 蓝=空闲（正常）/ 灰=已停用 / 红=异常。
@@ -1408,7 +1408,7 @@
   var OV_AUDIT = '/api/v1/audit';
   var OV_ALERT_WINDOW_MS = 5 * 60 * 1000;
   var OV_DENIED_BURST = 5;
-  var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '能力校验被拒绝' };
+  var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝（让管理员在设置里为该插件授权）' };
   var OV_SEV_TEXT = { critical: '严重', warning: '警告', info: '提示' };
 
   function ovNum(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -1540,7 +1540,7 @@
       var info = state.info || {};
       var sup = info.supervisor && typeof info.supervisor === 'object' ? info.supervisor : {};
       if (Number(sup.resident) >= 3) {
-        alerts.push({ severity: 'warning', title: '常驻槽位已满（' + Number(sup.resident) + ' / 3）', time: '' });
+        alerts.push({ severity: 'warning', title: '常驻名额已满（最多 3 个插件同时常驻，当前 ' + Number(sup.resident) + ' 个）', time: '' });
       }
       if (Array.isArray(info.warnings) && info.warnings.length) {
         alerts.push({ severity: 'warning', title: '部分隔离能力不可用，资源限额以观测模式运行', time: '' });

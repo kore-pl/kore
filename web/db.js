@@ -316,7 +316,7 @@
       }
       box.classList.add('is-none');
       badge('PostgreSQL');
-      title('PostgreSQL 实例未配置或不可达');
+      title('PostgreSQL 数据库连接未配置或不可达');
       text(S.instHint || (isMissingPlugin(S.loadError) ? pgHintFor(S.loadError) : '正在读取实例与连接配置…'));
       if (S.autoNotice) add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
       act('btn-primary', '配置连接', function () { openSettings(false); });
@@ -612,9 +612,9 @@
     if (S.slowlogMetaHost) S.slowlogMetaHost.textContent = '';
     resultHost.textContent = '';
     // 实例：下拉切换选中实例；切换后 databases / query / slowlog 都按新实例取数。
-    var instWrap = add(formHost, el('label', null, '实例'));
+    var instWrap = add(formHost, el('label', null, '数据库连接'));
     var instSel = add(instWrap, el('select', null));
-    instSel.setAttribute('aria-label', '切换实例');
+    instSel.setAttribute('aria-label', '切换数据库连接');
     (S.instances || []).forEach(function (inst) {
       var opt = add(instSel, el('option', null,
         inst.name + (inst.reachable ? '' : '（不可达）')));
@@ -749,7 +749,7 @@
     if (!inst) return;
     var statusPanel = add(host, el('section', 'panel'));
     var statusHead = add(statusPanel, el('div', 'panel-head'));
-    add(statusHead, el('span', 'panel-title', '实例详情'));
+    add(statusHead, el('span', 'panel-title', '数据库连接详情'));
     add(statusHead, el('span', 'panel-meta', inst.name === 'default' ? '默认连接' : inst.name));
     S.statusHost = add(statusPanel, el('div', 'db-status'));
     paintStatus();
