@@ -161,19 +161,29 @@
     });
   }
 
-  function procTable(host, procs, err) {
+  function procTable(host, procs, err, opts) {
     host.textContent = '';
     if (err) { add(host, emptyLine('进程读取失败：' + err)); return; }
     if (!procs) { add(host, emptyLine('正在读取进程…')); return; }
     var items = Array.isArray(procs.items) ? procs.items : [];
     if (!items.length) { add(host, emptyLine('无进程数据')); return; }
     add(host, table(['PID', '名称', 'CPU%', '内存', '线程'], items.map(function (p) {
-      return [el('code', 'mon-mono', p.pid), el('span', null, p.comm || '—'),
+      var name = el('span', null, p.comm || '—');
+      if (p.protected) {
+        var lock = add(name, el('span', 'mon-lock', '🔒 保护'));
+        lock.title = '在进程插件的保护名单内，结束进程需要二次确认';
+      }
+      return [el('code', 'mon-mono', p.pid), name,
         num(p.cpu_percent) === null ? '—' : p.cpu_percent.toFixed(1),
         human(p.mem_rss_human, p.mem_rss_bytes), num(p.threads) === null ? '—' : p.threads];
     })));
-    add(host, el('p', 'mon-proc-meta', '共 ' + (num(procs.total) || items.length) + ' 个进程 · 单次采样 ' +
-      (num(procs.sample_interval_ms) || '—') + ' ms · CPU% 按单核归一'));
+    var foot = add(host, el('p', 'mon-proc-meta'), '共 ' + (num(procs.total) || items.length) + ' 个进程 · 单次采样 ' +
+      (num(procs.sample_interval_ms) || '—') + ' ms · CPU% 按单核归一');
+    if (opts && opts.allHref) {
+      var all = add(foot, el('a', 'mon-all', '查看全部 →'));
+      all.href = opts.allHref;
+      all.title = '打开进程页查看全部进程并结束进程';
+    }
   }
 
   function warnings(host, list) {

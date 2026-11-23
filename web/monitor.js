@@ -15,10 +15,11 @@
   var FALLBACK_NOTE = '当前使用内核基础指标，安装 monitor 插件可获得磁盘/网络/温度详情';
   /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。 */
   var THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
+  /* 三条迷你折线：CPU / 内存 / 负载（负载不是百分比，按核数换算参照线）。 */
   var SERIES = [
-    { key: 'cpu_percent', label: 'CPU%', cls: 'mon-line-cpu' },
-    { key: 'memory_percent', label: '内存%', cls: 'mon-line-mem' },
-    { key: 'disk_percent', label: '磁盘%', cls: 'mon-line-disk' }
+    { key: 'cpu_percent', label: 'CPU', unit: '%', cls: 'mon-line-cpu', pct: true },
+    { key: 'memory_percent', label: '内存', unit: '%', cls: 'mon-line-mem', pct: true },
+    { key: 'load1', label: '负载', unit: '', cls: 'mon-line-load', pct: false }
   ];
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
@@ -53,7 +54,16 @@
     '.mon-sort[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
     '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}',
     '.mon-chart-body{padding:8px 16px 12px}',
-    '.mon-chart{display:block;width:100%;height:180px}',
+    '.mon-chart{display:block;width:100%;height:132px}',
+    '.mon-mini{padding:10px 16px 4px}',
+    '.mon-mini-head{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--kore-text-2)}',
+    '.mon-mini-val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
+    '.mon-line-load{stroke:var(--kore-text-3)}',
+    '.mon-threshold{stroke:var(--kore-danger);stroke-width:1;stroke-dasharray:4 3;opacity:.7}',
+    '.mon-all{display:inline-block;min-height:44px;line-height:44px;padding:0 4px;color:var(--kore-info)}',
+    '.mon-lock{margin-left:4px;font-size:11px;color:var(--kore-text-3)}',
+    '.mon-empty-note{padding:12px 16px;color:var(--kore-text-3)}',
+    '@media (max-width:640px){.mon-chart{height:96px}.mon-mini{padding:8px 12px 2px}}',
     '.mon-chart .mon-grid{stroke:var(--kore-border-2);stroke-width:1}',
     '.mon-chart .mon-line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}',
     '.mon-line-cpu{stroke:var(--kore-info)}',
@@ -206,15 +216,15 @@
     if (S.mode !== 'plugin' || !S.box || !S.C) return;
     var gen = S.gen;
     S.procs = null; S.procErr = '';
-    S.C.procTable(S.procBody, S.procs, S.procErr);
+    S.C.procTable(S.procBody, S.procs, S.procErr, { allHref: '#/process' });
     invoke('processes', { limit: 10, sort: S.sort }).then(function (d) {
       if (stale(gen) || S.mode !== 'plugin') return;
       S.procs = d || {};
-      S.C.procTable(S.procBody, S.procs, '');
+      S.C.procTable(S.procBody, S.procs, '', { allHref: '#/process' });
     }, function (err) {
       if (stale(gen) || S.mode !== 'plugin') return;
       S.procs = null; S.procErr = err.message || '未知错误';
-      S.C.procTable(S.procBody, S.procs, S.procErr);
+      S.C.procTable(S.procBody, S.procs, S.procErr, { allHref: '#/process' });
     });
   }
 
@@ -224,66 +234,90 @@
     return n;
   }
 
-  /* 历史曲线：monitor.system.history 是列式数组（timestamps + cpu/memory/load1/disk），
-     直接用 SVG polyline 画，不引任何图表库。 */
-  function chartInto(host, history) {
+  /* 历史曲线：monitor.system.history 是列式数组（timestamps + cpu_percent/memory_percent/load1），
+     三条迷你 SVG 折线自研绘制，不引任何第三方图表库；悬停用 SVG <title> 显示该点数值与时间。 */
+  function fmtPointTime(ms) {
+    var d = new Date(num(ms) === null ? Date.now() : ms);
+    return d.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+  function chartInto(host, history, cores) {
     var ts = history && Array.isArray(history.timestamps) ? history.timestamps : [];
     if (ts.length < 2) {
-      add(host, el('span', 'muted', ts.length
-        ? '已有 1 个采样点，再刷新一次即可连线（默认 60s 一个点）'
-        : '暂无历史采样点，点「刷新」后开始积累（默认 60s 一个点）'));
+      var lack = 2 - ts.length;
+      add(host, el('p', 'mon-empty-note', '正在积累数据（还差 ' + lack + ' 个采样；默认 60s 一个点，点「刷新」后更新）'));
       return;
     }
-    var W = 640, H = 180, PAD = 26;
-    var svg = svgEl('svg', 'mon-chart');
-    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', 'CPU/内存/磁盘历史曲线（最近 ' + ts.length + ' 个采样点）');
-    [0, 25, 50, 75, 100].forEach(function (v) {
-      var y = H - PAD - (H - 2 * PAD) * v / 100, line = svgEl('line', 'mon-grid');
-      line.setAttribute('x1', PAD); line.setAttribute('x2', W - PAD);
-      line.setAttribute('y1', y.toFixed(1)); line.setAttribute('y2', y.toFixed(1));
-      svg.appendChild(line);
-    });
     SERIES.forEach(function (series) {
-      var values = Array.isArray(history[series.key]) ? history[series.key] : [], pts = [], i, v;
-      for (i = 0; i < values.length; i++) {
+      var values = Array.isArray(history[series.key]) ? history[series.key] : [];
+      if (!values.length) return;
+      var latest = num(values[values.length - 1]);
+      var max = series.pct ? 100 : Math.max(1, (num(cores) || 1) * 1.5, latest !== null ? latest * 1.2 : 0);
+      var ref = series.pct ? THRESHOLDS.cpu_percent : (num(cores) || null);
+      var wrap = add(host, el('div', 'mon-mini'));
+      var head = add(wrap, el('div', 'mon-mini-head'));
+      add(head, el('span', null, series.label));
+      var refText = ref === null ? '' : (series.pct ? '阈值 ' + ref + '%' : '阈值 ' + ref + '（' + cores + ' 核）');
+      if (refText) add(head, el('span', 'muted', refText));
+      add(head, el('span', 'mon-mini-val', (latest === null ? '—' : latest.toFixed(1)) + series.unit));
+
+      var W = 640, H = 132, PAD = 22, PLOT = H - 2 * PAD;
+      var svg = svgEl('svg', 'mon-chart');
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', series.label + ' 历史曲线，最近 ' + ts.length + ' 个采样点');
+      [0, 0.5, 1].forEach(function (frac) {
+        var y = H - PAD - PLOT * frac, line = svgEl('line', 'mon-grid');
+        line.setAttribute('x1', PAD); line.setAttribute('x2', W - PAD);
+        line.setAttribute('y1', y.toFixed(1)); line.setAttribute('y2', y.toFixed(1));
+        svg.appendChild(line);
+      });
+      if (ref !== null) {
+        var ty = H - PAD - PLOT * Math.min(1, ref / max), tl = svgEl('line', 'mon-threshold');
+        tl.setAttribute('x1', PAD); tl.setAttribute('x2', W - PAD);
+        tl.setAttribute('y1', ty.toFixed(1)); tl.setAttribute('y2', ty.toFixed(1));
+        svg.appendChild(tl);
+      }
+      var pts = [], i, v;
+      for (i = 0; i < values.length && i < ts.length; i++) {
         v = num(values[i]);
         if (v === null) continue;
-        pts.push((PAD + (W - 2 * PAD) * i / (values.length - 1)).toFixed(1) + ',' +
-          (H - PAD - (H - 2 * PAD) * Math.max(0, Math.min(100, v)) / 100).toFixed(1));
+        var x = PAD + (W - 2 * PAD) * i / Math.max(1, values.length - 1);
+        var y2 = H - PAD - PLOT * Math.max(0, Math.min(max, v)) / max;
+        pts.push(x.toFixed(1) + ',' + y2.toFixed(1));
+        var hit = svgEl('circle', 'mon-hit');
+        hit.setAttribute('cx', x.toFixed(1)); hit.setAttribute('cy', y2.toFixed(1));
+        hit.setAttribute('r', '8'); hit.setAttribute('fill', 'transparent'); hit.setAttribute('pointer-events', 'all');
+        var title = svgEl('title');
+        title.textContent = fmtPointTime(ts[i]) + ' · ' + v.toFixed(1) + series.unit;
+        hit.appendChild(title); svg.appendChild(hit);
       }
-      if (pts.length < 2) return;
-      var poly = svgEl('polyline', 'mon-line ' + series.cls);
-      poly.setAttribute('points', pts.join(' '));
-      svg.appendChild(poly);
+      if (pts.length >= 2) {
+        var poly = svgEl('polyline', 'mon-line ' + series.cls);
+        poly.setAttribute('points', pts.join(' '));
+        svg.appendChild(poly);
+      }
+      add(wrap, svg);
     });
-    add(host, svg);
     var legend = add(host, el('div', 'mon-legend'));
-    SERIES.forEach(function (series) {
-      var item = add(legend, el('span')), swatch = add(item, el('i'));
-      swatch.style.background = 'var(--kore-' + (series.key === 'cpu_percent' ? 'info'
-        : series.key === 'memory_percent' ? 'success' : 'warning') + ')';
-      add(item, el('span', null, series.label));
-    });
-    add(legend, el('span', null, '· 最近 ' + ts.length + ' 点 · 间隔 ' +
-      (num(history.interval_s) === null ? '—' : history.interval_s) + 's'));
+    add(legend, el('span', null, '共 ' + ts.length + ' 点 · 间隔 ' +
+      (num(history.interval_s) === null ? '—' : history.interval_s) + 's · 悬停折线查看数值与时间'));
   }
 
   function chartPanel(d) {
     var p = S.C.panel('历史曲线', null, 'mon-chart-body');
-    chartInto(p.body, d.history || {});
+    chartInto(p.body, d.history || {}, d.cpu && d.cpu.cores);
     return p;
   }
 
-  /* 阈值告警：alerts 由后端按本次 thresholds 计算；超限行左侧红/黄高亮 + 人话 hint。 */
+  /* 阈值告警：alerts 由后端按本次 thresholds 计算；级别色 + 人话 + 怎么办。 */
   function alertPanel(d) {
     var alerts = Array.isArray(d.alerts) ? d.alerts : [];
     var p = S.C.panel('阈值告警', null, 'mon-alert-body');
     if (!alerts.length) {
-      add(p.body, el('span', 'muted', '未超过阈值：CPU / 内存 / 磁盘高于 ' +
-        THRESHOLDS.cpu_percent + '% / ' + THRESHOLDS.memory_percent + '% / ' +
-        THRESHOLDS.disk_percent + '% 时在此提示'));
+      var ok = add(p.body, el('div', 'mon-alert-head'));
+      add(ok, S.C.chip('ok', '全部正常'));
+      add(ok, el('span', 'muted', 'CPU / 内存 / 磁盘均低于 ' + THRESHOLDS.cpu_percent + '% / ' +
+        THRESHOLDS.memory_percent + '% / ' + THRESHOLDS.disk_percent + '%；超过阈值时这里会出现告警与处理建议'));
       return p;
     }
     alerts.forEach(function (a) {
@@ -295,7 +329,7 @@
       add(head, el('span', 'mon-alert-val',
         (num(a.current) === null ? '—' : a.current.toFixed(1)) + '% / 阈值 ' +
         (num(a.threshold) === null ? '—' : a.threshold) + '%'));
-      add(row, el('p', 'mon-alert-hint', a.hint || '超过阈值，请按提示处理'));
+      add(row, el('p', 'mon-alert-hint', a.hint ? '怎么办：' + a.hint : '超过阈值，请检查对应资源占用'));
       add(p.body, row);
     });
     return p;
@@ -325,7 +359,7 @@
     paintSort();
 
     S.procs = null; S.procErr = '';
-    C.procTable(S.procBody, S.procs, S.procErr);
+    C.procTable(S.procBody, S.procs, S.procErr, { allHref: '#/process' });
     loadTemperature(temp.body);
     C.warnings(S.warn, Array.isArray(d.warnings) ? d.warnings : []);
   }
