@@ -28,6 +28,8 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 6. **贡献与治理**：[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — 开源化政策（MIT）、PR / Issue 流程与评审要求。
 7. **安全披露**：[SECURITY.md](SECURITY.md)（根，披露政策）vs [docs/SECURITY.md](docs/SECURITY.md)（设计）——**两者不要混**。
 
+> **接手即读**：[.agents/HANDOFF.md](.agents/HANDOFF.md) — 交接四问（要做什么 / 怎么干 / 干到哪了 / 为什么这么定）各由哪些文件回答、交接卡片模板，以及"会话里说过但没落文件的判断不算数"。
+
 ## 2. 硬门禁（违反任意一条，产物即不成立）
 
 | 编号 | 规则 | 违反后果 | 检查方式 |
@@ -124,6 +126,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - [.agents/README.md](.agents/README.md)（体系与反模式）、[.agents/ROLES.md](.agents/ROLES.md)（6 张角色卡 / 冲突仲裁 / 不可兼任）、[.agents/WORKFLOW.md](.agents/WORKFLOW.md)（Kore Loop 七阶段 / 讨论协议 / 状态机）。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
 - [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/HANDOFF.md](.agents/HANDOFF.md) — 交接规范：四问 → 文件映射、交接卡片六格模板、完成判定与证据硬约束（会话结论不落文件即视为不存在）。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md)（复盘模板 / 里程碑记录 / 反模式）与 [.agents/LOG/](.agents/LOG/)（裁决 / 派发 / 会话台账）——依次回答"教训 / 状态 / 判断"。
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 贡献流程 / 行为准则 / MIT 开源政策 / CI 与模板；[SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）**两者不要混**。
 - [docs/DECISIONS/](docs/DECISIONS/) — ADR：每个不可逆选择的备选对比、后果与复审条件；例 [0018-privilege-model.md](docs/DECISIONS/0018-privilege-model.md)：插件保持低权、root 动作经内核代理（systemd transient unit），非 root `available=false` + 可操作提示，提权审计 fail-closed。
