@@ -19,7 +19,7 @@
 | **升级 kore 自身、备份与恢复状态** | [docs/OPERATIONS.md](docs/OPERATIONS.md) — 升级前备份 + 回滚步骤 |
 | 找某类文档（装插件 / 加固 SSH / 写插件 / 查决策） | [docs/README.md](docs/README.md) — 文档总览，按「我想做什么」组织 |
 
-> 第一次用就只看 `QUICKSTART.md`：构建、最小 `kore.yaml`（管理员口令 + `server.addr: 127.0.0.1:8787`）、启动 `kored`、浏览器访问、首次登录与 CSRF 全部在里面。
+> 第一次用就只看 `QUICKSTART.md`：构建、最小 `kore-quickstart.yaml`（管理员口令 + `server.addr: 127.0.0.1:8787`）、启动 `kored`、浏览器访问、首次登录与 CSRF 全部在里面。
 
 ## 机制上的差异
 

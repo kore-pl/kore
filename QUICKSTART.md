@@ -28,7 +28,7 @@ kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次
 管理员口令（只显示这一次，请立即保存）：Xy7k...（24 字符）
 
 已将口令哈希写入 /绝对路径/kore-quickstart.yaml（权限 0600）
-提示：重启 kored 后生效；忘记口令可再执行 `kored admin-password --set` 重置。
+提示：改 hash 后对后续登录立即生效（已建立的会话不受影响）；重启 kored 最稳妥（会踢掉旧会话）；忘记口令可再执行 `kored admin-password --set` 重置。
 ```
 
 - **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径，相对路径都按当前工作目录归一。
@@ -65,6 +65,8 @@ paths:
   log_dir:   "./kore-log"
 ```
 
+> **`state_dir` 是显式覆盖，不是默认值**：本示例故意把状态目录改到 `./kore-state`；`RUNBOOK`/`OPERATIONS` 里写的 `data/`（portable `<install>/data`、fhs `/var/lib/kore`）才是**默认值**。CLI 与 serve 必须用同一个 `--config`——混用两种路径就会出现两个 `state.db`（事故原文见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §7.2.1）。
+
 > 想先写 yaml 再生成口令也可以：`admin-password --config ./kore-quickstart.yaml` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关——只要和 §3 的 `--config` 是同一个文件。
 
 ### 2.3 首启自动引导（忘了上面那步也不会卡死）
@@ -72,7 +74,7 @@ paths:
 `kored serve` 启动时如果发现「配置文件不存在 或 `auth.admin_password_hash` 为空」，不再只打一条干瘪 WARN：
 
 - **stdin 是终端** → 直接提示输入两次新口令，写入配置文件后用新口令启动；
-- **stdin 不是终端**（systemd / 容器 / 重定向）→ 只打印可操作提示、**不阻塞启动**，避免把服务卡在等输入上。此时面板能打开但登录不了，先离线执行 `kored admin-password --generate --config <与 serve 相同的配置文件>` 再重启即可（TTY 分支直接写入 serve 自己解析的那个文件，不会再出现路径不一致）。
+- **stdin 不是终端**（systemd / 容器 / 重定向）→ 只打印可操作提示、**不阻塞启动**，避免把服务卡在等输入上。此时面板能打开但登录不了，先离线执行 `kored admin-password --generate --config <与 serve 相同的配置文件>`；写完后对**后续登录**立即生效，已建立的会话不受影响，**重启 kored 最稳妥**（会踢掉旧会话）。TTY 分支直接写入 serve 自己解析的那个文件，不会再出现路径不一致。
 
 ## 3. 启动
 

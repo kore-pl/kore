@@ -107,7 +107,7 @@ func runAdminPassword(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "\n管理员口令（只显示这一次，请立即保存）：%s\n", plain)
 	}
 	fmt.Fprintf(stdout, "已将口令哈希写入 %s（权限 0600）\n", path)
-	fmt.Fprintln(stdout, "提示：重启 kored 后生效；忘记口令可再执行 `kored admin-password --set` 重置。")
+	fmt.Fprintln(stdout, "提示：改 hash 后对后续登录立即生效（已建立的会话不受影响）；重启 kored 最稳妥（会踢掉旧会话）；忘记口令可再执行 `kored admin-password --set` 重置。")
 	return exitOK
 }
 

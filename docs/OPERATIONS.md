@@ -58,7 +58,8 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo OK
 | --- | --- | --- |
 | `<data>/state.db` | 插件登记、启用状态、scheduler 任务、会话、审计 | **必须备份**；丢了要重装/重配全部插件与任务 |
 | `<data>/plugins/<id>/<version>/` | 已装插件的二进制与 `info.json` | 可重装（需对应 dist + 索引），但离线环境等于丢失 |
-| `<install>/config/config.yaml` | 监听地址、口令哈希、路径 | **必须备份**；丢了要重设管理员口令（当前首启 bootstrap 另有已知问题，见 task-170） |
+| `<install>/config/config.yaml`（portable 默认；设了 `KORE_HOME` 即 `$KORE_HOME/config/config.yaml`） | 监听地址、口令哈希、路径 | **必须备份**；丢了要重设管理员口令（首启 bootstrap 见 §4：TTY 可交互设置，非 TTY 只提示不阻塞） |
+| `/etc/kore/config.yaml`（fhs / 发行版打包） | 同上（监听地址、口令哈希、路径） | **必须备份**，同上 |
 | `<data>/credentials/` | 凭据库（如插件凭据） | 必须备份，否则插件连接信息要重填 |
 | `<data>/ssl/`、`<data>/backups/` | 站点证书、备份产物 | 视业务；丢了证书要重签、备份要重做 |
 | `<data>/changes.jsonl` | 宿主变更账本（ADR-0023） | 卸载时无法按账本回滚，建议一起备份 |
@@ -128,10 +129,14 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo restored_ok
 
 ### 3.1 备份/恢复演练（2026-11-23，/tmp/kore-ops，port 18897）
 
+> **装插件的正确姿势（2026-11-23 晚修正，替代下表旧写法）**：`kored install` 与 `kored serve` **独占同一个 `state.db`**，所以**必须先停服务**，而且 `install` **必须带与 `serve` 相同的 `--config`**。
+> 依据：`kored install --help` 原文「install 与 serve 独占同一 state.db…CLI install 仅离线使用（在线运行会撞锁 exit 3）」；fail-closed 下未显式给 `--config` 且配置文件不存在 → 退出 2。
+> 正确序列：停服务（portable 前台 Ctrl-C 退出 `kored serve`；systemd 形态 `systemctl stop kore.service`）→ `kored install --config <与 serve 同一个> --package <插件包>` → 再起 `serve`。完整说明见 [RUNBOOK.md](./RUNBOOK.md) §6.1.1。
+
 | 步骤 | 命令/动作 | 结果 |
 | --- | --- | --- |
 | 起实例 | `KORE_HOME=/tmp/kore-ops bin/kored serve` | `/-/healthz` 200；登录 200 |
-| 装 2 插件 | `kored install --package file-0.3.1.tar.gz`、`cron-0.4.1.tar.gz` | 均 `installed`；`GET /plugins` 显示 `enabled=true`（文件插件 lazy stopped 正常） |
+| 装 2 插件 | `kored install --package file-0.3.1.tar.gz`、`cron-0.4.1.tar.gz` | 均 `installed`；`GET /plugins` 显示 `enabled=true`（文件插件 lazy stopped 正常）。**（已过期，见上：服务在跑时该写法会撞锁 exit 3；现在缺 `--config` 还会先退出 2）** |
 | 建配置 | `POST /api/v1/scheduler/tasks`（`ops-journey`, `*/5 * * * *`） | 200，返回 `tsk-d9f41957ed1d2bb3` |
 | 备份 | 停服务 → `tar -C /tmp/kore-ops -czf /tmp/kore-ops-backup.tgz bin config data` | 归档 11 MiB，`gzip -t` 通过 |
 | 灾难 | `rm -rf /tmp/kore-ops` | 目录不存在（模拟全损） |
@@ -146,7 +151,7 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo restored_ok
 - **跨 `SchemaVersion` 迁移未验证**：当前仓库没有迁移器；若未来 bump 版本，本文 §1.2 的「直接读」结论需要重测。
 - **在线一致性备份未实现**：没有 bbolt 快照入口，只能停服务备份；热备实验不构成保证。
 - **fhs 形态的 root/属主恢复未实测**：本文命令给了 `chown`，但本次只在 portable（同 uid）验证。
-- **首启口令 bootstrap 仍不可用**（`task-170` 在修）：恢复后能登录的前提是 `config.yaml` 里有 `auth.admin_password_hash`；只有 state.db 没有 config 时无法登录。
+- **首启口令 bootstrap 已实现**（`cmd/kored/admin_password.go` 的 `firstRunAuthGuide`，由 `cmd/kored/serve.go:26` 在启动时调用）：**stdin 是终端时直接交互输入两次新口令，写进 serve 自己解析的那个配置文件**；**stdin 不是终端（systemd / 容器 / 重定向）只打印可操作提示、不阻塞启动**。恢复后能登录的前提仍是 `config.yaml` 里有 `auth.admin_password_hash`；只有 state.db 没有 config 时无法登录（此时离线执行一次 `kored admin-password --generate --config <与 serve 相同>` 补上）。
 
 ## 5. 下一步看哪里
 
