@@ -25,6 +25,7 @@
     'nav.runtimes': 'Runtimes',
     'nav.integrity': 'Integrity',
     'nav.container': 'Containers',
+    'nav.appdeploy': 'App Deploy',
     'nav.group.ops': 'Operations',
     'nav.group.biz': 'Services',
     'nav.group.res': 'Resources',
