@@ -40,6 +40,17 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), pluginActorKey{}, actor)))
 				return
 			}
+			// 本机免密（ADR-0041）：UDS（文件系统权限即认证）与 loopback TCP 跳过会话
+			// 鉴权；身份不合规的 UDS 对端回 403 EACCES（不是 401，也不是静默放行）。
+			// TCP 非 loopback 走下面的原有会话校验，一行都不放开。
+			if local, blocked := s.resolveLocal(r); blocked {
+				writeLocalDenied(w)
+				return
+			} else if local.isLocal() {
+				s.noteLocalAccess(r, local)
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localAccessKey{}, local)))
+				return
+			}
 			if _, err := s.sessionFrom(r); err != nil {
 				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 				return
@@ -143,6 +154,13 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// UDS 免密请求豁免 CSRF：浏览器没有 unix socket 通道，跨站请求打不到这里，
+		// 认证由文件系统权限（0600 socket）承担。loopback TCP **不豁免**——浏览器
+		// 就在本机，SameSite 挡不住同站跨源，双提交必须照做。
+		if local, _ := s.resolveLocal(r); local.channel == localChannelUnix {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// 插件 bearer 身份不走 cookie，天然无 CSRF 面（withAuth 会校验 token）。
 		if isRootActionPath(r.URL.Path) && r.Header.Get(authorizationHeader) != "" {
 			next.ServeHTTP(w, r)
@@ -206,7 +224,7 @@ func (s *Server) auditDenied(subject, plugin, target, reason string) {
 	s.noteDeniedAlert(subject, plugin, target, reason)
 }
 
-// sessionFrom 从 cookie 取 token 并校验，返回会话视图。
+// sessionFrom 从 cookie 取 token 并校验，返回会话视图（不续期）。
 func (s *Server) sessionFrom(r *http.Request) (auth.Session, error) {
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil {

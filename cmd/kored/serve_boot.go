@@ -96,6 +96,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		slog.Error("HTTP 监听失败", "err", err)
 		return nil, exitListen
 	}
+	enforceSocketPerms(socketPath(app))
 	return server, exitOK
 }
 
@@ -302,4 +303,25 @@ func loginLimiter(cfg config) *auth.LoginLimiter {
 	}
 	r := cfg.snapshot.Security.LoginRateLimit
 	return auth.NewLoginLimiter(r.Attempts, r.Window, r.Lock)
+}
+
+// enforceSocketPerms 把主 socket 权限收敛到 0600（ADR-0041）：socket 是"本机即管理员"
+// 的唯一凭据载体，组/其他用户可读写等于把管理员权限发给全机。属主保持运行用户，
+// 绝不 chown 成 root（root 只是平台层的额外 permit 项，不是必需属主）。
+func enforceSocketPerms(path string) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("读取 socket 权限失败", "socket", path, "err", err)
+		return
+	}
+	mode := fi.Mode().Perm()
+	if mode == 0o600 {
+		slog.Debug("socket 权限符合预期", "socket", path, "mode", fmt.Sprintf("%04o", mode))
+		return
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		slog.Error("收紧 socket 权限失败", "socket", path, "from", fmt.Sprintf("%04o", mode), "err", err)
+		return
+	}
+	slog.Warn("socket 权限已收紧到 0600", "socket", path, "from", fmt.Sprintf("%04o", mode), "to", "0600")
 }

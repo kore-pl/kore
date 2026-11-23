@@ -161,6 +161,11 @@ var adminCapabilities = []string{
 // 全权处理；authorizeInvoke 会在首次检查时打一次 WARN 说明降级。多用户接入时
 // 由装配层注入 CapabilityResolver 覆盖本函数即可生效。
 func defaultCapabilityResolver(r *http.Request) (string, []string) {
+	// 本机免密（UDS / loopback TCP）没有会话 cookie，按本机管理员给全权；
+	// 否则管理端点会在 withAuth 放行之后又被这里判成"未授权"（ADR-0041）。
+	if local, ok := localAccessFrom(r.Context()); ok && local.isLocal() {
+		return "admin", adminCapabilities
+	}
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil || cookie.Value == "" {
 		return "", nil
@@ -329,6 +334,11 @@ func New(opts Options, transport platform.Transport) *Server {
 		Handler:           server.withRequestID(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// 把 net.Conn 带进请求上下文：UDS 免密要拿它做 SO_PEERCRED 校验，
+		// 同时按连接记住"是否已记过 local.access"（只记首次连接 + 写操作）。
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return context.WithValue(ctx, connKey{}, &connInfo{conn: conn})
+		},
 	}
 	// 独立通道：单独一个 http.Server，处理器只认插件 root-action（channel.go）。
 	// ConnContext 把 net.Conn 带进请求上下文，供 SO_PEERCRED 双校验使用。
