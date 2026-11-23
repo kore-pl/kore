@@ -115,22 +115,53 @@ fi
 # 精确字面量豁免：useradd 的系统账户参数名 --no-create-home 里含 "create"，
 # 但它是工具参数名、不是业务动词。只把这个完整 token 从待匹配文本里摘掉；
 # create|restart|deploy 的整词匹配强度与其它文本一字不动。
-# 精确词根豁免（2026-11-23，与 ADR-0028 同款做法）：内核升级后必须重启的是「自己」的
-# unit，这是内核自身的生命周期原语（与 privilege 同层），不是插件的业务动作。
-# 只对**自管理两处**把 restart 字面量/标识符换成中性占位，其它目录的 restart 匹配强度一字不动。
+#
+# 精确 token 豁免（2026-11-23，依据：.agents/LOG/DECISIONS.md 2026-11-23 条
+# 「thin-shell restart 精确豁免（自升级/自卸载两文件）」；沿用 ADR-0028 对 filewrite
+# 的 Backup 先例，但粒度更严）：内核升级后必须重启的是**自己**的 unit，
+# 属内核生命周期原语（与 privilege 同层），不是插件的业务动作。豁免边界：
+#   1) 文件：只认 cmd/kored/upgrade.go 与 internal/core/privilege/systemd.go 两个精确路径；
+#   2) 词：只把下列**已知自管理 token**换成中性占位，不做整文件 restart→relaunch 替换；
+#      替换后仍残留的 restart 会照常被 VERB_RE 判 FAIL（fail-closed，不是整文件放行）；
+#   3) 交叉约束：这两个文件出现 `kore-plugin-`（插件 unit 前缀）即单独 FAIL——内核自管理
+#      文件不得承载插件生命周期，restart 豁免不能顺带放过「重启某个插件的 unit」。
+# 因此将来在这两个文件里新增任何非自管理 restart 用法，门禁仍会 FAIL 并强制复核。
+SELF_MGMT_FILE_RE='^\.\/(cmd\/kored\/upgrade\.go|internal\/core\/privilege\/systemd\.go):'
 VERB_SCAN=$(printf '%s\n' "$CODE" | sed 's/--no-create-home//g' | awk '
-/^\.\/cmd\/kored\/upgrade\.go:/ || /^\.\/internal\/core\/privilege\/systemd\.go:/ {
-  gsub(/restart/, "relaunch")
-  gsub(/Restart/, "Relaunch")
-}
-{ print }')
+{
+  if ($0 ~ /^\.\/cmd\/kored\/upgrade\.go:/) {
+    gsub(/submitUpgradeRestart/, "submitUpgradeRelaunch")
+    gsub(/RestartUnitNoBlock/, "RelaunchUnitNoBlock")
+    gsub(/noRestart/, "noRelaunch")
+    gsub(/--no-restart/, "--no-relaunch")
+    gsub(/"no-restart"/, "\"no-relaunch\"")
+    gsub(/deps\.restart/, "deps.relaunch")
+    gsub(/restart[[:space:]]+func\(/, "relaunch func(")
+    gsub(/restart:/, "relaunch:")
+    gsub(/systemctl --no-block restart/, "systemctl --no-block relaunch")
+    gsub(/systemctl restart/, "systemctl relaunch")
+  }
+  if ($0 ~ /^\.\/internal\/core\/privilege\/systemd\.go:/) {
+    gsub(/BuildRestartArgv/, "BuildRelaunchArgv")
+    gsub(/RestartUnitNoBlock/, "RelaunchUnitNoBlock")
+    gsub(/"restart"/, "\"relaunch\"")
+  }
+  print
+}')
 VERB_RE='(^|[^[:alnum:]_])(create|restart|deploy)([^[:alnum:]_]|$)'
 VERB_HITS=$(printf '%s\n' "$VERB_SCAN" | grep -iE -- "$VERB_RE" || true)
-if [ -z "$VERB_HITS" ]; then
+PLUGIN_UNIT_HITS=$(printf '%s\n' "$VERB_SCAN" | grep -E -- "$SELF_MGMT_FILE_RE" | grep -E 'kore-plugin-' || true)
+if [ -z "$VERB_HITS" ] && [ -z "$PLUGIN_UNIT_HITS" ]; then
   ok "业务动作词（整词匹配，注释已剥离）：0 命中（create/restart/deploy）"
 else
-  bad "可执行代码出现业务动作词（整词匹配）"
-  printf '%s\n' "$VERB_HITS" | head -10 | while IFS= read -r l; do detail "$l"; done
+  if [ -n "$VERB_HITS" ]; then
+    bad "可执行代码出现业务动作词（整词匹配；豁免只覆盖两个自管理文件的已知 token）"
+    printf '%s\n' "$VERB_HITS" | head -10 | while IFS= read -r l; do detail "$l"; done
+  fi
+  if [ -n "$PLUGIN_UNIT_HITS" ]; then
+    bad "自管理豁免文件出现插件 unit 前缀（kore-plugin-）：豁免只覆盖内核自重启，不得承载插件生命周期"
+    printf '%s\n' "$PLUGIN_UNIT_HITS" | head -10 | while IFS= read -r l; do detail "$l"; done
+  fi
 fi
 
 printf '\n'
