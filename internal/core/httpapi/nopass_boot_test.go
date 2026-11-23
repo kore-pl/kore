@@ -126,6 +126,51 @@ func TestLoopbackKeepsCSRFUDSExempt(t *testing.T) {
 	}
 }
 
+// TestSessionSlideRenewsCookie 覆盖滑动续期：剩余 <24h 时重发 Set-Cookie。
+func TestSessionSlideRenewsCookie(t *testing.T) {
+	srv := newLocalTestServer(t, time.Hour) // 1h < 24h 阈值 → 每次鉴权都续期
+	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"password":"`+localTestPassword+`"}`))
+	login.RemoteAddr = "203.0.113.9:5555"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, login)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("登录应成功，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	var token string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		t.Fatal("登录未下发会话 cookie")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
+	req.RemoteAddr = "203.0.113.9:5555"
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("带 cookie 请求应 200，实际 %d", rec2.Code)
+	}
+	var renewed *http.Cookie
+	for _, c := range rec2.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			renewed = c
+		}
+	}
+	if renewed == nil {
+		t.Fatal("剩余寿命低于阈值时应重发 Set-Cookie（滑动续期）")
+	}
+	if renewed.Value != token {
+		t.Fatal("续期不得更换 token")
+	}
+	if renewed.MaxAge != int(time.Hour.Seconds()) {
+		t.Fatalf("续期 cookie Max-Age 应为 %d，实际 %d", int(time.Hour.Seconds()), renewed.MaxAge)
+	}
+}
+
 // hashForLocalTest 生成测试口令哈希；localTestPassword 与之一致。
 const localTestPassword = "nopass-test-password"
 

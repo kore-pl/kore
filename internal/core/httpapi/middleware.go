@@ -51,7 +51,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localAccessKey{}, local)))
 				return
 			}
-			if _, err := s.sessionFrom(r); err != nil {
+			if _, err := s.authenticate(w, r); err != nil {
 				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 				return
 			}
@@ -231,6 +231,30 @@ func (s *Server) sessionFrom(r *http.Request) (auth.Session, error) {
 		return auth.Session{}, auth.ErrNoSession
 	}
 	return s.auth.Validate(cookie.Value)
+}
+
+// authenticate 校验会话并做滑动续期（ADR-0041）：剩余 < 24h 时写回过期时刻并
+// 重发 Set-Cookie，面板连续使用就不会被 12h/7d 的固定过期踢下线。
+// 续期失败只记 WARN、不拒绝请求——鉴权已通过，不能因写库抖动把用户挡在外面。
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (auth.Session, error) {
+	cookie, err := r.Cookie(auth.CookieName)
+	if err != nil {
+		return auth.Session{}, auth.ErrNoSession
+	}
+	sess, err := s.auth.Validate(cookie.Value)
+	if err != nil {
+		return auth.Session{}, err
+	}
+	next, renewed, slideErr := s.auth.Slide(sess)
+	if slideErr != nil {
+		slog.Warn("会话滑动续期失败", "err", slideErr)
+		return sess, nil
+	}
+	if renewed {
+		s.auth.SetCookie(w, cookie.Value)
+		return next, nil
+	}
+	return sess, nil
 }
 
 // reqIDKey 是请求 id 在 context 中的私有键。

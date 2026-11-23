@@ -49,7 +49,7 @@ func TestMissingFileUsesDefaults(t *testing.T) {
 	if filepath.Base(snap.Paths.StateDir) != "data" || filepath.Base(snap.Paths.PluginDir) != "plugins" {
 		t.Fatalf("portable 默认目录不匹配: state_dir=%q plugin_dir=%q", snap.Paths.StateDir, snap.Paths.PluginDir)
 	}
-	if snap.Auth.SessionTTL != 12*time.Hour {
+	if snap.Auth.SessionTTL != 7*24*time.Hour {
 		t.Fatalf("默认 TTL 不匹配: %s", snap.Auth.SessionTTL)
 	}
 	if len(warnings) == 0 || !strings.Contains(warnings[0].String(), "不存在") {

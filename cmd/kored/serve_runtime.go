@@ -135,6 +135,13 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}
+	// 改口令 → 全局吊销（ADR-0041）：`kored admin-password set` 只改配置哈希，
+	// 旧会话仍在 bbolt 里；这里按口令指纹比对，变化即删除全部会话。
+	if revoked, err := svc.auth.ReconcilePasswordFingerprint(); err != nil {
+		slog.Error("口令指纹比对失败，旧会话未被吊销", "err", err)
+	} else if revoked {
+		slog.Info("管理员口令已变更，全部旧会话已吊销")
+	}
 	// 卸载能力：刻意用可选接口注入，Backend 接口本身不扩方法（不涟漪测试替身）。
 	svc.backend.uninstaller = func(ctx context.Context, id string) (httpapi.UninstallOutcome, error) {
 		return svc.uninstallPlugin(ctx, cfg, id)

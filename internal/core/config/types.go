@@ -164,7 +164,7 @@ func defaultsFor(profile string) *Snapshot {
 		Profile: profile,
 		Server:  Server{Socket: socket},
 		Auth: Auth{
-			SessionTTL:   12 * time.Hour,
+			SessionTTL:   7 * 24 * time.Hour, // ADR-0041：面板默认 7 天；显式配置优先
 			CookieSecure: "auto",
 		},
 		Paths:     paths,
