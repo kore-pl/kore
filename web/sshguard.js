@@ -204,9 +204,9 @@
     if (!a.failed) verdict = '这个窗口内没有登录失败记录：看起来没人在试密码。';
     else {
       var top = tops[0];
-      var share = top && a.failed ? Math.round((top.count / a.failed) * 100) : 0;
+      var share = top && a.failed ? Math.round((top.failed / a.failed) * 100) : 0;
       if (tops.length <= 2 && share >= 60)
-        verdict = '失败高度集中在 ' + tops.length + ' 个 IP（最高 ' + top.address + ' 占 ' + share + '%）：像定向暴力破解，建议直接封这两个地址。';
+        verdict = '失败高度集中在 ' + tops.length + ' 个 IP（最高 ' + top.ip + ' 占 ' + share + '%）：像定向暴力破解，建议直接封这两个地址。';
       else if (tops.length >= 10)
         verdict = '失败来自 ' + tops.length + ' 个以上不同 IP、单 IP 占比不高：像分布式扫描/撞库，建议按 Top IP 逐个封禁并确认密码策略。';
       else verdict = '失败分散在 ' + tops.length + ' 个 IP：' + (a.failed > 100 ? '量偏大，建议封 Top IP。' : '量不大，先观察。');
@@ -226,9 +226,9 @@
     var tbody = add(table, el('tbody'));
     tops.slice(0, 10).forEach(function (item) {
       var tr = add(tbody, el('tr'));
-      add(tr, el('td', 'sg-mono', item.address)).setAttribute('data-label', '来源 IP');
-      add(tr, el('td', 'sg-num', String(item.count))).setAttribute('data-label', '失败次数');
-      var pct = a.failed ? Math.round((item.count / a.failed) * 100) : 0;
+      add(tr, el('td', 'sg-mono', item.ip || '—')).setAttribute('data-label', '来源 IP');
+      add(tr, el('td', 'sg-num', String(item.failed || 0))).setAttribute('data-label', '失败次数');
+      var pct = a.failed ? Math.round(((item.failed || 0) / a.failed) * 100) : 0;
       var bar = add(tr, el('td', null)); bar.setAttribute('data-label', '占比');
       var track = add(bar, el('span', 'sg-bar')); var fill = add(track, el('span', 'sg-bar-fill'));
       fill.style.width = Math.max(4, Math.min(100, pct)) + '%';
@@ -237,7 +237,7 @@
       var btn = add(ops, el('button', 'btn btn-ghost', '封禁此 IP')); btn.type = 'button';
       btn.disabled = S.readOnly || S.busy;
       if (S.readOnly) btn.title = S.readOnlyWhy;
-      on(btn, function () { S.ipInput.value = item.address; submitBan(); });
+      on(btn, function () { S.ipInput.value = item.ip || ''; submitBan(); });
     });
   }
 
