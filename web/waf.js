@@ -249,7 +249,7 @@
   // hidePanels：插件未安装时把「模式/名单/添加/规则/日志」面板整体收起。
   function hidePanels(hidden) {
     var flag = hidden === undefined ? true : !!hidden;
-    [S.modePanel, S.bansPanel, S.formPanel, S.rulesPanel, S.logsPanel].forEach(function (p) {
+    [S.modePanel, S.bansPanel, S.formPanel, S.rulesPanel, S.addRulePanel, S.logsPanel].forEach(function (p) {
       if (p) p.hidden = flag;
     });
   }
@@ -428,38 +428,151 @@
     });
   }
 
-  // ---- 防护规则（只读）----
+  // ---- 防护规则（内置只可启停；自定义可增删启停）----
+  // 后端契约（waf 0.4.1+）：waf.rules 额外返回 chain[]（name/expr/action/enabled/builtin/handle）；
+  // rule.add 只收 {name, expr, action}，expr 必须命中受控匹配器白名单（不接受自由 nft 语法）；
+  // rule.remove 对内置规则一律 E_INVALID（只能 rule.toggle enabled=false）。
+  var MATCHERS = [
+    { v: 'ip saddr', label: '来源 IPv4（ip saddr）', hint: 'IPv4 或网段，如 203.0.113.7 / 203.0.113.0/24', need: true },
+    { v: 'ip6 saddr', label: '来源 IPv6（ip6 saddr）', hint: 'IPv6 或网段，如 2001:db8::1 / 2001:db8::/32', need: true },
+    { v: 'tcp dport', label: 'TCP 端口（tcp dport）', hint: '端口或逗号列表，如 22 或 80,443', need: true },
+    { v: 'udp dport', label: 'UDP 端口（udp dport）', hint: '端口或逗号列表，如 53 或 53,123', need: true },
+    { v: 'ct state', label: '连接状态（ct state）', hint: 'new / established / related / invalid，可逗号组合', need: true },
+    { v: 'tcp flags syn', label: 'SYN 扫描（tcp flags syn）', hint: '这个匹配器不需要值', need: false }
+  ];
+  function matcherDef(v) {
+    for (var i = 0; i < MATCHERS.length; i++) if (MATCHERS[i].v === v) return MATCHERS[i];
+    return MATCHERS[0];
+  }
+  function ruleFailure(err, verb) {
+    var msg = (err && err.message) || '';
+    if (err && err.code === 'E_UNSUPPORTED' && /匹配器|白名单|不受控|expr/i.test(msg)) {
+      return '这个匹配条件暂不支持：' + msg + '。可用的是：ip saddr / ip6 saddr / tcp dport / udp dport / ct state / tcp flags syn。';
+    }
+    if (/内置/.test(msg)) return '内置规则只能停用不能删除（用「停用」按钮）。';
+    if (err && err.code === 'E_INVALID') return '参数不合法：' + msg;
+    return failureText(err, verb);
+  }
+  function toggleRule(name, enabled, btn) {
+    if (S.rBusy) return;
+    S.rBusy = true; if (btn) btn.disabled = true;
+    S.rMsg = (enabled ? '正在启用 ' : '正在停用 ') + name + '…'; S.rTone = ''; paintRuleMsg();
+    invoke('waf.rule.toggle', { name: name, enabled: enabled }).then(function (d) {
+      if (S.destroyed) return;
+      S.rBusy = false;
+      S.rMsg = (enabled ? '已启用 ' : '已停用 ') + name + (d && d.verified ? '（已回读确认）' : '（未回读确认，请刷新核对）');
+      S.rTone = d && d.verified ? 'ok' : 'warn';
+      paintRuleMsg(); loadRules(); loadStatus();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.rBusy = false; S.rMsg = ruleFailure(err, enabled ? '启用' : '停用'); S.rTone = 'fail';
+      paintRuleMsg(); paintRules();
+    });
+  }
+  function removeRule(name, btn) {
+    if (S.rBusy) return;
+    S.rBusy = true; if (btn) btn.disabled = true;
+    S.rMsg = '正在删除 ' + name + '…'; S.rTone = ''; paintRuleMsg();
+    invoke('waf.rule.remove', { name: name }).then(function (d) {
+      if (S.destroyed) return;
+      S.rBusy = false;
+      S.rMsg = '已删除 ' + name + (d && d.verified ? '（已回读确认）' : '');
+      S.rTone = 'ok'; paintRuleMsg(); loadRules();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.rBusy = false; S.rMsg = ruleFailure(err, '删除'); S.rTone = 'fail';
+      paintRuleMsg(); paintRules();
+    });
+  }
+  function submitRule() {
+    if (S.rBusy || S.locked) return;
+    var name = (S.mName.value || '').trim();
+    var def = matcherDef(S.mMatcher.value);
+    var value = (S.mValue.value || '').trim();
+    if (!/^[a-z][a-z0-9-]{1,30}$/.test(name)) {
+      S.rMsg = '规则名要小写字母开头，只用小写字母、数字和连字符（2–31 位），例如 allow-office'; S.rTone = 'fail';
+      paintRuleMsg(); S.mName.focus(); return;
+    }
+    if (def.need && !value) { S.rMsg = '请填「' + def.label + '」的值：' + def.hint; S.rTone = 'fail'; paintRuleMsg(); S.mValue.focus(); return; }
+    var expr = def.need ? (def.v + ' ' + value) : def.v;
+    var action = S.mAction.value;
+    S.rBusy = true; S.mBtn.disabled = true;
+    S.rMsg = '正在新增规则 ' + name + '…'; S.rTone = ''; paintRuleMsg();
+    invoke('waf.rule.add', { name: name, expr: expr, action: action }).then(function (d) {
+      if (S.destroyed) return;
+      S.rBusy = false; S.mBtn.disabled = false;
+      if (d && d.verified) {
+        S.rMsg = '已新增规则 ' + name + '（' + expr + ' → ' + action + '），已回读确认。';
+        S.rTone = 'ok'; S.mName.value = ''; S.mValue.value = '';
+      } else {
+        S.rMsg = '规则已提交，但没有通过回读校验' + (d && d.hint ? '：' + d.hint : '（请刷新核对）');
+        S.rTone = 'warn';
+      }
+      paintRuleMsg(); loadRules(); loadStatus();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.rBusy = false; S.mBtn.disabled = false;
+      S.rMsg = ruleFailure(err, '新增规则'); S.rTone = 'fail';
+      paintRuleMsg(); paintRules();
+    });
+  }
+  function paintRuleMsg() {
+    if (!S.rMsgHost) return;
+    S.rMsgHost.textContent = S.rMsg || '';
+    S.rMsgHost.className = 'waf-msg' + (S.rTone === 'fail' ? ' is-fail' : (S.rTone === 'ok' ? ' is-ok' : ''));
+  }
   function paintRules() {
     if (S.notInstalled) { if (S.rulesHost) S.rulesHost.textContent = ''; return; }
     if (!S.rulesHost) return;
     S.rulesHost.textContent = '';
-    S.rulesMeta.textContent = S.rulesLoaded ? (S.rulesCount + ' 条规则') : '';
-    if (S.rulesError) {
-      S.rulesHost.appendChild(notice('规则读取失败：' + S.rulesError, 'fail'));
-      return;
-    }
+    S.rulesMeta.textContent = S.rulesLoaded ? (S.chain.length ? (S.chain.length + ' 条（' + S.chain.filter(function (r) { return r.builtin; }).length + ' 内置）') : (S.rulesCount + ' 条规则')) : '';
+    if (S.rulesError) { S.rulesHost.appendChild(notice('规则读取失败：' + S.rulesError, 'fail')); return; }
     if (!S.rulesLoaded) { add(S.rulesHost, el('div', 'waf-loading', '正在读取规则…')); return; }
-    if (!S.rules.length) {
-      S.rulesHost.appendChild(emptyBlock(
-        '当前没有装载任何规则。切到「只记录不拦截」或「直接拦截」后会装载 4 条基础规则' +
-        '（封禁名单 IPv4/IPv6、SYN 扫描限速、单 IP 并发上限）。'));
+    if (S.rulesErrorText) S.rulesHost.appendChild(notice(S.rulesErrorText, 'fail'));
+    if (S.chain.length) {
+      var wrap = add(S.rulesHost, el('div', 'plugin-table-wrap'));
+      var table = add(wrap, el('table', 'plugin-table waf-table'));
+      var htr = add(add(table, el('thead')), el('tr'));
+      ['规则名', '匹配条件', '动作', '类型', '状态', '操作'].forEach(function (t) { add(htr, el('th', null, t)); });
+      var tbody = add(table, el('tbody'));
+      S.chain.forEach(function (r) {
+        var tr = add(tbody, el('tr'));
+        add(tr, el('td', 'waf-rule-text', r.name || '—')).setAttribute('data-label', '规则名');
+        add(tr, el('td', 'waf-rule-text', r.expr || '—')).setAttribute('data-label', '匹配条件');
+        add(tr, el('td', null, r.action === 'drop' ? '拦截' : (r.action === 'accept' ? '放行' : (r.action || '—')))).setAttribute('data-label', '动作');
+        var typeTd = add(tr, el('td', null)); typeTd.setAttribute('data-label', '类型');
+        typeTd.appendChild(chip(r.builtin ? 'na' : 'ok', r.builtin ? '内置' : '自定义'));
+        add(tr, el('td', null, r.enabled === false ? '已停用' : '启用中')).setAttribute('data-label', '状态');
+        var ops = add(tr, el('td', 'waf-ops cell-ops')); ops.setAttribute('data-label', '操作');
+        var tb = add(ops, el('button', 'btn btn-ghost', r.enabled === false ? '启用' : '停用')); tb.type = 'button';
+        tb.disabled = S.rBusy || S.locked;
+        if (S.locked) tb.title = '需要 root 提权通道（见状态卡）';
+        on(tb, function () { toggleRule(r.name, r.enabled === false, tb); });
+        var db = add(ops, el('button', 'btn waf-danger', '删除')); db.type = 'button';
+        db.disabled = !!r.builtin || S.rBusy || S.locked;
+        db.title = r.builtin ? '内置规则只能停用不能删除' : (S.locked ? '需要 root 提权通道（见状态卡）' : '删除这条自定义规则');
+        on(db, function () { removeRule(r.name, db); });
+      });
+      add(S.rulesHost, el('p', 'field-hint', '内置规则是基础防护（封禁名单 / SYN 限速 / 并发上限），只能停用不能删除；自定义规则可删可启停。'));
       return;
     }
-    var scroll = add(S.rulesHost, el('div', 'waf-table-wrap'));
-    var table = add(scroll, el('table', 'waf-table'));
-    var htr = add(add(table, el('thead')), el('tr'));
-    ['#', '规则内容', '动作', '命中包数', '字节数'].forEach(function (t) { add(htr, el('th', null, t)); });
-    var tbody = add(table, el('tbody'));
+    if (!S.rules.length) {
+      S.rulesHost.appendChild(emptyBlock('当前没有装载任何规则。切到「只记录不拦截」或「直接拦截」后会装载 4 条内置基础规则。'));
+      return;
+    }
+    var scroll2 = add(S.rulesHost, el('div', 'waf-table-wrap'));
+    var t2 = add(scroll2, el('table', 'waf-table'));
+    var h2 = add(add(t2, el('thead')), el('tr'));
+    ['#', '规则内容', '动作', '命中包数', '字节数'].forEach(function (t) { add(h2, el('th', null, t)); });
+    var b2 = add(t2, el('tbody'));
     S.rules.forEach(function (rule) {
-      var tr = add(tbody, el('tr'));
+      var tr = add(b2, el('tr'));
       add(tr, el('td', 'waf-num', '#' + (rule.handle || '?'))).setAttribute('data-label', '序号');
       var ruleCell = add(tr, el('td', 'waf-rule-text'));
       ruleCell.setAttribute('data-label', '规则内容');
       add(ruleCell, el('div', null, rulePurpose(rule.summary)));
       add(ruleCell, el('code', 'waf-rule-raw', rule.summary || ''));
-      ruleCell.title = rule.summary || '';
-      add(tr, el('td', null, rule.verdict === 'drop' ? '拦截' : (rule.verdict === 'accept' ? '放行' : '只记录')))
-        .setAttribute('data-label', '动作');
+      add(tr, el('td', null, rule.verdict === 'drop' ? '拦截' : (rule.verdict === 'accept' ? '放行' : '只记录'))).setAttribute('data-label', '动作');
       add(tr, el('td', 'waf-num', String(Number(rule.packets) || 0))).setAttribute('data-label', '命中包数');
       add(tr, el('td', 'waf-num', fmtBytes(rule.bytes))).setAttribute('data-label', '字节数');
     });
@@ -506,6 +619,13 @@
         : '封禁写进 kore 自有的 nft 集合，不影响宿主已有防火墙规则；永久封禁需手动解封。';
     }
     if (S.logsRefresh) S.logsRefresh.disabled = false;
+    if (S.mBtn) S.mBtn.disabled = S.locked || S.rBusy;
+    if (S.ruleHint) {
+      S.ruleHint.textContent = S.locked
+        ? '规则增删/启停需要 root 提权通道；当前没有，表单已禁用。按状态卡片里的说明启动 kored 后即可编辑。'
+        : '后端只接受上面 6 种匹配器，值不合法会被拒绝；提交后会回读 nft 链确认生效。';
+    }
+    [S.mName, S.mMatcher, S.mValue, S.mAction].forEach(function (n) { if (n) n.disabled = S.locked || S.rBusy; });
     // 解锁后必须重画模式按钮：它们的 disabled 由 paintModes 读 S.locked 决定，
     // 只改 S.locked 不重画会留下「按钮一直灰着」的死状态（真机截图抓到）。
     if (S.modeHost) paintModes();
@@ -538,6 +658,7 @@
       if (S.destroyed) return;
       var nft = (data && data.nft) || {};
       S.rules = nft.rules || []; S.rulesCount = Number(nft.rules_count) || S.rules.length;
+      S.chain = (data && data.chain) || [];
       S.rulesLoaded = true; paintRules();
     }, function (err) {
       if (S.destroyed) return;
@@ -676,9 +797,35 @@
     S.banHint = add(form.panel, el('p', 'field-hint', ''));
 
     // ⑤ 规则（只读）
-    var rules = panel('防护规则（只读）', ''); add(S.root, rules.panel); S.rulesPanel = rules.panel;
+    var rules = panel('防护规则', '内置只可停用；自定义可增删启停'); add(S.root, rules.panel); S.rulesPanel = rules.panel;
     S.rulesMeta = add(rules.meta, el('span', null, ''));
     S.rulesHost = add(rules.panel, el('div', 'waf-rules'));
+
+    // 新增规则：匹配器只给下拉（后端只收白名单表达式），值按匹配器给提示，动作只有 drop/accept。
+    var addRule = panel('新增规则', '只支持受控匹配器，不支持自由表达式'); add(S.root, addRule.panel); S.addRulePanel = addRule.panel;
+    var rform = add(addRule.panel, el('div', 'waf-form'));
+    S.mName = el('input', 'field-input'); S.mName.type = 'text'; S.mName.placeholder = '例如 allow-office';
+    S.mName.setAttribute('autocomplete', 'off'); S.mName.maxLength = 31;
+    S.mMatcher = el('select', 'field-input');
+    MATCHERS.forEach(function (m) { var o = el('option', null, m.label); o.value = m.v; S.mMatcher.appendChild(o); });
+    S.mValue = el('input', 'field-input'); S.mValue.type = 'text';
+    S.mValue.placeholder = matcherDef('ip saddr').hint; S.mValue.setAttribute('autocomplete', 'off');
+    S.mAction = el('select', 'field-input');
+    [['drop', '拦截（drop）'], ['accept', '放行（accept）']].forEach(function (a) { var o = el('option', null, a[1]); o.value = a[0]; S.mAction.appendChild(o); });
+    var nf = add(rform, el('label', 'field')); add(nf, el('span', 'field-label', '规则名')); add(nf, S.mName);
+    var mf = add(rform, el('label', 'field')); add(mf, el('span', 'field-label', '匹配条件')); add(mf, S.mMatcher);
+    var vf = add(rform, el('label', 'field')); add(vf, el('span', 'field-label', '匹配值')); add(vf, S.mValue);
+    var af = add(rform, el('label', 'field')); add(af, el('span', 'field-label', '动作')); add(af, S.mAction);
+    var rops = add(rform, el('div', 'waf-form-ops'));
+    S.mBtn = add(rops, el('button', 'btn btn-primary', '新增规则')); S.mBtn.type = 'button'; on(S.mBtn, submitRule);
+    S.rMsgHost = add(rops, el('span', 'waf-msg', ''));
+    S.ruleHint = add(addRule.panel, el('p', 'field-hint', ''));
+    on(S.mMatcher, function () {
+      var def = matcherDef(S.mMatcher.value);
+      S.mValue.placeholder = def.hint;
+      S.mValue.disabled = !def.need;
+      if (!def.need) S.mValue.value = '';
+    }, 'change');
 
     // ⑥ 拦截日志
     var logs = panel('最近拦截记录', '引擎平面，只读'); add(S.root, logs.panel); S.logsPanel = logs.panel;
