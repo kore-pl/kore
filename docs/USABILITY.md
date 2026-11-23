@@ -130,7 +130,7 @@
 
 > **复验状态（2026-11-23，`3f2c870`）**：P0-1 / P0-2 的中途状态（口令能生成但路径与 `serve` 不一致导致 401）已在 [.agents/verify/v1-user-journey-round2.md](../.agents/verify/v1-user-journey-round2.md) 记录，现行文档与命令已统一 `--config` 语义，见下方第 1、2 条。
 
-1. **P0-1 首次安装文档缺失（已修复，2026-11-23 口径更新）**：仓库根 [QUICKSTART.md](../QUICKSTART.md) 覆盖「构建 → 启动 → 浏览器访问」三步；**口令不再是必经步骤**（本机免密，见下条），只有远程访问才需要 §2.1 的 `admin-password`。`docs/RUNBOOK.md` §7 补「重置管理员口令」。
+1. **P0-1 首次安装文档缺失（已修复，2026-11-23 口径更新）**：仓库根 [QUICKSTART.md](../QUICKSTART.md) 覆盖「构建 → 启动 → 浏览器访问」三步；**必须先有管理员口令**（`kored admin-password --generate`）才能登录面板——登录是 kore 自己的 Web 登录体系（ADR-0043），登录一次后所有操作（含 root 特权动作）免密。`docs/RUNBOOK.md` §7 补「重置管理员口令」。
 2. **P0-2 首启 bootstrap（已按账号裁决重定口径）**：本机身份＝操作系统用户身份，UDS（socket `0600`）与 loopback 浏览器访问**直接可用、不再要求输入任何账号口令**；`serve` 首启检测到缺哈希时**只打一行提示**（不再 TTY 交互拦口令、不再写配置）。口令降级为**可选**、只为「其他机器访问面板」服务：`kored admin-password --generate/--set [--stdin]/--hash` 一条命令写入（原子写 + 0600 + 只打印一次），与 `serve` 共用同一套 `--config` / `KORE_CONFIG` 解析。没设口令时远程登录一律拒绝（`auth.Manager.Verify` 哈希为空直接 false），不会用空口令放行。
 3. **P0-3 CLI 安装与运行中服务互斥且未文档化**：服务运行时 `kored install --package` 报「状态库已被占用」，必须先停服务，但文档未写。
 4. **P0-4 非 root 卸载假成功**：`kored uninstall --purge --yes` 打印需要 root 后 **exit 0**，`data/` 与 `--purge` 实际未生效；按退出码判成功会留下整个安装目录。

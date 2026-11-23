@@ -70,21 +70,20 @@
 
 **取舍与复审条件**：PBKDF2 无内存硬化，对 GPU/ASIC 离线爆破的抵抗弱于内存硬 KDF。当前可接受的前提是三条同时成立：单管理员账号、默认只绑 UDS 或 `127.0.0.1`、无公网暴露面；再叠加 60s 内 5 次失败锁 300s 的限速，在线爆破不可行，离线爆破的前置是攻击者已能读 `0600 root:root` 的配置（等价 root）。**复审条件**：默认暴露公网、出现多用户/多租户、或 `auth.admin_password_hash` 进入非 root 可读的备份路径时，必须改用内存硬 KDF（**Argon2id**）并开新 ADR 显式放宽依赖白名单（新增 `golang.org/x/crypto`），同时给出哈希迁移与双格式兼容方案。
 
-### 3.2 本机免密与远程凭据（ADR-0041）
+### 3.2 登录门与操作免密（ADR-0043，更正 ADR-0041）
 
-kore 是**单管理员、本机管理**的产品（G-11：不做多用户 RBAC）。**本机身份 = 操作系统用户身份**，口令不是本机使用的前置条件：
+kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RBAC）。**登录 = kore 自己的 Web 登录体系**，凭据只有 `auth.admin_password_hash`（单管理员口令，无用户名）。**「操作免密」不是「免登录」**——两者必须分开：
 
-| 场景 | 需要口令吗 | 凭据是什么 |
+| 场景 | 未登录 | 登录一次之后 |
 | --- | --- | --- |
-| 本机 CLI（UDS `<run>/kore.sock`） | **不需要** | 文件系统权限：socket `0600`、属主＝运行 kored 的用户；`root` 亦可（`SO_PEERCRED` 校验 uid） |
-| 本机浏览器（`127.0.0.1` loopback） | **不需要** | 本机 loopback 可达性（只认 TCP 层 `RemoteAddr`，不读 `X-Forwarded-For`）+ CSRF 双提交 |
-| **其他机器访问面板** | **需要** | `kored admin-password --generate/--set` 写入 `auth.admin_password_hash` 的远程凭据 |
+| 本机浏览器（`127.0.0.1` loopback） | **401** + 登录页 | 所有操作免密（含 root 特权动作），7 天滑动会话 |
+| 本机 CLI（UDS `<run>/kore.sock`） | **401** | 复用同一会话 cookie，免密 |
+| **其他机器访问面板** | **401** | 同一套 Web 登录（口令只校验一次） |
+| root 特权动作 | 不可达 | 会话授权后由内核 root 服务执行（ADR-0042），**不弹本机账号口令、不弹 polkit、不用 sudo** |
 
-口径：**本机免密 = 「能登进这台机器且是运行 kore 的那个用户，就能管 kore」**，与 docker / systemd 的信任模型一致；这**不是多用户 RBAC**，没有账号列表、没有第二套账号体系的角色。
-
-- **没设口令时远程登录一律不可用**：`auth.Manager.Verify` 在哈希为空时直接返回 `false`（`session.go`），**绝不用空串比对通过**；非 loopback 请求仍走原有会话鉴权，未认证即 401。
-- **口令只剩一个用途**：从其他机器访问面板。首启（`auth.admin_password_hash` 为空）**只打印一行提示**（本机免密 + 如需远程再执行 `kored admin-password --generate`），不读终端、不拦启动、不写配置；TTY 下也不再要求输入两次口令。
-- **已有实例不破坏**：配置文件里已有 `auth.admin_password_hash` 时读入行为与升级前一致（校验算法仍是 PBKDF2-HMAC-SHA256 / 600,000 次，见 §3.1）；`admin-password` 命令的 `--generate/--set/--hash` 语义不变。首启生成的明文口令永不进日志，只打印一次。
+- **本机通道不是认证**：`withAuth` 对全部 `/api/v1/*` 一律做会话校验，UDS 与 loopback 不再跳过（ADR-0041 的「本机免密 = 免登录」已被 ADR-0043 更正）。本机通道只保留 CSRF 令牌引导（`csrf_local.go`）与 UDS 的 CSRF 豁免。
+- **没设口令时面板不可用**：`auth.Manager.Verify` 在哈希为空时一律返回 `false`，登录端点回 401「口令错误」，面板停在登录页无法进入。首启**只打印一行提示**（执行 `kored admin-password --generate`），不读终端、不拦启动、不写配置；首启引导流程属另一张卡，本轮未实现。
+- **已有实例不破坏**：配置文件里已有 `auth.admin_password_hash` 时行为与升级前一致（PBKDF2-HMAC-SHA256 / 600,000 次，见 §3.1）；`admin-password` 命令的 `--generate/--set/--hash` 语义不变。首启生成的明文口令永不进日志，只打印一次。
 
 ### 3.3 会话
 

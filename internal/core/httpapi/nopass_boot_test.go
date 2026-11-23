@@ -49,9 +49,31 @@ func newLocalTestServer(t *testing.T, ttl time.Duration) *Server {
 	}, localTestTransport{})
 }
 
-// TestUDSAccessBypassesSessionTCPDoesNot 是 ADR-0041 的核心回归：
-// UDS 无 cookie → 200；非 loopback TCP 无 cookie → 401；伪造 XFF 无效。
-func TestUDSAccessBypassesSessionTCPDoesNot(t *testing.T) {
+// loginTokenForTest 走真实登录端点换会话 token（RemoteAddr 设为远程，确保
+// 测试拿到的 token 只来自口令校验，不依赖任何本机捷径）。
+func loginTokenForTest(t *testing.T, srv *Server) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"password":"`+localTestPassword+`"}`))
+	req.RemoteAddr = "203.0.113.9:5555"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("登录应成功，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.CookieName && c.Value != "" {
+			return c.Value
+		}
+	}
+	t.Fatal("登录未下发会话 cookie")
+	return ""
+}
+
+// TestLocalChannelsRequireSession 是 ADR-0043 的核心回归（更正 ADR-0041
+// 「本机免密 = 免登录」的误读）：UDS / loopback / 远程**都必须先登录**，
+// 未登录一律 401；同一请求带上有效会话后 200。
+func TestLocalChannelsRequireSession(t *testing.T) {
 	srv := newLocalTestServer(t, time.Hour)
 	sock := filepath.Join(t.TempDir(), "kore.sock")
 	ln, err := net.Listen("unix", sock)
@@ -67,25 +89,53 @@ func TestUDSAccessBypassesSessionTCPDoesNot(t *testing.T) {
 			return d.DialContext(ctx, "unix", sock)
 		},
 	}}
+
+	// 未登录：UDS 无 cookie → 401（旧行为是 200，本用例锁定纠正）。
 	resp, err := udsClient.Get("http://unix/api/v1/plugins")
 	if err != nil {
 		t.Fatalf("UDS 请求失败: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("UDS 无 cookie 应 200，实际 %d", resp.StatusCode)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("UDS 无 cookie 应 401，实际 %d", resp.StatusCode)
 	}
 
-	// loopback TCP（httptest 默认 127.0.0.1）→ 200。
+	// 未登录：loopback TCP → 401。
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	resp2, err := ts.Client().Get(ts.URL + "/api/v1/plugins")
 	if err != nil {
 		t.Fatalf("loopback 请求失败: %v", err)
 	}
-	defer func() { _ = resp2.Body.Close() }()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("loopback 无 cookie 应 200，实际 %d", resp2.StatusCode)
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("loopback 无 cookie 应 401，实际 %d", resp2.StatusCode)
+	}
+
+	token := loginTokenForTest(t, srv)
+
+	// 登录后：UDS 带会话 → 200。
+	req, _ := http.NewRequest(http.MethodGet, "http://unix/api/v1/plugins", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	resp3, err := udsClient.Do(req)
+	if err != nil {
+		t.Fatalf("UDS 带会话请求失败: %v", err)
+	}
+	_ = resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("UDS 带会话应 200，实际 %d", resp3.StatusCode)
+	}
+
+	// 登录后：loopback 带会话 → 200。
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/plugins", nil)
+	req2.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	resp4, err := ts.Client().Do(req2)
+	if err != nil {
+		t.Fatalf("loopback 带会话请求失败: %v", err)
+	}
+	_ = resp4.Body.Close()
+	if resp4.StatusCode != http.StatusOK {
+		t.Fatalf("loopback 带会话应 200，实际 %d", resp4.StatusCode)
 	}
 
 	// 非 loopback TCP → 401；伪造 X-Forwarded-For: 127.0.0.1 同样 401。
@@ -104,9 +154,9 @@ func TestUDSAccessBypassesSessionTCPDoesNot(t *testing.T) {
 	}
 }
 
-// TestLoopbackKeepsCSRFUDSExempt 覆盖安全边界：loopback 仍强制 CSRF，
-// UDS 因浏览器不可达而豁免。
-func TestLoopbackKeepsCSRFUDSExempt(t *testing.T) {
+// TestLocalCSRFPolicy 覆盖安全边界：loopback 仍强制 CSRF（浏览器就在本机），
+// UDS 因浏览器不可达而豁免 CSRF——但 UDS 未登录仍 401，只是原因不是 CSRF。
+func TestLocalCSRFPolicy(t *testing.T) {
 	srv := newLocalTestServer(t, time.Hour)
 	// loopback POST 无 CSRF → 401 且原因为 CSRF。
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/echo/enable", strings.NewReader("{}"))
@@ -119,12 +169,15 @@ func TestLoopbackKeepsCSRFUDSExempt(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "CSRF") {
 		t.Fatalf("loopback 401 应来自 CSRF 校验，实际 %s", rec.Body.String())
 	}
-	// UDS POST 无 CSRF / 无 cookie → 不应被 CSRF 拦成 401。
+	// UDS POST 无 CSRF / 无会话 → 401，但原因是未登录而不是 CSRF。
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/echo/enable", strings.NewReader("{}"))
 	req2.RemoteAddr = "@"
 	rec2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec2, req2)
-	if rec2.Code == http.StatusUnauthorized && strings.Contains(rec2.Body.String(), "CSRF") {
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("UDS 未登录 POST 应 401，实际 %d", rec2.Code)
+	}
+	if strings.Contains(rec2.Body.String(), "CSRF") {
 		t.Fatalf("UDS POST 不应被 CSRF 拦下: %d %s", rec2.Code, rec2.Body.String())
 	}
 }

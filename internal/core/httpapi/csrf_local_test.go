@@ -18,8 +18,8 @@ func localCSRFCookie(rec *httptest.ResponseRecorder) string {
 	return ""
 }
 
-// TestLocalGETBootstrapsCSRF 覆盖 P0 回归：本机免密不经过登录，幂等请求必须
-// 补发 kore_csrf，否则面板所有数据视图的 POST 都会被 CSRF 401 拦下。
+// TestLocalGETBootstrapsCSRF 覆盖 P0 回归：令牌补发与登录门并存——未登录时
+// GET 仍 401（ADR-0043），但响应里必须补发 kore_csrf，登录后写请求才有双提交对。
 func TestLocalGETBootstrapsCSRF(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -34,8 +34,9 @@ func TestLocalGETBootstrapsCSRF(t *testing.T) {
 			req.RemoteAddr = tc.remoteAddr
 			rec := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("本机 GET 应 200，实际 %d: %s", rec.Code, rec.Body.String())
+			// 未登录 → 401：本机通道不是免登录身份（ADR-0043）。
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("本机未登录 GET 应 401，实际 %d: %s", rec.Code, rec.Body.String())
 			}
 			token := localCSRFCookie(rec)
 			if token == "" {

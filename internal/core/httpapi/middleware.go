@@ -18,8 +18,14 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// withAuth 对 /api/v1/* 强制会话校验；/-/healthz 与登录端点放行。
+// withAuth 对 /api/v1/* 强制会话校验；/-/healthz、登录端点与主壳壳资源放行。
 // 无有效 cookie → 401 E_UNAUTHORIZED（不泄露是"无 cookie"还是"已过期"）。
+//
+// 本机（UDS / loopback）**不是免登录通道**（ADR-0043 更正 ADR-0041 的误读）：
+// 「操作免密」指登录一次后所有动作（含 root 特权动作，走 ADR-0042 的内核 root
+// 服务）不再要口令，**不是"不登录就能操作管理 API"**。因此 UDS 与 loopback 与
+// 远程同口径：没有有效会话一律 401；浏览器未登录时 /api/v1/system/info 也是 401，
+// 前端据此渲染登录页。
 //
 // root-action 端点额外接受**插件 bearer 身份**（ADR-0018 提权通道）：插件用
 // KORE_PLUGIN_TOKEN 调内核代理自己声明的动作；带 Authorization 时不做会话回退，
@@ -38,17 +44,6 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), pluginActorKey{}, actor)))
-				return
-			}
-			// 本机免密（ADR-0041）：UDS（文件系统权限即认证）与 loopback TCP 跳过会话
-			// 鉴权；身份不合规的 UDS 对端回 403 EACCES（不是 401，也不是静默放行）。
-			// TCP 非 loopback 走下面的原有会话校验，一行都不放开。
-			if local, blocked := s.resolveLocal(r); blocked {
-				writeLocalDenied(w)
-				return
-			} else if local.isLocal() {
-				s.noteLocalAccess(r, local)
-				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localAccessKey{}, local)))
 				return
 			}
 			if _, err := s.authenticate(w, r); err != nil {

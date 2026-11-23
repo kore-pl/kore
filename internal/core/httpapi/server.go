@@ -161,11 +161,8 @@ var adminCapabilities = []string{
 // 全权处理；authorizeInvoke 会在首次检查时打一次 WARN 说明降级。多用户接入时
 // 由装配层注入 CapabilityResolver 覆盖本函数即可生效。
 func defaultCapabilityResolver(r *http.Request) (string, []string) {
-	// 本机免密（UDS / loopback TCP）没有会话 cookie，按本机管理员给全权；
-	// 否则管理端点会在 withAuth 放行之后又被这里判成"未授权"（ADR-0041）。
-	if local, ok := localAccessFrom(r.Context()); ok && local.isLocal() {
-		return "admin", adminCapabilities
-	}
+	// 只认会话 cookie：本机通道不是免登录身份（ADR-0043），不再提供
+	// "UDS/loopback 即 admin 全权"的第二条提权路径。
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil || cookie.Value == "" {
 		return "", nil

@@ -2,47 +2,36 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
-	"sync/atomic"
-
-	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// 本机免密的两条通道（ADR-0041）：文件系统权限（UDS）与 loopback TCP。
+// 本机通道的**识别**（ADR-0043）：UDS 与 loopback TCP。
 //
-// 安全边界（写进代码就是契约，别在别处重解释）：
-//   - UDS：能读写 <run>/kore.sock（0600，属主=运行用户）的进程就是管理员——与
-//     docker / systemd / postgres 的既有信任模型一致。对端凭据由 platform.PeerCred
-//     （SO_PEERCRED）取，uid == socket 属主（即 kored 运行用户）或 uid == 0 才放行。
-//   - loopback TCP：源地址是 127.0.0.0/8 或 ::1 的请求视为本机管理员。只认 TCP 层
-//     RemoteAddr，**绝不读 X-Forwarded-For / X-Real-IP**——反代场景下伪造头就是提权。
-//   - 两者都不是（局域网/公网）→ 保持原有会话鉴权，一行都不放开。
+// 这不是一条认证通道。ADR-0041 曾把「本机通道」直接当作免登录身份（UDS 文件系统
+// 权限 / loopback 可达性即认证，withAuth 跳过会话校验），实测后果是面板打开后没有
+// 登录页、未登录也能操作管理 API——与用户「面板必须要有登录页面」的要求相反，已被
+// ADR-0043 更正。现在本文件只剩两件**非认证**用途：
+//   - CSRF 双提交的本机引导（csrf_local.go）：幂等请求补发 kore_csrf，避免登录前
+//     首屏 GET 之后写请求拿不到令牌；仅本机通道下发。
+//   - UDS 的 CSRF 豁免判定：浏览器没有 unix socket 通道，跨站请求打不到这里。
 //
-// 这不是多用户 RBAC（G-11 明确不做）：本机免密 == 「能登进这台机器的人就能管 Kore」。
-// CSRF：loopback 仍是浏览器可达面，**必须**保留双提交校验；UDS 浏览器不可达
-// （浏览器没有 unix socket 通道），故 UDS 豁免 CSRF，由文件系统权限兜底。
+// 所有 /api/v1/* 的认证口径统一在 withAuth：没有有效会话一律 401，本机不例外。
+// 操作免密（含 root 特权动作）由「登录一次 + 7 天滑动会话 + ADR-0042 的内核 root
+// 服务」共同实现，不靠跳过登录。
 const (
-	// localChannelUnix 是 UDS 免密通道名（审计 detail.channel）。
+	// localChannelUnix 是 UDS 通道名。
 	localChannelUnix = "unix"
-	// localChannelTCPLoopback 是 loopback TCP 免密通道名。
+	// localChannelTCPLoopback 是 loopback TCP 通道名。
 	localChannelTCPLoopback = "tcp-loopback"
-	// localAccessAction 是本机免密访问的审计动作名。
-	localAccessAction = "local.access"
 )
 
-// connInfo 是连接级状态：原始 net.Conn + 是否已记过 local.access（首次连接一次）。
+// connInfo 是连接级状态：原始 net.Conn（ConnContext 注入），用于识别 UDS。
 type connInfo struct {
-	conn    net.Conn
-	audited atomic.Bool
+	conn net.Conn
 }
-
-// markAudited 返回本次是否抢到"首次连接"审计权（每连接只成功一次）。
-func (c *connInfo) markAudited() bool { return c.audited.CompareAndSwap(false, true) }
 
 // connKey 是连接信息在 context 中的私有键（ConnContext 注入）。
 type connKey struct{}
@@ -53,36 +42,18 @@ func connInfoFrom(ctx context.Context) *connInfo {
 	return info
 }
 
-// peerCred 是本机对端身份的最小视图（pid/comm 只在 Linux 可用）。
-type peerCred struct {
-	uid   int32
-	pid   int32
-	comm  string
-	known bool
-}
-
-// localAccessKey 是本机免密判定结果在 context 中的私有键（withAuth 注入）。
-type localAccessKey struct{}
-
-// localAccessFrom 取本机免密判定结果；缺失返回 false。
-func localAccessFrom(ctx context.Context) (localRequest, bool) {
-	local, ok := ctx.Value(localAccessKey{}).(localRequest)
-	return local, ok
-}
-
-// localRequest 是一次"本机免密"判定的结果。
+// localRequest 是一次"本机通道"判定的结果（仅用于 CSRF 引导/豁免，不是身份）。
 type localRequest struct {
 	// channel 是通道名（unix / tcp-loopback）；空串表示不是本机请求。
 	channel string
-	// cred 是对端凭据（UDS 有；loopback 只有 RemoteAddr，known=false）。
-	cred peerCred
 }
 
-// isLocal 表示该请求命中本机免密通道。
+// isLocal 表示该请求命中本机通道。
 func (l localRequest) isLocal() bool { return l.channel != "" }
 
-// resolveLocal 判定请求是否来自本机免密通道；blocked=true 表示"是本机 socket
-// 但身份不合规"，必须回 403 EACCES 而不是退化成会话鉴权或被当成 TCP 放行。
+// resolveLocal 判定请求是否来自本机通道；blocked=true 表示"是本机 socket
+// 但身份不合规"（对端 uid 既非 socket 属主也非 root）。blocked 只用于拒绝
+// 为这类连接补发 CSRF 令牌，**不是**鉴权结论——鉴权由 withAuth 的会话校验负责。
 func (s *Server) resolveLocal(r *http.Request) (local localRequest, blocked bool) {
 	info := connInfoFrom(r.Context())
 	if info != nil && info.conn != nil {
@@ -103,9 +74,9 @@ func (s *Server) resolveLocal(r *http.Request) (local localRequest, blocked bool
 	return localRequest{}, false
 }
 
-// unixLocal 用 platform.PeerCred（SO_PEERCRED）校验 UDS 对端身份。
+// unixLocal 用 platform.PeerCred（SO_PEERCRED）校验 UDS 对端身份：
 // uid == 0（root）或 uid == socket 属主（= kored 运行用户，socket 由本进程创建且
-// 不 chown）才放行；其余一律 blocked。
+// 不 chown）才算合规；其余 blocked。
 func (s *Server) unixLocal(conn net.Conn) (localRequest, bool) {
 	if s.transport == nil {
 		return localRequest{}, true // 无法取对端凭据：拒绝，不静默放行
@@ -118,13 +89,11 @@ func (s *Server) unixLocal(conn net.Conn) (localRequest, bool) {
 	if uid != 0 && uid != localOwnerUID() {
 		return localRequest{}, true
 	}
-	return localRequest{channel: localChannelUnix, cred: peerCred{
-		uid: uid, pid: cred.PID, comm: procComm(cred.PID), known: true,
-	}}, false
+	return localRequest{channel: localChannelUnix}, false
 }
 
 // localOwnerUID 是"本机管理员"的属主 uid：socket 由 kored 自己创建、属主即运行
-// 用户；loopback 请求没有对端凭据，同一口径取运行用户。G-16：不碰 syscall。
+// 用户。G-16：不碰 syscall。
 func localOwnerUID() int32 { return int32(os.Getuid()) }
 
 // isUnixConn 判断连接是否 UDS（net.UnixConn 或 LocalAddr 网络为 unix）。
@@ -147,51 +116,4 @@ func isLoopbackAddr(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// procComm 读对端进程名（/proc/<pid>/comm）；非 Linux 或读不到时返回空串，
-// 不影响放行判定（comm 只是审计可读性，不是鉴权依据）。
-func procComm(pid int32) string {
-	if runtime.GOOS != "linux" || pid <= 0 {
-		return ""
-	}
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(raw))
-}
-
-// noteLocalAccess 记一条 local.access 审计。
-//
-// 写放大取舍：**只记写操作 + 每连接第一次**。面板/CLI 高频轮询如果每请求一条，
-// 审计库会被读请求淹掉，反而看不见真正的管理动作。
-func (s *Server) noteLocalAccess(r *http.Request, local localRequest) {
-	info := connInfoFrom(r.Context())
-	first := false
-	if info != nil {
-		first = info.markAudited()
-	}
-	if isSafeMethod(r.Method) && !first {
-		return
-	}
-	detail := map[string]string{
-		"channel":     local.channel,
-		"source":      "local",
-		"method":      r.Method,
-		"path":        r.URL.Path,
-		"remote_addr": r.RemoteAddr,
-	}
-	if local.cred.known {
-		detail["uid"] = fmt.Sprintf("%d", local.cred.uid)
-		detail["pid"] = fmt.Sprintf("%d", local.cred.pid)
-		detail["comm"] = local.cred.comm
-	}
-	s.recordAudit(AuditEvent{Subject: "admin", Action: localAccessAction, Result: auditResultOK, Detail: detail})
-}
-
-// writeLocalDenied 统一回 403（EACCES 语义），与 401 明确区分：
-// 这不是"你没登录"，而是"你这个身份不许直接连本机 socket"。
-func writeLocalDenied(w http.ResponseWriter) {
-	writeError(w, 403, pluginapi.E_NEED_ROOT, "本机 socket 访问被拒：对端 uid 既不是 socket 属主也不是 root", "")
 }

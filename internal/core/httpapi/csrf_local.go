@@ -4,13 +4,13 @@ import (
 	"net/http"
 )
 
-// 本机免密通道（ADR-0041）的 CSRF 引导。
+// 本机通道的 CSRF 引导（保留自 ADR-0041 的成果；认证口径见 ADR-0043）。
 //
-// 断链背景：withAuth 对 UDS / loopback 免密放行后不再经过登录，而 kore_csrf
-// 原先只在登录成功时下发（handlers_auth.setCSRFCookie）。于是本机浏览器
-// document.cookie 里没有 kore_csrf，面板所有数据视图的 POST /api/v1/invoke/*
-// 都被 withCSRF 以 401 拦下——免密只解决了"有没有会话"，没解决"写请求的
-// 双提交令牌从哪来"。
+// 背景：kore_csrf 在登录成功时由 setCSRFCookie 下发。但登录前的首屏 GET 与
+// 已登录但 cookie 被清掉的窗口里，本机浏览器 document.cookie 可能没有
+// kore_csrf，随后的写请求会被 withCSRF 以 401 拦下。这里在幂等请求上补发，
+// 让双提交令牌始终可用——**补发令牌不等于放行**：本机请求仍必须携带有效会话
+// （withAuth 在 withCSRF 内层，未登录一律 401）。
 //
 // 口径（不削弱 CSRF，跨站伪造 POST 仍然被拒）：
 //   - 只对**幂等方法**（GET/HEAD/OPTIONS）+ **本机通道**（UDS / loopback TCP）

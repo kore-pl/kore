@@ -14,17 +14,17 @@ make build          # 产出 bin/kored（CGO_ENABLED=0 单二进制，已内嵌 
 
 > **换了索引验签公钥就必须重启 kored**：公钥编在二进制里，旧进程仍用旧公钥验新签名 → 商店全部 401。完整七步发布流程见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1。
 
-## 2. 账号与凭据：本机默认免密，口令只为远程访问
+## 2. 账号与凭据：面板必须登录，登录后操作免密（含 root）
 
-kore 是**单管理员、本机管理**的产品（[AGENTS.md](AGENTS.md) G-11：不做多用户 RBAC）。**本机身份就是操作系统用户身份**，不需要第二套账号口令——和 docker / systemd 一致：能登进这台机器、并且是运行 kore 的那个用户，就能管 kore。
+kore 是**单管理员、Web 面板管理**的产品（[AGENTS.md](AGENTS.md) G-11：不做多用户 RBAC）。**登录是 kore 自己的 Web 登录体系**，凭据只有 `auth.admin_password_hash` 一个（无用户名）。**「操作免密」不是「免登录」**：
 
-| 场景 | 需要口令吗 | 凭据是什么 |
+| 场景 | 未登录 | 登录一次之后 |
 | --- | --- | --- |
-| 本机 CLI（UDS `/run/kore/kore.sock`） | **不需要** | 文件系统权限（socket `0600`，属主＝运行 kored 的用户；`root` 亦可） |
-| 本机浏览器（`127.0.0.1:8787`） | **不需要** | 本机 loopback + CSRF 双提交 |
-| **其他机器访问面板** | **需要** | `kored admin-password` 写入的远程凭据 |
+| 本机浏览器（`127.0.0.1:8787`） | **401 + 登录页** | 所有操作免密（含 root 特权动作），7 天滑动会话 |
+| 本机 CLI（UDS `/run/kore/kore.sock`） | **401** | 复用同一会话 cookie，免密 |
+| **其他机器访问面板** | **401** | 同一套 Web 登录（口令只校验一次） |
 
-> 本机免密 = 「能登进这台机器且是运行 kore 的那个用户，就能管 kore」，**不是多用户 RBAC**，也没有"账号列表"。命令行 / 浏览器在本机操作时**不会再要求输入任何账号口令**。
+> 登录一次后，日常使用与 root 特权操作都**不再要求任何密码**（root 动作由以 root 运行的内核完成，见 ADR-0042）；但「不登录就能操作管理 API」已被移除（ADR-0043）——本机 UDS / loopback 与远程同口径，没有会话一律 401。
 
 ### 2.1 只有要从其他机器访问时才设置口令（可选）
 
@@ -82,15 +82,15 @@ paths:
 
 > 想先写 yaml 再生成口令也可以：`admin-password --config ./kore-quickstart.yaml` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关——只要和 §3 的 `--config` 是同一个文件。
 
-### 2.4 首启引导（已不再拦口令）
+### 2.4 首启引导（不拦启动，但没口令就登不进面板）
 
 `kored serve` 启动时如果发现 `auth.admin_password_hash` 为空，**只打印一行提示**，不读终端、不阻塞、不写配置文件：
 
 ```
-提示：本机访问无需口令（身份＝当前系统用户；UDS / 本机回环免密）；如需从其他机器访问本面板，请先执行 `kored admin-password --generate` 设置远程凭据。
+提示：尚未设置管理员口令——面板会显示登录页但无法登录；请执行 `kored admin-password --generate` 生成一次口令（写入配置后重启 kored 生效）。
 ```
 
-也就是说：「没设置口令」不再是启动的必经步骤，也不再是 TTY 下必须输入两次口令的拦截点。以前那套交互式引导（TTY 强制输入两次口令 / 非 TTY 提示"面板将无法登录"）已移除。
+**已知缺口（ADR-0043）**：「没设置口令」的实例会显示登录页，但登录端点一律回 401「口令错误」——没有任何凭据能进入面板。首启引导属另一张卡，本轮未实现；当前必须先用 `admin-password` 生成口令并重启。
 
 ## 3. 启动
 
@@ -111,10 +111,10 @@ http://127.0.0.1:8787/
 
 这是 `kored` 自己托管的面板主壳（`web/dist` 二十三个产物经 `web/embed.go` 编进二进制）。路由只有两条：`GET /` 提供 `index.html`，`GET /assets/{file}` 提供其余静态资源（按后缀决定 Content-Type，只认单段文件名与 `.js/.css/.html` 后缀）。首屏加载四件套（`index.html` + `style.css` + `app.js` + `shell.js`），`store.js` / `files.js` / `sites.js` / `tasks.js` / `monitor.js` / `settings.js` / `terminal.js` / `db.js` / `logs.js` / `process.js` / `ssl.js` / `backups.js` / `redis.js` / `firewall.js` 十四个视图模块在切到对应视图时才按需注入（终端 / 数据库 / 日志 / 进程 / SSL / 备份 / Redis / 防火墙由 `shell.js` 内置路由懒加载）；`files-l2.js` / `site-edit.js` / `db-l2.js` 只在文件/站点/数据库页首次执行 L2 操作时注入，`config-panel.js` 只在日志/备份页点「设置」时注入，`monitor-cards.js` 只在进入监控页时注入——首屏体积不随视图数与能力数增长。其它路径（如 `/nonexistent`）返回 404，没有 SPA 兜底。`/-/healthz` 仍可供探针使用（返回 200 `{"status":"ok"}`）。
 
-## 5. 访问与 CSRF（本机免密，远程才登录）
+## 5. 访问与 CSRF（先登录，之后免密）
 
-1. **本机**（UDS 或 `127.0.0.1` loopback）访问 `/api/v1/*` 直接可用，**不出现登录页、不需要口令**：UDS 由 socket 权限认证，loopback 由本机可达性认证（仍强制 CSRF 双提交）。
-2. **其他机器**访问才需要登录：走 `POST /api/v1/auth/login`，请求体 `{"password":"你在 §2.2 设置的口令"}`。成功会下发两个 cookie：`kore_session`（HttpOnly 会话）和 `kore_csrf`（双提交 token）。**没设置口令时该端点一律 401**——不会用空口令放行远程。
+1. **任何来源**（本机 UDS、`127.0.0.1` loopback、其他机器）访问 `/api/v1/*` 都必须先登录：未登录一律 401，面板显示登录页。本机通道**不是**认证替代品（ADR-0043）。
+2. 登录：`POST /api/v1/auth/login`，请求体 `{"password":"你在 §2.2 设置的口令"}`。成功会下发两个 cookie：`kore_session`（HttpOnly 会话，默认 7 天滑动）和 `kore_csrf`（双提交 token）。**没设置口令时该端点一律 401「口令错误」**。
 3. 之后的写请求（POST/PUT/DELETE 等）必须带请求头 `X-Kore-CSRF: <kore_csrf 的值>`，且浏览器同时携带 `kore_csrf` cookie；两者不一致或缺任一，返回 401 `CSRF 校验失败`。GET 请求无需 CSRF 头。
 4. 口令错误 5 次（60 秒窗口内）会锁 300 秒，别硬试。
 
