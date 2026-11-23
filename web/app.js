@@ -122,12 +122,55 @@
       title: '依赖缺失：Docker 未安装或未启动',
       action: 'Debian/Ubuntu 用 curl -fsSL https://get.docker.com | sh 安装，RHEL 用 dnf install docker；装好后 systemctl enable --now docker，再刷新本页。'
     };
+    // 下面几项由 firewall / waf / dns / ssh-guard 四个视图的实测错误码补齐（2026-11-24）。
+    // 通用码（NOTFOUND/UNAUTHORIZED/UNSUPPORTED/INVALID/UPSTREAM）不绑页面，
+    // 同一 code 在任何视图都必须落到同一句 title，避免各页再写一套局部文案。
+    var notFound = {
+      title: '插件未安装或没有这个方法',
+      action: '到左侧「软件商店」安装对应插件（或确认插件已启用、方法名正确），装好后刷新本页。'
+    };
+    var unauthorized = {
+      title: '没有权限执行这个操作',
+      action: '确认登录未失效、当前账号有对应权限；受保护对象与不可回滚动作按页面提示完成二次确认后再试。'
+    };
+    var unsupported = {
+      title: '当前环境不支持这个操作',
+      action: '按提示检查依赖与版本（如 nftables、插件版本），补齐或升级后重试。'
+    };
+    var invalid = {
+      title: '填写的参数不合法',
+      action: '按提示检查格式、范围与必填项，修正后重试。'
+    };
+    var noEngine = {
+      title: '本机没有可用的 DNS 服务',
+      action: '装上 BIND9 或 dnsmasq 并启动后刷新本页；只查外部域名可直接用「即时查询」。'
+    };
+    var confirmRequired = {
+      title: '这个动作需要一次性确认',
+      action: '页面会自动申请一次性确认令牌，重试一次即可；不可回滚的动作请先核对目标。'
+    };
+    var upstream = {
+      title: '后端命令执行失败或超时',
+      action: '确认对应服务在运行、磁盘与系统负载正常后重试；持续失败请查看插件日志。'
+    };
+    var conflict = {
+      title: '操作与当前状态冲突',
+      action: '刷新后按当前状态重试；插件未启用时先到「插件」页启用，目标已存在时换名称或先删除。'
+    };
     return {
       'E_NEED_ROOT': needRoot,
       'E_NEED_ROOT|need_root': needRoot,
       'E_UNSUPPORTED|docker_missing': dockerMissing,
       'E_UNAVAILABLE|docker_missing': dockerMissing,
-      'E_UNAVAILABLE': { title: '依赖缺失', action: '按提示安装所需组件后重试。' }
+      'E_UNAVAILABLE': { title: '依赖缺失', action: '按提示安装所需组件后重试。' },
+      'E_NOTFOUND': notFound,
+      'E_UNAUTHORIZED': unauthorized,
+      'E_UNSUPPORTED': unsupported,
+      'E_INVALID': invalid,
+      'E_NO_ENGINE': noEngine,
+      'E_CONFIRM_REQUIRED': confirmRequired,
+      'E_UPSTREAM': upstream,
+      'E_CONFLICT': conflict
     };
   })();
 

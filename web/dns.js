@@ -52,7 +52,7 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error(data.message || ('请求失败（HTTP ' + res.status + '）'));
-        err.code = data.code || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
+        err.code = data.code || ''; err.detail = data.detail || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -70,13 +70,40 @@
     return id || '未检测到';
   }
   function typeText(t) { return t ? (t + (TYPE_HINT[t] ? '（' + TYPE_HINT[t] + '）' : '')) : '—'; }
+  // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
+  // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会空白 / undefined。
+  function errorView(err) {
+    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : null;
+    if (!f || !f.mapped) {
+      return { mapped: false, title: '', action: '', detail: String((err && err.message) || err || '') };
+    }
+    return f;
+  }
   function failureText(err, verb) {
     if (!err) return verb + '失败';
-    if (err.code === 'E_NEED_ROOT') return verb + '失败：需要 root 权限读取区域文件。按状态卡片里的说明以 root 重启 kored 后重试。';
-    if (err.code === 'E_NOTFOUND') return verb + '失败：DNS 插件还没装或没有这个方法。';
-    if (err.code === 'E_NO_ENGINE') return '本机没有可用的 DNS 服务：' + (err.hint || '装上 BIND9 或 dnsmasq 后刷新本页。');
-    if (err.code === 'E_INVALID') return '参数不合法：' + err.message;
-    return verb + '失败：' + err.message + (err.hint ? '（' + err.hint + '）' : '');
+    var f = errorView(err);
+    if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
+    return verb + '失败：' + (err.message || '原因未知') + (err.hint ? '（' + err.hint + '）' : '');
+  }
+  // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
+  function failureBlock(err, cmd) {
+    var f = errorView(err), box = el('div', 'dns-callout dns-callout-warn');
+    box.setAttribute('role', 'status');
+    add(box, el('div', 'dns-callout-title', f.mapped ? f.title : '操作失败'));
+    add(box, el('p', 'dns-callout-text', f.mapped
+      ? f.action
+      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '')));
+    if (cmd) add(box, el('pre', 'dns-cmd', cmd));
+    var raw = (err && err.message) ? String(err.message) : '';
+    if (raw) {
+      var details = add(box, el('details', 'dns-details'));
+      add(details, el('summary', null, '查看原始错误'));
+      add(details, el('pre', null, raw));
+    }
+    var p = add(box, el('p', 'dns-callout-text'));
+    var a = add(p, el('a', 'dns-link', '查看运行手册'));
+    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    return box;
   }
   function chip(tone, text) {
     var c = el('span', 'chip chip-' + tone), dot = el('span', 'dot');
@@ -116,22 +143,6 @@
     }
     return box;
   }
-  function rootGuide(hint) {
-    var box = el('div', 'dns-callout dns-callout-warn');
-    add(box, el('div', 'dns-callout-title', '这一步需要 root 权限，当前没有可用的提权通道'));
-    add(box, el('p', 'dns-callout-text',
-      '区域文件（如 /etc/bind/named.conf.local、/var/lib/bind/*.zone）通常只有 root 可读。' +
-      'kored 以普通用户身份启动时读不到，kore 的设计是让内核代理 root 动作（ADR-0018）。'));
-    var d = add(box, el('details', 'dns-details'));
-    add(d, el('summary', null, '查看如何配置'));
-    add(d, el('p', 'dns-callout-text', '在服务器上以 root 重启 kored，然后刷新本页：'));
-    add(d, el('pre', 'dns-cmd', 'sudo systemctl restart kore'));
-    if (hint) add(d, el('p', 'dns-callout-text', '后端提示：' + hint));
-    var p = add(d, el('p', 'dns-callout-text'));
-    var a = add(p, el('a', 'dns-link', '查看运行手册'));
-    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
-    return box;
-  }
   function goStore() {
     if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
     else window.location.hash = '#/store';
@@ -152,11 +163,13 @@
       if (S.statusCode === 'E_NOTFOUND') {
         S.notInstalled = true;
         hidePanels();
-        S.statusHost.appendChild(emptyBlock('还没有安装 DNS 插件（页面先把「怎么装」给你，不留空白）。',
+        var missing = errorView({ code: S.statusCode, message: S.statusError, hint: S.statusHint });
+        S.statusHost.appendChild(emptyBlock(missing.mapped ? missing.title + '：' + missing.action
+          : '还没有安装 DNS 插件（页面先把「怎么装」给你，不留空白）。',
           '去软件商店安装', goStore));
       } else {
-        S.statusHost.appendChild(notice('状态读取失败：' + S.statusError, 'fail'));
-        if (S.statusHint) S.statusHost.appendChild(guideFor('状态读取失败', ['这是后端返回的原因，不是登录失效。'], [], S.statusHint));
+        S.statusHost.appendChild(failureBlock({ code: S.statusCode, message: S.statusError, hint: S.statusHint },
+          S.statusCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       }
       return;
     }
@@ -267,11 +280,8 @@
     S.zonesHost.textContent = '';
     S.zonesMeta.textContent = S.zonesLoaded ? ((S.zones || []).length + ' 个区域') : '';
     if (S.zonesError) {
-      if (S.zonesCode === 'E_NEED_ROOT') {
-        S.zonesHost.appendChild(emptyBlock('读不到区域文件（需要 root 权限）。按上方状态卡里的说明以 root 重启 kored 后刷新本页。'));
-      } else {
-        S.zonesHost.appendChild(notice('区域列表读取失败：' + S.zonesError, 'fail'));
-      }
+      S.zonesHost.appendChild(failureBlock({ code: S.zonesCode, message: S.zonesError, hint: S.zonesHint },
+        S.zonesCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       return;
     }
     if (!S.zonesLoaded) { add(S.zonesHost, el('div', 'dns-loading', '正在读取区域列表…')); return; }

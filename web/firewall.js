@@ -10,7 +10,8 @@
   // 提权说明锚点：docs/RUNBOOK.md §5「以 root 启动 kored 与提权通道（ADR-0018）」。
   var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   function fresh() {
-    return { root: null, status: null, statusError: '', rules: [], rulesError: '', rulesErrorCode: '', rulesErrorHint: '',
+    return { root: null, status: null, statusError: '', statusCode: '', statusHint: '',
+      rules: [], rulesError: '', rulesErrorCode: '', rulesErrorHint: '',
       rulesLoaded: false, canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
       deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false };
   }
@@ -40,7 +41,7 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error((data.code ? data.code + '：' : '') + (data.message || ('请求失败（HTTP ' + res.status + '）')));
-        err.code = data.code || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
+        err.code = data.code || ''; err.detail = data.detail || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -61,27 +62,40 @@
     add(h, el('span', 'panel-title', title));
     return { panel: p, head: h, meta: add(h, el('span', 'panel-meta', metaText || '')) };
   }
-  // rootGuide：非 root 的折叠提权指引。默认收起，标题只讲「需要 root 权限」，
-  // 原始错误放在二级折叠里——不把 ERROR: You need to be root 直接铺在页面上。
-  function rootGuide(hint, raw) {
-    var box = el('div', 'fw-callout-warn fw-root-guide');
-    box.setAttribute('role', 'status');
-    add(box, el('div', 'fw-callout-title', '防火墙管理需要 root 权限'));
-    add(box, el('p', 'fw-callout-text',
-      '当前 kored 以非 root 身份运行，读不到也改不了 ufw 规则。这是权限限制，不是登录失效，无需重新登录。'));
-    var details = add(box, el('details', 'fw-details'));
-    add(details, el('summary', null, '查看如何配置'));
-    add(details, el('p', 'fw-callout-text', '在服务器上以 root 重启 kored，然后刷新本页：'));
-    add(details, el('pre', 'fw-cmd', 'sudo systemctl restart kore'));
-    add(details, el('p', 'fw-callout-text',
-      'systemd 部署用上面的命令；开发态直接启动可用 sudo ./bin/kored serve --config <你的配置>。' +
-      'Kore 不会给单个请求加 sudo，也不会让插件自己提权；root 动作经内核 root-action 通道代理（ADR-0018）。'));
-    if (hint) add(details, el('p', 'fw-callout-text', '后端提示：' + hint));
-    if (raw) {
-      var more = add(details, el('details', 'fw-details'));
-      add(more, el('summary', null, '查看原始错误'));
-      add(more, el('pre', null, raw));
+  // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
+  // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会出现空白 / undefined。
+  function errorView(err) {
+    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : null;
+    if (!f || !f.mapped) {
+      return { mapped: false, title: '', action: '', detail: String((err && err.message) || err || '') };
     }
+    return f;
+  }
+  function failureText(err, verb) {
+    var f = errorView(err);
+    if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
+    return verb + '失败：' + ((err && err.message) || '原因未知') +
+      (err && err.hint ? '（' + err.hint + '）' : '');
+  }
+  // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
+  // root 缺失只给一条指引，不把原始英文错误铺在首屏。
+  function failureBlock(err, cmd) {
+    var f = errorView(err), box = el('div', 'fw-callout-warn fw-root-guide');
+    box.setAttribute('role', 'status');
+    add(box, el('div', 'fw-callout-title', f.mapped ? f.title : '操作失败'));
+    add(box, el('p', 'fw-callout-text', f.mapped
+      ? f.action
+      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '')));
+    if (cmd) add(box, el('pre', 'fw-cmd', cmd));
+    var raw = (err && err.message) ? String(err.message) : '';
+    if (raw) {
+      var details = add(box, el('details', 'fw-details'));
+      add(details, el('summary', null, '查看原始错误'));
+      add(details, el('pre', null, raw));
+    }
+    var p = add(box, el('p', 'fw-callout-text'));
+    var a = add(p, el('a', 'fw-perm-link', '查看运行手册'));
+    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
     return box;
   }
   function fmtPort(v) { return v === '' || v === null || v === undefined ? 'any' : String(v); }
@@ -108,7 +122,11 @@
   function paintStatus() {
     if (!S.statusHost) return;
     S.statusHost.textContent = '';
-    if (S.statusError) { S.statusHost.appendChild(notice('状态读取失败：' + S.statusError)); return; }
+    if (S.statusError) {
+      S.statusHost.appendChild(failureBlock({ code: S.statusCode, message: S.statusError, hint: S.statusHint },
+        S.statusCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
+      return;
+    }
     if (!S.status) { add(S.statusHost, el('div', 'muted fw-loading', '正在探测防火墙后端…')); return; }
     var st = S.status; S.canWrite = !!(st.available && st.backend === 'ufw'); S.previewable = st.backend === 'ufw';
     var box = add(S.statusHost, el('div', 'fw-status-body'));
@@ -141,17 +159,8 @@
       }
     }
     if (!st.available) {
-      if (st.error_code === 'E_NEED_ROOT') {
-        // root 缺失是权限限制，不是登录失效：只给一条折叠指引，不铺原始英文错误。
-        add(box, rootGuide(st.hint, st.error));
-      } else {
-        var call = add(box, el('div', 'fw-callout-warn'));
-        add(call, el('div', 'fw-callout-title', '当前环境无法读取防火墙状态'));
-        var p = add(call, el('p', 'fw-callout-text', '当前环境无法读取防火墙状态：' + (st.error || '原因未知') +
-          '。表单已禁用，仅保留只读展示；排除原因后刷新本页。 '));
-        var guide = add(p, el('a', 'fw-perm-link', '查看运行手册'));
-        guide.href = RUNBOOK_PRIV; guide.target = '_blank'; guide.rel = 'noopener noreferrer';
-      }
+      S.statusHost.appendChild(failureBlock({ code: st.error_code, message: st.error, hint: st.hint },
+        st.error_code === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
     }
     var can = S.canWrite;
     // 状态说了算：能写才解锁表单，否则一律禁用（非 root 时不再让用户白填一遍）。
@@ -168,16 +177,8 @@
     if (!S.rulesHost) return;
     S.rulesHost.textContent = ''; S.rulesCount.textContent = S.rulesLoaded ? S.rules.length + ' 条' : '';
     if (S.rulesError) {
-      if (S.rulesErrorCode === 'E_NEED_ROOT') {
-        S.rulesHost.appendChild(rootGuide(S.rulesErrorHint, S.rulesError));
-        add(S.rulesHost, el('div', 'panel-empty', '规则列表在 root 权限下才能读取；提权后点「刷新」即可恢复。'));
-      } else if (S.rulesErrorCode === 'E_UNAUTHORIZED') {
-        S.rulesHost.appendChild(notice('登录已失效，请重新登录后再查看防火墙规则。'));
-        add(S.rulesHost, el('div', 'panel-empty', '当前会话没有权限；重新登录后刷新本页。'));
-      } else {
-        S.rulesHost.appendChild(notice('读取规则失败：' + S.rulesError));
-        add(S.rulesHost, el('div', 'panel-empty', '读取失败时页面保留只读状态并禁用写操作。'));
-      }
+      S.rulesHost.appendChild(failureBlock({ code: S.rulesErrorCode, message: S.rulesError, hint: S.rulesErrorHint },
+        S.rulesErrorCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       return;
     }
     if (!S.rulesLoaded) { add(S.rulesHost, el('div', 'muted fw-loading', '正在读取规则…')); return; }
@@ -207,7 +208,7 @@
   function paintDeleteConfirm() {
     if (!S.deleteHost) return;
     S.deleteHost.textContent = '';
-    if (S.deleteError) S.deleteHost.appendChild(notice('删除失败：' + S.deleteError));
+    if (S.deleteError) S.deleteHost.appendChild(notice(S.deleteError));
     if (!S.deletePreview) return;
     var r = S.deleteTarget || {}, box = add(S.deleteHost, el('div', 'fw-preview fw-delete-confirm'));
     add(box, el('div', 'fw-preview-title', '将删除规则 #' + (r.index || '?') + '：' +
@@ -230,7 +231,7 @@
       S.deletePreview = data; paintDeleteConfirm();
     }, function (err) {
       if (S.destroyed) return;
-      S.deleteError = err.message; paintDeleteConfirm();
+      S.deleteError = failureText(err, '删除'); paintDeleteConfirm();
     });
   }
   function execDelete(btn) {
@@ -244,7 +245,7 @@
       paintNotice(); paintDeleteConfirm(); loadStatus(); loadRules();
     }, function (err) {
       if (S.destroyed) return;
-      S.busy = false; S.deleteError = err.message; paintDeleteConfirm();
+      S.busy = false; S.deleteError = failureText(err, '删除'); paintDeleteConfirm();
     });
   }
   function formParams(dryRun) {
@@ -281,7 +282,7 @@
       S.preview = data; paintPreview();
     }, function (err) {
       if (S.destroyed) return;
-      S.previewError = err.message; S.pending = null; paintPreview();
+      S.previewError = failureText(err, '预览'); S.pending = null; paintPreview();
     });
   }
   function execPreview(btn) {
@@ -294,7 +295,7 @@
       paintNotice(); paintPreview(); loadStatus(); loadRules();
     }, function (err) {
       if (S.destroyed) return;
-      S.busy = false; S.previewError = err.message; paintPreview();
+      S.busy = false; S.previewError = failureText(err, '执行'); paintPreview();
     });
   }
   function updateSSH() {
@@ -302,13 +303,13 @@
     S.sshWarn.hidden = port !== 22;
   }
   function loadStatus() {
-    S.statusError = ''; paintStatus();
+    S.statusError = ''; S.statusCode = ''; S.statusHint = ''; paintStatus();
     invoke('firewall.status', {}).then(function (data) {
       if (S.destroyed) return;
       S.status = data; paintStatus();
     }, function (err) {
       if (S.destroyed) return;
-      S.statusError = err.message; paintStatus();
+      S.statusError = err.message; S.statusCode = err.code || ''; S.statusHint = err.hint || ''; paintStatus();
     });
   }
   function loadRules() {

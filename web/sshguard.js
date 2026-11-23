@@ -15,7 +15,7 @@
   function fresh() {
     return { root: null, status: null, statusError: '', statusCode: '', statusHint: '',
       attempts: null, attemptsLoaded: false, attemptsError: '', win: '24h',
-      bans: [], bansLoaded: false, bansError: '', bansCode: '', bansNote: '', bansSource: '', bansAvailable: false,
+      bans: [], bansLoaded: false, bansError: '', bansCode: '', bansHint: '', bansNote: '', bansSource: '', bansAvailable: false,
       ip: '', busy: false, notice: '', noticeTone: '', confirmUnban: '', banMsg: '', banTone: '',
       tokenMsg: '', readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false,
       // 加固建议（suggest）：只生成建议，前端没有任何「应用」写操作
@@ -51,7 +51,7 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error(data.message || ('请求失败（HTTP ' + res.status + '）'));
-        err.code = data.code || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
+        err.code = data.code || ''; err.detail = data.detail || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -84,13 +84,40 @@
     if (left >= 60) return Math.floor(left / 60) + ' 小时 ' + (left % 60) + ' 分钟';
     return left + ' 分钟';
   }
+  // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
+  // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会空白 / undefined。
+  function errorView(err) {
+    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : null;
+    if (!f || !f.mapped) {
+      return { mapped: false, title: '', action: '', detail: String((err && err.message) || err || '') };
+    }
+    return f;
+  }
   function failureText(err, verb) {
     if (!err) return verb + '失败';
-    if (err.code === 'E_NEED_ROOT') return verb + '失败：需要宿主 root 权限（经内核提权通道执行 fail2ban-client）。按状态卡片里的说明启动 kored 后重试。';
-    if (err.code === 'E_CONFIRM_REQUIRED' || /confirm/i.test(err.message || '')) return verb + '失败：这个动作不可回滚，需要一次性确认令牌（页面会自动申请，重试一次即可）。';
-    if (err.code === 'E_NOTFOUND') return verb + '失败：SSH 防护插件还没装或没有这个方法。';
-    if (err.code === 'E_INVALID') return '参数不合法：' + err.message;
-    return verb + '失败：' + err.message + (err.hint ? '（' + err.hint + '）' : '');
+    var f = errorView(err);
+    if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
+    return verb + '失败：' + (err.message || '原因未知') + (err.hint ? '（' + err.hint + '）' : '');
+  }
+  // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
+  function failureBlock(err, cmd) {
+    var f = errorView(err), box = el('div', 'sg-callout sg-callout-warn');
+    box.setAttribute('role', 'status');
+    add(box, el('div', 'sg-callout-title', f.mapped ? f.title : '操作失败'));
+    add(box, el('p', 'sg-callout-text', f.mapped
+      ? f.action
+      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '')));
+    if (cmd) add(box, el('pre', 'sg-cmd', cmd));
+    var raw = (err && err.message) ? String(err.message) : '';
+    if (raw) {
+      var details = add(box, el('details', 'sg-details'));
+      add(details, el('summary', null, '查看原始错误'));
+      add(details, el('pre', null, raw));
+    }
+    var p = add(box, el('p', 'sg-callout-text'));
+    var a = add(p, el('a', 'sg-link', '查看运行手册'));
+    a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    return box;
   }
   function chip(tone, text) {
     var c = el('span', 'chip chip-' + tone), dot = el('span', 'dot');
@@ -143,10 +170,12 @@
     if (S.statusError) {
       if (S.statusCode === 'E_NOTFOUND') {
         S.notInstalled = true; hidePanels();
-        S.statusHost.appendChild(emptyBlock('还没有安装 SSH 防护插件（页面先把「怎么装」给你，不留空白）。', '去软件商店安装', goStore));
+        var missing = errorView({ code: S.statusCode, message: S.statusError, hint: S.statusHint });
+        S.statusHost.appendChild(emptyBlock(missing.mapped ? missing.title + '：' + missing.action
+          : '还没有安装 SSH 防护插件（页面先把「怎么装」给你，不留空白）。', '去软件商店安装', goStore));
       } else {
-        S.statusHost.appendChild(notice('状态读取失败：' + S.statusError, 'fail'));
-        if (S.statusHint) S.statusHost.appendChild(guideBox('状态读取失败', ['这是后端返回的原因，不是登录失效。'], [], S.statusHint));
+        S.statusHost.appendChild(failureBlock({ code: S.statusCode, message: S.statusError, hint: S.statusHint },
+          S.statusCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       }
       return;
     }
@@ -289,11 +318,8 @@
     S.bansHost.textContent = '';
     S.bansMeta.textContent = S.bansLoaded ? (S.bans.length + ' 个') : '';
     if (S.bansError) {
-      if (S.bansCode === 'E_NEED_ROOT') {
-        S.bansHost.appendChild(emptyBlock('需要宿主 root 权限才能读取 fail2ban 封禁清单。按上方状态卡里的说明启动 kored 后刷新本页。'));
-      } else {
-        S.bansHost.appendChild(notice('封禁名单读取失败：' + S.bansError, 'fail'));
-      }
+      S.bansHost.appendChild(failureBlock({ code: S.bansCode, message: S.bansError, hint: S.bansHint },
+        S.bansCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       return;
     }
     if (!S.bansLoaded) { add(S.bansHost, el('div', 'sg-loading', '正在读取封禁名单…')); return; }
@@ -464,7 +490,7 @@
     if (!S.sugHost) return;
     var host = S.sugHost; host.textContent = '';
     if (S.sugError) {
-      add(host, notice('生成失败：' + S.sugError, 'fail'));
+      add(host, notice(S.sugError, 'fail'));
       if (S.sugHint) add(host, guideBox('生成失败', ['这是后端返回的原因，不是登录失效。'], [], S.sugHint));
       return;
     }
@@ -552,7 +578,7 @@
     });
   }
   function loadBans() {
-    S.bansLoaded = false; S.bansError = ''; S.bansCode = ''; paintBans();
+    S.bansLoaded = false; S.bansError = ''; S.bansCode = ''; S.bansHint = ''; paintBans();
     // 数据源是 bans（fail2ban 真实 jail 列表；没有 fail2ban 时是日志推断的可疑 IP）。
     // ban.list 是恒空桩（handleBanList 硬编码空数组），接了只会永远显示「没有封禁记录」。
     invoke('bans', {}).then(function (d) {
@@ -563,7 +589,7 @@
       S.bansNote = (d && d.note) || '';
       S.bansLoaded = true; paintBans();
     }, function (err) {
-      if (S.destroyed) return; S.bansError = err.message; S.bansCode = err.code || ''; S.bansLoaded = true; paintBans();
+      if (S.destroyed) return; S.bansError = err.message; S.bansCode = err.code || ''; S.bansHint = err.hint || ''; S.bansLoaded = true; paintBans();
     });
   }
   function refreshAll() { loadStatus(); loadAttempts(); loadBans(); }

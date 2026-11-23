@@ -29,11 +29,11 @@
   function fresh() {
     return { root: null, status: null, statusError: '', statusCode: '', statusHint: '',
       count: 0, rules: [], rulesLoaded: false, rulesError: '', rulesCount: 0,
-      bans: [], bansLoaded: false, bansError: '', bansCode: '',
+      bans: [], bansLoaded: false, bansError: '', bansCode: '', bansHint: '',
       logs: [], logSources: [], logsLoaded: false, logsError: '',
       canWrite: false, locked: true, rootMissing: false, busy: false, notice: '', noticeTone: '',
       confirmOff: false, modeMsg: '', modeTone: '', banMsg: '', banTone: '',
-      rootGuide: null, notInstalled: false, destroyed: false };
+      notInstalled: false, destroyed: false };
   }
   var S = fresh();
 
@@ -64,7 +64,7 @@
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
         var err = new Error((data.code ? data.code + '：' : '') + (data.message || ('请求失败（HTTP ' + res.status + '）')));
-        err.code = data.code || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
+        err.code = data.code || ''; err.detail = data.detail || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -121,22 +121,37 @@
     add(h, el('span', 'panel-title', title));
     return { panel: p, head: h, meta: add(h, el('span', 'panel-meta', metaText || '')) };
   }
-  // rootGuide：非 root / 无提权通道的折叠指引（默认收起，先讲怎么办）。
-  function rootGuide(callout) {
-    var box = el('div', 'waf-callout waf-callout-warn');
+  // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
+  // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会空白 / undefined。
+  function errorView(err) {
+    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : null;
+    if (!f || !f.mapped) {
+      return { mapped: false, title: '', action: '', detail: String((err && err.message) || err || '') };
+    }
+    return f;
+  }
+  function failureText(err, verb) {
+    if (!err) return verb + '失败';
+    var f = errorView(err);
+    if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
+    return verb + '失败：' + (err.message || '原因未知') + (err.hint ? '（' + err.hint + '）' : '');
+  }
+  // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
+  function failureBlock(err, cmd) {
+    var f = errorView(err), box = el('div', 'waf-callout waf-callout-warn');
     box.setAttribute('role', 'status');
-    add(box, el('div', 'waf-callout-title', '这一步需要 root 权限，当前没有可用的提权通道'));
-    add(box, el('p', 'waf-callout-text',
-      'kored 以普通用户身份启动时，插件不能自己提权；kore 的设计是让内核代理 root 动作（ADR-0018）。' +
-      '这不影响你查看状态，但改防护模式、封禁/解封 IP 会失败。'));
-    var details = add(box, el('details', 'waf-details'));
-    add(details, el('summary', null, '查看如何配置'));
-    add(details, el('p', 'waf-callout-text', '在服务器上以 root 重启 kored，然后刷新本页：'));
-    add(details, el('pre', 'waf-cmd', 'sudo systemctl restart kore'));
-    add(details, el('p', 'waf-callout-text',
-      'systemd 部署用上面的命令；开发态直接启动可用 sudo ./bin/kored serve --config <你的配置>。'));
-    if (callout) add(details, el('p', 'waf-callout-text', '后端提示：' + callout));
-    var link = add(details, el('p', 'waf-callout-text'));
+    add(box, el('div', 'waf-callout-title', f.mapped ? f.title : '操作失败'));
+    add(box, el('p', 'waf-callout-text', f.mapped
+      ? f.action
+      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '')));
+    if (cmd) add(box, el('pre', 'waf-cmd', cmd));
+    var raw = (err && err.message) ? String(err.message) : '';
+    if (raw) {
+      var details = add(box, el('details', 'waf-details'));
+      add(details, el('summary', null, '查看原始错误'));
+      add(details, el('pre', null, raw));
+    }
+    var link = add(box, el('p', 'waf-callout-text'));
     var a = add(link, el('a', 'waf-link', '查看运行手册'));
     a.href = RUNBOOK_PRIV; a.target = '_blank'; a.rel = 'noopener noreferrer';
     return box;
@@ -178,16 +193,16 @@
     if (S.statusError) {
       if (S.statusCode === 'E_NOTFOUND') {
         // 插件未安装：只留一张「怎么装」的空态卡，隐藏其余面板——
-        // 四个相同的 404 红条不是信息，是噪音。
+        // 四个相同的 404 红条不是信息，是噪音。标题与下一步同样取自映射表。
         S.notInstalled = true;
         hidePanels();
-        S.statusHost.appendChild(emptyBlock('还没有安装 WAF 插件（页面先把「怎么装」给你，不留空白）。',
+        var missing = errorView({ code: S.statusCode, message: S.statusError, hint: S.statusHint });
+        S.statusHost.appendChild(emptyBlock(missing.mapped ? missing.title + '：' + missing.action
+          : '还没有安装 WAF 插件（页面先把「怎么装」给你，不留空白）。',
           '去软件商店安装', goStore));
       } else {
-        S.statusHost.appendChild(notice('状态读取失败：' + S.statusError, 'fail'));
-        if (S.statusHint) {
-          S.statusHost.appendChild(guideFor('状态读取失败', ['这是后端返回的原因，不是登录失效。'], [], S.statusHint));
-        }
+        S.statusHost.appendChild(failureBlock({ code: S.statusCode, message: S.statusError, hint: S.statusHint },
+          S.statusCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
       }
       setLocked(true); return;
     }
@@ -236,7 +251,8 @@
         ['sudo apt install nftables      # Debian / Ubuntu', 'sudo dnf install nftables      # RHEL / Fedora'],
         be.hint || be.reason || ''));
     } else if (rootMissing || !be.channel) {
-      S.statusHost.appendChild(rootGuide(be.hint || be.reason || ''));
+      S.statusHost.appendChild(failureBlock({ code: 'E_NEED_ROOT', message: be.hint || be.reason || '', hint: be.hint || '' },
+        'sudo systemctl restart kore'));
     } else if (!be.present) {
       S.statusHost.appendChild(guideFor('数据面还没初始化（正常，第一次启用时自动建表）',
         ['点下面「只记录不拦截」或「直接拦截」会自动建 kore 自有 nft 表与封禁集合；也可以先加一个封禁 IP。'], [], ''));
@@ -319,15 +335,6 @@
       if (err && err.code === 'E_NEED_ROOT') paintStatus();
     });
   }
-  function failureText(err, verb) {
-    if (!err) return verb + '失败';
-    if (err.code === 'E_NEED_ROOT') return verb + '需要 root 权限：当前 kored 不是以 root 启动的，按状态卡片里的说明重启后重试。';
-    if (err.code === 'E_UNAUTHORIZED') return verb + '被拒绝：需要管理员权限，或确认令牌缺失（关闭防护必须二次确认）。';
-    if (err.code === 'E_UNSUPPORTED') return verb + '失败：' + err.message + '（可能需要升级 nftables）';
-    if (err.code === 'E_NOTFOUND') return verb + '失败：WAF 插件还没装或没有这个方法。';
-    if (err.code === 'E_INVALID') return '参数不合法：' + err.message;
-    return verb + '失败：' + err.message;
-  }
 
   // ---- 封禁名单 ----
   function paintBans() {
@@ -337,13 +344,11 @@
     S.banCount.textContent = S.bansLoaded ? S.bans.length + ' 个' : '';
     if (S.bansError) {
       if (S.bansCode === 'E_NEED_ROOT') {
-        // 权限缺失不铺原始错误码：状态卡已经给过完整指引，这里只留一句「怎么办」。
         S.rootMissing = true; S.canWrite = false; S.locked = true;
-        S.bansHost.appendChild(emptyBlock('需要 root 权限才能读取封禁名单。按上方状态卡里的说明以 root 重启 kored 后刷新本页即可。'));
-        if (S.statusHost) paintStatus();
-      } else {
-        S.bansHost.appendChild(notice('封禁名单读取失败：' + S.bansError, 'fail'));
       }
+      S.bansHost.appendChild(failureBlock({ code: S.bansCode, message: S.bansError, hint: S.bansHint },
+        S.bansCode === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
+      if (S.bansCode === 'E_NEED_ROOT' && S.statusHost) paintStatus();
       return;
     }
     if (!S.bansLoaded) { add(S.bansHost, el('div', 'waf-loading', '正在读取封禁名单…')); return; }
@@ -450,7 +455,6 @@
       return '这个匹配条件暂不支持：' + msg + '。可用的是：ip saddr / ip6 saddr / tcp dport / udp dport / ct state / tcp flags syn。';
     }
     if (/内置/.test(msg)) return '内置规则只能停用不能删除（用「停用」按钮）。';
-    if (err && err.code === 'E_INVALID') return '参数不合法：' + msg;
     return failureText(err, verb);
   }
   function toggleRule(name, enabled, btn) {
@@ -643,13 +647,13 @@
     });
   }
   function loadBans() {
-    S.bansLoaded = false; S.bansError = ''; S.bansCode = ''; paintBans();
+    S.bansLoaded = false; S.bansError = ''; S.bansCode = ''; S.bansHint = ''; paintBans();
     invoke('waf.bans', {}).then(function (data) {
       if (S.destroyed) return;
       S.bans = (data && data.bans) || []; S.bansLoaded = true; paintBans();
     }, function (err) {
       if (S.destroyed) return;
-      S.bansError = err.message; S.bansCode = err.code || ''; S.bansLoaded = true; paintBans();
+      S.bansError = err.message; S.bansCode = err.code || ''; S.bansHint = err.hint || ''; S.bansLoaded = true; paintBans();
     });
   }
   function loadRules() {
