@@ -39,3 +39,10 @@
 - `kored serve` 启动扫描插件目录时，会**跳过「目录存在但状态库未登记」的插件**，打 WARN：`插件目录存在但状态库未登记，跳过 plugin_id=…`。
 - `kored install --package` 会打开 state.db 并原子落库安装；`--scenario` 当前只做参数解析并明确回未实现。**手工解包到 `state/plugins/` 不会写状态库**——目录在、进程不加载、面板看不到。
 - 结论：**「手工解包」不等于安装**。离线安装必须先确认状态库已登记（`GET /api/v1/plugins` 可见），再排查文件权限/版本；否则会得到「文件都在、就是不出现在面板」的静默失败。
+
+## 5. 口径收口注记（2026-11-24）
+
+- **本 ADR 已取代裁决40 的 iframe 桥要求**（`.agents/LOG/DECISIONS.md` 2026-11-22「插件 UI 如何集成进主壳页面」选③：独立站点 origin iframe + postMessage 桥 + `kore_csrf` 改 HttpOnly）。该要求**不是当前要求**，而是本 ADR §2.4 所述未来方案，**未实现、v1.0 前不补**。
+- `AGENTS.md` §6 第 6 条已同步：由「插件 UI 走独立 origin iframe + postMessage 桥…`kore_csrf` 为 HttpOnly（裁决40）」改为「插件 UI = 主壳懒加载视图…`kore_csrf` 为非 HttpOnly 的 CSRF cookie…管理 API 不对插件桥开放——独立 origin iframe + postMessage 桥在 v1.0 前不补、未实现，属未来方案（ADR-0040 已取代裁决40）」。
+- 同时纠正一处事实：`kore_csrf` **不是 HttpOnly**（`internal/core/httpapi/csrf_local.go` 唯一写入点 `HttpOnly: false`；登录/本机补发均复用），双提交要求前端可读；HttpOnly 是裁决40 的目标态，从未落地。实测响应头见 `.agents/verify/plugin-ui-form.md`。
+- 代码证据（22 个主壳视图模块、无 `/plugin-assets/` 路由、桥为 srcdoc 模拟且无插件声明 `web` 段）见 `.agents/verify/plugin-ui-form.md`（锚点 `409ca75`）。
