@@ -24,7 +24,7 @@ M2 的主壳前端是**零依赖静态产物**：没有打包器、没有 `node_
 | 工程细则 | 十条判定条文统一在 FRONTEND §13，实现与验收只认 §13 |
 | **替代方案** | 可自研 Canvas/SVG 或换轻量库，前提是**逐条满足 FRONTEND §13**；选型理由、体积与实例证据须另开 ADR 或在本文追加「备选实施记录」。**ECharts 不是唯一方案、不是硬指标** |
 
-**当前状态（2026-11-23）**：首选方案的基础设施已落地并经验收——`web/charts.js` + `web/charts/echarts-entry.js` + `scripts/build-charts.sh` + `make charts` + `web/embed.go` 两行 + `frontend-check` 图表卡口，提交 `cc47bac`（chunk 443910 B / gzip 149053；二进制 +471040 → 10477730 B，红线 26214400）。**该实现已就绪，但当前无页面消费者**：监控页历史曲线走**自研 Canvas + LTTB**（用户裁决 2026-11-23）。若后续二进制预算收紧，首个裁剪动作是**移除 embed 两行并暂缓 vendor chunk**，不需要改判据。若 `cc47bac` 被回退，以 `git log -- web/charts.js` 的实际状态为准。
+**当前状态（2026-11-23）**：首选方案曾随 `cc47bac` 落地并按当时门禁通过——`web/charts.js` + `web/charts/echarts-entry.js` + `scripts/build-charts.sh` + `make charts` + `web/embed.go` 两行 + `frontend-check` 图表卡口（chunk 443910 B / gzip 149053）。随后被并发会话 `c9a5336` **整体回退**（`da5b88f` 同轮回退了 §13 校准）。**当前 HEAD 无该实现**：无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行；ECharts 无在树实现、无页面消费者。**体积（同刻对照，非当前工作区二进制）**：回退后干净 HEAD `bin/kored` = **10027170 B（9.56 MiB）**；含 charts embed 的同刻构建 = **10477730 B**，差值 **+450560 B** = 两产物原始 448436 B + embed 索引开销 2124 B；红线 26214400 B 不变。首屏六件套 gzip 59709 B（不受图表影响）。**ECharts 仍是首选方案但当前不在树**；恢复**不是一条命令**——`git revert c9a5336` 在当前 HEAD 会因 `web/embed.go` 冲突而失败，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh`，并与并发会话协调避免再次互回退，不重新设计。监控页历史曲线当前走**自研 Canvas + LTTB**（用户裁决 2026-11-23，`9468f05 [agent:monitor-canvas]`）。若后续二进制预算收紧，首个裁剪动作仍是**移除 embed 两行并暂缓 vendor chunk**，不需要改判据。
 
 **边界声明**：本 ADR 论证的是「首选方案为什么值得一个首屏 / 体积例外」，不构成"以后前端可以随便引第三方运行时"的先例——新增第二个前端运行时依赖必须另开 ADR；替代实现不需要重开本 ADR，但必须在 ADR 或本文留下选型记录，且不得破首屏与二进制预算。
 

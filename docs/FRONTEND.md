@@ -349,7 +349,7 @@ var Dist embed.FS
 
 **定调**：图表实现**不锁定具体库**——**ECharts5 按需 ESM 是首选默认方案，不是硬指标**。任何实现（自研 Canvas/SVG、其他轻量库、或 ECharts）只要逐条满足下列判据即可合入；换方案须在 [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)（或新 ADR）记录选型理由与体积 / 实例证据。图表是**非首屏能力**：任何方案都不得进首屏，`d(首屏)/d(图表数)=0`。
 
-**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**，未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；ECharts 基础设施（`web/charts.js` / `web/charts/echarts-entry.js` / `scripts/build-charts.sh` / `make charts`）已就绪但**当前无页面消费者**（见 ADR-0027）。判据对两种实现同等适用。
+**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**（`9468f05 [agent:monitor-canvas]`），未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；实测锚点：`web/monitor.js` 的 `lttbSample`（约 :259）、`devicePixelRatio` 缩放（约 :302）、验收钩子 `window.__koreMonitorChart`（约 :702），行号以 `grep -n` 为准。ECharts 基础设施曾随 `cc47bac` 落地并按当时门禁通过，随后被并发会话 `c9a5336` 整体回退（`da5b88f` 同轮回退了 §13 校准）；**当前 HEAD 无该实现**——无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行，也**无页面消费者**（见 ADR-0027）。ECharts 仍是首选方案但当前不在树；恢复**不是一条命令**（`git revert c9a5336` 会因 `web/embed.go` 冲突，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh` 并与并发会话协调），不重新设计。以 `git log -- web/charts.js` 与 `git cat-file -e HEAD:web/charts.js` 的实际状态为准；判据对两种实现同等适用。
 
 **首选默认方案（ECharts）的契约文件**——选其它方案时这些文件可以不存在，但 §13 判据不变：
 
