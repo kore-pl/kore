@@ -20,6 +20,7 @@
   'nav.firewall': '防火墙',
   'nav.waf': 'Web 防火墙',
   'nav.dns': 'DNS 解析',
+  'nav.discover': '服务发现',
   'nav.sshguard': 'SSH 防护',
   'nav.runtimes': '运行环境',
   'nav.integrity': '完整性',
