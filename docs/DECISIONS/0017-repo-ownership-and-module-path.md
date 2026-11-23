@@ -29,9 +29,9 @@
 ## 决策
 
 - 仓库归属：**`pengtang1024`（个人账号）**
-- 内核 module：`github.com/pengtang1024/kore`
-- SDK 子模块：`github.com/pengtang1024/kore/pkg/pluginapi`（子目录 tag `pkg/pluginapi/v0.1.0`）
-- 插件仓：`github.com/pengtang1024/kore-plugin-<id>`；索引仓 `github.com/pengtang1024/kore-plugins`
+- 内核 module：`github.com/kore-pl/kore`
+- SDK 子模块：`github.com/kore-pl/kore/pkg/pluginapi`（子目录 tag `pkg/pluginapi/v0.1.0`）
+- 插件仓：`github.com/kore-pl/kore-plugin-<id>`；索引仓 `github.com/kore-pl/kore-plugins`
 
 ## 影响面（已落地的改动）
 
@@ -58,3 +58,10 @@ M1 的 11 个 commit 作者与提交者邮箱为 `pengtang1024@qq.com`；用户�
 - [ADR-0013](./0013-extreme-resource-frugality.md)（资源极简）、[ADR-0016](./0016-resource-budget-final.md)（预算定案）
 - [OPEN-SOURCE.md](../OPEN-SOURCE.md) §1 版权与归属 / §2 多仓库许可一致性
 - [REPOS.md](../REPOS.md) 仓库拓扑与 `replace` 规则（`=> ./pkg/pluginapi` 仍必须提交）
+
+## 迁移记录（2026-11-23）
+
+决策 C（使用个人账号 `pengtang1024`）中"未来仍可迁组织"的条件已兑现：
+全部 26 个仓库已迁移至 `kore-pl` 组织（GitHub），gitee 镜像暂不迁移。
+原决策内容保留不变，仅在此追加迁移事实。旧地址 `pengtang1024/*`（GitHub 旧 owner）
+会 302 重定向到新地址。
