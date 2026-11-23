@@ -25,7 +25,7 @@
       l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null,
       // 慢查询分析（db-mysql.slowlog）：阈值/条数只存预设档位，schema 空串=全部库。
       slowlog: null, slowlogError: '', slowlogBusy: false, slowlogLoaded: false,
-      slowlogSchema: '', slowlogMinMS: 500, slowlogLimit: 20,
+      slowlogSchema: '', slowlogMinMS: 500, slowlogLimit: 20, slowlogOpen: false,
       slowlogFormHost: null, slowlogMetaHost: null, slowlogHost: null };
   }
   var S = fresh();
@@ -611,13 +611,31 @@
     formHost.textContent = '';
     if (S.slowlogMetaHost) S.slowlogMetaHost.textContent = '';
     resultHost.textContent = '';
-    // 实例：跟随当前选中实例，只读展示（不在本面板里切换实例，避免与左栏状态打架）。
+    // 实例：下拉切换选中实例；切换后 databases / query / slowlog 都按新实例取数。
     var instWrap = add(formHost, el('label', null, '实例'));
     var instSel = add(instWrap, el('select', null));
-    instSel.setAttribute('aria-label', '实例（跟随当前选中实例）');
-    instSel.disabled = true;
-    var instOpt = add(instSel, el('option', null, S.selected || '未选择'));
-    instOpt.value = S.selected || '';
+    instSel.setAttribute('aria-label', '切换实例');
+    (S.instances || []).forEach(function (inst) {
+      var opt = add(instSel, el('option', null,
+        inst.name + (inst.reachable ? '' : '（不可达）')));
+      opt.value = inst.name;
+      if (inst.name === S.selected) opt.selected = true;
+    });
+    if (!(S.instances || []).length) {
+      var only = add(instSel, el('option', null, S.selected || '未选择'));
+      only.value = S.selected || '';
+    }
+    instSel.addEventListener('change', function () {
+      var next = instSel.value;
+      if (!next || next === S.selected) return;
+      selectInstance(next);
+    });
+    // 当前实例不可达时给下一步，而不是只留一个报错。
+    var activeInst = currentInstance();
+    if (activeInst && !activeInst.reachable) {
+      add(formHost, el('p', 'db-slow-raw',
+        '当前实例不可达：点上方实例卡或右上角「设置」修改连接后重试，也可切到其他可达实例。'));
+    }
     // 库：全部 + 已加载的库列表。
     var schemaWrap = add(formHost, el('label', null, '库'));
     var schemaSel = add(schemaWrap, el('select', null));
@@ -795,6 +813,7 @@
     // 慢查询分析放在折叠区：不展开就不发查询；PG 无 db-mysql.slowlog，不渲染。
     if (!isPg()) {
       var slow = add(host, el('details', 'panel db-l2-panel'));
+      slow.open = !!S.slowlogOpen;
       var slowSum = add(slow, el('summary', 'db-l2-summary'));
       add(slowSum, el('span', 'panel-title', '慢查询分析'));
       S.slowlogMetaHost = add(slowSum, el('span', 'panel-meta', '按总耗时排序'));
@@ -805,6 +824,7 @@
       S.slowlogFormHost = add(slowBody, el('div', 'db-slow-form'));
       S.slowlogHost = add(slowBody, el('div', 'db-slow-result'));
       slow.addEventListener('toggle', function () {
+        S.slowlogOpen = slow.open;
         if (slow.open) paintSlowlog();
       });
       paintSlowlog();
