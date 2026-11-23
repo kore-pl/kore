@@ -134,8 +134,12 @@ func TestInstallForceReplacesSameVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取插件目录失败: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "0.1.0" {
-		t.Fatalf("force 成功后不应残留备份目录，实际: %v", entries)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if strings.Join(names, ",") != "0.1.0,current" {
+		t.Fatalf("force 成功后只应有版本目录与稳定链接（current），实际: %v", names)
 	}
 }
 

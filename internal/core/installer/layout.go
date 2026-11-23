@@ -2,6 +2,7 @@ package installer
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,6 +13,17 @@ import (
 
 // stashSuffix 是强制重装时旧版本目录的暂存后缀（同一父目录内，成功后即删除）。
 const stashSuffix = ".bak-"
+
+// currentLinkName 是插件的稳定入口：<pluginRoot>/<id>/current -> <version>。
+//
+// 为什么需要它：插件要把自己的二进制路径写进**宿主**计划任务（如 cron 的 crontab），
+// 而宿主条目的生命周期长于插件版本。若写 <root>/<id>/<version>/bin/<id>，升级后
+// 旧条目会继续执行旧版本且没有任何提示。稳定链接由安装器维护，升级时原子切到新版本，
+// 条目只写 <root>/<id>/current/bin/<id> 即可自动跟随。
+//
+// 链接目标是**相对路径**（版本目录名），因此整个状态目录可搬迁；更新用临时链接 +
+// rename 覆盖，不存在“链接短暂消失”的窗口（那个窗口里 cron 到点会失败）。
+const currentLinkName = "current"
 
 // newStaging 在插件根目录的 .staging 下建唯一临时目录并收紧权限。
 func (in *Installer) newStaging(ref pkgRef) (string, error) {
@@ -55,11 +67,26 @@ func (in *Installer) commit(staging string, manifest *registry.Manifest, sum str
 		in.restoreStash(final, stash)
 		return nil, wrap(ErrStateDir, "设置版本目录权限失败：%v", err)
 	}
+	prevCurrent, linkErr := in.updateCurrentLink(final, manifest.Version)
+	if linkErr != nil {
+		// 不阻断安装：符号链接在部分平台（Tier B Windows）需要额外权限。
+		// 但绝不留下指向旧版本的稳定链接——那正是本机制要消灭的“静默跑旧版本”；
+		// 移除后 cron.list 会报 missing，降级可见。
+		in.logger.Warn("维护插件稳定路径失败，安装继续（cron 等插件会退化为版本路径并依赖启动迁移）",
+			"plugin_id", manifest.ID, "version", manifest.Version,
+			"stable", filepath.Join(filepath.Dir(final), currentLinkName), "err", linkErr)
+		if rmErr := in.replaceCurrentLink(filepath.Dir(final), ""); rmErr != nil {
+			in.logger.Error("移除指向旧版本的稳定链接失败，稳定路径可能仍指向旧版本",
+				"plugin_id", manifest.ID, "err", rmErr)
+		}
+		prevCurrent = ""
+	}
 	if err := in.record(manifest, sum); err != nil {
 		if rmErr := os.RemoveAll(final); rmErr != nil {
 			in.logger.Error("回滚已落位目录失败，需人工清理", "dir", final, "err", rmErr)
 		}
 		in.restoreStash(final, stash)
+		in.restoreCurrentLink(final, prevCurrent)
 		return nil, err
 	}
 	in.dropStash(stash)
@@ -93,6 +120,55 @@ func (in *Installer) restoreStash(final, stash string) {
 	}
 	if err := os.Rename(stash, final); err != nil {
 		in.logger.Error("回滚旧版本目录失败，需人工清理", "stash", stash, "dir", final, "err", err)
+	}
+}
+
+// updateCurrentLink 把 <id>/current 原子指向 version（相对链接），返回更新前目标
+// （"" 表示原先没有链接），供落库失败时回滚。
+func (in *Installer) updateCurrentLink(final, version string) (string, error) {
+	dir := filepath.Dir(final)
+	current := filepath.Join(dir, currentLinkName)
+	prev := ""
+	if target, err := os.Readlink(current); err == nil {
+		prev = target
+		if prev == version {
+			return prev, nil
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", wrap(ErrStateDir, "读取插件稳定链接失败：%v", err)
+	}
+	if err := in.replaceCurrentLink(dir, version); err != nil {
+		return "", err
+	}
+	return prev, nil
+}
+
+// replaceCurrentLink 用临时链接 + rename 原子替换 <id>/current；target 为空表示移除。
+// rename 覆盖保证任何时刻 current 要么指向旧版本、要么指向新版本，不会短暂缺失。
+func (in *Installer) replaceCurrentLink(dir, target string) error {
+	current := filepath.Join(dir, currentLinkName)
+	if target == "" {
+		if err := os.Remove(current); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return wrap(ErrStateDir, "移除插件稳定链接失败：%v", err)
+		}
+		return nil
+	}
+	temp := filepath.Join(dir, fmt.Sprintf(".current.%d.%d", os.Getpid(), time.Now().UnixNano()))
+	if err := os.Symlink(target, temp); err != nil {
+		return wrap(ErrStateDir, "创建插件稳定链接失败：%v", err)
+	}
+	if err := os.Rename(temp, current); err != nil {
+		_ = os.Remove(temp)
+		return wrap(ErrStateDir, "更新插件稳定链接失败：%v", err)
+	}
+	return nil
+}
+
+// restoreCurrentLink 在安装失败时把稳定链接还原到更新前的目标；失败只记 ERROR。
+func (in *Installer) restoreCurrentLink(final, prev string) {
+	dir := filepath.Dir(final)
+	if err := in.replaceCurrentLink(dir, prev); err != nil {
+		in.logger.Error("回滚插件稳定链接失败", "plugin_id", filepath.Base(dir), "target", prev, "err", err)
 	}
 }
 
