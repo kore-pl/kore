@@ -64,8 +64,6 @@
 
 ## 6. 门禁与提交
 
-- `make frontend` PASS（首屏 59308 B / 307200 B，余量 247892 B）
-- `make docs-check`：5 pass / 1 warn / **0 fail**（WARN 不阻断）
-- `make check`：11/11 段全部通过，secret-check 0 FAIL
+- `make frontend` PASS（首屏 59308 B / 307200 B）；`make docs-check` 5 pass/1 warn/**0 fail**；`make check` 11/11 段全过、secret-check 0 FAIL。
 - 隔离实例已停、/tmp 临时脚本与配置已删；本轮未改动 8787 主实例任何运行态配置。
 - 提交：`feat(web): 设计基座——字号五档/角标修复/z-index 表/商店图标`（本地 commit，不 push，safe-commit CAS）
