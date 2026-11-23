@@ -28,7 +28,7 @@
 | --- | --- | --- | --- | --- |
 | 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；**本机通道不是认证**（§3.2，ADR-0043）：`withAuth` 对全部 `/api/v1/*` 一律会话校验，本机 UDS / loopback 未登录同样是 401 + 登录页；「操作免密」只指登录一次后的 7 天滑动会话；**远程**另需 PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时远程口令走明文 |
 | 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（进程内存全局桶，见 §3.5）、恒定时间比较 | 慢速低频爆破（单机场景收益低）；锁定期随重启清零 |
-| CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token + `X-Kore-CSRF` + Origin 校验 | 同站 XSS 可绕过全部三层 |
+| CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token（两方，非会话绑定）+ `X-Kore-CSRF` + Origin 校验 | 同源 XSS 可绕过全部三层（纯双提交无会话绑定兜底，见 §4） |
 | 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、默认 168h（7 天）滑动 TTL（阈值 `min(24h, ttl/2)`，绝对上限 30 天）、登出即删 | 同机 root 可读浏览器进程内存；**无 UA/IP 指纹绑定**，被盗 cookie 可在其它浏览器重放 |
 | 插件越权调用 | 低权插件请求 `system:admin` 方法 | 宿主被改写 | capabilities 三处校验（安装/授予/调用）+ 审计 | 用户安装时授予过宽能力 |
 | 恶意插件包 | 安装来路不明的包 | 以 `kore-<id>` 执行任意代码 | M4 起 ed25519 强制签名；独立 uid + cgroup | M0–M3 未签名期无法证明来源 |
@@ -115,7 +115,10 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 三层同时启用，任一层失败即拒绝：
 
 1. **`SameSite=Strict`**：跨站请求不携带会话 cookie。
-2. **双提交 token**：登录成功下发 `kore_csrf=<32 字节 hex>`（**非 HttpOnly**，前端需读取）并与 session 绑定；前端每个写请求带 `X-Kore-CSRF: <值>`；服务端比对 `header == cookie == sessions.csrf`。
+2. **双提交 token（只做两方比对，没有会话绑定）**：登录成功下发 `kore_csrf=<32 字节 hex>`（**非 HttpOnly**，双提交要求前端可读）；前端每个写请求带 `X-Kore-CSRF: <值>`；服务端**只比对 `header == cookie`**（`internal/core/httpapi/middleware.go` 的 `withCSRF`，常量时间比较）。**`auth.Session` 没有 `csrf` 字段**（`internal/core/auth/session.go:40-47` 只有 `TokenHash` / `ExpiresAt` / `CreatedAt`），服务端不存"这个 token 属于哪个会话"——这是纯双提交，不是会话绑定。
+   - **当前防什么**：攻击者页面读不到受害者的 `kore_csrf`（跨源读 cookie 被同源策略挡住），因此无法给伪造的写请求补上匹配的 `X-Kore-CSRF`；叠加上 `SameSite=Strict` 与 `Origin` 校验，挡得住跨站伪造型 CSRF。
+   - **不防什么**：**同源 XSS**。token 必须让前端脚本可读，XSS 就能读出它并同时写进 cookie 与 header，两方比对自洽通过——这道门对同源 XSS 等于不存在。
+   - **与会话绑定的真实差距（残余风险）**：目标态是服务端在 session 上存 csrf 并三方比对 `header == cookie == sessions.csrf`、token 改 `HttpOnly` 使脚本读不到（[ADR-0040](./DECISIONS/0040-plugin-ui-distribution.md) §2.4 的未来方案，v1.0 前不实现）。差这一维的后果有两条：① 同源 XSS 能读到 token 并复用，而会话绑定 + `HttpOnly` 下 XSS 读不到；② 两方比对只证明"两个位置一致"，**不证明这个 token 属于当前会话**——兄弟子域 / 中间人注入一对自洽的 cookie+header 即可绕过，服务端没有参照值可校验。因此**不得把本实现按"会话绑定 CSRF"评估**；实际强度取决于 `SameSite=Strict` + `Origin` 校验 + 同源 XSS 面收敛（会话 cookie 是 `HttpOnly`）。
 3. **同源校验**：`Origin`（缺失时倒退 `Referer`）必须与请求 `Host` 同源；**非 GET 请求缺 Origin/Referer 直接 `E_UNAUTHORIZED`**。
 
 所有非 GET 必须带 `X-Kore-CSRF`；`GET /-/healthz`（探针例外，不带业务前缀）与 `GET /api/v1/events` 例外（只读），但 SSE 仍要求有效 session cookie，`SameSite=Strict` 阻止跨站 `EventSource`。

@@ -71,9 +71,9 @@
 
 ## 4. 插件前端契约
 
-**安全边界（裁决40）**：插件 UI **不进主壳 realm**。插件前端在**独立站点 origin 的 iframe** 中运行——必须是与站点不同的 origin，**不只是不同端口**：`SameSite=Strict` 按 site 判定，同站不同端口仍会带主域 cookie，因此子帧必须跨站，读不到 `kore_csrf`、不带主域 cookie。插件不碰主壳 cookie / csrf / DOM，只经 postMessage 桥调 `invoke`。`kore_csrf` 改 HttpOnly；管理 API 永不对桥开放。**服务端根因单列**：管理端点（如 `/api/v1/plugins/{id}/enable`，`middleware.go:24-25` 只查 session+CSRF）缺"按目标操作做 capability 校验"，列为 M4 待办独立修补，客户端 UI 隔离只是兜底，不由本方案代替。
+**安全边界（ADR-0040 取代裁决40）**：v1.0 的**现行**边界是**主壳 realm + 主壳 API 鉴权**——插件 UI 就是主壳内的懒加载视图（`web/<id>.js`），与主壳同 realm，所有动作走主壳会话（`HttpOnly` cookie）+ CSRF 双提交 + `Origin` 校验（[SECURITY](./SECURITY.md) §4），不额外开第二条信任通道。**独立站点 origin 的 iframe + postMessage 桥是未来方案**（[ADR-0040](./DECISIONS/0040-plugin-ui-distribution.md) §2.1「v1.0 前不补」/ §2.4「保留为未来方案并标注未实现」），**v1.0 前不实现**：`/plugin-assets/` 路由不存在（`internal/core/httpapi/handlers.go` 的 `routes()` 无该前缀，实测 404）；24 个插件仓 `info.json` **无一声明 `web` 段**（`entry` 全部是顶层 `bin/<id>`，`web.entry` 零命中）；`kore_csrf` 仍为**非 `HttpOnly`**（双提交要求前端可读）。下面 4.1 / 4.2 的 iframe 分发链与 `web/` 段字段即属该未来方案，按 ADR-0040 §2 保留标注、**不得据此建链**；管理 API 永不对任何桥（现在或未来）开放。**服务端根因单列**：管理端点（如 `/api/v1/plugins/{id}/enable`，`middleware.go:24-25` 只查 session+CSRF）缺"按目标操作做 capability 校验"，列为 M4 待办独立修补，视图隔离只是兜底，不由本方案代替。
 
-**首屏纪律**：首屏只加载主壳三件套，插件 UI 按需入 iframe，`d(首屏)/d(插件数)=0`——装 100 个插件首屏体积不变。`kore` 的 `go:embed` 只含主壳前端，不含任何插件资产；插件前端永不进主二进制。
+**首屏纪律**：首屏只加载主壳三件套，插件 UI 按需懒加载（未来方案下才是按需入 iframe），`d(首屏)/d(插件数)=0`——装 100 个插件首屏体积不变。`kore` 的 `go:embed` 只含主壳前端，不含任何插件资产；插件前端永不进主二进制。
 
 ### 4.1 清单来源
 

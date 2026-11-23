@@ -140,9 +140,11 @@ func isCSRFExempt(path string) bool {
 // 用常量时间比较避免时序侧信道。仅在启用鉴权时由 New 挂载：auth==nil 的
 // M0 探活骨架没有会话/cookie 体系，不引入 CSRF 门禁。
 //
-// TODO(M4, 裁决40): 服务端应把 header/cookie 与 sessions.csrf 三方比对，
-// 并把 kore_csrf 改为 HttpOnly（客户端 UI 改走独立 origin iframe + postMessage 桥）。
-// 本阶段 auth.Session 无 csrf 字段且写域禁止改 auth 模块，故先做双提交两方比对。
+// 关于"三方比对"（header == cookie == sessions.csrf）：那**不是待办事项**，而是
+// ADR-0040 §2.4 所述未来方案的一部分——与独立 origin iframe + postMessage 桥、
+// kore_csrf 改 HttpOnly 同属一条未实现的链路，v1.0 前不补。
+// 现状（事实口径）：auth.Session 至今无 csrf 字段，服务端只做两方比对；残余风险
+// （纯双提交不防"同源 XSS 读 cookie 后伪造"，会话绑定可防）见 SECURITY.md §4。
 func (s *Server) withCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isCSRFExempt(r.URL.Path) || isSafeMethod(r.Method) {
