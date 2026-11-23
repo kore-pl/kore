@@ -20,7 +20,7 @@
 | G10 | 无联网 / 无遥测 | 对 `internal/core` 执行出网客户端与上报关键词扫描：`http.Client`、`net.Dial`（UDS 除外）、`telemetry`、`analytics`、`report`、`phone-home` | 命中数 = 0（UDS 与本机 127.0.0.1 监听不计） | 删除出网代码；确需联网的功能必须进插件并走能力白名单 | verifier | 里程碑 |
 | G11 | 仓库边界（含 `replace` 边界） | `grep -rn "plugins/" internal/ cmd/`；另查仓库内是否存在 `plugins/*/main.go` 形态的插件代码；插件仓查 `go.mod` 的 `replace`：`grep -rn "=> \.\./" ` 与绝对路径形式 | 前两项命中数均为 0；跨仓 `replace`（`=> ../` 或绝对路径）命中数 = 0；**同仓嵌套 module 的 `replace => ./pkg/pluginapi` 不拦** | 插件代码迁出到 `kore-plugin-<id>`；跨仓联调改走 `go.work`（不提交）；同仓 `replace => ./` 保留 | verifier | 合并前 |
 | G12 | 协议兼容 | 读插件仓库 `info.json` 的 `requires_kore`，与 `kore` 的 `VERSION` 做区间比对；**lifecycle 解析（M1 起）**：`lifecycle` 接受 `resident` / `lazy` / `oneshot` 三值并落盘，M1 运行期只支持 `resident`，遇 `lazy` / `oneshot` 返回 `E_UNSUPPORTED`（message 写明"M2 支持"） | 语义化区间包含当前 `kore` 版本；破坏性改动必须主版本 + ADR；`lazy` / `oneshot` 在 M1 返回 `E_UNSUPPORTED` 属**预期**，不算缺陷 | 插件侧改 `requires_kore`；或按 ADR 升主版本并同步索引；M1 期把 `lazy` / `oneshot` 的断言改成"接受字段 + 返回 E_UNSUPPORTED" | verifier | 里程碑（跨仓库变更前移到合并前） |
-| G13 | 兼容性（三平台） | ① `make compat-info`（打印 build flags 与 link flags + `file` + `go version -m`）；② `GOOS=windows GOARCH=amd64 go build ./...`；③ `GOOS=darwin GOARCH=arm64 go build ./...`；④ `grep -rn --exclude-dir=platform "syscall\." internal/core`；⑤ `grep -rn "可能不支持" docs/`。flags 口径：**build flags** = `CGO_ENABLED=0 GOAMD64=v1 GOARM64=v8.0 -trimpath -buildvcs=false`（`-buildvcs` 是 build flag，塞进 `-ldflags` 会报 `flag provided but not defined`）；**link flags** = `-s -w` | ① build flags 与上述一致、`file` 为静态无 interpreter、`go version -m` 无 `-buildvcs` 污染；②③ 退出码 0（M1 起）；④ 零命中；⑤ 零命中 | ②③ 挂 → 把平台分支收进 `internal/platform` 或修构建标签；④ 有命中 → 迁进 `internal/platform`；⑤ 有命中 → 把“可能不支持”改成明确降级行为 | verifier | 里程碑 |
+| G13 | 兼容性（三平台） | ① `make cross-build`（`make check` **第 17 段，阻断级**；复用 `make cross` 五目标真编译——含 ③④ 两条 G-16 明文命令 + linux/amd64 · linux/arm64 · darwin/amd64；失败贴**首个编译错误原文**并 exit 1）；② `make compat-info`（**信息入口，不阻断**：build flags 与 link flags + `file` + `go version -m`）；③ `GOOS=windows GOARCH=amd64 go build ./...`；④ `GOOS=darwin GOARCH=arm64 go build ./...`；⑤ `grep -rn --exclude-dir=platform "syscall\." internal/core`；⑥ `grep -rn "可能不支持" docs/`。flags 口径：**build flags** = `CGO_ENABLED=0 GOAMD64=v1 GOARM64=v8.0 -trimpath -buildvcs=false`（`-buildvcs` 是 build flag，塞进 `-ldflags` 会报 `flag provided but not defined`）；**link flags** = `-s -w` | ① 退出码 0（五目标**真编译**，不只验参数）；② build flags 与上述一致、`file` 为静态无 interpreter、`go version -m` 无 `-buildvcs` 污染；③④ 退出码 0（M1 起）；⑤ 零命中；⑥ 零命中 | ①③④ 挂 → 把平台分支收进 `internal/platform` 或修构建标签；⑤ 有命中 → 迁进 `internal/platform`；⑥ 有命中 → 把“可能不支持”改成明确降级行为。**2026-11-23 教训**：旧 `make check` 第 2 段只 grep Makefile 里「是否列了五个 target 名字」，真正编译的 `cross` 只挂在 `compat-info` 上而 `check` 从不调用——`cmd/kored/uninstall.go` 引用仅 linux-tagged 的 `platform.UnitFileName`，windows/darwin 全红数小时无人发现。**门禁必须真跑构建，不能只验参数文本** | verifier | 里程碑 |
 | G14 | 空闲行为 | `make idle`（可用，约 65s）；等价手工取证：`/proc/<pid>/stat` 取 utime+stime 前后差、`/proc/<pid>/task` 计数、`/proc/<pid>/fd` 计数、`ss -tnp` | 空载 60s CPU 时间 ≤ 60ms、goroutine ≤ 20、fd ≤ 64、出站连接 0、定时器仅 `scheduler`（单实例单 ticker，ADR-0019；`cert_renew` 已迁移为内置任务）；`make idle` 扫描白名单 = `internal/core/scheduler/` 目录 + `cert_renew`，其余 `NewTicker/AfterFunc` 仍判 FAIL；不得有轮询循环，lazy 插件不得用内部 ticker 续命 | 去掉轮询改事件推送；lazy 插件必须在空闲后真正退出；超预算先砍定时器再谈优化 | verifier | 里程碑 |
 | G15 | 深度等级（M3 起） | `grep -r "depth_level" <插件仓>/info.json`；查对标矩阵标注；查 `production` 插件的 `tests/fault/` 目录 | `depth_level` 存在且 ∈ {`production`,`basic`}；`basic` 在对标矩阵中不得标"生产级"；`production` 必须有 `tests/fault/` 且故障注入用例可跑 | 缺 `depth_level` → 不进商店；标错等级 → 改矩阵并复核；没有 `tests/fault/` → 降级为 `basic` 或补测试 | verifier | 里程碑（M3 起） |
 | G16 | 无副作用的诊断代码（M1 起） | `grep -rn "SetGCPercent(-1)" --include='*.go' .` 与 `grep -rn "SetMemoryLimit(-1)" --include='*.go' .` **双零命中**；另查同形态"设置即读取"API（`debug.SetMemoryLimit` / `debug.SetGCPercent` / `debug.SetMaxThreads` 等传负数的写法） | 两条 grep 命中数均为 0；读取运行时配置只允许 `runtime/metrics`，或记录"自己设置过的值" | 视为 **P0**（会静默改变运行时行为）：日志里的 `SetGCPercent(-1)` 实测会**关闭 GC**；改为记录自己设置的值或走 `runtime/metrics`，并补回归测试（`setRuntimeLimits()` 后分配内存必须观察到 GC 次数增长） | verifier | 合并前 |
@@ -50,8 +50,8 @@
 
 | 门禁 | `make check` 段位 | 级别 | 理由 | 转阻断条件 |
 | --- | --- | --- | --- | --- |
-| `store-check` | 14/16 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状 **24 pass / 0 fail / 0 warn**。判据已与 G-17 / 协议 §3.1 对账：`description` 不在必填 9 字段内，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判、全缺只 WARN——原先「23 仓缺同一个 `description`」的阻断理由已消失，但**是否转阻断级需单独裁决**（本段不擅自升级） | 转阻断级条件：单独裁决确认后续插件仓变更不会大面积打红后切换 |
-| `presets-check` | 15/16 | **阻断** | 现状 7 pass / 8 warn / 1 fail：8 条 `depth_level` 索引↔仓库不一致按「已知待裁决」计 WARN（清单即 `scripts/depth-level-pending.txt`，等产品裁决方向），1 条 FAIL 是 `db-only.json` 的 G-20 违规（`out_of_box=true` 引用索引 `basic` 的 `db-postgres`）——**这是存量数据缺陷，不是判据放宽**；判据先把「新增不一致」钉死为 FAIL；且 preset 是用户可见的装配入口，版本区间解析失败 / 深度等级错标都会直接误导安装 | 存量 8 条裁决落定（更新索引值）后，从清单删除对应 id，`presets-check` 回到 0 warn；`db-only` 修掉后 FAIL 归零，才可维持阻断 |
+| `store-check` | 14/17 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状 **24 pass / 0 fail / 0 warn**。判据已与 G-17 / 协议 §3.1 对账：`description` 不在必填 9 字段内，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判、全缺只 WARN——原先「23 仓缺同一个 `description`」的阻断理由已消失，但**是否转阻断级需单独裁决**（本段不擅自升级） | 转阻断级条件：单独裁决确认后续插件仓变更不会大面积打红后切换 |
+| `presets-check` | 15/17 | **阻断** | 现状 7 pass / 8 warn / 1 fail：8 条 `depth_level` 索引↔仓库不一致按「已知待裁决」计 WARN（清单即 `scripts/depth-level-pending.txt`，等产品裁决方向），1 条 FAIL 是 `db-only.json` 的 G-20 违规（`out_of_box=true` 引用索引 `basic` 的 `db-postgres`）——**这是存量数据缺陷，不是判据放宽**；判据先把「新增不一致」钉死为 FAIL；且 preset 是用户可见的装配入口，版本区间解析失败 / 深度等级错标都会直接误导安装 | 存量 8 条裁决落定（更新索引值）后，从清单删除对应 id，`presets-check` 回到 0 warn；`db-only` 修掉后 FAIL 归零，才可维持阻断 |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
 
@@ -160,7 +160,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **16 段门禁**（docs-check / 依赖白名单 + 兼容基线 / 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **17 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -178,7 +178,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 16 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 17 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
