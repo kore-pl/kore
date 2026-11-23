@@ -115,7 +115,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 
 | 问题 | 规则 |
 | --- | --- |
-| 谁唤醒 lazy | 四种：① bus 转发调用前查 supervisor，未运行 → 冷启动并**排队**（上限 32，超限 `E_RATELIMIT`）；② 事件订阅命中；③ 显式 `enable`；④ **宿主调度器触发**——`cron` 插件写入的 `systemd timer` / `/etc/cron.d/kore-*` / launchd / Task Scheduler 到点调用 `kored invoke <plugin> <method>`，主壳自身**无 ticker** |
+| 谁唤醒 lazy | 四种：① bus 转发调用前查 supervisor，未运行 → 冷启动并**排队**（上限 32，超限 `E_RATELIMIT`）；② 事件订阅命中；③ 显式 `enable`；④ **内核 scheduler 到点触发**——`internal/core/scheduler`（ADR-0019，单实例单 ticker，无启用任务即零 ticker）扫描 `state.db` 的 `scheduler_tasks`，到点按 `{plugin,method,params}` 经 bus 调用并冷启动目标插件；任务由 `POST /api/v1/scheduler/tasks` 创建。**没有对外 CLI 唤醒入口**：`kored invoke` 未实现，宿主 systemd timer / crontab 不能直接唤醒插件 |
 | 空闲判定 | supervisor 记 `last_used_at`；空闲满 **300 s** 进入 drain：停接新调用 → 等在途 ≤2 s → `kore.shutdown` → 5 s → `SIGKILL` |
 | 冷启动互斥 | 同一插件同时只允许 1 次 cold start，其余请求并入等待队列；hello 失败则整队返回 `E_UPSTREAM` |
 | 配额（resident） | **默认 ≤2 个（`site`+`monitor`，16 MiB，`resources.resident_max=2`）**；总数硬上限 3（resident + 活跃 lazy）、合计 ≤24 MiB、单个 ≤12 MiB。**第 3 个 resident 启用直接拒绝**（`E_RATELIMIT` + 当前 resident 列表），resident **不自动踢人**；lazy 至少保留 1 槽 |
@@ -310,7 +310,7 @@ ADR 文件命名 `docs/DECISIONS/<4 位序号>-<kebab-slug>.md`（如 `0002-uds-
 
 | `Makefile`、`scripts/`、`.gitignore` / `.editorconfig` / `AGENTS.md` / `README.md` | 门禁入口与脚本（不参与运行期）+ 协作入口与工程约定 | 全员 | 骨架 |
 
-插件**不在本仓库**：`site` / `backup` 分别是独立仓库 `kore-plugin-site` / `kore-plugin-backup`，索引在 `kore-plugins`；kore 只提供 `pkg/pluginapi` 与安装/运行机制（见 [REPOS.md](./REPOS.md)）。`kored` 的 CLI 子命令（serve / db dump / backup / restore / invoke / version）见 [CORE.md](./CORE.md) §10。
+插件**不在本仓库**：`site` / `backup` 分别是独立仓库 `kore-plugin-site` / `kore-plugin-backup`，索引在 `kore-plugins`；kore 只提供 `pkg/pluginapi` 与安装/运行机制（见 [REPOS.md](./REPOS.md)）。`kored` 的 CLI 子命令（`serve` / `version` / `install` / `audit` / `uninstall` / `status` / `upgrade` / `admin-password` / `help`，唯一权威清单是 `kored help`）见 [CORE.md](./CORE.md) §10。
 
 运行时落点（与目录布局区分）：配置 `/etc/kore/config.yaml`；状态 `/var/lib/kore/{state.db,plugins,tasks}`；socket `/run/kore/kore.sock` 与 `/run/kore/plugins/<id>.sock`；日志 `/var/log/kore/kore.log` 与 `/var/log/kore/plugins/<id>.log`；锁 `/run/kore/kore.lock`。
 

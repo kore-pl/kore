@@ -17,7 +17,7 @@
 | --- | --- |
 | 定义位置 | `kore-plugins` 仓库 `presets/<id>.json`（与索引同仓，一起校验、一起发版） |
 | 内置快照 | kore 构建时 `//go:embed presets/` 打包一份快照 → **首次安装完全离线可用**（无需先联网） |
-| 刷新 | 只有 `kored store --preset-refresh`（或 `POST /api/v1/store/refresh`）才联网拉新版预设；其余时间零出站 |
+| 刷新 | 只有 `POST /api/v1/store/refresh`（写请求，需登录会话 + `X-Kore-CSRF`）才联网拉新版预设；`kored store --preset-refresh` **未实现**（`store` 子命令不存在）；其余时间零出站 |
 | 版本锁定 | 预设内每个插件给 `version_range`；安装器取满足区间的最高已索引版本，并 **pin 到该版本** |
 | 配额仲裁 | 安装器按 `lifecycle` 算常驻合计；超 24 MiB 或 >3 个 resident（**推荐 ≤2**）时拒绝该预设并在安装前报错（不是装到一半才失败） |
 | 与商店关系 | 预设只是"批量安装清单"；安装后一切管理走商店（更新/卸载/单独启用） |
@@ -71,9 +71,9 @@
 
 **常驻只留 2 个**：`site`(10) + `monitor`(6) = 16 MiB。3 是硬上限、不是目标；`cron` 转 lazy 后不再占常驻位（见下）。
 
-**`cron` 为什么不常驻、也不自己跑调度器**：`cron` 是 lazy，且只负责把任务**写成宿主调度器的条目**——Linux 用 `systemd timer`（`kore-<task>.timer`）或 `/etc/cron.d/kore-*`，macOS 用 launchd `StartCalendarInterval`，Windows 用 Task Scheduler；到点由**宿主**调用 `kored invoke <plugin> <method>`，再由内核按需拉起目标插件。
+**`cron` 为什么不常驻、也不自己跑调度器**：`cron` 是 lazy，且只负责把任务**写成宿主调度器的条目**——Linux 用 `systemd timer`（`kore-<task>.timer`）或 `/etc/cron.d/kore-*`，macOS 用 launchd `StartCalendarInterval`，Windows 用 Task Scheduler；但「宿主条目到点唤醒插件」的 CLI 入口 `kored invoke` **未实现**——没有命令行唤醒入口，宿主 timer / cron 无法直接调用插件。当前可用的到点唤醒是内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`），到点经 bus 调插件并按需冷启动目标插件。
 
-理由三条：① kore 自身保持零后台定时器（G-19 红线不破，主壳里没有 ticker）；② 常驻一个插件只为"到点唤醒"不值得占 12 MiB 配额；③ 宿主调度器本来就存在，不引入新守护进程。**它不是"每 60 s 轮询"**——没有循环、没有 sleep 轮询，只有宿主到点触发的一次性调用。
+理由三条：① kore 默认零后台定时器，唯一例外是 `scheduler` 单 ticker（ADR-0019，无启用任务时不起，G-19 红线不破）；② 常驻一个插件只为"到点唤醒"不值得占 12 MiB 配额；③ 宿主调度器本来就存在，不引入新守护进程。**它不是"每 60 s 轮询"**——没有循环、没有 sleep 轮询，只有宿主到点触发的一次性调用。**当前缺口**：宿主条目到点唤醒插件的 CLI 入口 `kored invoke` 未实现，这条路径尚不可用；在此之前定时唤醒走内核 `scheduler`（ADR-0019，`POST /api/v1/scheduler/tasks`）。
 
 ### 3.1 `minimal` — 极简（只要一个入口）
 

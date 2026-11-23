@@ -339,16 +339,16 @@ WantedBy=multi-user.target
 
 ## 10. CLI 入口（`kored` 子命令）
 
-`kored` 是单二进制：**无子命令时等价 `kored serve`**；子命令用标准库 `flag` 手写分发，不引 cobra/urfave（G-02）。
+`kored` 是单二进制：**无子命令时等价 `kored serve`**；子命令用标准库 `flag` 手写分发，不引 cobra/urfave（G-02）。**唯一权威清单是 `kored help`**：已实现 `serve`（默认）/ `version` / `install` / `audit` / `uninstall` / `status` / `upgrade` / `admin-password` / `help`；**没有** `db` / `backup` / `restore` / `invoke` / `store` 子命令（`cmd/kored/main.go:37-62`）。
 
 | 子命令 | 作用 | 起 HTTP / 插件进程 |
 | --- | --- | --- |
 | `serve`（默认） | 启动主壳（§4–§7 全流程） | 是 |
-| `db dump <bucket>` / `backup <out>` / `restore <in>` | 只读导出 bucket / 停写快照 / 恢复（恢复前校验 sha256 与 schema 版本） | 否 |
-| `invoke <plugin> <method> [--json]` | 一次性调用，仅拉起目标插件 | 否 |
+| `db dump` / `backup` / `restore` | **未实现**：无对应子命令，照敲得到「未知子命令」退出码 2。替代：停机手工流程见 [DATA-MODEL](./DATA-MODEL.md) §10 与 [OPERATIONS](./OPERATIONS.md) §2（停服 → `bbolt` / `tar` → 校验 → 恢复） | 否 |
+| `invoke <plugin> <method>` | **未实现**：没有对外的 CLI 唤醒入口。一次性调用走 `POST /api/v1/invoke/{plugin}/{method}`（登录会话 + `X-Kore-CSRF`）；定时唤醒走内核 scheduler（ADR-0019，`POST /api/v1/scheduler/tasks`），由 bus 按需拉起插件 | 否 |
 | `install --scenario <id>` | **未实现（M2）**：当前返回 `E_UNSUPPORTED` 并列出替代路径（`--package` 单包 / 面板商店逐插件安装；无批量预设一键装） | 否 |
 | `install --package <tar.gz>` | 单包安装（离线/内网） | 否 |
-| `version` | 版本 / 协议版本 / commit | 否 |
+| `version` | 版本 / 协议版本（`cmd/kored/main.go:40-42`；**不打印 commit**，`kored --version` 不是有效写法） | 否 |
 
 退出码沿用 `DATA-MODEL.md` §7 码表（2 配置 / 3 状态目录或锁 / 4 存储或 schema / 5 监听绑定 / 6 环境硬要求不满足），子命令失败码与 `serve` 一致；`serve` 之外子命令执行完即退出，不留后台进程、不注册 systemd。
 

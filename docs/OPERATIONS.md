@@ -19,7 +19,7 @@
 
 ```bash
 # 0) 记录当前版本（回滚需要）
-<install>/bin/kored version            # 或 kored --version
+<install>/bin/kored version            # 只有 version 子命令；`kored --version` 未实现（会按未知子命令报错并退出码 2）
 
 # 1) 校验新包（只校验、不改动任何文件：sha256 不符时目标二进制一个字节都不动）
 kored upgrade --bin ./kored-new --sha256 <hex> --dry-run

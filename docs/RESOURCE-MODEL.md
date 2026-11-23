@@ -238,11 +238,11 @@ cgroup 缺失或受限**不是**硬要求，任何降级都不触发退出码 6�
 
 ## 5. oneshot 调度模型
 
-触发源三种，按优先级：
+触发源两种（当前可用）+ 一种未实现，按优先级：
 
 1. **HTTP invoke**：`POST /api/v1/invoke/{plugin}/{method}`，body 为 `params`，同步等待结果。
-2. **kored CLI**：`kored invoke <plugin> <method> --json '<params>'`（单二进制子命令，标准库 `flag` 实现），走同一 UDS，供 systemd timer / cron 调用。
-3. **可选 cron**：默认关闭，且**不创建内核定时器**——推荐用宿主 `systemd timer` 或 `cron` 调 `kored invoke`；`info.json.triggers` 里的 `cron` 条目只作元数据提示，M0–M3 主壳不内建调度器。
+2. **内核 scheduler**：`POST /api/v1/scheduler/tasks` 创建 `{plugin,method,params,schedule|interval_s}` 任务（需 `system:admin`）；`internal/core/scheduler` 用单 ticker（ADR-0019；无启用任务时零 ticker）到点经 bus 调 `Invoke`，与 HTTP invoke 同一调用面、同样按需冷启动插件。
+3. **CLI / 宿主调度器（未实现）**：`kored invoke` 没有对应子命令，**没有对外命令行唤醒入口**；systemd timer / cron 无法直接唤醒插件。需要宿主级定时请改用第 2 条（等价能力，API 入口）；`info.json.triggers` 里的 `cron` 条目只作元数据提示。
 
 拉起-执行-回收时序：
 
