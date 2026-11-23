@@ -50,7 +50,10 @@ var (
 	// capabilityPattern 是能力项语法：<域>:<动作>，两段均为小写短横线标识符。
 	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`)
 	// methodActionPattern 是方法级能力键的动作段：小写字母开头，允许点分。
-	methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
+	// 字符集与内核 internal/core/registry 的 methodActionPattern **逐字一致**（ADR-0047）：
+	// 段内允许字母/数字/下划线（camelCase | snake_case），段首限小写字母，不接受连字符。
+	// 两处必须同一变更集同改，否则「插件自检通过、内核装不上」或反之。
+	methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$`)
 	// privilegedCapabilities 是内核唯一认识的 6 项宿主级能力。
 	privilegedCapabilities = map[string]struct{}{
 		"system:read": {}, "system:admin": {},
@@ -245,7 +248,7 @@ func validateMethodCapabilities(pluginID string, methodCaps map[string]string, c
 		}
 		if !methodActionPattern.MatchString(action) {
 			problems = append(problems, fmt.Errorf(
-				"method_capabilities 的键 %q 动作段 %q 非法：应为小写字母开头的点分标识符（如 config.get）",
+				"method_capabilities 的键 %q 动作段 %q 非法：应为小写字母开头的点分标识符（段内可含下划线，如 config.get / verify_file；不接受连字符）",
 				method, action))
 			continue
 		}

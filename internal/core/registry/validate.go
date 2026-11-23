@@ -51,8 +51,19 @@ var (
 	// capabilityPattern 是能力项语法：<域>:<动作>，两段均为小写短横线标识符。
 	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}:[a-z][a-z0-9-]{0,30}$`)
 	// methodActionPattern 是方法级能力键的动作段语法：单段动词或点分多段（如
-	// createDatabase / config.get）；域由插件 id 单独比对，不进本正则。
-	methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
+	// createDatabase / config.get / verify_file）；域由插件 id 单独比对，不进本正则。
+	//
+	// 字符集 = camelCase | snake_case：段内允许字母、数字、下划线（ADR-0047）。
+	// 两处刻意的边界，改前先读 ADR-0047 §3.1：
+	//   - 段首仍限小写字母 → `_leading` / `1status` 依旧非法；
+	//   - **不接受连字符**（`verify-file` 仍拒）。这是显式接受的不对称，勿顺手放开。
+	//
+	// 切分规则（ADR-0047 §3.2）：动作段**不切分**。整条 method_capabilities 键只有唯一
+	// 分割点——`<id>` 与 `<action>` 之间的那个「.」（见 validateMethodCapabilities 的
+	// strings.CutPrefix(method, m.ID+".")）；idPattern 不含下划线与点，域/动作边界唯一
+	// 无歧义，故 a_b.c 只有一种读法：一个整体动作名。内核从不按 '.' 或 '_' 分解动作
+	// 层级——用命名切分层级表达业务结构属插件业务逻辑，内核做即违反 G-01。
+	methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$`)
 	// eventNamePattern 是 event 触发的匹配名语法：<域>.<事件>，如 cert.renew_due。
 	eventNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9_-]*$`)
 	// invokeNamePattern 是 invoke 触发的匹配名语法：允许单段动词（如 run）
@@ -159,7 +170,8 @@ func (m *Manifest) validateCapabilities() error {
 // 规则（fail-closed，任一不合即整份清单加载失败）：
 //   - 条数 ≤ maxMethodCapabilities；
 //   - 键必须是插件自身域：`<info.json.id>.<action>`，域不等于自身 id 视为越权声明；
-//   - 动作段匹配 methodActionPattern（小写字母开头，可点分，如 config.get）；
+//   - 动作段匹配 methodActionPattern（小写字母开头，可点分、段内可含下划线，
+//     如 config.get / verify_file；连字符仍非法）；
 //   - 值只能是 6 项特权能力之一——插件自有 `<id>:<action>` 不在此表（内核不解释其语义）。
 //
 // 未声明的方法不在本函数校验范围：运行期回退插件级 capabilities（向后兼容）。
@@ -179,6 +191,8 @@ func (m *Manifest) validateMethodCapabilities() error {
 	sort.Strings(methods) // 固定错误顺序：map 遍历随机，门禁与回显需要可复现
 	for _, method := range methods {
 		capability := m.MethodCapabilities[method]
+		// 唯一分割点：<id> 与 <action> 之间的那个「.」。idPattern 不含下划线与点，
+		// 边界唯一无歧义；action 此后只做整段正则匹配，不再按 '.' / '_' 切分。
 		action, ok := strings.CutPrefix(method, prefix)
 		if !ok || action == "" {
 			return errf(pluginapi.E_INVALID,
@@ -186,7 +200,7 @@ func (m *Manifest) validateMethodCapabilities() error {
 		}
 		if !methodActionPattern.MatchString(action) {
 			return errf(pluginapi.E_INVALID,
-				"method_capabilities 的键 %q 动作段 %q 非法：应为小写字母开头的点分标识符（如 config.get）",
+				"method_capabilities 的键 %q 动作段 %q 非法：应为小写字母开头的点分标识符（段内可含下划线，如 config.get / verify_file；不接受连字符）",
 				method, action)
 		}
 		if _, ok := privilegedCapabilities[capability]; !ok {

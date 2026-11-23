@@ -1,4 +1,4 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-24 · 里程碑: M5 · 关联: [0018-privilege-model](./0018-privilege-model.md)、[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md) §3.1.2、[PLUGIN-MATURITY](../PLUGIN-MATURITY.md) §3.5、[CORE](../CORE.md) §3、[裁定报告](../../.agents/verify/method-underscore.md)
+> 状态: accepted · 归属: architect · 更新: 2026-11-24 · 里程碑: M5 · 关联: [0018-privilege-model](./0018-privilege-model.md)、[PLUGIN-PROTOCOL](../PLUGIN-PROTOCOL.md) §3.1.2、[PLUGIN-MATURITY](../PLUGIN-MATURITY.md) §3.5、[CORE](../CORE.md) §3、[裁定报告](../../.agents/verify/method-underscore.md)
 
 # ADR-0047: 方法名字符集——放宽 `methodActionPattern` 接受下划线（不重命名 `verify_file`）
 
@@ -6,7 +6,7 @@
 
 `integrity` 插件有方法 `verify_file`，它只需要 `system:read`（只读 sha256 校验），但**写不进** `info.json` 的 `method_capabilities`：内核 `methodActionPattern` 不允许下划线，声明即 `E_INVALID`，整份清单 fail-closed（插件装不上）。于是它按设计回退到插件级能力，而 integrity 插件级同时声明 `system:read` 与 `system:admin`，回退取最高要求 → `verify_file` 被当成 admin 类方法。
 
-本 ADR 只裁一件事：**放宽内核正则（A）、还是把方法改名（B）、还是保持现状只写文档（C）**。本卡不实现。
+本 ADR 只裁一件事：**放宽内核正则（A）、还是把方法改名（B）、还是保持现状只写文档（C）**。裁决 A，实施记录见 §7。
 
 事实与逐条证据见 [裁定报告](../../.agents/verify/method-underscore.md)（下称「报告」）。
 
@@ -118,3 +118,42 @@ G-01 红线是「不得维护业务域名词表」。A 改的是**字符集**，
 | --- | --- |
 | 真实 `kored` 装载带 `integrity.verify_file` 的清单回 `E_INVALID` 的端到端复现 | 需改插件仓或造临时清单，超出本卡「只读」授权；结论基于代码路径 + Go 正则实测 + 既有单测绿 |
 | G-14 对「插件方法改名」的无明文解释 | 本 ADR 按「协议文法未变」理解，见复审条件 4 |
+
+## 7. 实施记录（2026-11-24，accepted 落地）
+
+裁决 A 已按 §4.1 落地，变更集 `CS-20261124-01`（见 [BOARD](../../.agents/BOARD.md) §5）。
+
+### 7.1 改前 → 改后
+
+```go
+// 改前
+methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
+// 改后（ADR-0047 §3.1：只加 `_`，首字母仍限小写，未放开 `-`）
+methodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$`)
+```
+
+| 落点 | 文件 | 说明 |
+| --- | --- | --- |
+| 内核 | `internal/core/registry/validate.go:66` | 正则；`idPattern` 未动；`:194` 处注明唯一分割点、动作段不切分 |
+| SDK | `pkg/pluginapi/pluginapitest/infocheck.go:56` | 与内核逐字一致（同批改，防「自检过、内核装不上」） |
+| 插件侧正则副本 | `kore-plugin-integrity/tests/fault/declaration_test.go:15`、`capabilities_test.go:20` | 两处「与内核逐字一致」的副本同步，否则熔断器永不触发 |
+
+### 7.2 两处熔断器（前提断言）已按本 ADR 解除并反向
+
+| 原断言 | 现状 | 理由 |
+| --- | --- | --- |
+| `tests/fault/declaration_test.go:55-58`「正则接受 `_` 就 `t.Fatal`」 | 改为「正则若不接受 `_` 才 `t.Fatal`」，并断言 `integrity.verify_file == system:read` 必须存在 | 熔断器已按 ADR-0047 解除；将来若再收紧要重新裁决（复审条件 1/2），不是改断言 |
+| `capabilities_test.go:132-133`「`verify_file` 不得出现在声明面」 | 反转为 `TestVerifyFileReadOnlyDeclared`：必须出现且只能 `system:read` | 同上 |
+
+### 7.3 验收证据
+
+- **正反例（内核真实解析器 `registry.Parse` 实跑，非仅单测）**：`verify_file` / `verifyFile` / `a_b.c` → ACCEPT；`verify-file` / `_leading` / `1status` → `E_INVALID`（错误信息含「不接受连字符」）。
+- **真装得上**：`registry.Parse` 解析 `kore-plugin-integrity/info.json`（0.5.0）→ `PARSE OK id=integrity version=0.5.0 method_caps=8 verify_file="system:read"`。
+- 测试：`internal/core/registry` 新增 `TestParseMethodCapabilitiesUnderscore`（含 `a_b.c` 不被切分的反向断言）；SDK `infocheck_test.go` 的「含下划线」原用例拆分——下划线改为合法正例，另留「下划线开头 / 连字符 / 大写开头 / 数字开头」四条负例；`method_capabilities_test.go` 负例表补「下划线开头」。
+- `integrity` 0.4.0 → 0.5.0（minor：协议表达能力变化，dist sha 必变），CHANGELOG 记条目，dist 两打同 sha。
+- 文档同步：`docs/PLUGIN-PROTOCOL.md` §3.1.2.1（语法 + 不切分规则）、本 ADR、`.agents/LOG/DECISIONS.md`。
+
+### 7.4 与原文的差异
+
+- 原文 §4.1 第 1 条要求「两处各补测试」，实际插件侧还有 2 处正则副本（原文未列，属 §1 事实表的遗漏项）——不同改会让熔断器永远不触发、测试假装通过，已一并同步。
+- 原文 §4.1 第 6 条提到的插件侧 `README.md` / `RELEASE-EVIDENCE.md` 追记不在本次卡范围内，留待插件仓文档轮次；本 ADR 只记「未做」，不冒充已同步。

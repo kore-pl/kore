@@ -39,6 +39,35 @@ func TestParseMethodCapabilities(t *testing.T) {
 	}
 }
 
+// TestParseMethodCapabilitiesUnderscore 锁定 ADR-0047 的字符集裁决：接受下划线
+// （camelCase | snake_case），段首仍限小写字母，连字符仍拒。
+//
+// 回归护栏：ADR-0047 之前 verify_file 这类方法**声明不出来**，只能回退插件级
+// capabilities（integrity 因此把只读方法算成 admin 类）。此用例一旦变红，说明
+// 字符集被收回，须重新裁决——不是改断言。
+func TestParseMethodCapabilitiesUnderscore(t *testing.T) {
+	manifest := baseManifest()
+	manifest["method_capabilities"] = map[string]string{
+		"site.verify_file": "system:read", // snake_case
+		"site.verifyFile":  "system:read", // camelCase 并存
+		"site.a_b.c":       "system:read", // 点分 + 下划线：整段匹配，内核不切分
+	}
+	got := parse(t, manifest)
+	for _, key := range []string{"site.verify_file", "site.verifyFile", "site.a_b.c"} {
+		if got.MethodCapabilities[key] != "system:read" {
+			t.Errorf("%s 应落位为 system:read，实际 %q（表：%v）", key, got.MethodCapabilities[key], got.MethodCapabilities)
+		}
+	}
+	// 切分规则（ADR-0047 §3.2）：唯一分割点是 <id> 与 <action> 之间的那个「.」，
+	// 动作段内部不切分 —— a_b.c 是「一个整体动作名」，不会落成 site.a_b 或 site.c。
+	if _, ok := got.MethodCapabilities["site.a_b"]; ok {
+		t.Error("a_b.c 被按 '.' 切分了：动作段内部禁止切分层级")
+	}
+	if _, ok := got.MethodCapabilities["site.c"]; ok {
+		t.Error("a_b.c 被按 '.' 切分了：动作段内部禁止切分层级")
+	}
+}
+
 // TestParseMethodCapabilitiesAbsent 验证缺省字段为 nil（向后兼容：全部回退插件级）。
 func TestParseMethodCapabilitiesAbsent(t *testing.T) {
 	if got := parse(t, baseManifest()); got.MethodCapabilities != nil {
@@ -62,6 +91,7 @@ func TestParseRejectsInvalidMethodCapabilities(t *testing.T) {
 		{"动作段大写开头", map[string]string{"site.Instances": "system:read"}, "动作段"},
 		{"动作段为空", map[string]string{"site.": "system:read"}, "插件自身 id 为域"},
 		{"动作段含连字符", map[string]string{"site.set-rewrite": "system:read"}, "动作段"},
+		{"动作段以下划线开头", map[string]string{"site._instances": "system:read"}, "动作段"},
 		{"值插件自有能力", map[string]string{"site.instances": "site:read"}, "6 项特权能力"},
 		{"值未知宿主动作", map[string]string{"site.instances": "system:superuser"}, "6 项特权能力"},
 		{"值为空串", map[string]string{"site.instances": ""}, "6 项特权能力"},
