@@ -85,6 +85,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),
 		Privilege:         svc.privilege,
 		PluginAuth:        svc.pluginTokenAuth,
+		Scheduler:         svc.sched,
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)

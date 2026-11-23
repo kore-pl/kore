@@ -16,6 +16,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/bus"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/registry"
+	"github.com/pengtang1024/kore/internal/core/scheduler"
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/core/supervisor"
 	"github.com/pengtang1024/kore/internal/platform"
@@ -45,6 +46,7 @@ type service struct {
 	auth          *auth.Manager
 	db            *store.Store
 	privilege     *privilege.Service // ADR-0018 提权通道执行器
+	sched         *scheduler.Service // ADR-0019 定时任务调度器（单 ticker）
 	pluginRootDir string             // 插件落盘根目录，供 reloadOne 重载登记复用
 	// reloadMu 串行化同一进程内的安装后重载：Stop→Forget→Replace→Start 不能交错，
 	// 否则两次并发安装会互相覆盖 catalog/instance，最终跑错版本。
@@ -102,6 +104,17 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
 			cfg.snapshot.Auth.CookieSecure == "true"),
 	}
+	// 调度器必须在 backend 之后装配：Invoker 就是 daemon.Invoke（oneshot 调用面）。
+	sched, err := scheduler.New(scheduler.Options{
+		Store: db, Invoker: svc.backend, Logger: slog.Default(), Builtin: svc.builtinTask,
+		CertRenewEnabled:  cfg.snapshot.CertRenew.Enabled,
+		CertRenewInterval: cfg.snapshot.CertRenew.Interval,
+	})
+	if err != nil {
+		slog.Error("调度器装配失败", "err", err)
+		return nil, exitConfig
+	}
+	svc.sched = sched
 	svc.restoreEnabled()
 	return svc, exitOK
 }

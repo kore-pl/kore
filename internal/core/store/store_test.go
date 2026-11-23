@@ -16,8 +16,8 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// TestOpenCreatesSixBuckets 验证首次打开建齐 6 个 bucket 与 schema v1。
-func TestOpenCreatesSixBuckets(t *testing.T) {
+// TestOpenCreatesEightBuckets 验证首次打开建齐 8 个 bucket（含 ADR-0019 的 scheduler_*）与 schema v1。
+func TestOpenCreatesEightBuckets(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	s, err := Open(dir, testLogger())
 	if err != nil {
@@ -26,8 +26,8 @@ func TestOpenCreatesSixBuckets(t *testing.T) {
 	defer s.Close()
 
 	names := BucketNames()
-	if len(names) != 6 {
-		t.Fatalf("bucket 数量应为 6，实际 %d: %v", len(names), names)
+	if len(names) != 8 {
+		t.Fatalf("bucket 数量应为 8，实际 %d: %v", len(names), names)
 	}
 	err = s.View(func(tx *Tx) error {
 		for _, name := range names {

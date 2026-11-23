@@ -1,6 +1,6 @@
 // Package store 封装 kore 的单文件 bbolt 持久层。
 //
-// 只提供打开/关闭、6 个固定 bucket、schema 版本检查与事务透传；
+// 只提供打开/关闭、8 个固定 bucket、schema 版本检查与事务透传；
 // 不做业务语义、不做 SQL、不做跨 bucket 长事务。
 package store
 
@@ -37,20 +37,26 @@ const (
 	schemaKey = "schema_version"
 )
 
-// 6 个固定 bucket（键结构见 docs/DATA-MODEL.md §5）。
+// 8 个固定 bucket（键结构见 docs/DATA-MODEL.md §5）。
+//
+// scheduler_tasks / scheduler_runs 是 ADR-0019 的追加 bucket：additive 变更，
+// 旧二进制忽略新 bucket，schema 版本不变。
 const (
-	bucketMeta        = "meta"
-	bucketPlugins     = "plugins"
-	bucketPluginState = "plugin_state"
-	bucketTasks       = "tasks"
-	bucketSessions    = "sessions"
-	bucketAudit       = "audit"
+	bucketMeta           = "meta"
+	bucketPlugins        = "plugins"
+	bucketPluginState    = "plugin_state"
+	bucketTasks          = "tasks"
+	bucketSessions       = "sessions"
+	bucketAudit          = "audit"
+	bucketSchedulerTasks = "scheduler_tasks"
+	bucketSchedulerRuns  = "scheduler_runs"
 )
 
 // bucketNames 是建库时必须齐备的 bucket 列表。
 var bucketNames = []string{
 	bucketMeta, bucketPlugins, bucketPluginState,
 	bucketTasks, bucketSessions, bucketAudit,
+	bucketSchedulerTasks, bucketSchedulerRuns,
 }
 
 // Store 是已打开的状态库句柄；Close 幂等。
@@ -169,7 +175,7 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
-// BucketNames 返回 6 个固定 bucket 的副本。
+// BucketNames 返回 8 个固定 bucket 的副本。
 func BucketNames() []string {
 	out := make([]string, len(bucketNames))
 	copy(out, bucketNames)

@@ -76,6 +76,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/auth/", s.handleUnsupported)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	// 定时任务（ADR-0019）：列表 / 创建 / 立即执行 / 删除；能力要求 system:admin。
+	s.mux.HandleFunc("GET "+schedulerTasksPath, s.handleSchedulerList)
+	s.mux.HandleFunc("POST "+schedulerTasksPath, s.handleSchedulerCreate)
+	s.mux.HandleFunc("POST "+schedulerTasksPath+"/{id}/run", s.handleSchedulerRun)
+	s.mux.HandleFunc("DELETE "+schedulerTasksPath+"/{id}", s.handleSchedulerDelete)
+	s.mux.HandleFunc("/api/v1/scheduler/", s.handleNotFound)
 	s.mux.HandleFunc("/", s.handleNotFound)
 }
 

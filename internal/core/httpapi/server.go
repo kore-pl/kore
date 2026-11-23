@@ -21,6 +21,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/core/privilege"
+	"github.com/pengtang1024/kore/internal/core/scheduler"
 	"github.com/pengtang1024/kore/internal/platform"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 	"github.com/pengtang1024/kore/web"
@@ -109,6 +110,9 @@ type Options struct {
 	// TaskEvents 是安装/升级任务进度的进程内扇出中心（GET /api/v1/events 的 SSE 源）。
 	// nil 时端点仍可连接但不产生事件；进度只存内存，不落库、不跨重启。
 	TaskEvents *TaskEvents
+	// Scheduler 是内核定时任务调度器（ADR-0019）；nil 时 scheduler/* 端点回 501。
+	// 由 cmd/kored 注入（本包不 import store、不持有任务持久化逻辑）。
+	Scheduler *scheduler.Service
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
@@ -250,6 +254,7 @@ type Server struct {
 	privilege      RootActionExecutor
 	pluginAuth     PluginTokenAuth
 	taskEvents     *TaskEvents
+	scheduler      *scheduler.Service
 	mu             sync.Mutex
 	listeners      []net.Listener
 }
@@ -263,7 +268,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
-		taskEvents: opts.TaskEvents,
+		taskEvents: opts.TaskEvents, scheduler: opts.Scheduler,
 	}
 	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {

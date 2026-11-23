@@ -69,7 +69,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 
 `store.*` 与包签名的边界：`store.allow_unsigned` 管的是**索引仓签名**（`index/plugins.json.sig`，M2 的 ed25519 验签），零值 `false` 即默认拒绝未签名/验签失败的索引；它由 Go 结构体零值兜底，**刻意不在 `Default()` 中显式设置**，只允许显式配置并写 WARN 审计。它与 `plugins.allow_unsigned`（**插件包签名**，M4）是两个完全独立的开关，作用对象、里程碑与默认值都不同，不得互相替代或混写。
 
-`cert_renew.*` 的设计约束（唯一常驻定时器）：默认 `enabled: false`，严格守住「默认零后台定时器」资源锚点，关闭时内核不创建任何 ticker；内核**不做 ACME、不联网**，到点只发事件 `kore.event{type:"cert.renew_due"}`，实际续期由插件完成（内核只定规则不做业务）；该定时器是白名单里唯一一项，代码层门禁见 CORE 的 `grep time.NewTicker` 检查。
+`cert_renew.*` 的设计约束（ADR-0019 起迁移为 `scheduler` 的内置任务）：默认 `enabled: false`，严格守住「默认零后台定时器」资源锚点；关闭时对应的内置任务被禁用，无任何启用任务时内核不创建 ticker。内核**不做 ACME、不联网**，到点只标记 `cert.renew_due` 并写执行记录，实际续期由插件完成（内核只定规则不做业务）。**诚实披露**：bus 的事件投递面尚未落地，内置任务当前只记录到点执行、不广播事件。唯一周期源是 `internal/core/scheduler/` 的单 ticker，代码层门禁见 CORE 的 `grep time.NewTicker` 检查。
 
 ### 3.2 完整示例（含注释）
 
@@ -124,7 +124,7 @@ security:
 audit:
   invoke_all: false             # 默认只审计需要 admin 的写/管理类 invoke；true = 全量审计（调试用，SIGHUP 热更）
 
-cert_renew:                     # 唯一允许的常驻定时器，默认关
+cert_renew:                     # 迁移为 scheduler 内置任务，默认关（ADR-0019）
   enabled: false                # false = 内核不创建任何 ticker
   interval: "6h"                # 仅 enabled=true 生效；范围 1h–24h
 ```
@@ -160,6 +160,8 @@ cert_renew:                     # 唯一允许的常驻定时器，默认关
 | `tasks` | ULID 26 字符（时间序） | `{id,plugin_id,method,trigger:"event"\|"schedule"\|"invoke",status:"queued"\|"running"\|"ok"\|"failed"\|"timeout",started_at,finished_at,dur_ms,error_code,req_id}` | 保留 30 天（启动时 + 惰性触发） |
 | `sessions` | `sha256(token)` 的 64 位小写 hex（token = 登录时生成的 32 字节随机 base64url，仅返回浏览器一次） | `{subject:"admin",created_at,last_seen_at,expires_at}`；`expires_at` = 最近一次鉴权 + `session_ttl`（12h 滑动） | 过期即删（读时判断 + 惰性清理） |
 | `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | 保留 90 天 |
+| `scheduler_tasks` | 任务 id（`tsk-<16 hex>`；内置任务 `builtin-cert-renew`） | `{id,name,plugin,method,params,schedule,interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count,created_at}`（`schedule` 为 5 段 cron 表达式）（ADR-0019；`params` 是插件方法参数原始 JSON，属 G-24 受控例外） | 删除任务即删；内置任务随 `cert_renew.enabled` 启停 |
+| `scheduler_runs` | `%020d-<task-id>-%06d`（unix 纳秒 + 序号），字典序 = 时间序 | `{task_id,started_at,finished_at,status:"ok"\|"failed"\|"timeout"\|"skipped"\|"missed",error,dur_ms}` | 保留最近 100 条（写入时裁剪） |
 
 **`triggers`（`info.json` 与 `plugins` bucket 同名字段）**：**`[]string`**，每项格式 **`<type>:<name>`**（**前缀即类型**；不是对象数组，也不是无前缀裸名）：
 

@@ -7,7 +7,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 读者 | implementer（照此实现）、verifier（照此验收）、red-team（照此攻击） |
-| 作用 | 把"内核只定规则"落成 10 个模块的字段级规格：职责、输入输出、失败模式、明确不做 |
+| 作用 | 把"内核只定规则"落成 11 个模块的字段级规格：职责、输入输出、失败模式、明确不做 |
 | 不作用 | 不写组件图与进程模型（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写愿景（见 [VISION.md](./VISION.md)）、不写业务插件规格 |
 | 硬约束 | 依赖白名单 3 个（`yaml.v3`、`bbolt`、M3 的 `protobuf`）；`internal/core` 禁 import `plugins/**`；禁 SQL/Web 框架/出网客户端 |
 | 版本基线 | MVP 0.1.0；协议 `kore.plugin.v1`；帧上限 8 MiB；术语以 [GLOSSARY.md](./GLOSSARY.md) 为准 |
@@ -33,7 +33,7 @@
 
 每个模块四小节。配置字段名与默认值以 `DATA-MODEL.md` §3 为**唯一真源**，本文件不复写键表，只写内核行为与失败码。
 
-14 个小节中，`config/store/auth/registry/supervisor/bus/httpapi` 对应 `internal/core` 的 7 个子包；`installer`（§2.12）、`privilege`（§2.13，ADR-0018 提权通道）与 `market`（§2.14）是 M2 新增内核模块（包名用 `market` 避开 §2.2 持久化 `store`，对外 API/UI 仍叫「商店」）；`logger`、`static`、`sse` 物理上是 `internal/core/httpapi` 的包内子包（不单开顶层目录，避免"7 个子包"契约漂移）；`envprobe`（§2.11）是启动期一次性探测，放 `cmd/kored/envprobe`，不进内核规则集。
+15 个小节中，`config/store/auth/registry/supervisor/bus/httpapi` 对应 `internal/core` 的 7 个子包；`installer`（§2.12）、`privilege`（§2.13，ADR-0018 提权通道）、`market`（§2.14）与 `scheduler`（§2.15，ADR-0019 定时任务）是后续里程碑新增的内核模块（包名用 `market` 避开 §2.2 持久化 `store`，对外 API/UI 仍叫「商店」）；`logger`、`static`、`sse` 物理上是 `internal/core/httpapi` 的包内子包（不单开顶层目录，避免"7 个子包"契约漂移）；`envprobe`（§2.11）是启动期一次性探测，放 `cmd/kored/envprobe`，不进内核规则集。
 
 ### 2.1 `internal/core/config`
 
@@ -44,7 +44,7 @@
 
 ### 2.2 `internal/core/store`
 
-- **职责**：打开/关闭 bbolt（`0600`、`Timeout=1s`），定义 6 个 bucket：`meta`（schema 版本、安装时间、kore 版本）、`plugins`（清单与安装元数据）、`plugin_state`（desired/actual 状态与重启计数）、`tasks`（任务索引，原始输出落 `/var/lib/kore/tasks/`）、`sessions`（会话哈希→过期时间）、`audit`（审计，保留 90 天）。单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`（不建 `users`）。提供 `View`/`Update` 事务封装与错误分类。
+- **职责**：打开/关闭 bbolt（`0600`、`Timeout=1s`），定义 8 个 bucket：`meta`（schema 版本、安装时间、kore 版本）、`plugins`（清单与安装元数据）、`plugin_state`（desired/actual 状态与重启计数）、`tasks`（任务索引，原始输出落 `/var/lib/kore/tasks/`）、`sessions`（会话哈希→过期时间）、`audit`（审计，保留 90 天）、`scheduler_tasks` / `scheduler_runs`（ADR-0019 定时任务与最近 100 条执行记录，属 schema v1 的**追加** bucket，旧二进制忽略、不升版本）。单管理员无用户表，鉴权凭据来自 `config.yaml` 的 `auth.admin_password_hash`（不建 `users`）。提供 `View`/`Update` 事务封装与错误分类。
 - **输入输出**：输入 `path=/var/lib/kore/state.db` 与 bucket/key/value；输出类型化错误：`ErrNotFound`、`ErrConflict`、`ErrCorrupt`、`ErrSchemaTooNew`。值大小上限 1 MiB，超限直接拒绝（大对象是设计错误）。
 - **失败模式与处理**：文件锁被占/损坏 → 退出码 4，日志给损坏页偏移与"从 `state.db.bak` 恢复"指引；schema 版本高于二进制 → 退出码 4（拒绝降级写）；磁盘满 → 事务回滚，返回 `E_INTERNAL` 且 `message` 写明"磁盘空间不足"；事务超过 500 ms → WARN（长事务是设计味道）。
 - **明确不做什么**：不暴露 SQL/查询语言；不存业务数据；不做跨 bucket 长事务；不做自动修复（损坏只报告，不猜）；不缓存热数据（bbolt 自身 mmap 即缓存）。
@@ -60,7 +60,7 @@
 ### 2.4 `internal/core/httpapi`
 
 - **职责**：路由表、固定顺序中间件链（§3）、JSON 编解码、错误码→HTTP 状态映射、静态与插件资产托管入口、SSE 入口。路由用 Go 1.22+ `net/http.ServeMux` 的方法+路径模式，不引入 Web 框架。
-- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：业务 `POST /auth/login`、`POST /auth/logout`、`GET /auth/session`、`GET /plugins`、`GET /plugins/{id}`、`POST /plugins`（501 占位，M2 实现）、`POST /plugins/{id}/enable`、`POST /plugins/{id}/disable`、`POST /plugins/{id}/root-action`、`GET /plugins/{id}/root-action/{action_id}/confirm-token`、`POST /invoke/{plugin}/{method}`、`GET /system/info`、`GET /system/metrics`、`GET /audit`（M4-C 操作审计查询，`since` 必填）、`GET /events`（SSE 任务进度推送）；商店：`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`GET /store/jobs/{id}`。共 **22 个端点**（15 业务 + 7 store，其中 1 个 501 占位：`POST /plugins`）；另有 `GET /-/healthz` 与 2 条静态前缀（`GET /{$}`、`GET /assets/*`）。`GET /api/v1/system/info` 在 capability report 之外附带 `supervisor{resident,restarts,resident_max,lazy_slots}`（常驻插件数 / 历史累计重启 / resident 独占上限 / 仍可供 lazy 使用的槽位）与 `paths{state_dir,run_dir,log_dir,index_dir,plugin_dir}`（归一化后的绝对路径，排障用）。
+- **输入输出**：输入 HTTP 请求；输出统一 JSON 体 `{code,message,detail}`（成功体直接返回业务 `result`，错误体三字段固定）。路由清单（前缀 `/api/v1`）：业务 `POST /auth/login`、`POST /auth/logout`、`GET /auth/session`、`GET /plugins`、`GET /plugins/{id}`、`POST /plugins`（501 占位，M2 实现）、`POST /plugins/{id}/enable`、`POST /plugins/{id}/disable`、`POST /plugins/{id}/root-action`、`GET /plugins/{id}/root-action/{action_id}/confirm-token`、`POST /invoke/{plugin}/{method}`、`GET /system/info`、`GET /system/metrics`、`GET /audit`（M4-C 操作审计查询，`since` 必填）、`GET /events`（SSE 任务进度推送）、`GET /scheduler/tasks`、`POST /scheduler/tasks`、`POST /scheduler/tasks/{id}/run`、`DELETE /scheduler/tasks/{id}`（ADR-0019 定时任务，需 `system:admin`）；商店：`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`GET /store/jobs/{id}`。共 **26 个端点**（19 业务 + 7 store，其中 1 个 501 占位：`POST /plugins`；任务书写作 3 个端点 / 22→25，实际落地 4 条路由，按实数登记）；另有 `GET /-/healthz` 与 2 条静态前缀（`GET /{$}`、`GET /assets/*`）。`GET /api/v1/system/info` 在 capability report 之外附带 `supervisor{resident,restarts,resident_max,lazy_slots}`（常驻插件数 / 历史累计重启 / resident 独占上限 / 仍可供 lazy 使用的槽位）与 `paths{state_dir,run_dir,log_dir,index_dir,plugin_dir}`（归一化后的绝对路径，排障用）。
 - **失败模式与处理**：未知路由 → 404 `E_NOTFOUND`；方法不符 → 405 `E_INVALID`；body 超限 → 413 `E_INVALID`（同时断开连接，不读完剩余字节）；handler panic → recover 记堆栈，500 `E_INTERNAL`；`invoke` 目标插件不存在 → 404 `E_NOTFOUND`，未启用 → 409 `E_CONFLICT`，插件超时 → 504 `E_UPSTREAM`。**`POST /invoke` 转发前按目标插件声明的能力做调用校验**：先查方法级 `method_capabilities[<id>.<method>]`（命中即单独生效），未命中回退插件级 `capabilities`（多项取最高）；内核只认 `system:`/`net:`/`proc:` 前缀，`read` 动作任意已登录会话可调、`write/admin` 动作需 `system:admin`（或会话能力集含该项），宿主前缀下的未知动作 fail-closed；不足 → 403 `E_UNAUTHORIZED`（message 写明所需能力）并写审计 `capability.denied`，插件自有 `<id>:<action>` 不由内核解释（G-01）。**审计按最终生效能力收口**：只有 `write`/`admin` 类写 `invoke.*`，解析为 `*:read` 的方法不写；单用户模式下会话恒持全权、授权仍全放行，方法级能力此时只在审计侧生效。
 - **明确不做什么**：不做业务参数校验（交插件）；不直连 bbolt；不直接 `exec` 进程（只调 supervisor）；不实现 WebSocket（SSE 是唯一推送通道）；不做 CORS（同源部署，跨源是设计外）。
 
@@ -142,6 +142,15 @@
 - **失败模式与处理**：索引缺失/过期 → 200 + `stale=true`（不阻塞首装，用 embed 快照兜底）；刷新失败 → **保留旧缓存**并返回 `E_UPSTREAM`（禁止清空）；job 不存在 → 404 `E_NOTFOUND`；包 sha256 不符 → job `failed` + `E_INVALID`；同一插件并发安装 → 409 `E_CONFLICT`。
 - **明确不做什么**：不做审核 / 账号 / 评分 / 评论；不做自动后台刷新（**零轮询**，G-19）；不代理第三方下载（按索引 URL 取包后**自算 sha256**，索引不是信任源）；不长期存包（安装完成即删临时文件）。
 - **端点实现状态（M2-B 快照；终态规格见上文"输入输出"）**：7 个 store 端点中，M2-B 已接通 4 个路由——`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/install`、`GET /store/jobs/{id}`；其余 `POST /store/refresh`、`GET /store/presets`、`POST /store/update`、`DELETE /store/plugins/{id}` 属后续里程碑。**路由接通 ≠ 功能完成**：`GET /store/jobs/{id}` 虽已注册，handler 当前返回 **501 `E_UNSUPPORTED`**（message 标注 M3 支持），任务进度查询到 M3 才落地；M2-B 阶段该端点仅占位，不返回真实 job 状态。
+
+### 2.15 `internal/core/scheduler`（定时任务，ADR-0019）
+
+- **职责**：内核**唯一**的周期执行器。单个 ticker（30s 检查）扫描 `scheduler_tasks` 中 `next_run_at <= now` 的任务，到点调用 `Invoker.Invoke(plugin, method, params)`（oneshot 调用面），写 `scheduler_runs` 执行记录并推进下次时间；不认业务语义，只搬运 `{plugin, method, params}`（G-01）。
+- **输入输出**：任务 `{id,name,plugin,method,params,schedule|interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count}`（`schedule` 即 5 段 cron 表达式；字段名按 thin-shell 名词表取语义等价词，见 ADR-0019「命名决策」）；表达式 5 段（分 时 日 月 周，自写解析、零依赖），支持 `*` / `n` / `a-b` / `a,b` / `*/n` / `a-b/n`；`cert_renew.enabled=true` 时迁移为内置任务（`plugin="kore"`、`method="cert.renew_due"`），原独立 ticker 不再创建。
+- **生命周期**：`Start` 恢复任务（停机期间 `next_run_at` 已过 → 记 `missed`、**不补跑**、从 now 重算）→ 有启用任务才起 ticker（默认零后台定时器）；任务全禁用/删除后 ticker 停掉；`Stop` 取消循环。同一任务不并发（执行中再触发记 `skipped` + WARN）；单任务超时默认 300s（可配 1–3600s），超时记 `timeout`；运行时迟到 >5min 视为 `missed`。
+- **失败模式与处理**：表达式非法 / 参数非对象 / `schedule` 与 `interval_s` 同给或都不给 → 400 `E_INVALID`；任务不存在 → 404 `E_NOTFOUND`；执行中手动触发或任务已禁用 → 409 `E_CONFLICT`；内置处理器或插件调用面未装配 → 执行失败并记 `failed`（不假装成功）；单条任务记录损坏 → 跳过 + WARN（不猜内容、不自动删）。
+- **端点**：`GET /api/v1/scheduler/tasks`、`POST /api/v1/scheduler/tasks`、`POST /api/v1/scheduler/tasks/{id}/run`、`DELETE /api/v1/scheduler/tasks/{id}`，全部要求 `system:admin`。
+- **明确不做什么**：不做秒级精度、不做 per-task 时区、不做分布式锁与跨机调度、不做业务参数校验、不写系统 crontab（那是插件自治）、不主动联网（G-10）。
 
 ## 3. 中间件链
 
@@ -316,7 +325,7 @@ WantedBy=multi-user.target
 | 3 | 业务词表 | `grep -rniE "wordpress\|nginx\|mysql\|redis\|backup\|站点\|数据库\|证书签发" internal/core/ --include=*.go` | 零命中（含注释） |
 | 4 | 禁 SQL | `grep -rniE "database/sql\|INSERT INTO\|SELECT .* FROM\|gorm" internal/` | 零命中 |
 | 5 | 禁出网客户端 | `grep -rn "http.Client\|net.Dial" internal/ pkg/` | 零命中（server 侧监听不算） |
-| 6 | 定时器白名单 | `grep -rn "time.NewTicker\|time.NewTimer\|time.AfterFunc" internal/` | 仅命中 `cert_renew` 包 |
+| 6 | 定时器白名单 | `grep -rn "time.NewTicker\|time.NewTimer\|time.AfterFunc" internal/` | 周期源仅 `internal/core/scheduler/`（单实例单 ticker，ADR-0019）；`time.NewTimer` 仅允许请求级且必须 `Stop()` |
 | 7 | 行数预算 | `find internal/ pkg/pluginapi -name '*.go' \| xargs wc -l` | 合计 ≤ 8000 行（M1 实测后校准，超 10% 需 ADR）；单文件 ≤ 400 行 |
 | 8 | 协议可独立实现 | `go test ./pkg/pluginapi/...` 含帧编解码往返与超长拒绝用例 | 全绿 |
 | 9 | 二进制体积 | `du -b bin/kored` | ≤ 26214400 字节（25 MiB） |

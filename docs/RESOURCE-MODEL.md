@@ -35,7 +35,7 @@ kore 的资源预算是**门禁**，不是建议值：超了等于没做完。�
 | 前端首屏 | 静态资源 | ≤ 300 KiB gzip（307,200 B） | 180–250 KiB | — | 见 §8 的 gzip 统计口径 | 路由拆包、按需引入、删第三方库 |
 | 空载 fd | 常驻 | ≤ 64 | 12–32 | **6** | `ls /proc/<pid>/fd | wc -l` | 查泄漏 fd 与未关闭连接 |
 | 空载出站连接 | 常驻 | 0 | 0 | **0** | `ss -tnp state established | grep -c kored` | 禁止隐藏上报/心跳；出网只在插件 |
-| 后台定时器 | 常驻 | 0 个（唯一例外：证书续期 `cert_renew.enabled`，默认关） | 0 或 1 | **0** | 代码审查 `time.NewTicker`/`time.AfterFunc` 全量清点 | 删除或改事件驱动 |
+| 后台定时器 | 常驻 | 0 个（唯一例外：`scheduler` 单 ticker，默认无任务即不起；`cert_renew` 已迁移为内置任务） | 0 或 1 | **0** | 代码审查 `time.NewTicker`/`time.AfterFunc` 全量清点 | 删除或改事件驱动 |
 
 M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **7688 KiB**（min 7608 / max 7688）、Threads 12、空闲 CPU 0ms/60s、fd 6、二进制 6,209,698 B。**作为观测值记录，不作为 M4 收口判据**；收口在 M4 集中瘦身后按目标 8 MiB 争取、硬红线 16 MiB 判。历史值 **7832 / 8472 / 6408** 均在 GC 被关闭或线程数非预期状态下采集，**已作废，仅留档**。
 
@@ -97,12 +97,12 @@ M1 观测（GC 缺陷修复后，commit `02d0154`）：主壳 VmRSS 中位 **768
 - goroutine：`/system/info.goroutines` ≤ 20；`ls /proc/$PID/task | wc -l`（OS 线程）仅作旁证，两者不可互相替代。
 - fd：`ls /proc/$PID/fd | wc -l` ≤ 64。
 - 出站连接：`ss -tnp state established | grep -c kored` 必须为 0。
-- 定时器：仅 `cert_renew`；`grep -rn "time.NewTicker\|time.AfterFunc" internal/` 只允许命中证书续期一处。
+- 定时器：周期源仅 `scheduler`（`internal/core/scheduler/`，单实例单 ticker，ADR-0019）；`grep -rn "time.NewTicker\|time.AfterFunc" internal/` 只允许命中该包。无启用任务时 `scheduler` 不创建 ticker（默认零后台定时器）；`cert_renew` 已迁移为其中一条内置任务，不再是独立周期源。
 - **禁止轮询**：主壳不得有「每 N 秒拉一次插件状态」的循环；状态变化由插件推 `plugin.health`/`plugin.state` 事件，配置变化走 SIGHUP。
 
 ### 2.5 为什么 22 个插件不会变成 22 个进程
 
-绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制，且 **`resident` 单独限 2（`resources.resident_max`，默认 2），lazy 至少保留 1 槽**：第 3 个 resident 的 `enable` 直接拒绝并列出当前常驻（`E_RATELIMIT`，不静默降级）；lazy 唤醒遇 3 槽全满时驱逐最久未用的 **lazy**，`resident` 永不驱逐。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由**宿主调度器**（systemd timer / cron.d / launchd / Task Scheduler）触发 `kored invoke`，kore 不自带 scheduler；`cron` 插件是 lazy。
+绝大多数插件默认 `lazy`/`oneshot`：空闲即无进程、RSS=0。同时常驻 ≤3 由 supervisor 配额强制，且 **`resident` 单独限 2（`resources.resident_max`，默认 2），lazy 至少保留 1 槽**：第 3 个 resident 的 `enable` 直接拒绝并列出当前常驻（`E_RATELIMIT`，不静默降级）；lazy 唤醒遇 3 槽全满时驱逐最久未用的 **lazy**，`resident` 永不驱逐。lazy 唤醒源：业务方法调用、事件订阅命中、显式 `POST /api/v1/plugins/{id}/enable`；唤醒同样受冷启动 300ms 门禁约束。定时任务由内核 `scheduler`（ADR-0019：单一 ticker + `state.db` 任务表，默认无任务即零 ticker）到点调用插件方法；外部 systemd timer 只是可选补充，不是开箱路径。`cron` 插件仍是 lazy，它管理的是系统 crontab（插件自治），与内核调度器不是一回事。
 
 ### 2.6 槽位分配保护（已实现 · Round 5 / R5-5）
 

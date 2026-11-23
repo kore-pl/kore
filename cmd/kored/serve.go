@@ -40,6 +40,11 @@ func runServe(args []string, stderr io.Writer) int {
 	if code != exitOK {
 		return code
 	}
+	if err := svc.startScheduler(); err != nil {
+		slog.Error("定时任务调度器启动失败", "err", err)
+		svc.StopAll()
+		return exitConfig
+	}
 	server, code := startHTTP(app, cfg, report, svc)
 	if code != exitOK {
 		svc.StopAll()

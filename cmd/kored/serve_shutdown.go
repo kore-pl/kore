@@ -11,11 +11,13 @@ import (
 // shutdownTimeout 是优雅关闭自限（ARCHITECTURE §6.2：在途 HTTP ≤5s）。
 const shutdownTimeout = 5 * time.Second
 
-// shutdownAll 按固定顺序关闭：先停 HTTP（在途 ≤5s）→ 再停全部插件 → 由 defer 关状态库。
+// shutdownAll 按固定顺序关闭：先停调度器（不再派发新任务）→ 停 HTTP（在途 ≤5s）
+// → 再停全部插件 → 由 defer 关状态库。
 //
-// 顺序不可调换：先停 HTTP 保证不再产生新调用，再停插件才能让 kore.shutdown 的
-// 5s 宽限期覆盖真实在途请求。
+// 顺序不可调换：先停调度器与 HTTP 保证不再产生新调用，再停插件才能让
+// kore.shutdown 的 5s 宽限期覆盖真实在途请求。
 func shutdownAll(server *httpapi.Server, svc *service) {
+	svc.stopScheduler()
 	shutdownHTTP(server)
 	svc.StopAll()
 }
