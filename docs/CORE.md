@@ -84,6 +84,7 @@
 - **职责**：帧编解码（4 字节大端长度前缀 + JSON，单帧 ≤ 8 MiB = 8388608 字节）、请求-响应关联、单次调用超时、事件扇出与 SSE 环形缓冲。帧信封：`type` 取 `request|response|event|ping|pong`，请求 `{type:"request",id,req_id,method,params}`，响应 `{type:"response",id,result}` 或 `{type:"response",id,error:{code,message,detail}}`（字段级细节以 `PLUGIN-PROTOCOL.md` 为准）；`id` 为连接内唯一请求标识，`req_id` 透传 HTTP 侧请求标识便于跨进程追日志。
 - **输入输出**：`Call(plugin, method, params, timeout) (result, *PluginError)`；`Publish(plugin, event)`；`Subscribe() <-chan Event`。事件 id 为进程内单调 uint64，环形缓冲 256 条（只服务断线补发）。
 - **失败模式与处理**：帧长 > 8 MiB 或 < 2 字节 → 断开该连接 + `E_INVALID`（超长帧是攻击或 bug，不尝试读一半）；JSON 解析失败 → `E_INVALID` 并记 method 摘要；调用目标未运行（lazy/oneshot）→ 触发冷启动并排队（上限 32，超限 429 `E_RATELIMIT`）；插件 15 s 不响应（默认，envelope 可覆盖至 120 s）→ 504 `E_UPSTREAM`；连接断开 → 该插件所有在途请求立即 `E_UPSTREAM`（不重试，避免重复副作用）；缓冲满 → 丢最旧 + WARN（事件是通知不是事实来源）。
+- **超时与迟到帧**：超时保留连接（帧边界已丢失时才断开），插件迟到写回的响应帧在下一次调用丢弃并重同步，不把上一次超时的残留报成本次 `E_INVALID`。
 - **明确不做什么**：不做消息持久化；不做自动重试（重连由 supervisor 负责）；不保证跨插件事件顺序；不做流式分片（单帧必须完整）。
 
 ### 2.8 logger（跨包 `log/slog` 约定，非独立包）
