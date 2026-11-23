@@ -1,6 +1,6 @@
 # Gitee 镜像仓库（Gitea 权威源 · 三端镜像推送）
 
-> 状态: active · 归属: scribe · 更新: 2026-11-23 · 里程碑: M1
+> 状态: active · 归属: scribe · 更新: 2026-11-24 · 里程碑: M1
 
 kore 多仓库三端推送：自建 Gitea `gitea.iouf.cn/kore-pl` 是**唯一权威源**（[ADR-0024](DECISIONS/0024-repo-topology-and-gitea.md) 决策 B），GitHub 与 Gitee 均为镜像。issue / PR / tag 以 Gitea 为准；CI 与 release 按现行策略只在 GitHub 侧（见 [AGENTS.md](../AGENTS.md) §5 CI 触发策略）。Gitee 只做代码与发行物的可用性镜像，接收推送，不接收贡献流程（不在 GitHub / Gitee 上开分支、提 PR、改代码）。
 
@@ -78,3 +78,96 @@ git ls-remote gitee main
 curl -s "https://gitee.com/api/v5/repos/pengtang1024/<repo>/releases?per_page=100" \
   | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d),[r["tag_name"] for r in d])'
 ```
+
+## 8. 补建缺失 release（`scripts/gitee-release-fill.sh`）
+
+### 8.1 典型故障形态与根因
+
+发版报告写「环境无 `GITEE_TOKEN`，gitee release 未创建」，但 tag 与 `main` 都推送成功。这不是 Gitee 故障，是**凭据注入范围**问题：
+
+- tag / 分支用 SSH 推（`git@gitee.com`，`~/.ssh/id_ed25519_gitee_*`），**不依赖 token**——所以代码先到了；
+- `GITEE_TOKEN` 只在本机 `~/.config/environment.d/10-api-tokens.conf` 定义，由**用户会话登录时**注入；
+- 发版脚本若跑在没继承该变量的进程里（非登录 shell、桌面会话之外启动的进程、旧会话），`env | grep GITEE` 为空 → 脚本按设计跳过 release。
+
+结论：**「环境无 token」要先查进程环境，不要先怀疑 Gitee API/权限**；补建用第 8.4 节的脚本即可，历史 tag 不需要重推。
+
+### 8.2 生成 token（最小权限）
+
+1. Gitee → 设置 → 私人令牌 → 生成新令牌；
+2. **只勾 `projects`**（仓库读写：建 release、传附件、删 release 都在此权限内）。不要勾 `keys` / `hook` / `groups` / `enterprises` / `admin` 类；
+3. 有效期取团队策略允许的最短值；令牌只在生成页显示一次，立即注入，不落仓库。
+
+### 8.3 注入方式与边界
+
+| 方式 | 生效范围 | 说明 |
+| --- | --- | --- |
+| `export GITEE_TOKEN=***` | 当前 shell | 临时补建首选；命令结束即失效 |
+| `~/.config/environment.d/10-api-tokens.conf` | 用户会话登录时 | 本机默认；`chmod 600`；**新登录后才生效**，已在运行的进程不继承 |
+| CI secret | 流水线 | 走仓库 secrets，不落文件 |
+
+硬约束（G-30）：token 不得写入仓库、脚本默认值、文档或日志；脚本一律用 `Authorization: token` 请求头，**不要**把 `access_token=` 拼进 URL（会留在 shell history、进程表与访问日志里）。
+
+### 8.4 使用
+
+```bash
+# 1) 只读盘点缺口（不需要 token，走公开只读 API）
+bash scripts/gitee-release-fill.sh --dry-run --all
+
+# 2) 单仓补建（需要 token）
+export GITEE_TOKEN=***
+bash scripts/gitee-release-fill.sh --dir ../kore-plugin-app-deploy
+
+# 3) 全量补建；补完先看保留策略再决定是否清理
+bash scripts/gitee-release-fill.sh --all
+bash scripts/gitee-release-prune.sh --dry-run --repo pengtang1024/kore-plugin-app-deploy
+```
+
+行为约定：
+
+- **幂等**：tag 已有 release 则跳过；release 存在但缺 `dist` 资产则只补传；资产已在则整条跳过；
+- **资产命名**：`dist/<id>-<version>.tar.gz`（`<id>` = 仓库名去掉 `kore-plugin-` 前缀），与 GitHub 侧同 sha256，可离线复用；
+- **回读校验**：上传后下载资产、比对本地 sha256，不一致非零退出；
+- **tag 过滤**：只处理 `^v[0-9]`，`pkg/pluginapi/v*` 这类子模块 tag 不建 release；
+- **保留策略**：补建后超过 `--keep`（默认 5）只 WARN，不自动删除——清理是破坏性动作，必须先 `--dry-run`。
+
+### 8.5 两个 Gitee API 坑（2026-11-24 实测）
+
+| 症状 | 根因 | 处理 |
+| --- | --- | --- |
+| `HTTP 400 {"messages":["target_commitish is missing"]}` | 即便 tag 已存在，Gitee 建 release 仍强制要求 `target_commitish` | 传 tag 指向的 commit：`git rev-parse <tag>^{commit}` |
+| `HTTP 400` 且 `message` / `errors` 均为空 | 该端点不接受 JSON body，报错信息还丢字段 | 改用表单编码（`curl --data-urlencode`） |
+| release assets 的 `size` 恒为 `null` | Gitee API 不回填附件大小 | 验收看**下载字节数 + sha256**，不看 `size` 字段 |
+
+### 8.6 2026-11-24 盘点快照（补建 `app-deploy v0.3.1` / `terminal v0.2.1` 之后）
+
+| 仓库 | tag 数 | release 数 | 尚无 release 的 tag | 超 5 |
+| --- | --- | --- | --- | --- |
+| kore | 6 | 0 | `pkg/pluginapi/v0.1.0`–`v0.1.5`（子模块 tag，不建 release） | no |
+| kore-plugins | 0 | 0 | — | no |
+| kore-plugin-app-deploy | 7 | 4 | v0.2.1, v0.2.2, v0.3.0 | no |
+| kore-plugin-backup | 7 | 3 | v0.3.0, v0.4.0, v0.4.1, v0.4.2 | no |
+| kore-plugin-container | 9 | 3 | v0.3.0, v0.4.0, v0.4.1, v0.5.0, v0.5.1, v0.5.2 | no |
+| kore-plugin-cron | 6 | 2 | v0.3.0, v0.4.0, v0.4.1, v0.5.0 | no |
+| kore-plugin-db-mysql | 7 | 4 | v0.3.2, v0.4.0, v0.4.1 | no |
+| kore-plugin-db-postgres | 8 | 4 | v0.3.0, v0.3.1, v0.3.2, v0.3.3 | no |
+| kore-plugin-discover | 4 | 2 | v0.3.0, v0.3.1 | no |
+| kore-plugin-dns | 7 | 2 | v0.2.0, v0.3.0, v0.3.1, v0.3.2, v0.4.0 | no |
+| kore-plugin-echo | 5 | 3 | v0.1.0, v0.1.4 | no |
+| kore-plugin-file | 6 | 3 | v0.3.0, v0.3.1, v0.3.2 | no |
+| kore-plugin-firewall | 7 | 5 | v0.2.4, v0.2.6 | no |
+| kore-plugin-integrity | 8 | 3 | v0.3.0, v0.3.1, v0.3.2, v0.3.3, v0.4.0 | no |
+| kore-plugin-logs | 9 | 4 | v0.3.0, v0.4.0, v0.4.1, v0.4.2, v0.5.0 | no |
+| kore-plugin-monitor | 5 | 4 | v0.3.0 | no |
+| kore-plugin-process | 6 | 2 | v0.2.0, v0.2.1, v0.2.2, v0.3.0 | no |
+| kore-plugin-redis | 6 | 3 | v0.4.0, v0.5.0, v0.6.0 | no |
+| kore-plugin-runtime-node | 7 | 3 | v0.2.1, v0.2.2, v0.2.3, v0.2.4 | no |
+| kore-plugin-runtime-php | 5 | 3 | v0.2.1, v0.2.2 | no |
+| kore-plugin-runtime-python | 8 | 3 | v0.2.2, v0.2.3, v0.2.4, v0.3.0, v0.3.1 | no |
+| kore-plugin-site | 8 | 2 | v0.3.0, v0.3.1, v0.4.0, v0.4.1, v0.4.2, v0.4.3 | no |
+| kore-plugin-ssh-guard | 8 | 3 | v0.2.0, v0.2.1, v0.2.2, v0.2.3, v0.3.0 | no |
+| kore-plugin-ssl | 8 | 3 | v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0 | no |
+| kore-plugin-terminal | 4 | 3 | v0.2.0 | no |
+| kore-plugin-waf | 9 | 3 | v0.2.0, v0.3.0, v0.3.1, v0.4.1, v0.4.2, v0.4.3 | no |
+
+**这张表的读法**：release 从来只在「首次发版」时集中建过（各仓前 1–5 个），后续 tag 推上去了但没补 release——是**批量流程缺口**，不是个别仓漏操作。缺口合计 **90** 个 tag（不含 `kore` 的 6 个子模块 tag）；补建顺序建议：先补「最新 5 个窗口内」的 tag（做完仍在保留策略内，不需要立刻清理），再决定是否用 `--keep` 更小值做历史清退。
+
