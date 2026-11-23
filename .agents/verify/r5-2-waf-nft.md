@@ -225,19 +225,38 @@ exit=1                                    ← 插件按幂等成功处理（remo
 
 读取宿主规则必须 root：在 `systemd-run --user` 的 transient unit 内 `sudo -n`（NoNewPrivs=0，R5-1 已验证的同一手法）。
 
+> **口径更正（2026-11-23，R5-2 视图收口时发现）**：本节最初记录的三个 sha
+> （`b1e78966…` / `71b1ea8d…` / `147eb052…`）**不是规则集内容的 sha，而是权限错误文本的 sha**——
+> 当时的快照脚本漏了 `sudo -n`，`nft list ruleset` / `iptables -S` / `ufw status` 全部失败，错误信息被写进文件。
+> 由于本轮所有规则操作都在 `unshare -rn` 的独立 netns 里做，"宿主未被改动"的结论仍然成立，
+> 但那三个数值不能作为基线证据。以下是补做 sudo 采集 + counter 归一后的真实证据。
+
+补测（视图收口时，隔离实例以 root 起服并真实建表 → 删表）：
+
 ```
-前: b1e78966ac1cff8e64af068f387b51e1b31e0806351ec47650e7dd1c712f3a7d  /tmp/host-nft.ruleset
-    71b1ea8d60b82e5a1ae4d33ca055e389eb31f6000abde394bcc4f8c3791f3e2b  /tmp/host-iptables.txt
-    147eb0529db1c219500747f503e8ebbeffa8c62428962447dbedfcd72f67ca36  /tmp/host-ufw.txt
-    kore_waf-in-host-tables=0
-后: b1e78966ac1cff8e64af068f387b51e1b31e0806351ec47650e7dd1c712f3a7d  /tmp/host-nft.ruleset
-    71b1ea8d60b82e5a1ae4d33ca055e389eb31f6000abde394bcc4f8c3791f3e2b  /tmp/host-iptables.txt
-    147eb0529db1c219500747f503e8ebbeffa8c62428962447dbedfcd72f67ca36  /tmp/host-ufw.txt
-    kore_waf-in-host-tables=0
+# 建表后（during，sudo -n 采集）
+b56105c286b6fe52e00507a062d1924e7dbacdd947cb016b1037b6a0ab61b92f  nft list ruleset
+d1d740e3493bdc64b1ccb8e4deb37c571257cf1252d7c85699f5cc7d49123c70  iptables -S
+1e37bdb1005511db50f9854bb80f1befc1edb5b8899bf8c48a00ae3ce20cd713  ufw status verbose
+
+# 删表后（after）
+506767b9f5999de782ffc42777a996be7ad6a3bb131bf1a24b74c5baf75ad984  nft list ruleset
+d1d740e3493bdc64b1ccb8e4deb37c571257cf1252d7c85699f5cc7d49123c70  iptables -S   ← 与 during 逐字相同
+1e37bdb1005511db50f9854bb80f1befc1edb5b8899bf8c48a00ae3ce20cd713  ufw status verbose ← 与 during 逐字相同
 ```
 
-三项逐字一致；宿主 `nft list tables` 里没有 `kore_waf`（宿主原有 `libvirt_network` 等表未受影响）。
-**未碰宿主 `ufw`**（全程未执行 `ufw` 任何写命令）。
+`nft list ruleset` 的两个 sha 不同是**预期**（during 里多一张 kore_waf 表，且宿主 libvirt/docker 的
+`counter packets/bytes` 在持续增长）。把 `counter packets N bytes N` 归一成同一占位后 diff：
+
+```
+$ diff <(sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter packets N bytes N/g' during) \
+       <(sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter packets N bytes N/g' after)
+227,253d226        ← 仅删除 kore_waf 表（27 行：两个集合 + 一个动态 meter 集合 + 链 + 4 条规则）
+```
+
+- 归一后差异 **只有** `table inet kore_waf` 这 27 行，无任何其他结构差异；
+- `after` 里 `grep -ci kore` = **0**，`getent passwd | grep -c '^kore-'` = **0**；
+- 全程未执行任何 `ufw` 写命令（`ufw status` 前后 sha 一致即证）。
 
 ## 7. 门禁与发版
 
