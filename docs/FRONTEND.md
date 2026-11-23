@@ -349,7 +349,7 @@ var Dist embed.FS
 
 **定调**：图表实现**不锁定具体库**——**ECharts5 按需 ESM 是首选默认方案，不是硬指标**。任何实现（自研 Canvas/SVG、其他轻量库、或 ECharts）只要逐条满足下列判据即可合入；换方案须在 [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)（或新 ADR）记录选型理由与体积 / 实例证据。图表是**非首屏能力**：任何方案都不得进首屏，`d(首屏)/d(图表数)=0`。
 
-**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**（`9468f05 [agent:monitor-canvas]`），未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；实测锚点：`web/monitor.js` 的 `lttbSample`（约 :259）、`devicePixelRatio` 缩放（约 :302）、验收钩子 `window.__koreMonitorChart`（约 :702），行号以 `grep -n` 为准。ECharts 基础设施曾随 `cc47bac` 落地并按当时门禁通过，随后被并发会话 `c9a5336` 整体回退（`da5b88f` 同轮回退了 §13 校准）；**当前 HEAD 无该实现**——无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行，也**无页面消费者**（见 ADR-0027）。ECharts 仍是首选方案但当前不在树；恢复**不是一条命令**（`git revert c9a5336` 会因 `web/embed.go` 冲突，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh` 并与并发会话协调），不重新设计。以 `git log -- web/charts.js` 与 `git cat-file -e HEAD:web/charts.js` 的实际状态为准；判据对两种实现同等适用。
+**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**（`9468f05 [agent:monitor-canvas]`），未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；实测锚点：`web/monitor.js` 的 `lttbSample`（约 :259）、`devicePixelRatio` 缩放（约 :302）、验收钩子 `window.__koreMonitorChart`（约 :702），行号以 `grep -n` 为准；另有 1000 点尾部截断与单片 `RESIZE_DEBOUNCE_MS=100` 单监听。**未使用任何图表库**。ECharts 基础设施曾随 `cc47bac` 落地并按当时门禁通过，随后被并发会话 `c9a5336` 整体回退（`da5b88f` 同轮回退了 §13 校准）；**当前 HEAD 无该实现**——无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行，也**无页面消费者**（见 ADR-0027）。ECharts 仍是首选方案但当前不在树；恢复**不是一条命令**（`git revert c9a5336` 会因 `web/embed.go` 冲突，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh` 并与并发会话协调），不重新设计。以 `git log -- web/charts.js` 与 `git cat-file -e HEAD:web/charts.js` 的实际状态为准；判据对两种实现同等适用。
 
 **首选默认方案（ECharts）的契约文件**——选其它方案时这些文件可以不存在，但 §13 判据不变：
 
@@ -368,7 +368,7 @@ var Dist embed.FS
 | 2 | **单页图表实例 ≤ 12 个**（秒级刷新场景）；超出必须用 Tab / 折叠拆分，不得靠调参硬扛 | `count()` 或等效实例计数在图表页满载时 ≤ 12，且第 13 个创建必须**硬拒绝**而不是静默降级（ECharts 为例：`E_CHART_LIMIT`）；超限即返工，返工方式是改页面结构，不是上调上限或关动画 |
 | 3 | **迷你趋势卡不得引入重型图表库**（含 ECharts）：用轻量 DOM / canvas；单卡渲染代码 ≤ 50 行 | 指标卡渲染路径不加载图表 vendor、不创建图表实例；单卡渲染函数 ≤ 50 行；违反即返工 |
 | 4 | **时序折线**：Canvas 渲染 + 采样（LTTB 或等效）+ 增量更新（不整图重建）+ 关闭动画 | 折线初始化可见 canvas 渲染、采样开启、`animation: false`；刷新走增量而非 dispose + 重建（ECharts 为例：`{ lazyUpdate: true }`）；> 1000 点未采样即返工 |
-| 5 | **渲染器选择原则**：静态、无交互、切片少的占比图优先 SVG；时序 / 大数据量用 Canvas | 饼图 / 占比图无性能理由却用 Canvas 即返工；时序大数据量用 SVG 且无采样即返工 |
+| 5 | **渲染器选择（实现无关）**：时序 / 大数据量用 **Canvas 或等效位图**；静态、无交互、切片少的占比图优先 SVG。不绑定具体库，也不以「用了 SVG / 用了 Canvas」本身判合规 | 统一判定看：实例数 ≤12、单图 ≤1000 点、100ms 单监听防抖、切走 dispose 后计数归零、无动画 / 无悬停 / 无标记点、首屏不变；任一不满足即返工 |
 | 6 | **销毁**：组件卸载、切 Tab 必须销毁图表实例并置空引用；禁只移除 DOM 不销毁 | 视图 teardown 路径可见 `disposeChart` / `disposeAll` 或等效销毁调用且实例计数回落；只 `removeChild` / `innerHTML=''` / 仅置 `display:none` 即返工 |
 | 7 | **resize 统一 100ms 防抖**：由封装层单点绑定，不逐图各自绑定 | 图表容器的唯一全局 resize 监听在封装层（默认方案为 `web/charts.js`，实例表空即解绑）；图表页视图内不得再绑 `window` resize 或对图表容器 `ResizeObserver`。非图表模块的既有绑定（如 `terminal.js` 的 `visualViewport`）不属本条判定范围，但**不得借此放宽**图表侧 |
 | 8 | **精简配置**：不需要的坐标轴、`tooltip`、高亮（`emphasis`）、标记点（`markPoint`）等按所选库的等效项全部显式关闭 | 每份图表配置里上述项为 `show: false` 或不存在（时序图只保留必要坐标轴）；保留默认开启项即返工 |
