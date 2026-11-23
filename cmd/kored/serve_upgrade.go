@@ -26,6 +26,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/platform"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 const (
@@ -383,4 +384,61 @@ func (t *tailBuffer) String() string { return t.buf.String() }
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// ---- 装配层转发：httpapi.SelfUpdater 的可选接口实现 ----
+//
+// 为什么是"给 daemon 补四个转发方法"而不是"让 serve_boot 直接把 *selfUpdater 注入 httpapi"：
+//   - httpapi.Options.Backend 是**单一**接口值，同时承载插件管理（Plugins/Plugin/Enable/...）；
+//     把它换成 *selfUpdater 会让所有插件端点失去后端；组合成 wrapper 又平白多一层包装，
+//     且偏离本仓既有的"可选能力接口"模式（PluginUninstaller 同款，见 serve_plugin_uninstall.go）。
+//   - 业务语义（校验/原子替换/.prev/回滚/finalize）仍只在 selfUpdater 一处收口，daemon 只做委托，
+//     保持"实现与暴露分离"，也不涟漪任何测试替身（Backend 接口不扩方法）。
+//
+// 曾经的缺陷正是这层缺失：serve_runtime.go 只把实现写进 d.selfUpdate，字段没有读者，
+// 于是 HTTP 层对 Backend 的类型断言失败 → 四个端点全部 501。
+
+// 编译期断言：daemon 必须满足 httpapi.SelfUpdater，否则类型断言会在运行期静默失败成 501。
+var _ httpapi.SelfUpdater = (*daemon)(nil)
+
+// selfUpdateUnwired 是装配缺失时的显式错误（HTTP 501 + E_UNSUPPORTED，不假装成功）。
+func selfUpdateUnwired() error {
+	return &pluginapi.Error{
+		Code: pluginapi.E_UNSUPPORTED, Message: "当前装配未启用内核自升级",
+	}
+}
+
+// UpgradeStatus 实现 httpapi.SelfUpdater：转发到装配注入的实现。
+func (d *daemon) UpgradeStatus(ctx context.Context) (httpapi.SelfUpdateStatus, error) {
+	if d.selfUpdate == nil {
+		return httpapi.SelfUpdateStatus{}, selfUpdateUnwired()
+	}
+	return d.selfUpdate.UpgradeStatus(ctx)
+}
+
+// StartUpgrade 实现 httpapi.SelfUpdater：转发到装配注入的实现。
+func (d *daemon) StartUpgrade(ctx context.Context, actor string, req httpapi.SelfUpdateRequest) (httpapi.SelfUpdateJob, error) {
+	if d.selfUpdate == nil {
+		return httpapi.SelfUpdateJob{}, selfUpdateUnwired()
+	}
+	return d.selfUpdate.StartUpgrade(ctx, actor, req)
+}
+
+// StartRollback 实现 httpapi.SelfUpdater：转发到装配注入的实现。
+func (d *daemon) StartRollback(ctx context.Context, actor string, req httpapi.SelfUpdateRollbackRequest) (httpapi.SelfUpdateJob, error) {
+	if d.selfUpdate == nil {
+		return httpapi.SelfUpdateJob{}, selfUpdateUnwired()
+	}
+	return d.selfUpdate.StartRollback(ctx, actor, req)
+}
+
+// UpgradeJob 实现 httpapi.SelfUpdater：转发到装配注入的实现。
+//
+// 该接口没有 error 返回值，未装配时按"未知任务"处理（HTTP 404）；装配缺失由另外三个
+// 端点显式回 E_UNSUPPORTED，不会被这一条掩盖。
+func (d *daemon) UpgradeJob(id string) (httpapi.SelfUpdateJob, bool) {
+	if d.selfUpdate == nil {
+		return httpapi.SelfUpdateJob{}, false
+	}
+	return d.selfUpdate.UpgradeJob(id)
 }
