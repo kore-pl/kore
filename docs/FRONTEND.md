@@ -353,7 +353,7 @@ var Dist embed.FS
 
 | 文件 | 角色 | 约束 |
 | --- | --- | --- |
-| `web/charts.js` | 运行时封装（ESM） | 导出 `loadEcharts` / `createLineChart` / `disposeChart` / `disposeAll` / `count()`（当前活动实例数，验收断言用）；同一 host 复用实例、走 `setOption` 增量；页面与视图只经它建图 |
+| `web/charts.js` | 运行时封装（ESM） | 导出 `loadEcharts` / `createLineChart` / `disposeChart` / `disposeAll` + 实例计数；页面与视图只经它建图 |
 | `web/charts/echarts-entry.js` | ECharts 唯一入口 | 只显式 import 用到的图表 / 组件 / 渲染器（允许 `echarts/core` / `echarts/charts` / `echarts/components` / `echarts/renderers` 子路径） |
 | `scripts/build-charts.sh` + `make charts` | 构建 | 产出 `web/dist/charts.js` 与 `web/dist/charts-echarts.js` |
 | `web/dist/charts*.js` | 产物 | **平铺**（静态路由 `/assets/{file}` 只接受单段文件名）；禁 `*.map`；不进首屏预算 |
@@ -362,13 +362,13 @@ var Dist embed.FS
 
 | # | 条文 | 可判定判据（违反即返工） |
 | --- | --- | --- |
-| 1 | **按需 ESM，禁全量导入**：只经 `web/charts/echarts-entry.js` 显式 import；页面不得直接 import ECharts | `grep -rn "from 'echarts'\|echarts/index\|echarts/dist" web/` 零命中（全量包 / 入口总表 / 预构建 dist 一律禁）；`grep -rn "from 'echarts/" web/` 只允许命中 `web/charts/echarts-entry.js`（排除 `node_modules` 与 `web/dist` 构建产物）；其它文件直引即返工 |
-| 2 | **单页独立实例 ≤ 12 个**（秒级刷新场景）；超出必须用 Tab / 折叠拆分，不得靠调参硬扛 | `count()`（`web/charts.js` 暴露）在图表页满载时 ≤ 12，且第 13 个 `createLineChart` 必须硬拒绝（`E_CHART_LIMIT`）而不是静默降级；超限即返工，且返工方式是改页面结构，不是上调上限或关动画 |
+| 1 | **按需 ESM，禁全量导入**：只经 `web/charts/echarts-entry.js` 显式 import；页面不得直接 import ECharts | `grep -rn "from 'echarts'\|echarts/index\|echarts/dist" web/` 零命中（全量包 / 入口总表 / 预构建 dist 一律禁）；`grep -rn "from 'echarts/" web/` 只允许命中 `web/charts/echarts-entry.js`；其它文件直引即返工 |
+| 2 | **单页独立实例 ≤ 12 个**（秒级刷新场景）；超出必须用 Tab / 折叠拆分，不得靠调参硬扛 | 运行时实例计数（`web/charts.js` 暴露）在图表页满载时 ≤ 12；超限即返工，且返工方式是改页面结构，不是上调上限或关动画 |
 | 3 | **迷你趋势卡片不用 ECharts**：概览页指标卡的微型走势（单序列、无坐标轴、无 tooltip）用轻量 canvas 或现有 DOM 进度条 | 指标卡渲染路径不得出现 `createLineChart` / `echarts.init`；出现即返工 |
 | 4 | **时序折线**：Canvas 渲染器 + LTTB 采样 + `lazyUpdate: true` + 关闭动画（`animation: false`） | 折线初始化含 `{ renderer: 'canvas', lazyUpdate: true }` 且配置 `animation: false`；> 1000 点未采样即返工（采样兜底也必须可见） |
 | 5 | **静态饼图**：SVG 渲染器 | `echarts.init(el, null, { renderer: 'svg' })`；无性能理由却用 Canvas 画饼图即返工 |
 | 6 | **销毁**：组件卸载、切 Tab 必须 `dispose` 并置空引用；禁只移除 DOM 不 dispose | 视图 teardown 路径可见 `disposeChart` / `disposeAll` 调用且实例计数回落；只 `removeChild` / `innerHTML=''` / 仅置 `display:none` 即返工 |
-| 7 | **resize 统一 100ms 防抖**：由 `web/charts.js` 单点绑定，不逐图各自绑定 | `web/charts.js` 是图表容器的唯一全局 resize 监听（100ms 防抖、实例表空即解绑）；图表页视图内不得再绑 `window` resize 或对图表容器 `ResizeObserver`。非图表模块的既有绑定（如 `terminal.js` 的 `visualViewport`）不属本条判定范围，但**不得借此放宽**图表侧 |
+| 7 | **resize 统一 100ms 防抖**：由 `web/charts.js` 单点绑定，不逐图各自绑定 | `grep -rn "addEventListener('resize'\|onresize\|ResizeObserver" web/` 只允许命中 `web/charts.js`；页面 / 视图级 resize 监听即返工 |
 | 8 | **精简配置**：不需要的坐标轴、`tooltip`、高亮（`emphasis`）、标记点（`markPoint`）全部显式关闭 | 每份图表配置里上述项为 `show: false` 或不存在（时序图只保留必要坐标轴）；保留默认开启项即返工 |
 | 9 | **单图数据 ≤ 1000 点**：超出由后端预聚合，前端只做兜底截断 / 抽样 | 后端返回点数 ≤ 1000（或显式声明已聚合）；前端 `series.data.length > 1000` 仍未采样即返工 |
 | 10 | **验收口径**：满载（12 图）持续秒级刷新不卡顿、内存可回落、无泄漏 | 实现方须给：PC + 手机截图（G-28）、满载刷新 ≥ 10 分钟的 Performance 记录（帧率无持续下降、内存无持续上升）、dispose 后实例计数回 0；缺任一项即返工 |
