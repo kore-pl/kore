@@ -83,6 +83,9 @@ func runPackageInstall(opts installOptions, stdout, stderr io.Writer) int {
 	state, err := store.Open(snapshot.Paths.StateDir, slog.Default())
 	if err != nil {
 		fmt.Fprintf(stderr, "状态存储打开失败: %v\n", err)
+		if errors.Is(err, store.ErrLocked) {
+			printStoreLockedHint(stderr)
+		}
 		return storeExitCode(err)
 	}
 	defer func() {
@@ -98,16 +101,35 @@ func runPackageInstall(opts installOptions, stdout, stderr io.Writer) int {
 		Store:       state,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "安装失败: %v\n", err)
+		reportInstallError(stderr, err)
 		return installExitCode(err)
 	}
 	result, err := inst.Install(opts.packagePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "安装失败: %v\n", err)
+		reportInstallError(stderr, err)
 		return installExitCode(err)
 	}
 	fmt.Fprintf(stdout, "installed %s %s\n", result.ID, result.Version)
 	return exitOK
+}
+
+// reportInstallError 打印安装错误；状态库被占用时追加可操作的下一步提示。
+//
+// 原始错误始终原样打印（含持有者 pid），提示只做追加，不替换证据。
+func reportInstallError(w io.Writer, err error) {
+	fmt.Fprintf(w, "安装失败: %v\n", err)
+	if errors.Is(err, store.ErrLocked) {
+		printStoreLockedHint(w)
+	}
+}
+
+// printStoreLockedHint 给出"状态库被占用"时的下一步：先停服务，装完再启动。
+func printStoreLockedHint(w io.Writer) {
+	fmt.Fprintln(w, "提示: Kore 服务正在运行并独占 state.db，安装插件前请先停止服务：")
+	fmt.Fprintln(w, "  systemctl --user stop kored-local       # 用户级实例（portable，bin/kored serve）")
+	fmt.Fprintln(w, "  sudo systemctl stop kore                # 系统级实例（fhs，/etc/systemd/system/kore.service）")
+	fmt.Fprintln(w, "安装完成后再启动：systemctl --user start kored-local / sudo systemctl start kore")
+	fmt.Fprintln(w, "若你用的是商店页面安装（POST /api/v1/store/install），服务无需停止，可直接安装。")
 }
 
 // installExitCode 把安装错误映射为退出码：校验 2 / 状态目录或锁 3 / 存储 4。

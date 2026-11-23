@@ -269,6 +269,32 @@ sudo systemctl daemon-reload && sudo systemctl enable --now kore
 
 安装目录换位置时用 `KORE_HOME` 显式指定（服务脚本里写 `Environment=KORE_HOME=/opt/kore` 最稳）；若二进制被装进 `/usr/local/bin` 等系统目录，内核会**自动退回 `fhs` profile 并打 WARN**——那是发行版打包形态，不是默认形态。
 
+### 6.1.1 离线安装插件（需先停服务）
+
+`kored install --package` 与 `kored serve` **独占同一个 `state.db`**：服务在跑时执行 CLI 安装会撞文件锁，报
+`store: 状态库已被占用: <state>/state.db（持有者 pid=<pid>）`，退出码 3。新版本会在这条错误后直接给出下一步（原 pid 保留）：
+
+```text
+提示: Kore 服务正在运行并独占 state.db，安装插件前请先停止服务：
+  systemctl --user stop kored-local       # 用户级实例（portable，bin/kored serve）
+  sudo systemctl stop kore                # 系统级实例（fhs，/etc/systemd/system/kore.service）
+安装完成后再启动：systemctl --user start kored-local / sudo systemctl start kore
+若你用的是商店页面安装（POST /api/v1/store/install），服务无需停止，可直接安装。
+```
+
+照做即可（以 portable 用户级实例为例）：
+
+```bash
+systemctl --user stop kored-local            # 先停：释放 state.db 锁
+/opt/kore/bin/kored install --package site-0.1.0.tar.gz   # 判据：输出 installed site 0.1.0、退出码 0
+systemctl --user start kored-local           # 装完再启动
+curl -s localhost:8787/api/v1/system/info | grep -o '"version":"[^"]*"'   # 复核服务已起
+```
+
+**不要**为了绕锁去改 `--state-dir` 指向主实例的另一个路径——那只会在别处新建一个空状态库，装出来的插件主实例看不见。装插件只有两条路：停服务走 CLI（离线包），或服务在跑时走商店页面 / API（在线安装）。
+
+判据：停服务后 CLI 安装退出码 0；`systemctl --user status kored-local` 显示 active (running) 且商店能看到新插件。
+
 ### 6.2 卸载（卸载链，ADR-0023 阶段 B）
 
 ```bash
@@ -293,7 +319,7 @@ sudo kored uninstall --yes --purge
 
 **行为约定**：
 - `userdel` 按 `/etc/passwd` 前缀扫描，**不依赖 state**（用户可能先删了 state）；删除前用与建用户相同的正则再校验，`-r` 只删 home（插件 home 是 `/nonexistent`）；"does not exist" 视为成功；
-- 非 root 且要清理 unit/用户 → **退出码 6** 并提示 `sudo`；
+- 非 root 且要清理 unit/用户 → **部分完成 + 退出码 6**（详见 6.2.1，绝不返回 0）；
 - 幂等：unit / 用户 / 账本 / state 缺失都按"已清理"处理；
 - `--purge` 只执行白名单 `purge_op`（`file.remove` / `file.restore`），**绝不 `sh -c`**；
 - `make uninstall` 等价 `kored uninstall`（`make uninstall ARGS="--dry-run"` 先看计划）。
@@ -308,6 +334,37 @@ rm -rf /opt/kore
 # 断言（应全部无输出）
 ! test -e /etc/kore && ! test -e /var/lib/kore && ! pgrep -x kored && ! ss -lx | grep -q kore
 ```
+
+### 6.2.1 卸载的部分完成与退出码
+
+卸载链把动作分成两段：**安装目录内（本地）**与**宿主侧（systemd unit / `kore-*` 用户）**。两段的权限要求不同，退出码必须能区分"真完成"和"只做了一半"。
+
+| 场景 | 行为 | 退出码 |
+| --- | --- | --- |
+| `sudo kored uninstall --yes [--purge]` | 全链执行 | `0` |
+| `--yes --keep-service --keep-users`（任意身份） | 只清安装目录/状态，宿主侧声明自己处理 | `0` |
+| 非 root、未给两个 `--keep-*` | **部分完成**：本地该清的照清（`--purge` 也会真的执行），宿主侧跳过，打印摘要 | `6`（环境/权限不足） |
+| 非 root、无 `--yes`（非 TTY） | 零变更，提示加 `--yes` | `2` |
+| 有步骤失败 | 打印 `[FAIL]` 并汇总 | `1` |
+| `--dry-run` | 只打印计划，零变更；输出随 profile 变化 | `0` |
+
+部分完成时 stdout 末尾固定有这段摘要（脚本可据此判断）：
+
+```text
+[摘要] 卸载部分完成：宿主侧（systemd unit / kore-* 用户）因权限跳过，本次未全部完成
+  已做：systemd unit 已清理、状态目录已删除：/opt/kore/data
+  因权限跳过：systemd unit 清理（/etc/systemd/system/kore.service）、kore-* 用户清理（前缀 kore-）
+  怎么补做（拿到 root 后重跑，幂等）：sudo kored uninstall --yes --purge
+  只想清安装目录、宿主侧自己处理：kored uninstall --yes --keep-service --keep-users（该写法返回 0）
+退出码 6 = 环境不满足（权限不足），脚本/CI 不得当作成功
+```
+
+两条使用纪律：
+
+1. **脚本 / CI 只看退出码**：`kore uninstall && rm -rf ...` 这种写法在非 root 下会因退出码 6 短路——这是有意的（旧版本在这里返回 0，导致 `data/` 原样保留却报成功）。
+2. **portable 默认不创建宿主侧对象**（ADR-0023），但 `uninstall` 的默认语义仍是"完整卸载"：想让它以"只清安装目录"的口径返回 0，必须**显式**加 `--keep-service --keep-users`——把"我知道宿主侧有残留、我自己处理"写进命令，而不是让工具猜。
+
+`--dry-run` 会先读当前 profile 再决定展示什么：`portable` 打印「（portable 模式：不会创建 systemd unit，也不创建 kore-* 用户）」，不列 `/etc/systemd/system/...`；`fhs` 才列真实 unit 路径与账户前缀（`KORE_PROFILE=fhs kored uninstall --dry-run` 可先看 fhs 计划）。
 
 ### 6.3 从旧（fhs）布局迁移
 

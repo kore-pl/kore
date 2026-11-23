@@ -6,10 +6,21 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
 	"github.com/pengtang1024/kore/internal/platform"
 )
+
+// uninstallPaths 是一次卸载解析出的路径与生效 profile（ADR-0023：portable / fhs）。
+type uninstallPaths struct {
+	// stateDir 是状态目录（--purge 的删除目标）。
+	stateDir string
+	// installRoot 是 portable 安装根（手工删除提示用）。
+	installRoot string
+	// profile 是本次生效的零侵入 profile，决定是否真的存在 systemd unit / kore-* 用户。
+	profile string
+}
 
 // uninstallDeps 是卸载链的注入点（测试用假实现，绝不删真实用户 / unit）。
 type uninstallDeps struct {
@@ -17,7 +28,7 @@ type uninstallDeps struct {
 	stdinIsTTY func() bool
 	confirm    func(io.Reader, io.Writer) bool
 	execPurge  func(purgeOp) error
-	loadPaths  func(opts uninstallOptions) (stateDir string, installRoot string, err error)
+	loadPaths  func(opts uninstallOptions) (uninstallPaths, error)
 	removeAll  func(path string) error
 	euid       func() int
 }
@@ -48,16 +59,20 @@ func defaultUninstallDeps() uninstallDeps {
 			return answer == "y" || answer == "Y" || answer == "yes"
 		},
 		execPurge: executePurgeOp,
-		loadPaths: func(opts uninstallOptions) (string, string, error) {
+		loadPaths: func(opts uninstallOptions) (uninstallPaths, error) {
 			snap, _, err := coreconfig.Load(coreconfig.Options{
 				FlagPath: opts.config,
 				StateDir: opts.stateDir,
 				Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 			})
 			if err != nil {
-				return "", "", err
+				return uninstallPaths{}, err
 			}
-			return snap.Paths.StateDir, coreconfig.InstallRoot(), nil
+			return uninstallPaths{
+				stateDir:    snap.Paths.StateDir,
+				installRoot: coreconfig.InstallRoot(),
+				profile:     snap.Profile,
+			}, nil
 		},
 		removeAll: os.RemoveAll,
 		euid:      os.Geteuid,
@@ -88,16 +103,24 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 		return exitConfig
 	}
 
-	stateDir, installRoot, err := deps.loadPaths(opts)
+	paths, err := deps.loadPaths(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "uninstall: 解析路径失败: %v\n", err)
 		return exitConfig
 	}
+	stateDir, installRoot := paths.stateDir, paths.installRoot
+	portable := paths.profile == coreconfig.ProfilePortable
 	unitPath := platform.UnitFileName(opts.unitDir, opts.unitName)
 	fmt.Fprintf(stdout, "[INFO] 安装根：%s\n", installRoot)
 	fmt.Fprintf(stdout, "[INFO] 状态目录：%s\n", stateDir)
-	fmt.Fprintf(stdout, "[INFO] unit：%s（%s）\n", unitPath, keepLabel(opts.keepUnit))
-	fmt.Fprintf(stdout, "[INFO] 系统用户前缀：%s（%s）\n", opts.prefix, keepLabel(opts.keepUsers))
+	fmt.Fprintf(stdout, "[INFO] profile：%s\n", paths.profile)
+	if portable {
+		// portable 不创建 unit / 系统用户（ADR-0023）：列 /etc/systemd/system/... 只会误导。
+		fmt.Fprintln(stdout, "[INFO] unit：不适用（portable 模式：不会创建 systemd unit，也不创建 kore-* 用户）")
+	} else {
+		fmt.Fprintf(stdout, "[INFO] unit：%s（%s）\n", unitPath, keepLabel(opts.keepUnit))
+		fmt.Fprintf(stdout, "[INFO] 系统用户前缀：%s（%s）\n", opts.prefix, keepLabel(opts.keepUsers))
+	}
 	if opts.dryRun {
 		fmt.Fprintln(stdout, "[DRY-RUN] 以下仅为计划，不做任何变更")
 	}
@@ -114,17 +137,27 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 			return exitConfig
 		}
 	}
-	// 安全阀 2（再校验权限）：非 root 且要动 systemd / 系统用户 → 拒绝（ADR-0018 / G-16）。
-	if !opts.dryRun && deps.euid() != 0 && (!opts.keepUnit || !opts.keepUsers) {
-		fmt.Fprintln(stderr, "uninstall: 清理 systemd unit 与 kore-* 用户需要 root：请用 `sudo kored uninstall`，"+
-			"或加 --keep-service --keep-users 只清状态目录")
-		return exitEnv
+	// 安全阀 2（再校验权限）：非 root 且要动 systemd / 系统用户 → 不中止，改为"部分完成"：
+	// 宿主侧跳过、安装目录内能清的照清，最后仍以 6 退出（绝不返回 0 谎报成功）。
+	// 只有显式 --keep-service --keep-users（声明"宿主侧我自己处理"）才允许非 root 全绿。
+	needRoot := !opts.keepUnit || !opts.keepUsers
+	partial := false
+	if !opts.dryRun && needRoot && deps.euid() != 0 {
+		partial = true
+		fmt.Fprintln(stderr, "uninstall: 当前不是 root：清理 systemd unit 与 kore-* 用户需要 root，"+
+			"本次跳过这两步、继续清理安装目录内可清理的内容；补做请用 `sudo kored uninstall`")
 	}
-
+	var done, skippedRoot []string
 	failed := 0
 
 	// 1–4. systemd unit：stop → disable → rm → daemon-reload（幂等）。
-	if !opts.keepUnit {
+	switch {
+	case opts.keepUnit:
+		fmt.Fprintln(stdout, "[UNIT] --keep-service：跳过（unit 仍会留在 /etc/systemd/system）")
+	case partial:
+		skippedRoot = append(skippedRoot, "systemd unit 清理（"+unitPath+"）")
+		fmt.Fprintf(stdout, "[SKIP] systemd unit：需要 root，本次跳过（补做：sudo kored uninstall --yes）\n")
+	default:
 		cleanup, err := deps.cleanup.RemoveServiceUnit(opts.unitName, unitPath, opts.dryRun)
 		if err != nil {
 			fmt.Fprintf(stderr, "[FAIL] systemd unit 清理失败: %v\n", err)
@@ -133,13 +166,18 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 			for _, action := range cleanup.Actions {
 				fmt.Fprintf(stdout, "[UNIT] %s\n", action)
 			}
+			done = append(done, "systemd unit 已清理")
 		}
-	} else {
-		fmt.Fprintln(stdout, "[UNIT] --keep-service：跳过（unit 仍会留在 /etc/systemd/system）")
 	}
 
 	// 5. 系统用户：按 /etc/passwd 前缀扫描，不依赖 state（可能已被删）。
-	if !opts.keepUsers {
+	switch {
+	case opts.keepUsers:
+		fmt.Fprintln(stdout, "[USER] --keep-users：跳过（kore-* 用户仍留在 /etc/passwd）")
+	case partial:
+		skippedRoot = append(skippedRoot, "kore-* 用户清理（前缀 "+opts.prefix+"）")
+		fmt.Fprintln(stdout, "[SKIP] kore-* 用户：需要 root，本次跳过（补做：sudo kored uninstall --yes）")
+	default:
 		accounts, err := deps.cleanup.RemoveAccountsByPrefix(opts.prefix, opts.dryRun)
 		if err != nil {
 			fmt.Fprintf(stderr, "[FAIL] kore-* 用户清理失败: %v\n", err)
@@ -153,9 +191,8 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 				fmt.Fprintf(stderr, "[FAIL] userdel %s 失败（见上方 stderr）\n", name)
 				failed++
 			}
+			done = append(done, fmt.Sprintf("kore-* 用户已清理（%d 个）", len(accounts.Removed)))
 		}
-	} else {
-		fmt.Fprintln(stdout, "[USER] --keep-users：跳过（kore-* 用户仍留在 /etc/passwd）")
 	}
 
 	// 6. 账本：只列清单，默认不执行回滚。
@@ -177,6 +214,8 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 	}
 
 	// 7. --purge：执行结构化 purge_op + 删状态目录。
+	purged := 0
+	stateRemoved := false
 	if opts.purge {
 		for _, entry := range entries {
 			if !entry.Reversible || entry.PurgeOp == nil {
@@ -191,6 +230,7 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 				failed++
 				continue
 			}
+			purged++
 			fmt.Fprintf(stdout, "[PURGE] 已回滚：%s\n", entry.Target)
 		}
 		if stateDir == "" || stateDir == "/" {
@@ -202,10 +242,27 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 			fmt.Fprintf(stderr, "[FAIL] 删除状态目录失败: %v\n", err)
 			failed++
 		} else {
+			stateRemoved = true
 			fmt.Fprintf(stdout, "[PURGE] 已删除状态目录：%s\n", stateDir)
 		}
 	} else {
 		fmt.Fprintf(stdout, "[PURGE] 未指定 --purge：状态目录保留（%s）\n", stateDir)
+	}
+
+	// 局部进度：供"部分完成"摘要逐条说明已做 / 跳过。
+	if len(entries) > 0 {
+		done = append(done, fmt.Sprintf("变更账本已列出（%d 条）", len(entries)))
+	}
+	if purged > 0 {
+		done = append(done, fmt.Sprintf("已回滚 %d 个结构化 purge_op", purged))
+	}
+	switch {
+	case stateRemoved:
+		done = append(done, "状态目录已删除："+stateDir)
+	case opts.purge:
+		done = append(done, "状态目录删除失败或被拒："+stateDir)
+	default:
+		done = append(done, "状态目录保留（未指定 --purge）："+stateDir)
 	}
 
 	// 8. 剩余手工步骤。
@@ -220,6 +277,25 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 	}
 	if opts.keepUsers {
 		fmt.Fprintln(stdout, "  4) 你选择了 --keep-users：kore-* 用户仍在 /etc/passwd")
+	}
+
+	// 9. 部分完成（宿主侧因权限跳过）：明确摘要 + 补做方式，但**不返回 0**。
+	if partial {
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "[摘要] 卸载部分完成：宿主侧（systemd unit / kore-* 用户）因权限跳过，本次未全部完成")
+		fmt.Fprintf(stdout, "  已做：%s\n", strings.Join(done, "、"))
+		fmt.Fprintf(stdout, "  因权限跳过：%s\n", strings.Join(skippedRoot, "、"))
+		if failed > 0 {
+			fmt.Fprintf(stdout, "  另有 %d 项失败（见上方 [FAIL]）\n", failed)
+		}
+		hint := "sudo kored uninstall --yes"
+		if !opts.purge {
+			hint += " --purge（要连状态目录一起删时加）"
+		}
+		fmt.Fprintf(stdout, "  怎么补做（拿到 root 后重跑，幂等）：%s\n", hint)
+		fmt.Fprintln(stdout, "  只想清安装目录、宿主侧自己处理：kored uninstall --yes --keep-service --keep-users（该写法返回 0）")
+		fmt.Fprintln(stdout, "退出码 6 = 环境不满足（权限不足），脚本/CI 不得当作成功")
+		return exitEnv
 	}
 
 	if failed > 0 {
