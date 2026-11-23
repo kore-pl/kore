@@ -1,4 +1,4 @@
-> 元信息: 2026-11-23T13:30+08:00 · 执行者 kore-impl-container-view（implementer，task-1）· 主壳第 17 个视图 `web/container.js`（322 行）· 隔离实例 `127.0.0.1:18870`（`--config /tmp/kore-cv/config.yaml`，state/run/log 全在 `/tmp/kore-cv`，index 指向 `kore-plugins/index` 验签索引）· 主实例 8787 全程无进程未动 · 真机 chromium CDP 双端截图 · 报告 ≤90 行
+> 元信息: 2026-11-23T13:30+08:00 · 执行者 kore-impl-container-view（implementer，task-1）· 主壳第 17 个视图 `web/container.js`（322 行）· 隔离实例 `127.0.0.1:18870`（`--config /tmp/kore-cv/config.yaml`，state/run/log 全在 `/tmp/kore-cv`，index 指向 `kore-plugins/index` 验签索引）· 主实例 8787 开工时无监听、本轮对它零请求零写入 · 真机 chromium CDP 双端截图 · 报告 ≤90 行
 
 # 容器视图收口验收（构建 + 隔离实例真机 + G-28 双端截图）
 
@@ -41,7 +41,7 @@ API 契约逐字段核对插件仓（`../kore-plugin-container/internal/containe
 
 ## 3. 隔离实例真机验证（G-29）
 
-**本轮未改动主实例任何运行态配置**：`.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` 零写入；主实例 8787 开工时与收工时均无监听进程（`ss -ltn` 空）。全部验证在隔离实例：
+**本轮未改动主实例任何运行态配置**：`.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` 零写入；开工时 `ss -ltn` 显示 8787 **无监听**，本轮对 8787 只做过 `ss` 端口只读探测、**零 HTTP 请求**（收工时 8787 已由并行 agent 起服，与本任务无关）。全部验证在隔离实例：
 
 - 起服：`./bin/kored serve --config /tmp/kore-cv/config.yaml` → `GET /-/healthz` **200**；`paths` 实测 `{state:/tmp/kore-cv/state, run:/tmp/kore-cv/run, log:/tmp/kore-cv/log, index:/home/pt/Work/GolandProjects/kore-plugins/index}`（**index 指向 kore-plugins/index，验签通过**）。
 - 登录：`POST /api/v1/auth/login` → `{"authenticated":true}`；口令为一次性随机值，只存 `/tmp/kore-cv/secret.env`（0600，收尾删除），**不落档**。
@@ -74,7 +74,7 @@ API 契约逐字段核对插件仓（`../kore-plugin-container/internal/containe
 - `make secret-check` → **0**（G-30：本报告无明文口令，口令为 `$KORE_CV_PASSWORD`，值不落档）。
 - 提交：`feat(web): 容器管理视图（第 17 个视图）`（sha 由回报给出）；精确 add：`web/container.js web/shell.js web/embed.go web/i18n/zh-CN.js web/i18n/en-US.js Makefile internal/core/httpapi/server.go docs/FRONTEND.md .agents/verify/container-view.md .agents/verify/screenshots/container-view-*`。**未 add** 他人写域（supervisor/platform/pluginapi/privilege/market、AGENTS.md、PLUGIN-MATURITY、r3*/redis*/install-six* 等证据）。
 - **G-06 文档同步**：`docs/FRONTEND.md` 同批把 31→32 文件、16→17 视图、导航 18→19 项、`//go:embed` 清单与视图清单补 `container.js`——**超出任务卡枚举的 add 列表，属 G-06 硬门禁要求的同检查点文档同步，特此声明**。
-- **运行态写边界声明**：本轮**未改动主实例运行态配置**（`.kore-local.yaml`/`.kore-local-state/`/`.kore-local-run/` 零写入，8787 无进程）；`bin/kored` 由 `make build` 重建（任务卡明确要求跑 `make build`，主实例无进程持有它）；隔离实例 `/tmp/kore-cv` 验证完即删。
+- **运行态写边界声明**：本轮**未改动主实例运行态配置**（`.kore-local.yaml`/`.kore-local-state/`/`.kore-local-run/` 零写入；8787 开工时无监听、本轮零请求）；`bin/kored` 由 `make build` 重建（任务卡明确要求跑 `make build`；开工时无进程持有它，收工时 8787 已由并行 agent 起服，Linux 下 `go build -o` 走 rename，运行中进程持旧 inode 不受影响）；隔离实例 `/tmp/kore-cv` 验证完即删（已 `rm -rf` 并复核不存在、18870 无监听、chromium 无残留）。
 
 ## 7. 事故与已知缺口（如实）
 

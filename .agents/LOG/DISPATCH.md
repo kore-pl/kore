@@ -36,6 +36,18 @@
 | 2026-11-22 | 只读探测：GitHub 归属与提交身份 | kore-gh-probe / kore-git-identity | 只读，无写域 | — | `gh auth status`（pengtang1024）→ ADR-0017 选项对比；`git log --format='%ae'` 11 条同邮箱 | —（只读，无产出） | completed |
 | 2026-11-23 | Round 4 收口：PLUGIN-MATURITY 按代码事实重判（6 个 L0 → L1.5 + monitor 修正 + db-mysql L2）+ CS-R4-01 登记 + AGENTS 压到 132 行 | update-maturity-r4 | `docs/PLUGIN-MATURITY.md`、`.agents/BOARD.md`、`AGENTS.md`、`.agents/LOG/DISPATCH.md` | lead 派发（Round 4 六插件 + 主壳两能力） | `PLUGIN-MATURITY` 178 行 / `BOARD` 179 行 / `AGENTS` 132 行 + 本台账 1 行；24 仓版本比对 22 一致 / 2 待重签；业务方法 127 | 本次提交 | completed |
 
+| 2026-11-23 | Round 5 · 四插件发版复核（redis 0.4.0 / logs 0.3.0 / container 0.3.0 / ssh-guard 0.2.0） | kore-rel-redis / kore-rel-logs / kore-rel-container / kore-rel-sshguard | 各插件仓（只读复核 + dist 重建） | 各仓 v0.x tag 已存在 | 四仓全 PASS、零漂移：tag 干净树 `make dist` sha == 工作树 dist sha，release 资产 `curl -L` 200 + sha 一致；logs 另补 `method_capabilities` 与 0.4.0 能力（见下行） | `8b5cb45` + `a19cd8b`（logs 0.4.0）；其余仓 `—` | completed |
+| 2026-11-23 | Round 5 · process 0.2.0 → 0.2.1（保护名单 + renice + capability） | kore-rel-process | `../kore-plugin-process` | logs 复核同批 | 保护名单 + `renice` + 方法级 capability；0.2.0 已推、0.2.1 本地固化 | `67e99fd` / `aebabbf` | completed |
+| 2026-11-23 | Round 5 · cron 0.4.0 → 0.4.1（启停 + 固化） | kore-impl-cron | `../kore-plugin-cron` | process 同批 | `enable` / `disable` 落地 + 0.4.1 固化；8 方法 / 方法级 capability | `81e84d8` / `d661d68` | completed |
+| 2026-11-23 | R5-1 提权验证（真 root 通道 + 修 --pipe） | kore-verify-privilege | `.agents/verify/`、`../kore-plugin-*` root action 调用侧 | P0 降权 | 真 root 通道端到端 + 修 `--pipe` 输出丢失；ADR-0018 记录 | `f7bd150` | completed（降权后未复验，见 BOARD §9） |
+| 2026-11-23 | **P0 插件降权**（kore-`<id>` 降权 + 降级矩阵） | kore-impl-demotion | `kore` 降权路径（16 文件） | R5-1 | `kore-<id>` 前缀降权落盘 + 降级矩阵；**事故：共享 index 竞态把 16 文件卷进 `6ceeba8`（消息为"移除 ipset"）** | `6ceeba8` + `f7bd150` | completed（事故已复盘，见 JOURNAL Round 5 §1） |
+| 2026-11-23 | R5-2 形状表 + waf（rootpolicy 769 行 + ADR-0022 + 删 sed 入口） | kore-impl-waf | `kore` rootpolicy / ADR-0022 / `../kore-plugin-waf` | P0 降权 | rootpolicy 形状表 769 行 + ADR-0022 + 移除 sed 入口 | `f086312` / `6ceeba8` / `2db5f92` | completed |
+| 2026-11-23 | SDK v0.1.2 / v0.1.3（rootaction 进 tag + pluginapitest） | kore-impl-sdk | `pkg/pluginapi/` | R5-2 形状表 | `rootaction` 进 tag（v0.1.2）+ 清单统一自检入口 `pluginapitest`（v0.1.3）+ SDK 文档同步 | `50d3681` / `1e0c10a` | completed |
+| 2026-11-23 | 索引第 32 / 33 次重签（12 条版本 + 私钥销毁） | kore-impl-release-r5 | `kore-plugins/index/`、`kore-plugins/scripts/`、`kore/internal/core/market/verify.go` | 各插件仓发版 | 第 32 次签 6 条后收到追加清单，私钥已 shred → 作废换第 33 把；12 条版本入索引 + `versions.lock` + 预设同步 | `b4f688b`（`kore-plugins`，第 33 次，已双推）/ `8566d43`（`kore` 新公钥） | completed（第 34 次待做，见 BOARD §9） |
+| 2026-11-23 | Round 5 · 插件能力补全 ×N（container / redis / ssl / logs / integrity / db-postgres / file / monitor / terminal / site / ssh-guard） | 各 agent（kore-impl-* / kore-rel-*） | 各插件仓 | 各仓既有能力 | 方法级 `method_capabilities` + §2 缺口（下载 / 增量跟踪 / 切割 / 聚合等）逐仓补齐；版本见 CS-20261123-04 | 各仓 commit（见各仓 `RELEASE-EVIDENCE.md` / CHANGELOG） | in_progress（推送待批次收口） |
+| 2026-11-23 | Round 5 · 文档重判（PLUGIN-MATURITY 按代码事实） | kore-architect-maturity | `docs/PLUGIN-MATURITY.md` | 各仓能力事实 | 方法数 / capability 覆盖率 / 下划线命名约束 / 视图数按代码同步（L0 0 / L1 0 / L1.5 18 / L2 5） | `1cec22b` | completed |
+| 2026-11-23 | Round 5 · 台账收口（DISPATCH / BOARD / JOURNAL） | kore-scribe-round5 | `.agents/LOG/DISPATCH.md`、`.agents/BOARD.md`、`.agents/JOURNAL.md` | 上述各轨 | 11 条派发汇总 + `CS-20261123-04` + 5 条教训 + 6 项遗留 | 本次提交 | in_progress |
+
 ## 未回收与待补
 
 1. **`internal/core/config` / `registry` 的派发记录缺失**：文件已落盘（2026-11-22 00:2x），但会话内没有对应的 `team_task_*` 或派发消息可引；owner 列留 `—`，等 lead 补登记后再回填。
