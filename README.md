@@ -1,4 +1,4 @@
-# kore
+# Kore
 
 [![CI](https://github.com/pengtang1024/kore/actions/workflows/ci.yml/badge.svg)](https://github.com/pengtang1024/kore/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -6,11 +6,11 @@
 
 > 状态: draft · 归属: scribe · 更新: 2026-11-21 · 里程碑: M0
 
-**一句话定位**：kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座——一个只做调度的薄壳内核，而不是一个功能面面俱到的大面板。
+**一句话定位**：Kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座——一个只做调度的薄壳内核，而不是一个功能面面俱到的大面板。
 
 ## 机制上的差异
 
-| 维度 | 传统运维面板 | kore |
+| 维度 | 传统运维面板 | Kore |
 | --- | --- | --- |
 | 功能承载 | 功能全部塞进同一进程，一处异常全站陪葬 | 每个插件是独立进程，按需拉起、用完即退，崩溃不互相传染 |
 | 资源姿态 | 常驻全家桶 + 内置中间件，空闲也占几百 MB | 内核个位数 MB；低频功能零常驻；默认零后台定时器 |
@@ -18,7 +18,7 @@
 
 ## 仓库清单
 
-kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件一仓。本仓库（`kore`）只放内核、公开协议 SDK、主壳前端与协作中枢。
+Kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件一仓。本仓库（`kore`）只放内核、公开协议 SDK、主壳前端与协作中枢。
 
 | 仓库 | 定位 | module 路径 | 状态 |
 | --- | --- | --- | --- |
@@ -35,17 +35,17 @@ kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件�
 内核不含任何运维业务：功能由 **18–22 个插件仓库**提供，每个插件独立仓库、独立版本线、独立 CI，可以只装需要的那些。
 首次安装可选 **8 类场景预设**一键成型——预设 embed 在二进制里，可刷新到新版本，离线环境下也有目录兜底；装完之后由软件商店自管：装什么、卸什么、升不升，用户说了算，没有审核队列、没有账号。
 
-**和宝塔 / 1Panel 的关系**（不贬低竞品，只说取舍）：kore 覆盖 **22 项能力域——12 项生产级 / 8 项基础级（边界用例延 v1.1）/ 6 项明确不做**。**明示不做，比含糊对标更可信**：不做的 6 项是多用户 RBAC、集群 / 多机、模板市场、厂商云存储深度集成、拖拽建站、多语言（i18n）。
+**和宝塔 / 1Panel 的关系**（不贬低竞品，只说取舍）：Kore 覆盖 **22 项能力域——12 项生产级 / 8 项基础级（边界用例延 v1.1）/ 6 项明确不做**。**明示不做，比含糊对标更可信**：不做的 6 项是多用户 RBAC、集群 / 多机、模板市场、厂商云存储深度集成、拖拽建站、多语言（i18n）。
 
 **现状**：v1.0 = **Linux GA**；macOS 12+ / Windows 10 1809+ 为 **preview**（可用，隔离与限额降级，见上文「支持的平台」）。
 
-| 维度 | kore | 同类面板（宝塔 / 1Panel 等） |
+| 维度 | Kore | 同类面板（宝塔 / 1Panel 等） |
 | --- | --- | --- |
 | 更轻 | 内核只做调度，空载 RSS ≤ 8 MiB，单静态二进制 | 面板与功能通常由同一套发行包承载 |
 | 更开放 | 无账号、无联网校验、无隐藏上报，配置全明文 | 以各自产品形态与授权策略为准 |
 | 插件独立仓库 | 一个插件一个仓库、一条版本线、一套 CI，可单独替换或干脆不用 | 多以插件市场 / 内置模块形式分发 |
 
-选哪个取决于你要什么：要开箱即用的全家桶，成熟面板更省事；要小而可控、能自己改，看 kore。
+选哪个取决于你要什么：要开箱即用的全家桶，成熟面板更省事；要小而可控、能自己改，看 Kore。
 
 ## 五锚点
 
@@ -190,7 +190,7 @@ go work use kore-plugins              # 需要联调索引脚本时再加
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/pengtang1024)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
+Kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/pengtang1024)（同时为仓库归属方；迁入组织需走 ADR）。内核、索引与每个插件仓库放同一份 `LICENSE`；治理规则（贡献、决策、发版、安全披露）唯一真源见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)。
 
 - **如何贡献**：[CONTRIBUTING.md](CONTRIBUTING.md)——PR 即按 MIT 授权（inbound = outbound），**不要求 CLA**，签名用 `git commit -s`（DCO）；行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **安全披露**：[SECURITY.md](SECURITY.md)（披露流程）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）——**两者不要混**。
@@ -198,7 +198,7 @@ kore 以 **MIT** 协议开源，版权人 [`pengtang1024`](https://github.com/pe
 
 ## 参与方式
 
-kore 由 6 个固定角色的 agent 协作推进：lead 拆解与验收、architect 定边界、implementer 实现、verifier 独立复跑门禁、red-team 蓝军攻击、scribe 维护文档与复盘。
+Kore 由 6 个固定角色的 agent 协作推进：lead 拆解与验收、architect 定边界、implementer 实现、verifier 独立复跑门禁、red-team 蓝军攻击、scribe 维护文档与复盘。
 所有任务都走 Kore Loop 七阶段：提案 → 双评审 → 拆解 → 实现 → 验证 → 蓝军 → 归档复盘，产物落文件而不是停在对话里。
 入口、角色卡与反模式清单见 [.agents/README.md](.agents/README.md)；开工前先读根 [AGENTS.md](AGENTS.md)。
 **插件开发请去对应的 `kore-plugin-<id>` 仓库**；本仓库只收内核与协议 SDK，跨仓库改动按变更集登记（见 [.agents/WORKFLOW.md](.agents/WORKFLOW.md)）。

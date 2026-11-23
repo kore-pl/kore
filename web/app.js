@@ -255,7 +255,7 @@
     card.setAttribute('method', 'post');
     card.setAttribute('novalidate', 'novalidate');
 
-    card.appendChild(el('div', 'login-brand', 'kore'));
+    card.appendChild(el('div', 'login-brand', 'Kore'));
     card.appendChild(el('div', 'login-sub', '控制台 · 单管理员登录'));
 
     var label = el('label', 'field');
@@ -334,7 +334,7 @@
     var bar = el('header', 'topbar');
     if (withBrand) {
       var brand = el('div', 'brand');
-      brand.appendChild(el('span', 'brand-name', 'kore'));
+      brand.appendChild(el('span', 'brand-name', 'Kore'));
       brand.appendChild(el('span', 'brand-sub', '控制台'));
       bar.appendChild(brand);
     } else {

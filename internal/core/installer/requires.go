@@ -97,11 +97,11 @@ func CheckRequiresKore(expr, koreVersion string) error {
 		return err
 	}
 	if strings.ContainsAny(koreVersion, "-+") {
-		return wrap(ErrUnsupported, "kore 版本 %q 含预发布/元数据，MVP 不参与 requires_kore 匹配", koreVersion)
+		return wrap(ErrUnsupported, "Kore 版本 %q 含预发布/元数据，MVP 不参与 requires_kore 匹配", koreVersion)
 	}
 	current, err := parseSemver(koreVersion)
 	if err != nil {
-		return wrap(ErrUnsupported, "kore 版本 %q 无法解析，不能匹配 requires_kore=%q", koreVersion, expr)
+		return wrap(ErrUnsupported, "Kore 版本 %q 无法解析，不能匹配 requires_kore=%q", koreVersion, expr)
 	}
 	belowLower := compareSemver(current, expected.lower) < 0
 	aboveUpper := expected.hasUpper && compareSemver(current, expected.upper) >= 0

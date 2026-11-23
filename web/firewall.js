@@ -75,7 +75,7 @@
     add(details, el('pre', 'fw-cmd', 'sudo systemctl restart kore'));
     add(details, el('p', 'fw-callout-text',
       'systemd 部署用上面的命令；开发态直接启动可用 sudo ./bin/kored serve --config <你的配置>。' +
-      'kore 不会给单个请求加 sudo，也不会让插件自己提权；root 动作经内核 root-action 通道代理（ADR-0018）。'));
+      'Kore 不会给单个请求加 sudo，也不会让插件自己提权；root 动作经内核 root-action 通道代理（ADR-0018）。'));
     if (hint) add(details, el('p', 'fw-callout-text', '后端提示：' + hint));
     if (raw) {
       var more = add(details, el('details', 'fw-details'));

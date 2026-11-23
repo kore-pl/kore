@@ -541,7 +541,7 @@
     var nav = el('nav', 'kore-nav');
     nav.setAttribute('aria-label', '主导航');
     var brand = el('div', 'kore-nav-brand');
-    brand.appendChild(el('span', 'kore-nav-brand-name', 'kore'));
+    brand.appendChild(el('span', 'kore-nav-brand-name', 'Kore'));
     brand.appendChild(el('span', 'kore-nav-brand-sub', '控制台'));
     nav.appendChild(brand);
 
@@ -592,6 +592,11 @@
       drawer.hidden = true;
       drawer.setAttribute('role', 'menu');
       drawer.setAttribute('aria-label', '更多导航');
+      // 手机端侧栏品牌块让位给底部 tab bar，抽屉里补一处品牌标题，产品名仍是「Kore」。
+      var drawerHead = el('div', 'kore-nav-drawer-head');
+      drawerHead.appendChild(el('span', 'kore-nav-brand-name', 'Kore'));
+      drawerHead.appendChild(el('span', 'kore-nav-brand-sub', '更多导航'));
+      drawer.appendChild(drawerHead);
       var lastDrawerGroup = '';
       for (var k = 0; k < extras.length; k++) {
         var extraRoute = byId[extras[k].id], drawerGroup = groupTitle(extraRoute.id);

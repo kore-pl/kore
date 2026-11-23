@@ -174,7 +174,7 @@
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     return card('关于', '版本与许可', [
-      row('kore 版本', el('span', 'mono', info.version || '—')),
+      row('Kore 版本', el('span', 'mono', info.version || '—')),
       row('协议版本', el('span', 'mono', ABOUT.protocol)),
       row('许可证', ABOUT.license + '（LICENSE）'),
       row('代码仓库', link),

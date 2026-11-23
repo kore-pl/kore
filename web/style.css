@@ -1584,11 +1584,23 @@ button:disabled, .btn:disabled {
     display: none; position: fixed; left: var(--kore-space-2); right: var(--kore-space-2);
     bottom: calc(56px + env(safe-area-inset-bottom, 0px) + var(--kore-space-2)); z-index: 5;
     flex-direction: column; gap: var(--kore-space-1); padding: var(--kore-space-2);
+    /* 抽屉项数多于一屏时内部滚动，标题固定在顶部，避免内容向上溢出被裁掉 */
+    max-height: calc(100vh - 56px - env(safe-area-inset-bottom, 0px) - var(--kore-space-4));
+    overflow-y: auto; overscroll-behavior: contain;
     background: var(--kore-bg-1); border: 1px solid var(--kore-border-1);
     border-radius: var(--kore-radius-container); box-shadow: var(--kore-shadow);
   }
   .kore-nav-drawer.is-open { display: flex; }
   .kore-nav-drawer[hidden] { display: none; }
+  /* 手机端抽屉品牌标题：侧栏品牌块在小屏隐藏，这里补回产品名（品牌显示名 Kore） */
+  .kore-nav-drawer-head {
+    position: sticky; top: 0; z-index: 1; flex: 0 0 auto;
+    display: flex; align-items: baseline; gap: var(--kore-space-2);
+    padding: var(--kore-space-1) var(--kore-space-3) var(--kore-space-2);
+    background: var(--kore-bg-1);
+    border-bottom: 1px solid var(--kore-border-2);
+    margin-bottom: var(--kore-space-1);
+  }
   .kore-nav-drawer .kore-nav-item {
     flex: 0 0 auto; width: 100%; min-height: 48px; padding: 0 var(--kore-space-3);
     flex-direction: row; justify-content: flex-start; gap: var(--kore-space-3);

@@ -86,7 +86,7 @@ func New(opts Options) (*Installer, error) {
 		return nil, wrap(ErrStateDir, "state_dir 为空")
 	}
 	if opts.KoreVersion == "" {
-		return nil, wrap(ErrInvalid, "kore 版本为空，无法校验 requires_kore")
+		return nil, wrap(ErrInvalid, "Kore 版本为空，无法校验 requires_kore")
 	}
 	logger := opts.Logger
 	if logger == nil {
