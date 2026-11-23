@@ -189,3 +189,20 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
   - **`verify_file` 下划线命名**：动作段正则 `^[a-z][a-zA-Z]*$` 不含下划线，该方法无法进 `method_capabilities`；须改名或放宽协议（放宽需 ADR）。
   - **第 34 次重签未做**：`waf` 0.3.0 与本轮新发版插件尚未入索引（第 33 次只覆盖 12 条），索引同步是滚动量。
   - **R5-1 真 root 端到端未在降权后复验**：`--pipe` 修复与真 root 通道验证发生在降权提交前，降权后未重跑同一命令。
+
+### 9.1 GitHub Issues 镜像（2026-11-23，公开可认领队列）
+
+**BOARD 仍是权威台账**；下列 issue 是公开镜像 + 认领入口，双向可查（issue 正文含「背景 / 要做什么 / 验收判据」三段）。认领后回填 issue 号与 owner。
+
+| 遗留项 | issue |
+| --- | --- |
+| firewall 0.2.3 之后 tag 漂移，下次发版必须 bump（同类：process / redis / ssl / waf） | kore-pl/kore#1 |
+| 零侵入阶段 B：`kored uninstall` + `userdel` 清理 | kore-pl/kore#2 |
+| 主壳前端接线：10 个后端方法无 UI 入口 | kore-pl/kore#3 |
+| module 路径是否迁移到 kore-pl（当前决策：不改，需 ADR 才改） | kore-pl/kore#4 |
+| 协议约束：下划线命名方法无法进 `method_capabilities`（`verify_file`） | kore-pl/kore#5 |
+| echo 补故障注入测试以升 production | kore-pl/kore-plugin-echo#1 |
+| container docker socket 错误提示与 ADR-0018 冲突 | kore-pl/kore-plugin-container#1 |
+| 硬编码版本断言清理（dns / runtime-node / runtime-python） | kore-pl/kore-plugin-dns#1 |
+
+**状态**：以上均 open、未认领；标签体系见 `kore-pl/kore` 的 `P0` / `P1` / `P2` / `zero-intrusion` / `frontend` / `protocol` / `capability` / `release-chain`。
