@@ -10,12 +10,12 @@
 | 作用 | 回答"每个能力域现在是什么水平、离能用差哪些动作、先补哪个"，作为后续补全的唯一依据 |
 | 不作用 | 不替代 [FEATURE-PARITY.md](./FEATURE-PARITY.md)（对标归属）、[PARITY-GAP.md](./PARITY-GAP.md)（差距账）、[PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md)（字段规格） |
 | 盘点方法 | 逐仓读 `info.json` / `CHANGELOG.md` / `methods.go` / `internal/*/call.go`，再核对真实副作用（`os/exec`、真实文件读写、网络连接、非 `noopExecutor`）；**不采信 README / tag message / CHANGELOG 的级别自述**，以 **git HEAD** 为准、未提交工作树不计入 |
-| 盘点基线 | 24 个 `kore-plugin-*` 仓、**164 个业务方法**（`§6` 命令口径 = case 字面量；不含 `config.get/set`；`site` 走 `verbRegistry` 另计 16、`redis` 已改 `methodTable` 注册表另计 16 → **完整方法面 196**）、主壳 **19 视图 / 四组导航**、**9 个仓有配置契约**（`site` / `logs` / `backup` / `db-mysql` / `db-postgres` / `redis` / `dns` / `ssh-guard` / `waf`）、**17 个仓有方法级 `method_capabilities`**（`grep -l method_capabilities ../kore-plugin-*/info.json` 实测）；`echo` 为验证件，不参与 L 分级 |
+| 盘点基线 | 24 个 `kore-plugin-*` 仓、**175 个业务方法**（`§6` 命令口径 = case 字面量；不含 `config.get/set`；`site` 走 `verbRegistry` 另计 19、`redis` 用 `methodTable` 注册表另计 16 → **完整方法面 210**）、主壳 **20 视图 / 四组导航**、**9 个仓有配置契约**（`site` / `logs` / `backup` / `db-mysql` / `db-postgres` / `redis` / `dns` / `ssh-guard` / `waf`）、**17 个仓有方法级 `method_capabilities`**（`grep -l method_capabilities ../kore-plugin-*/info.json` 实测）；`echo` 为验证件，不参与 L 分级 |
 | 竞品口径 | 宝塔面板 / 1Panel 专业版**公开功能**的常识描述；无法确认的项标"待核实"，不臆造 |
 | 盘点范围 | 任务给定的 **24 个** `kore-plugin-*` 仓；`discover` 自 Round 2 起纳入，不留在表外 |
-| 盘点时刻 | **2026-11-23 13:32 +08:00**。正处并发发版窗口（`container` 0.4.0 / `db-postgres` 0.3.0 / `integrity` 0.3.0 / `logs` 0.4.0 / `redis` 0.5.0 / `runtime-php` 0.2.1 / `ssl` 0.4.0 / `waf` 0.3.0 / `process` 0.2.1 / `runtime-node` 0.2.1 / `site` 0.3.1 / `file` 0.3.0 / `terminal` 0.2.0 / `monitor` 0.3.0 / `cron` 0.4.0 / `ssh-guard` 0.2.1 / `backup` 0.4.0 等均已 bump），一律按 **HEAD** 计、未提交工作树不计；**索引对齐与方法数都是滚动量，§6 命令实测为准** |
+| 盘点时刻 | **2026-11-23 19:05 +08:00**。HEAD 实测版本：`site` 0.4.1 / `file` 0.3.1 / `db-mysql` 0.3.2 / `dns` 0.3.2 / `ssl` 0.5.0 / `redis` 0.5.0 / `container` 0.4.1 / `db-postgres` 0.3.1 / `integrity` 0.3.2 / `logs` 0.4.1 / `cron` 0.4.1 / `ssh-guard` 0.2.3 / `waf` 0.3.1 / `runtime-node` 0.2.4 / `runtime-python` 0.2.4 / `runtime-php` 0.2.2 / `echo` 0.1.4（全部 `depth_level: production`，`basic` 已清零），一律按 **HEAD** 计、未提交工作树不计；**索引对齐与方法数都是滚动量，§6 命令实测为准** |
 
-**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**，上一版「L0 2 / L1 1」不成立。真缺口只剩 **1 条**：**插件凭据不能跨插件传递**（§5 #8）；**插件降权已落地**（#13，`6ceeba8`：`kore-<id>` + `SysProcAttr.Credential` + 降级矩阵）；**方法级 capability 仍是部分补**（#12，17/24 仓声明，内核侧已就绪）。索引对齐是滚动量：盘点时刻 HEAD **14/24**（10 个刚发版仓待重签，清单见 §6 命令输出）。
+**当前结论一句话**：23 个可分级仓里 **L0 0 / L1 0 / L1.5 18 / L2 5 / L3 0**（L2 = `site` / `file` / `db-mysql` / `terminal` / `cron`）——全仓已无 `noopExecutor`，**L0 与 L1 已清零**，上一版「L0 2 / L1 1」不成立。真缺口只剩 **1 条**：**插件凭据不能跨插件传递**（§5 #8）；**插件降权已落地**（#13，`6ceeba8`：`kore-<id>` + `SysProcAttr.Credential` + 降级矩阵）；**方法级 capability 仍是部分补**（#12，17/24 仓声明，内核侧已就绪）。`depth_level`：24/24 仓均 `production`，**`basic` 0**。索引对齐是滚动量：以 ``§6`` 版本比对命令实测为准（本轮盘点见 §6）。
 
 ### 0.1 文档声明 vs 代码事实（本轮重判）
 
@@ -28,7 +28,7 @@
 | 5 | §3.5 #12 写「只读方法也按 **admin 类**进审计」、声明「**3/24** 仓」 | **审计记录根本没有 capability 字段**：修复前只读也写一条 `invoke.*`（判定来源是插件级 admin），修复后 `needAdmin=false` 时**连记录都不写**（= 完全不落库）；已声明仓为 **17/24** | `internal/core/store/audit.go:36-44`（无 capability 字段）、`httpapi/audit_http.go:137`（审计门）、`httpapi/invoke_capability.go:165-177`（判定/回退）、`.agents/verify/r5-12-method-capability.md` §3/§4（18875 vs 18876 A/B） | #12 改部分补 + **措辞纠正为"只读完全不落库 vs 写调用落库"** |
 | 6 | `ssl` L1.5（10 方法已列） | 与代码一致；expiring / renew.set / acme.status / acme.issue 均在 | `../kore-plugin-ssl/methods.go:139,150,161,171` | 维持 L1.5（ACME 仍骨架） |
 | 7 | `process`「缺优先级」 | HEAD 0.2.1：protect + renice 已提交、tag 已推，**并补了 5 条方法级 capability**（list/detail/tree=`proc:read`，kill/renice=`proc:write`） | `../kore-plugin-process/CHANGELOG.md` 0.2.1、`methods.go:46` | 计入（索引待重签） |
-| 8 | 主壳 **16 视图** | **19 视图**：旧表漏计 `runtimes`（业务组）与 `integrity`（平台组）两个早已存在的视图，再加上已接入导航的 `container`（资源组）；`process` 视图已完成 0.2.1 适配（`c43aed6`） | `web/shell.js:58-61`（四组 ids 共 19 个） | §3.3.1 重写为 19（不是 17） |
+| 8 | 主壳 **16 视图** | **20 视图**（`waf` 视图入导航）：旧表漏计 `runtimes`（业务组）与 `integrity`（平台组）两个早已存在的视图，再加上已接入导航的 `container`（资源组）；`process` 视图已完成 0.2.1 适配（`c43aed6`） | `web/shell.js:60-63`（四组 ids 共 20 个） | §3.3.1 重写为 20（不是 17；`waf` 入导航后 +1） |
 | 9 | §3.5 #10「`runtime-php` / `runtime-python` 0.2.0 未入索引」 | 两仓已入索引（#10 结案）；索引对齐是滚动量，盘点时刻 14/24 | §6 版本比对命令（读 HEAD） | #10 改"已补" |
 | 10 | §3.3.2「告警/通知中心 无」「长任务进度 伪」 | **均已落地**：铃铛 + 抽屉 + 3 端点 + 服务端埋点；SSE 真实阶段进度 | `httpapi/handlers_alerts.go:19`、`httpapi/sse.go`、`web/shell.js:395-449`、`ui-alerts-progress.md`（双端截图） | 两行改"已达标" |
 | 11 | 配置契约 **6 个仓** | **9 个仓**：另含 `dns` / `ssh-guard` / `waf` | §6 `grep -rl '"config.get"'` | 口径更新 |
@@ -52,13 +52,13 @@
 
 ## 2. 功能矩阵（3.2，24 个插件仓）
 
-**depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**（G-20 判据：`tests/fault/` 实跑 + dist 可复现）。**方法总数不变**（仍 164 命令口径 / 完整 196），本轮只升 depth 与补 fault 测试。
+**depth_level（本轮升 8 仓）**：`container` 0.4.1 / `db-postgres` 0.3.1 / `dns` 0.3.1 / `integrity` 0.3.2 / `runtime-node` 0.2.3 / `runtime-python` 0.2.3 / `ssh-guard` 0.2.3 / `waf` 0.3.1 从 `basic` 升 **`production`**；`echo` 0.1.4 为**最后一个**升 production 的仓（`basic` 已清零），`file` 0.3.1 同批。G-20 判据：`tests/fault/` + dist 可复现——本盘点只实测 `info.json` 版本与方法面，**fault 测试未复跑**（各仓证据以仓库内 `tests/fault/` 与 CHANGELOG 为准，不在此文冒充已证）。方法总数见 §6 实测（175 + site 19 + redis 16 = 210）。
 
 | 能力域 | 插件（版本） | 现级别 | 现有方法（数量） | 已补（代码事实） | 仍缺（到 L2 / L3） |
 | --- | --- | --- | --- | --- | --- |
-| 站点（web） | `site` 0.3.1 | **L2+** | 16：list / create / delete / status / get / bindSSL / unbindSSL / setRewrite / getRewrite / setProxy / unsetProxy / setRedirect / unsetRedirect / disable / enable / setIndex（另 config.get/set） | 16 verb 注册 `siteverbs.go:15-30`；vhost 原子写/test/reload；容器 nginx `docker exec`；**目录三态** `site_dir_state`（`sitedir.go:60`）；18 条方法级 capability（0.3.1 补 `config.*`） | 缺克隆、密码访问、流量统计、ACME 联动 |
-| 文件 | `file` 0.3.0 | **L2** | 19：list / read / write / delete / mkdir / stat / upload / download / extract / compress / chmod / move / rename / copy / search / batch / trash.list / trash.restore / trash.purge | 0.3.0 补 rename/copy/search（glob+内容）/批量（≤200，逐项结果）/回收站三方法（delete 默认入回收站，`permanent=true` 走旧语义）+ 19 条方法级 capability | 缺断点续传、在线编辑；**前端未接** search/trash/rename/copy（`web/files.js` 仅批量删除） |
-| MySQL | `db-mysql` 0.3.1 | **L2** | 11：instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / export / import（另 config.get/set） | 建库/删库/用户/授权/导入导出 `internal/mysqlop/call.go:22-48`；13 条方法级 capability；双端页面 `web/db-l2.js` | 缺改密（`client_admin.go:146` 明示需单独方法）、慢查询分析、多实例切换 UI |
+| 站点（web） | `site` 0.4.1 | **L2+** | 19：list / create / delete / status / get / bindSSL / unbindSSL / setRewrite / getRewrite / setProxy / unsetProxy / setRedirect / unsetRedirect / disable / enable / setIndex / clone / setPassword / clearPassword（另 config.get/set） | 19 verb 注册 `siteverbs.go`（`§6` 实测）；vhost 原子写/test/reload；容器 nginx `docker exec`；**目录三态** `site_dir_state`（`sitedir.go:60`）；0.4.1 补 clone 与访问密码（setPassword/clearPassword）；方法级 capability 随注册表声明 | 缺流量统计、ACME 联动 |
+| 文件 | `file` 0.3.1 | **L2** | 21：list / read / write / delete / mkdir / stat / upload / download / extract / compress / chmod / move / rename / copy / search / batch / trash.list / trash.restore / trash.purge / +2（0.3.1 进行中，见仓库 CHANGELOG） | 0.3.0 的 rename/copy/search/批量/回收站保持；0.3.1 继续扩充（HEAD 21 方法，未发版部分不计 L 升级） | 缺断点续传、在线编辑；**前端未接** search/trash/rename/copy |
+| MySQL | `db-mysql` 0.3.2 | **L2** | 12：instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / export / import / slowlog（另 config.get/set） | 建库/删库/用户/授权/导入导出 `internal/mysqlop/call.go`；0.3.2 补慢查询分析 `slowlog`；方法级 capability 同步；双端页面 `web/db-l2.js` | 缺改密（`client_admin.go` 明示需单独方法）、多实例切换 UI |
 | 计划任务 | `cron` 0.4.0 | **L2** | 8：list / add / remove / replace / logs / run / enable / disable | 三类型 `croncore/tasktype.go:11`；日志 `methods.go:131`；立即执行 `:142`；启停 `81e84d8`（`#KORE-DISABLED#` 幂等标记、run 拒停用）；8 条 capability | 日常动作后端已满（8/8）；**启停前端按钮未接**（`web/tasks.js` 无调用）；L3 缺批量/模板/通知 |
 | 终端 | `terminal` 0.2.0 | **L2** | 9：create / write / resize / read / close / list / attach / history / history.clear | PTY `pty_linux.go:41`；0.2.0 补历史落盘（0600 原子写）、**重连游标**（`attach` + `read.cursor` + replay 窗口）、会话绑定 `client_id`、9 条 capability | 缺多标签、字号/全屏（纯前端范围）；**前端未接** history/attach（`web/terminal.js` 无调用） |
 | 日志 | `logs` 0.4.0 | **L1.5** | 7：sources / tail / search / stats / download / follow / rotate（另 config.get/set） | 真实文件与 `journalctl` 读取；`download` 导出 0600 原子落盘；0.4.0 补 `follow` 实时跟踪与 `rotate` 切割 | 缺清理、按站点聚合 |
@@ -85,7 +85,7 @@
 
 ## 3. 主壳（前端）成熟度（3.3）
 
-### 3.3.1 四组导航 · 19 视图
+### 3.3.1 四组导航 · 20 视图
 
 | 导航组 | 视图（id） | 数量 |
 | --- | --- | --- |
@@ -158,7 +158,7 @@
 
 汇总：**14 条 = 已补 10（#1 #3 #4 #6 #7 #9 #10 #11 #13 #14）/ 部分补 3（#2 #5 #12）/ 仍在 1（#8）**；v1.0 前必须 **1 条（#8）**；索引对齐为滚动量，以 §6 命令实测为准。
 
-## 6. 附录：24 仓方法清单（命令口径 164 + `redis` 注册表 16 = 180；`site` verbRegistry 另计 16 → 完整 196）
+## 6. 附录：24 仓方法清单（命令口径 **175** + `redis` 注册表 16 = 191；`site` verbRegistry 另计 19 → 完整 **210**）
 
 | 仓库 | 方法数 | 方法名 | 一句话职责 |
 | --- | --- | --- | --- |
@@ -166,12 +166,12 @@
 | `backup` | 11 | create / list / restore / delete / verify / retention / stats / download / jobs / schedule.set / schedule.get | 真实 tar.gz 打包/恢复/校验；保留策略、下载、作业进度、定时任务描述、站点/库维度 |
 | `container` | 12 | list / inspect / logs / start / stop / restart / stats / images / pull / rmi / update / health | 真实 docker CLI 列表、详情、日志、生命周期、统计；镜像拉取/删除、更新与健康检查 |
 | `cron` | 8 | list / add / remove / replace / logs / run / enable / disable | crontab 读写 + 三类任务 + 执行日志 + 立即执行 + 启停 |
-| `db-mysql` | 11 | instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / export / import | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 |
+| `db-mysql` | 12 | instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / export / import | 真实 mysql CLI：只读查询 + 建库/删库/用户/授权/导入导出 |
 | `db-postgres` | 10（另 config.get/set） | instances / databases / query / status / createDatabase / dropDatabase / createUser / dropUser / grant / changePassword | psql/docker exec 真连接；建库/删库/用户/授权/改密；只读 SQL 白名单 |
 | `discover` | 3 | services / ports / summary | 本机服务、监听端口、安装建议；服务端版本可探 |
-| `dns` | 4（另 config.get/set） | status / zones / records / query | 四引擎探测、区域与记录解析、真实查询（只读） |
+| `dns` | 7（另 config.get/set） | status / zones / records / query | 四引擎探测、区域与记录解析、真实查询（只读） |
 | `echo` | 5 | ping / echo / slow / timeout / crash | 验证件：协议回环、超时、崩溃重启计数 |
-| `file` | 19 | list / read / write / delete / mkdir / stat / upload / download / extract / compress / chmod / move / rename / copy / search / batch / trash.list / trash.restore / trash.purge | 配置根内真实文件操作；回收站、批量、搜索；19 条方法级 capability |
+| `file` | 21 | list / read / write / delete / mkdir / stat / upload / download / extract / compress / chmod / move / rename / copy / search / batch / trash.list / trash.restore / trash.purge | 配置根内真实文件操作；回收站、批量、搜索；19 条方法级 capability |
 | `firewall` | 5 | status / rules / allowPort / denyPort / deleteRule | 真实 ufw/iptables 状态、规则、放行/拒绝/删除；root 走内核通道 |
 | `integrity` | 5 | baseline / baseline.list / check / status / verify_file | 真实 sha256 基线、比对、单文件校验；基线多版本列表；基线 0600 原子写 |
 | `logs` | 7（另 config.get/set） | sources / tail / search / stats / download / follow / rotate | 白名单日志源、尾读、搜索、统计、导出、实时跟踪、切割 |
@@ -180,7 +180,7 @@
 | `redis` | 16（另 config.get/set） | instances / info / keys / get / delete / keyInfo / memory / persistence / slowlog / set / ttl / expire / persist / bgsave / serverConfig.get / serverConfig.set | 注册表 `methodTable`（14 动词）+ 点分方法（2）；真实 RESP；危险命令拒绝表 |
 | `runtime-node` | 5 | versions / info / projects / doctor / paths | 真实探测 Node 版本、详情、项目扫描、健康检查、路径元信息 |
 | `runtime-php` | 5 | versions / info / projects / doctor / paths | 真实检测 PHP CLI、ini/扩展、项目、健康检查、路径元信息 |
-| `runtime-python` | 4 | versions / info / projects / doctor | 真实检测 Python、pip/site-packages、项目、健康检查 |
+| `runtime-python` | 5 | versions / info / projects / doctor | 真实检测 Python、pip/site-packages、项目、健康检查 |
 | `site` | 0（`verbRegistry` 另计 16，另 config.get/set） | list / create / delete / status / get / bindSSL / unbindSSL / setRewrite / getRewrite / setProxy / unsetProxy / setRedirect / unsetRedirect / disable / enable / setIndex | 真实写 nginx vhost + test/reload，含容器 nginx；目录三态 |
 | `ssh-guard` | 6（另 config.get/set） | status / attempts / bans / ban.list / ban.add / ban.remove | 日志解析 + 防护源检测 + 封禁清单；封禁写当前只声明不执行 |
 | `ssl` | 14 | list / import / selfsign / renew / verify / issue / expiring / renew.set / acme.status / acme.issue / bind.set / bind.remove / bind.list / https.status | 证书落盘与 x509/TLS；到期聚合、续期任务、ACME 探测/显式调用；站点归属登记与 HTTPS 状态 |
