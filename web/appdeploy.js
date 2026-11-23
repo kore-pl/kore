@@ -2,12 +2,19 @@
    调用形态（硬约束，docs/FRONTEND.md §业务方法调用形态）：POST /api/v1/invoke/app-deploy/app-deploy.<action>。
    读：app-deploy.list / app-deploy.jobs / app-deploy.templates；
    写：app-deploy.upload（content_base64 制品）→ app-deploy.deployFromArtifact（登记部署）、app-deploy.upgrade（同名新包，先快照可回滚）。
-   三种降级：插件未安装（E_NOTFOUND）→ 去商店；无权限（E_UNAUTHORIZED/E_FORBIDDEN）→ 只读说明；
-   当前插件版本没有该方法（未知方法）→ 「去升级」。上传用 XHR 以显示真实进度（大包不能没有反馈）。
+   三种降级：插件未安装（E_NOTFOUND + 未安装文案）→ 去商店；无权限（E_UNAUTHORIZED/E_FORBIDDEN）→ 只读说明；
+   已确认插件版本低于 0.3.0（确实没有该方法）→ 「去升级」。其它调用失败（含方法名/URL 契约不一致）按原始错误
+   中性展示——「未知方法」不是旧插件的证据，不能把自身 bug 包装成用户可操作的升级提示。
+   上传用 XHR 以显示真实进度（大包不能没有反馈）。
    本页不轮询：列表与任务都是进页时/用户触发各查一次。 */
 (function () {
   'use strict';
-  var API = '/api/v1/invoke/app-deploy/', TIMEOUT_MS = 30000;
+  // 方法名必须是 <plugin-id>.<action>（docs/FRONTEND.md §业务方法调用形态）：
+  // 控制器按最后一个 '.' 拆插件与动作，漏掉 'app-deploy.' 前缀会被插件当成未知方法。
+  var API = '/api/v1/invoke/app-deploy/app-deploy.', TIMEOUT_MS = 30000;
+  // upload / deployFromArtifact / upgrade / jobs 是 0.3.0 引入的方法（见插件 CHANGELOG），
+  // 只有版本确实低于它，"未知方法" 才可能是旧插件。
+  var MIN_METHOD_VERSION = '0.3.0';
 
   function fresh() {
     return { root: null, notInstalled: false, denied: '', loadError: '', loadCode: '',
@@ -15,6 +22,7 @@
       upFile: null, upName: '', upBusy: false, upProgress: -1, upResult: null, upError: '',
       upDeploy: null,
       upgSel: '', upgFile: null, upgBusy: false, upgProgress: -1, upgResult: null, upgError: '',
+      pluginVersion: '', versionProbed: false,
       destroyed: false };
   }
   var S = fresh();
@@ -116,13 +124,45 @@
     function p(x) { return (x < 10 ? '0' : '') + x; }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
-  // 降级三态判别：插件未装 / 无权限 / 方法不存在（老版本插件）。
+  // 版本比较只服务于"确认旧插件"这一件事：数字逐段比，缺段按 0。
+  function versionAtLeast(version, want) {
+    var a = String(version || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+    var b = String(want || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+    for (var i = 0; i < Math.max(a.length, b.length); i++) {
+      var x = a[i] || 0, y = b[i] || 0;
+      if (x !== y) return x > y;
+    }
+    return true;
+  }
+  // 探测已装 app-deploy 的版本（GET /api/v1/plugins，一次进页探测，不轮询）。
+  // 探测失败只记 versionProbed=true，版本留空——宁可中性报错，也不猜"去升级"。
+  function probePluginVersion() {
+    fetch('/api/v1/plugins', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (S.destroyed) return;
+        var list = (data && data.plugins) || [], found = null;
+        for (var i = 0; i < list.length; i++) { if (list[i] && list[i].id === 'app-deploy') found = list[i]; }
+        S.pluginVersion = found ? String(found.version || '') : '';
+        S.versionProbed = true;
+        if (S.loadError) paintList();
+        if (S.jobsError) paintJobs();
+        if (S.upError) paintUpload();
+        if (S.upgError) paintUpgrade();
+      }, function () { if (!S.destroyed) S.versionProbed = true; });
+  }
+  // 降级四态：denied（无权限）/ notinstalled（没装或没 enable）/ unsupported（版本确认更旧）/ other。
+  // 「未知方法」只是"方法没找到"的事实，可能是旧插件、也可能是前端 URL 拼错或插件比前端新——
+  // 所以 unsupported 必须由版本证据支撑，其余一律 other 按原始错误中性展示。
   function degrade(err) {
     var code = (err && err.code) || '';
     var msg = String((err && err.message) || err || '');
     if (code === 'E_UNAUTHORIZED' || code === 'E_FORBIDDEN' || /无权限|未授权|E_UNAUTHORIZED/.test(msg)) return 'denied';
-    if (/未知方法|不支持的方法|method.*not/.test(msg)) return 'unsupported';
-    if (code === 'E_NOTFOUND' || /插件不存在|未安装|未 enable|插件未/.test(msg)) return 'notinstalled';
+    if (/未安装|未 enable|插件不存在|插件未启用/.test(msg)) return 'notinstalled';
+    if (/未知方法|不支持的方法|method\s+.*not\s+found/i.test(msg)) {
+      return (S.pluginVersion && !versionAtLeast(S.pluginVersion, MIN_METHOD_VERSION)) ? 'unsupported' : 'other';
+    }
+    if (code === 'E_NOTFOUND') return 'notinstalled';
     return 'other';
   }
   function fileToBase64(file) {
@@ -159,8 +199,8 @@
       }
       S.listHost.appendChild(notice('列表读取失败：' + S.loadError));
       S.listHost.appendChild(emptyBlock(kind === 'unsupported'
-        ? '当前插件版本不支持该能力：请到软件商店升级应用部署插件后刷新本页。'
-        : '怎么办：确认插件已启用后点「刷新」重试；仍失败请把上面的错误原文交给管理员。', '刷新', load));
+        ? '当前插件版本较低，没有列表方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件后刷新本页。'
+        : '调用失败，错误原文已保留在上面。先点「刷新」重试；反复出现说明前端与插件的方法契约不一致（既不是没装插件，也不是提示你升级就能解决），请把错误原文交给维护者。', '刷新', load));
       return;
     }
     if (S.notInstalled) S.notInstalled = false;
@@ -236,7 +276,9 @@
       S.upDeploy = dep; paintUpload(); load(); loadJobs();
     }).catch(function (err) {
       S.upBusy = false; S.upProgress = -1;
-      S.upError = degrade(err) === 'unsupported' ? '当前插件版本不支持上传（去软件商店升级应用部署插件后重试）' : String(err && err.message || err);
+      S.upError = degrade(err) === 'unsupported'
+        ? '当前插件版本较低，没有上传方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件后重试'
+        : String(err && err.message || err);
       paintUpBar(); paintUpload();
     });
   }
@@ -289,7 +331,7 @@
       S.upgResult = r; S.upgProgress = 100; S.upgBusy = false; paintUpgrade(); load(); loadJobs();
     }).catch(function (err) {
       S.upgBusy = false; S.upgProgress = -1;
-      S.upgError = degrade(err) === 'unsupported' ? '当前插件版本不支持升级（去软件商店升级插件后重试）' : String(err && err.message || err);
+      S.upgError = degrade(err) === 'unsupported' ? '当前插件版本较低，没有升级方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件后重试' : String(err && err.message || err);
       paintUpgrade();
     });
   }
@@ -301,8 +343,8 @@
     if (S.jobsError) {
       var kind = degrade({ code: S.jobsCode, message: S.jobsError });
       S.jobsHost.appendChild(emptyBlock(kind === 'unsupported'
-        ? '当前插件版本不支持任务查询：请到软件商店升级应用部署插件。'
-        : '任务读取失败：' + S.jobsError, kind === 'unsupported' ? '' : '刷新', kind === 'unsupported' ? null : loadJobs));
+        ? '当前插件版本较低，没有任务查询方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件。'
+        : '任务读取失败：' + S.jobsError, '刷新', loadJobs));
       return;
     }
     if (!S.jobs.length) {
@@ -454,6 +496,7 @@
     S.jobsHost = add(jobs.panel, el('div', 'adp-jobs'));
 
     paintDenied(); paintList(); paintUpload(); paintUpgrade(); paintJobs();
+    probePluginVersion();
     load(); loadJobs();
     return { destroy: function () { S.destroyed = true; } };
   }
