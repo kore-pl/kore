@@ -16,9 +16,10 @@ import (
 // withAdminFakes 替换终端/管道/rename 依赖，测试结束自动还原（避免全局泄漏）。
 func withAdminFakes(t *testing.T, tty bool, answers ...string) {
 	t.Helper()
-	oldTTY, oldPrompt, oldStdin, oldRename := adminTTY, adminPrompt, adminStdin, adminRenameFile
+	oldTTY, oldPrompt, oldStdin, oldRename, oldFirstRun := adminTTY, adminPrompt, adminStdin, adminRenameFile, firstRunTerminal
 	queue := append([]string(nil), answers...)
 	adminTTY = func() bool { return tty }
+	firstRunTerminal = func() bool { return tty }
 	adminPrompt = func(_ string, _ io.Writer) (string, error) {
 		if len(queue) == 0 {
 			return "", errors.New("测试没有更多预置口令")
@@ -28,7 +29,7 @@ func withAdminFakes(t *testing.T, tty bool, answers ...string) {
 		return answer, nil
 	}
 	t.Cleanup(func() {
-		adminTTY, adminPrompt, adminStdin, adminRenameFile = oldTTY, oldPrompt, oldStdin, oldRename
+		adminTTY, adminPrompt, adminStdin, adminRenameFile, firstRunTerminal = oldTTY, oldPrompt, oldStdin, oldRename, oldFirstRun
 	})
 }
 
@@ -273,39 +274,84 @@ func TestUpsertAdminHashKeepsCommentsAndOtherKeys(t *testing.T) {
 	}
 }
 
-// TestFirstRunAuthGuidePrintsOneLineHint 覆盖首启引导的新口径：缺口令时**只打一行
-// 提示、不读终端、不写配置**——本机用户不该被要求再输一次口令（账号管理裁决）。
-func TestFirstRunAuthGuidePrintsOneLineHint(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing.yaml")
-	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
-	if err != nil {
-		t.Fatalf("加载默认配置失败: %v", err)
-	}
-	cfg := buildConfig(snap, serveOptions{config: path})
-	// 即便 stdin 是 TTY 也不再交互：给 TTY=true 且不预置任何口令答案，
-	// 一旦实现仍然读口令就会走到 adminPrompt 的"没有更多预置口令"错误。
+// TestFirstRunBootstrapGeneratesOneTimeCredential 覆盖首启凭据主路径：TTY 下生成
+// 24 字符随机口令、只打印一次、写回哈希 + initialized=true，本次启动即可登录；
+// 重启（哈希已存在）不再打印，配置文件里没有明文。
+func TestFirstRunBootstrapGeneratesOneTimeCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, true)
 
 	var stderr bytes.Buffer
-	firstRunAuthGuide(&cfg, &stderr)
+	firstRunBootstrap(&cfg, &stderr)
 	out := stderr.String()
-	if !strings.Contains(out, "本机访问无需口令") || !strings.Contains(out, "admin-password --generate") {
-		t.Fatalf("首启提示未说明本机免密与远程可选口令:\n%s", out)
+	if !strings.Contains(out, "Kore 首启凭据（只显示这一次）") {
+		t.Fatalf("首启未打印一次性凭据块:\n%s", out)
 	}
-	if strings.Contains(out, "请输入") || strings.Contains(out, "再输入一次") {
-		t.Fatalf("首启引导不应再要求输入口令:\n%s", out)
+	plain := bootstrapPassword(t, out)
+	if len(plain) != adminPasswordLength {
+		t.Fatalf("首启口令长度应为 %d，实际 %d: %q", adminPasswordLength, len(plain), plain)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("首启引导不应写配置，stat err=%v", err)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("首启应写入配置文件: %v", err)
 	}
-	if cfg.snapshot.Auth.AdminPasswordHash != "" {
-		t.Fatal("首启引导不应写入哈希")
+	if strings.Contains(string(raw), plain) {
+		t.Fatalf("配置文件里不得出现明文口令:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "initialized: true") {
+		t.Fatalf("首启应写 auth.initialized=true:\n%s", raw)
+	}
+	if cfg.snapshot.Auth.AdminPasswordHash == "" || !cfg.snapshot.Auth.Initialized {
+		t.Fatal("内存快照未同步首启哈希，本次启动将无法登录")
+	}
+
+	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
+	if err != nil {
+		t.Fatalf("首启后配置无法解析: %v", err)
+	}
+	ok, err := auth.VerifyPassword(snap.Auth.AdminPasswordHash, plain)
+	if err != nil || !ok {
+		t.Fatalf("配置里的哈希无法校验首启口令: ok=%v err=%v", ok, err)
+	}
+
+	// 重启：哈希已存在 → 一行都不打（一次性凭据不再可得）。
+	cfg2 := buildConfig(snap, serveOptions{config: path})
+	var restart bytes.Buffer
+	firstRunBootstrap(&cfg2, &restart)
+	if restart.Len() != 0 {
+		t.Fatalf("已有哈希后重启不应再打印凭据:\n%s", restart.String())
 	}
 }
 
-// TestFirstRunAuthGuideKeepsExistingHashSilent 覆盖「不破坏已有实例」：已有哈希时
-// 一行提示都不打（行为与升级前一致）。
-func TestFirstRunAuthGuideKeepsExistingHashSilent(t *testing.T) {
+// TestFirstRunBootstrapNonTTYPrintsNoSecret 覆盖 systemd / 重定向场景：不生成、
+// 不写配置、不打印明文，只给不含秘密的 CLI 指引（避免 journald 长期留存）。
+func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := bootstrapConfigForTest(t, path)
+	withAdminFakes(t, false)
+
+	var stderr bytes.Buffer
+	firstRunBootstrap(&cfg, &stderr)
+	out := stderr.String()
+	if strings.Contains(out, "管理员口令: ") {
+		t.Fatalf("非 TTY 不得打印明文口令:\n%s", out)
+	}
+	if !strings.Contains(out, "admin-password --generate") || !strings.Contains(out, path) {
+		t.Fatalf("非 TTY 应给出可照做的 CLI 指引（含同一配置路径）:\n%s", out)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("非 TTY 不应写配置，stat err=%v", err)
+	}
+	if cfg.snapshot.Auth.AdminPasswordHash != "" {
+		t.Fatal("非 TTY 不应写入哈希")
+	}
+}
+
+// TestFirstRunBootstrapKeepsExistingHashSilent 覆盖「已有凭据实例行为不变」：
+// 不打印、不写文件、哈希一个字节都不变。
+func TestFirstRunBootstrapKeepsExistingHashSilent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	hash, err := auth.HashPassword("existing-pass")
 	if err != nil {
@@ -314,21 +360,72 @@ func TestFirstRunAuthGuideKeepsExistingHashSilent(t *testing.T) {
 	if err := writeAdminPasswordHash(path, hash); err != nil {
 		t.Fatalf("写配置失败: %v", err)
 	}
-	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
+	before, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("加载配置失败: %v", err)
+		t.Fatalf("读配置失败: %v", err)
 	}
-	cfg := buildConfig(snap, serveOptions{config: path})
+	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, true)
 
 	var stderr bytes.Buffer
-	firstRunAuthGuide(&cfg, &stderr)
+	firstRunBootstrap(&cfg, &stderr)
 	if stderr.Len() != 0 {
-		t.Fatalf("已有口令时不应输出首启提示:\n%s", stderr.String())
+		t.Fatalf("已有口令时不应输出任何首启提示:\n%s", stderr.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读配置失败: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("已有凭据的配置文件被改动")
 	}
 	if cfg.snapshot.Auth.AdminPasswordHash != hash {
 		t.Fatal("已有哈希被改动")
 	}
+}
+
+// TestFirstRunBootstrapWriteFailureKeepsSecretOut 覆盖写入失败：不打印明文
+// （打印了也登不上），只给 CLI 兜底。
+func TestFirstRunBootstrapWriteFailureKeepsSecretOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := bootstrapConfigForTest(t, path)
+	withAdminFakes(t, true)
+	adminRenameFile = func(_, _ string) error { return errors.New("模拟 rename 失败") }
+
+	var stderr bytes.Buffer
+	firstRunBootstrap(&cfg, &stderr)
+	out := stderr.String()
+	if strings.Contains(out, "管理员口令: ") {
+		t.Fatalf("写入失败时不得打印无法使用的明文:\n%s", out)
+	}
+	if !strings.Contains(out, "写入配置失败") || !strings.Contains(out, "admin-password --generate") {
+		t.Fatalf("写入失败应给出兜底指引:\n%s", out)
+	}
+}
+
+// bootstrapConfigForTest 按 serve 同款语义加载配置（文件不存在 → 默认快照 + Source）。
+func bootstrapConfigForTest(t *testing.T, path string) config {
+	t.Helper()
+	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	return buildConfig(snap, serveOptions{config: path})
+}
+
+// bootstrapPassword 从首启输出里取出唯一一次打印的口令。
+func bootstrapPassword(t *testing.T, out string) string {
+	t.Helper()
+	const marker = "管理员口令: "
+	idx := strings.Index(out, marker)
+	if idx < 0 {
+		t.Fatalf("首启输出里没有口令:\n%s", out)
+	}
+	rest := out[idx+len(marker):]
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[:nl]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // TestAdminPasswordAndServeResolveSameConfig 覆盖「文档路径不自洽」的硬缺口：

@@ -22,8 +22,9 @@ func runServe(args []string, stderr io.Writer) int {
 	if code != exitOK {
 		return code
 	}
-	// 首启引导：没有管理员口令时只打一行提示（本机免密，口令仅供远程访问）；不读终端、不拦启动。
-	firstRunAuthGuide(&cfg, stderr)
+	// 首启凭据：没有管理员口令时生成一次性初始口令（TTY 下打印一次并写回哈希，
+	// 本次启动即可登录；非 TTY 只给 CLI 指引，避免明文进 journald）。已有哈希时无操作。
+	firstRunBootstrap(&cfg, stderr)
 
 	app, report, code := bootstrap(cfg)
 	if code != exitOK {

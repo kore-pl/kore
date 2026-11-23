@@ -64,7 +64,7 @@ kored upgrade --rollback
 | --- | --- | --- |
 | `<data>/state.db` | 插件登记、启用状态、scheduler 任务、会话、审计 | **必须备份**；丢了要重装/重配全部插件与任务 |
 | `<data>/plugins/<id>/<version>/` | 已装插件的二进制与 `info.json` | 可重装（需对应 dist + 索引），但离线环境等于丢失 |
-| `<install>/config/config.yaml`（portable 默认；设了 `KORE_HOME` 即 `$KORE_HOME/config/config.yaml`） | 监听地址、口令哈希、路径 | **必须备份**；丢了要重设管理员口令（首启 bootstrap 见 §4：TTY 可交互设置，非 TTY 只提示不阻塞） |
+| `<install>/config/config.yaml`（portable 默认；设了 `KORE_HOME` 即 `$KORE_HOME/config/config.yaml`） | 监听地址、口令哈希、路径 | **必须备份**；丢了要重设管理员口令（首启自动生成一次性口令，见 §4 与 [QUICKSTART](../QUICKSTART.md) §2.1） |
 | `/etc/kore/config.yaml`（fhs / 发行版打包） | 同上（监听地址、口令哈希、路径） | **必须备份**，同上 |
 | `<data>/credentials/` | 凭据库（如插件凭据） | 必须备份，否则插件连接信息要重填 |
 | `<data>/ssl/`、`<data>/backups/` | 站点证书、备份产物 | 视业务；丢了证书要重签、备份要重做 |
@@ -158,7 +158,7 @@ curl -fsS http://127.0.0.1:8787/-/healthz && echo restored_ok
 - **跨 `SchemaVersion` 迁移未验证**：当前仓库没有迁移器；若未来 bump 版本，本文 §1.2 的「直接读」结论需要重测。
 - **在线一致性备份未实现**：没有 bbolt 快照入口，只能停服务备份；热备实验不构成保证。
 - **fhs 形态的 root/属主恢复未实测**：本文命令给了 `chown`，但本次只在 portable（同 uid）验证。
-- **首启口令 bootstrap 已实现**（`cmd/kored/admin_password.go` 的 `firstRunAuthGuide`，由 `cmd/kored/serve.go:26` 在启动时调用）：**stdin 是终端时直接交互输入两次新口令，写进 serve 自己解析的那个配置文件**；**stdin 不是终端（systemd / 容器 / 重定向）只打印可操作提示、不阻塞启动**。恢复后能登录的前提仍是 `config.yaml` 里有 `auth.admin_password_hash`；只有 state.db 没有 config 时无法登录（此时离线执行一次 `kored admin-password --generate --config <与 serve 相同>` 补上）。
+- **首启凭据 bootstrap 已实现**（`cmd/kored/admin_password.go` 的 `firstRunBootstrap`，由 `cmd/kored/serve.go` 在启动时调用）：**stderr 是终端时生成 24 字符随机口令，哈希 + `auth.initialized: true` 原子写回 serve 自己解析的配置文件，明文只打印一次、本次启动即生效**；**非终端（systemd / 容器 / 重定向）不生成、不打印明文**，只打印 `kored admin-password --generate --config <与 serve 相同>` 指引（避免口令进 journald）。已有哈希的实例不改文件、不打提示。恢复后能登录的前提仍是 `config.yaml` 里有 `auth.admin_password_hash`；只有 state.db 没有 config 时无法登录（此时离线执行一次 `kored admin-password --generate --config <与 serve 相同>` 补上）。
 
 ## 5. 下一步看哪里
 

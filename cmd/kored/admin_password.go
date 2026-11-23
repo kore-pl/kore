@@ -36,6 +36,10 @@ var (
 	adminStdin io.Reader = os.Stdin
 	// adminRenameFile 是原子写的最后一步（测试注入失败用）。
 	adminRenameFile = os.Rename
+	// firstRunTerminal 判断首启凭据能否安全打印到终端（stderr 是 TTY）。
+	// 非 TTY（systemd/journald、重定向）不生成、不打印明文：日志长期可读，
+	// 明文凭据只允许出现在用户当前终端这一次。
+	firstRunTerminal = func() bool { return platform.IsTerminal(os.Stderr.Fd()) }
 )
 
 // adminPasswordOptions 是 admin-password 子命令解析后的参数。
@@ -226,24 +230,85 @@ func generateAdminPassword(n int) (string, error) {
 	return string(out), nil
 }
 
-// firstRunAuthGuide 在缺管理员口令时只打一行提示：不读终端、不拦启动、不写配置。
+// firstRunBootstrap 在缺管理员口令时生成一次性初始凭据（对齐宝塔 / 1Panel 的安装期凭据模型）。
 //
-// 产品口径（单管理员 + 本机管理，G-11 不做多用户 RBAC）：本机身份就是操作系统
-// 用户身份——UDS 由 socket 权限（0600）认证，浏览器由 loopback 认证，**不需要
-// 第二套账号口令**。所以首启**不再**要求输入两次口令：那等于把本机用户当成
-// 未认证的远程访客，既多余又违反「账号管理不应要求再次输入口令」的裁决。
+// 口径（ADR-0043：面板必须有登录页，登录后所有操作免密）：
+//   - 哈希为空 = 从未初始化。此时生成 24 字符随机口令，PBKDF2 哈希**原子写回
+//     serve 自己解析的那个配置文件**（0600），并把 auth.initialized 置 true；
+//     内存快照同步更新，因此**本次启动即可登录**，不需要二次重启。
+//   - 明文只在 stderr 是终端时打印一次；配置、state、日志里只有哈希。
+//     journald 会长期留存输出，所以非 TTY 不生成、不打明文。
+//   - 非 TTY（systemd / 重定向）只给不含秘密的 CLI 指引：用户在自己终端执行
+//     `kored admin-password --generate`，由该命令打印一次。
+//   - 已有哈希的实例：直接返回，一行不打、一个字节不写（升级行为不变）。
 //
-// 口令只剩一个用途：从**其他机器**访问面板（非 loopback）。这种需求才会用到
-// `kored admin-password --generate`；没设口令时远程登录一律被拒（auth.Manager.Verify
-// 在哈希为空时直接 false），不会静默放行。已有 hash 的实例行为不变。
-func firstRunAuthGuide(cfg *config, stderr io.Writer) {
+// 无用户名：kore 是单管理员（G-11 不做多用户 RBAC），登录体只有口令。宝塔 /
+// 1Panel 的用户名属于其账号体系；这里补用户名既不增加安全性（用户名不是秘密，
+// 限速已覆盖爆破），又会破坏既有 `{password}` 登录契约与前端登录页，故按最小
+// 改动只保留口令。
+func firstRunBootstrap(cfg *config, stderr io.Writer) {
 	if cfg == nil || cfg.snapshot == nil {
 		return
 	}
 	if strings.TrimSpace(cfg.snapshot.Auth.AdminPasswordHash) != "" {
 		return
 	}
-	fmt.Fprintln(stderr, "提示：本机访问无需口令（身份＝当前系统用户；UDS / 本机回环免密）；如需从其他机器访问本面板，请先执行 `kored admin-password --generate` 设置远程凭据。")
+	path := cfg.snapshot.Source
+	if path == "" {
+		// 理论上不会发生（loadConfig 总会带 Source）：没有落点就不生成，
+		// 更不能打印一个无法保存的凭据。
+		fmt.Fprintln(stderr, "提示：尚未设置管理员口令，且未解析到配置文件路径；请执行 `kored admin-password --generate --config <path>` 后重启。")
+		return
+	}
+	if !firstRunTerminal() {
+		fmt.Fprintln(stderr, "提示：本实例尚未设置管理员口令。当前输出不是终端（systemd/journald 或重定向），")
+		fmt.Fprintln(stderr, "为避免一次性口令被日志长期留存，kored 不在这里自动生成。请在自己的终端执行一次：")
+		fmt.Fprintf(stderr, "  kored admin-password --generate --config %s\n", path)
+		fmt.Fprintln(stderr, "该命令把哈希写入同一个配置文件，并只显示一次初始口令；然后重启 kored 登录。")
+		return
+	}
+
+	plain, err := generateAdminPassword(adminPasswordLength)
+	if err != nil {
+		fmt.Fprintf(stderr, "首启凭据生成失败（随机源不可用）: %v；请手动执行 `kored admin-password --generate --config %s`\n", err, path)
+		return
+	}
+	hash, err := auth.HashPassword(plain)
+	if err != nil {
+		fmt.Fprintf(stderr, "首启凭据生成失败（哈希失败）: %v；请手动执行 `kored admin-password --generate --config %s`\n", err, path)
+		return
+	}
+	if err := writeAdminBootstrapHash(path, hash); err != nil {
+		// 写不进去就不打印明文：打印了也登不上，反而把一次性口令留在终端。
+		fmt.Fprintf(stderr, "首启凭据写入配置失败: %v\n请手动执行 `kored admin-password --generate --config %s`（同样只显示一次）。\n", err, path)
+		return
+	}
+	cfg.snapshot.Auth.AdminPasswordHash = hash
+	cfg.snapshot.Auth.Initialized = true
+
+	if cfg.Addr != "" {
+		fmt.Fprintf(stderr, "\n面板地址: http://%s/\n", cfg.Addr)
+	}
+	fmt.Fprintln(stderr, "================ Kore 首启凭据（只显示这一次）================")
+	fmt.Fprintf(stderr, "管理员口令: %s\n", plain)
+	fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；登录后所有操作免密。")
+	fmt.Fprintf(stderr, "已写入 %s：只存 PBKDF2 哈希，权限 0600；重启或再次启动都不会再显示这个口令。\n", path)
+	fmt.Fprintf(stderr, "再次查看: 口令只存哈希、无法再取；需要轮换请执行 kored admin-password --set --config %s（CLI 重置，不走 Web 找回、不发邮件；改凭据会吊销所有会话）\n", path)
+	fmt.Fprintln(stderr, "==============================================================")
+}
+
+// writeAdminBootstrapHash 把哈希与 auth.initialized=true 一次原子写入配置文件。
+func writeAdminBootstrapHash(path, hash string) error {
+	if err := auth.ValidateHash(hash); err != nil {
+		return err
+	}
+	doc, err := readAdminConfigFile(path)
+	if err != nil {
+		return err
+	}
+	doc = upsertAdminHash(doc, hash)
+	doc = upsertAuthKey(doc, "initialized", "true")
+	return atomicWrite0600(path, doc)
 }
 
 // adminPasswordConfigPath 按与 serve 相同的语义解析配置文件并归一为绝对路径。
@@ -328,11 +393,16 @@ func atomicWrite0600(path, content string) error {
 }
 
 // upsertAdminHash 在 YAML 文本里就地把 auth.admin_password_hash 设为 hash。
+func upsertAdminHash(doc, hash string) string {
+	return upsertAuthKey(doc, adminPasswordConfigKey, quoteYAML(hash))
+}
+
+// upsertAuthKey 在 YAML 文本的 auth: 段内就地把 key 设为 value。
 //
 // 走行级就地改写而不是 yaml 反序列化再序列化：配置文件里的注释与键顺序是
 // 用户的，重排一次就等于偷偷改了他的文件。
-func upsertAdminHash(doc, hash string) string {
-	entry := adminPasswordConfigKey + ": " + quoteYAML(hash)
+func upsertAuthKey(doc, key, value string) string {
+	entry := key + ": " + value
 	lines := strings.Split(doc, "\n")
 	if len(lines) == 1 && strings.TrimSpace(lines[0]) == "" {
 		lines = nil
@@ -360,7 +430,7 @@ func upsertAdminHash(doc, hash string) string {
 			}
 		}
 		for k := i + 1; k < end; k++ {
-			if strings.HasPrefix(strings.TrimSpace(lines[k]), adminPasswordConfigKey+":") {
+			if strings.HasPrefix(strings.TrimSpace(lines[k]), key+":") {
 				lines[k] = indent + entry
 				return strings.Join(lines, "\n")
 			}

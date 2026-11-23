@@ -26,28 +26,33 @@ kore 是**单管理员、Web 面板管理**的产品（[AGENTS.md](AGENTS.md) G-
 
 > 登录一次后，日常使用与 root 特权操作都**不再要求任何密码**（root 动作由以 root 运行的内核完成，见 ADR-0042）；但「不登录就能操作管理 API」已被移除（ADR-0043）——本机 UDS / loopback 与远程同口径，没有会话一律 401。
 
-### 2.1 只有要从其他机器访问时才设置口令（可选）
+### 2.1 首次凭据：首启自动生成，只在终端显示一次
 
-**没设口令时远程登录直接不可用**（`auth.Manager.Verify` 在哈希为空时一律拒绝，不会拿空串比对通过）；本机访问不受影响。需要远程访问面板时，一条命令生成远程凭据——**这里的 `--config` 必须和 §3 启动时完全一致**：
+全新实例（`auth.admin_password_hash` 为空）**第一次启动**时，kored 自动生成 24 字符随机口令，把 PBKDF2 哈希原子写进**它自己解析的那个配置文件**（权限 0600），并把初始口令**只在当前终端打印一次**——本次启动就能登录，不需要预先生成口令，也**不要求输入任何系统账号密码**：
 
 ```bash
-./bin/kored admin-password --generate --config ./kore-quickstart.yaml
+./bin/kored serve --config ./kore-quickstart.yaml
 ```
 
-kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次**，同时把 PBKDF2 哈希原子写进 `--config` 指向的那个文件（打印的是它的绝对路径）：
-
 ```
-管理员口令（只显示这一次，请立即保存）：Xy7k...（24 字符）
-
-已将口令哈希写入 /绝对路径/kore-quickstart.yaml（权限 0600）
-提示：哈希写入后需重启 kored 才生效（运行中的进程只在启动时读取口令哈希）；重启会踢掉旧会话；忘记口令可再执行 `kored admin-password --set` 重置。
+面板地址: http://127.0.0.1:8787/
+================ Kore 首启凭据（只显示这一次）================
+管理员口令: xxxxxxxxxxxxxxxxxxxxxxxx
+登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；登录后所有操作免密。
+已写入 /绝对路径/kore-quickstart.yaml：只存 PBKDF2 哈希，权限 0600；重启或再次启动都不会再显示这个口令。
+再次查看: 口令只存哈希、无法再取；需要轮换请执行 kored admin-password --set --config /绝对路径/kore-quickstart.yaml（CLI 重置，不走 Web 找回、不发邮件；改凭据会吊销所有会话）
+==============================================================
 ```
 
-- **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**远程登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径；相对路径按**配置文件所在目录**解析（与启动目录无关），仍建议写绝对路径。
-- 忘记自己用了哪个路径时，看命令打印的绝对路径（`admin-password` 与 `serve` 启动日志里的配置路径是同一个）。
-- 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。
-- **生效时机**：`admin-password` 只改配置文件；运行中的 kored 只在启动时读取口令哈希（SIGHUP 热更只更新配置快照，不替换已装载的口令），所以设完口令要**重启 kored**，重启会同时踢掉旧会话。
-- 命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。已有哈希的实例升级后行为不变。
+- 与宝塔 / 1Panel 的安装期凭据模型一致：**安装/首启生成随机凭据 + 终端只输出一次**。区别是 kore **单管理员、无用户名**（登录体只有口令），且明文**不落盘**——配置 / state / 日志里只有哈希。
+- **只出现一次**：哈希写回后，重启或再次启动都不会再打印；没有任何"再查一次"的入口，忘记只能走 §2.2 / `admin-password --set` 的 CLI 重置。
+- **非交互启动（systemd / 重定向）**：输出会被 journald 长期留存，kored **不会**把明文打进去，首启只给一行可照做的指引。请在自己的终端执行一次（同样只显示一次）：
+  ```bash
+  ./bin/kored admin-password --generate --config ./kore-quickstart.yaml   # 哈希写入后重启 kored
+  ```
+- **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径；相对路径按**配置文件所在目录**解析（与启动目录无关），仍建议写绝对路径。
+- **生效时机**：首启自动生成的哈希**本次启动即生效**；用 `admin-password` 手工写入的哈希要**重启 kored** 才生效（运行中的进程只在启动时读取口令哈希；SIGHUP 热更只更新配置快照），重启会同时踢掉旧会话。
+- 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。
 
 ### 2.2 自己指定口令
 
@@ -82,15 +87,17 @@ paths:
 
 > 想先写 yaml 再生成口令也可以：`admin-password --config ./kore-quickstart.yaml` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关——只要和 §3 的 `--config` 是同一个文件。
 
-### 2.4 首启引导（不拦启动，但没口令就登不进面板）
+### 2.4 首启引导行为速查
 
-`kored serve` 启动时如果发现 `auth.admin_password_hash` 为空，**只打印一行提示**，不读终端、不阻塞、不写配置文件：
+| 启动时的状态 | kored 的行为 |
+| --- | --- |
+| 无 `admin_password_hash` + stderr 是终端（SSH / 串口 / 本机 TTY） | 生成 24 字符随机口令 → 哈希 + `auth.initialized: true` 原子写回配置文件 → **口令在终端只打印一次** → 本次启动即可登录 |
+| 无 `admin_password_hash` + 非终端（systemd / journald / 重定向） | **不生成、不打印明文**（避免一次性口令被日志长期留存），只打印一行 `kored admin-password --generate --config <同一路径>` 的指引 |
+| 无 `admin_password_hash` + 登录 | 登录端点回 `401 {"code":"E_UNAUTHORIZED","message":"口令错误"}`，**空口令绝不放行** |
+| 已有 `admin_password_hash` | 一行提示都不打、配置文件一个字节都不改，登录行为与升级前完全一致 |
+| 写入配置文件失败（只读 / 权限） | 不打印无法使用的明文，提示执行 `admin-password --generate` 兜底 |
 
-```
-提示：尚未设置管理员口令——面板会显示登录页但无法登录；请执行 `kored admin-password --generate` 生成一次口令（写入配置后重启 kored 生效）。
-```
-
-**已知缺口（ADR-0043）**：「没设置口令」的实例会显示登录页，但登录端点一律回 401「口令错误」——没有任何凭据能进入面板。首启引导属另一张卡，本轮未实现；当前必须先用 `admin-password` 生成口令并重启。
+以前那套「TTY 强制输入两次口令」的交互式引导不会回来：首启凭据由 kored 生成，用户**从不需要输入系统账号密码**。
 
 ## 3. 启动
 
@@ -126,7 +133,7 @@ http://127.0.0.1:8787/
 
 ## 附录 A：高级 / 自动化场景（手工 PBKDF2 哈希）
 
-正常安装（本机使用）完全不需要读这一节——本机免密，只有远程访问才用 `admin-password --generate`。只有「不跑 kored 的部署流水线」或「已有哈希生成脚本」时才手算；格式固定 `pbkdf2-sha256$600000$<base64(salt)>$<base64(hash)>`，迭代次数必须是 **600000**，否则生成的串无法通过校验：
+正常安装不需要读这一节——首启会自动生成一次性口令（§2.1）。只有「不跑 kored 的首启流程」或「已有哈希生成脚本」时才手算；格式固定 `pbkdf2-sha256$600000$<base64(salt)>$<base64(hash)>`，迭代次数必须是 **600000**，否则生成的串无法通过校验：
 
 ```bash
 python3 -c 'import hashlib,base64,os;s=os.urandom(16);h=hashlib.pbkdf2_hmac("sha256",b"mypassword",s,600000,32);print("pbkdf2-sha256$600000$"+base64.b64encode(s).decode()+"$"+base64.b64encode(h).decode())'
