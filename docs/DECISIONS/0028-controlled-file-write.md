@@ -1,5 +1,5 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
-> ADR 状态: proposed（待裁决）· 关联: 0022-root-command-shapes.md、0018-privilege-model.md、0023-zero-intrusion.md、../PLUGIN-MATURITY.md §3.5
+> 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
+> ADR 状态: accepted（一期，2026-11-23；一期边界与二期条件见文末「实施记录」）· 关联: 0022-root-command-shapes.md、0018-privilege-model.md、0023-zero-intrusion.md、../PLUGIN-MATURITY.md §3.5
 
 # ADR-0028: 内核是否新增「受控文件写」原语
 
@@ -116,13 +116,75 @@
 3. 插件要求「整文件替换」→ 退回，本原语只做 drop-in；
 4. 若审计库需要支持内容级取证 → 另立 ADR（默认仍然是哈希 + 备份文件）。
 
-## 实施记录（2026-11-23，一期内核侧规则包）
+## 实施记录（2026-11-23，一期 accepted）
 
-- 落地 `internal/core/filewrite`（与 `privilege` 同层，只做规则与保护动作，不含 sshd/nginx 领域知识）：
-  - `ValidatePath`：绝对路径 + `filepath.Clean` 幂等 + 白名单前缀（`AllowedPrefixesV1`：`/etc/ssh/sshd_config.d/`、`/etc/sysctl.d/`、`/etc/security/limits.d/`、`/etc/logrotate.d/`）+ 只允许 `.conf` 扩展名（`.sh` 等拒绝）。
-  - `ValidateContent`：≤256 KiB、禁 NUL；`ValidateMode`：仅 `0644/0600/0640`。
-  - `checkNoSymlink`：父目录链与目标均 `Lstat`，符号链接一律拒绝；目标已存在时要求常规文件且权限在允许集。
-  - `Write`：写前备份原文件到 `<copyRoot>/<plugin>/<timestamp>/<name>`（0600，失败即中止）→ **审计 fail-closed**（Auditor 未注入或返回错误则不写文件）→ 同目录临时文件 `O_CREATE|O_EXCL` → chmod → fsync → rename → fsync(dir)。
-  - 审计字段：`plugin/actor/path/size/mode/sha256/previous_sha256/copy_path/decision/result`，**不记全文**。
-- G-01 豁免：`scripts/thin-shell-check.sh` 第 3 段对 `internal/core/filewrite/` 精确豁免 `backup` 词根（该包 Backup 指「写前备份原文件」通用动作，与 backup 插件业务域无关）；其它目录与其它业务词强度不变。
-- 未接线：`cmd/kored` 的 root-action 执行路径（本期只交付规则包与测试；接线需与 root-action 管理员鉴权一起做，避免与 p0-login 卡冲突）。**本机非 root，`/etc/*` 实际下发未验证**（见 `.agents/verify/adr-0028-phase1.md`）。
+> 状态变更依据：实现已落地并提交（`a029fae`），测试全 PASS；§2–§7 决策正文与备选对比**一字未改**，本节只登记「实现是什么」与「原文要求中一期没做到的」。凡与代码不符的原文表述，一律在本节按代码校正并标为差异，不改决策正文。
+
+### 1. 落地内容清单
+
+| 落点 | 内容 | 证据 |
+| --- | --- | --- |
+| `internal/core/filewrite/filewrite.go`（370 行） | 受控写规则原语：校验 / 备份 / 审计 fail-closed / 原子替换 | commit `a029fae`；入口 `filewrite.go:230`（`Write`） |
+| `internal/core/filewrite/filewrite_test.go`（222 行） | 7 个测试：`TestWriteLegal:30`、`TestRejectPaths:77`、`TestRejectSymlink:103`、`TestRejectContentAndMode:134`、`TestAuditFailClosed:156`、`TestBackupFailureAborts:183`、`TestUnsafeExistingTarget:208` | commit `a029fae` |
+| `scripts/thin-shell-check.sh:95-104` | G-01 精确豁免：仅当路径匹配 `^\./internal/core/filewrite/` 时把 `backup` 词根替换为中性占位；其它目录、其它业务词（site/monitor/cron/ssl/database/mysql/nginx/docker）强度不变 | commit `a029fae`；正反例自证见 `.agents/verify/adr-0028-phase1.md` §3 |
+| `.agents/verify/adr-0028-phase1.md`（67 行） | 一期实施证据：形状、拒绝清单与测试名、G-01 自证、门禁、端到端未验证声明 | commit `a029fae` |
+
+### 2. 逐项实现实况（读代码核对，非照抄设计表）
+
+| 约束 | 实际实现 | 位置 |
+| --- | --- | --- |
+| 白名单 4 个目录 | 恰为 `/etc/ssh/sshd_config.d/`、`/etc/sysctl.d/`、`/etc/security/limits.d/`、`/etc/logrotate.d/`（`AllowedPrefixesV1`）；**不含** `/etc/nginx/conf.d/`，与 §3 一致 | `filewrite.go:37-42` |
+| ≤256 KiB | `MaxContentBytes = 256 * 1024`（262144）；判据是 `len > 上限` 才拒，故恰好 262144 字节允许 | `filewrite.go:29`、`:155` |
+| 禁 NUL | 逐字节扫 `b == 0`，命中返回 `E_BAD_CONTENT` | `filewrite.go:158-162` |
+| mode 仅 0644 / 0600 / 0640 | 常量 `Mode0644`/`Mode0600`/`Mode0640`，`ValidateMode` 用 switch 精确匹配，其它值（0777/0755/0666）返回 `E_BAD_MODE` | `filewrite.go:31-33`、`:167-173` |
+| 仅 `.conf`（拒 `.sh`） | `strings.ToLower(filepath.Ext(base)) != ".conf"` → `E_DENIED_PATH`，错误文案显式点名「.sh 可执行脚本」 | `filewrite.go:125-128` |
+| 绝对路径 + Clean 幂等 | `filepath.IsAbs` 拒绝相对路径；`filepath.Clean(path) != path` 拒绝 `..`/`//`/尾部 `/`；另拒路径含 `\x00\n\r` | `filewrite.go:111-120` |
+| 父链与目标禁软链接 | `checkNoSymlink` 从 `/` 逐级 `Lstat`：任一级是符号链接 → `E_SYMLINK`，父目录不存在 → `E_UNSAFE_TARGET`；目标存在时须常规文件且权限在允许集，否则 `E_UNSAFE_TARGET` | `filewrite.go:190-227` |
+| 写前备份 | 目标已存在时先算 `sha256(旧文件)`，复制到 `<CopyRoot>/<plugin>/<UTC 20060102T150405Z>/<basename>`；目录 `0700`，副本以 `O_CREATE\|O_EXCL` 打开（`0600`）；任一失败 → `E_BACKUP_FAILED` 且原文件不动 | `filewrite.go:259-273`、`:351-369` |
+| 审计 fail-closed | `Auditor == nil` → `E_AUDIT_DENIED`；`Auditor` 返回错误 → `E_AUDIT_DENIED`；两者都发生在写文件之前，目标不落盘 | `filewrite.go:282-288` |
+| 原子写 | 同目录 `os.CreateTemp(".kore-write-*")`（内部即 `O_CREATE\|O_EXCL`）→ `Write` → `Sync` → `Chmod` → `Close` → `Rename` → 目录 `Sync`；任一步失败删临时文件 | `filewrite.go:297-334` |
+| 插件名形状 | 备份目录与审计字段共用的 `ValidatePlugin`：非空、≤32、仅小写字母/数字/`-` | `filewrite.go:176-187` |
+
+### 3. 审计字段（实际字段名，确认不记全文）
+
+`AuditEvent`（`filewrite.go:71-82`）的 JSON 标签共 10 个：
+
+| 字段 | JSON 标签 | 说明 |
+| --- | --- | --- |
+| `Plugin` | `plugin` | 请求方插件 id |
+| `Actor` | `actor` | 操作者 |
+| `Path` | `path` | 规范化后的目标绝对路径 |
+| `Size` | `size` | 本次写入字节数 |
+| `Mode` | `mode` | 新权限（数值） |
+| `SHA256` | `sha256` | 本次内容的散列 |
+| `PreviousSHA256` | `previous_sha256`（omitempty） | 旧文件散列；新建时为空 |
+| `CopyPath` | **`backup_path`**（omitempty） | 写前备份的落点；先前记录写的 `copy_path` 有误，已按代码改正 |
+| `Decision` | `decision` | `allow` |
+| `Result` | `result` | `written` |
+
+**不记全文**：结构体无 content 字段，`Write` 只把 64 位十六进制摘要（`filewrite.go:276-281`）交给审计；测试亦只断言 `Size`/`SHA256`/`PreviousSHA256`/`CopyPath`（`filewrite_test.go:66-71`）。另有两点如实登记：① `Decision`/`Result` 目前只会是 `allow`/`written`——被拒请求在各校验点即返回，**不产生 deny 审计**；② 备份文件本身 0600，全文只存在于备份目录，需排障时由用户显式取（与 §4 一致）。
+
+### 4. 与原文（§2–§5）的差异（一期未做到的部分，逐条如实登记）
+
+| 原文要求 | 一期实际 | 处置 |
+| --- | --- | --- |
+| §2「父目录必须已存在且属主 root」、§5.4「目标已存在但属主不是 root → 拒」 | **未做属主校验**：只查存在 / 非软链 / 是目录 / 权限在允许集；`grep Uid\|Stat_t` 零命中 | 二期补齐（属主判定须收在 `internal/platform`，`internal/core` 不得直接调平台专有 API，G-16）。一期不得据此宣称「属主可控」 |
+| §3 备注「文件名 `kore-<plugin>-*.conf`」 | **未强制文件名前缀**，只强制 `.conf` 扩展名 | 一期口径以代码为准；收窄文件名规则需改代码，不能只改文档 |
+| §3 备注「sshd 片段仅 `0644`」 | 四个前缀统一允许 `0644/0600/0640`，不做按目录差异化 | 同上：按目录差异化 mode 属二期收紧项 |
+| §2 备份落点 `<install>/data/changes/backup-<sha8>` + `changes.jsonl` | 实际为 `<CopyRoot>/<plugin>/<timestamp>/<name>`，**未写 `changes.jsonl`**；`CopyRoot` 由调用方注入（缺省报错文案提示 `<install>/data/backups`） | 与 ADR-0023 §3.5 豁免 #3 的清单账尚未接通，二期随零侵入门禁一起做 |
+| §5.7「按路径加进程内锁；跨进程临时名冲突重试一次」 | **无进程内锁**；`CreateTemp` 随机名，无冲突重试分支 | 一期无调用方（未接线）故未触发；接线前必须补，列为二期门槛 |
+| §5.9「插件未声明该动作的 capability」 | 不在本包，属装配 / registry 层，一期未接 | 随 root-action 接线一起做 |
+| §2「属主固定 `root:root`」 | 不改属主；实际属主 = 调用进程（root-action 下即 root） | 并入首行「属主校验」同批处理 |
+| §2 原子性「`O_CREAT\|O_EXCL` 临时文件」 | `os.CreateTemp` 内部即 `O_CREATE\|O_EXCL`，语义等价 | 无差异，仅记录实现方式 |
+
+### 5. 一期边界（三条，显式写死）
+
+1. **端到端写盘未真机验证**：本机当前用户 `pt` 非 root，四个白名单目录均 `root:root 0755` 不可写（`.agents/verify/adr-0028-phase1.md` §5 有 `writable=no` 原始输出）。
+2. **尚未接线 `cmd/kored` 的 root-action 执行路径**：仓库内无该原语的任何调用方，插件目前**不能**通过它真正写文件。
+3. 因此「一期 accepted」= **原语能力（校验 / 备份 / 审计 / 形状）已就绪**，**不等于插件已能下发配置**；sshd 加固一类对外能力仍然不可用。
+
+### 6. 二期条件
+
+- 接线 `cmd/kored` root-action 执行路径（与管理员鉴权、审计同一事务），并同批补齐 §4 的属主校验、按路径锁、capability 声明；
+- 真实写盘 e2e（需 root 或白名单目录可写的环境）：写 `/etc/ssh/sshd_config.d/kore-<plugin>-test.conf` → `ls -l` 核 `0644` → 备份存在 → 重写幂等 → 删除后备份仍在；
+- 与 ADR-0023 §3.5 豁免 #3 的 `changes.jsonl` 清单接通（§4 第 4 行）。
