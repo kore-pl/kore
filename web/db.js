@@ -22,7 +22,11 @@
       discoveryState: 'loading', discovery: null, discoveryError: '',
       autoNotice: null, autoPending: false, selectedDb: '', includeSystem: false, l2Promise: null,
       dbType: 'mysql', instHint: '', container: null,
-      l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null };
+      l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null,
+      // 慢查询分析（db-mysql.slowlog）：阈值/条数只存预设档位，schema 空串=全部库。
+      slowlog: null, slowlogError: '', slowlogBusy: false, slowlogLoaded: false,
+      slowlogSchema: '', slowlogMinMS: 500, slowlogLimit: 20,
+      slowlogFormHost: null, slowlogMetaHost: null, slowlogHost: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -193,7 +197,19 @@
     '.db-type-switch .btn{border:0;border-radius:0;min-height:32px;padding:0 var(--kore-space-3);font-size:var(--kore-font-12);white-space:nowrap}' +
     '.db-type-switch .btn[aria-pressed="true"]{background:var(--kore-info);color:#fff}' +
     '.db-pg-note{margin:0 var(--kore-space-4) var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.6}' +
-    '.db-type-row{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;padding:0 var(--kore-space-3) var(--kore-space-2)}';
+    '.db-type-row{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;padding:0 var(--kore-space-3) var(--kore-space-2)}' +
+    '.db-slow-form{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;margin-bottom:var(--kore-space-2)}' +
+    '.db-slow-form label{display:flex;align-items:center;gap:var(--kore-space-1);color:var(--kore-text-2);font-size:var(--kore-font-12)}' +
+    '.db-slow-form select{min-height:32px}' +
+    '.db-slow-meta{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;margin:0 0 var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
+    '.db-slow-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-13)}' +
+    '.db-slow-table th{text-align:left;color:var(--kore-text-2);font-weight:600;padding:var(--kore-space-1) var(--kore-space-2);white-space:nowrap}' +
+    '.db-slow-table td{padding:var(--kore-space-1) var(--kore-space-2);border-top:1px solid var(--kore-border-1);vertical-align:top}' +
+    '.db-slow-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}' +
+    '.db-slow-sql{display:block;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:help}' +
+    '.db-slow-hint{margin:var(--kore-space-1) 0;padding:var(--kore-space-2) var(--kore-space-3);color:var(--kore-danger);border:1px solid var(--kore-danger);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);line-height:1.5}' +
+    '.db-slow-raw{margin:var(--kore-space-1) 0 0;color:var(--kore-text-3);font-size:var(--kore-font-12);word-break:break-word}' +
+    '@media (max-width:640px){.db-slow-table{display:block;overflow-x:auto}.db-slow-sql{max-width:18ch}}';
   function ensureL2Style() {
     if (document.getElementById('kore-db-l2-style')) return;
     var style = document.createElement('style');
@@ -561,10 +577,156 @@
       });
     });
   }
+  // ── 慢查询分析（db-mysql.slowlog，仅 MySQL/MariaDB）──
+  // 数据来自 performance_schema 的 digest 聚合：只读、不改服务端状态。
+  // 阈值与条数只给预设档位（手填任意数字容易拉出大结果集，后端上限 100 条）。
+  var SLOWLOG_MIN_MS = [100, 500, 1000];
+  var SLOWLOG_LIMITS = [10, 20, 50];
+  // stripErrCode 去掉 E_XXX：前缀，页面上不出现协议码。
+  function stripErrCode(text) {
+    return String(text || '').replace(/^E_[A-Z_]+[:：]\s*/, '');
+  }
+  // slowlogHintFor 把后端错误翻成「下一步做什么」。
+  function slowlogHintFor(text) {
+    var msg = String(text || '');
+    if (/performance_schema/i.test(msg)) {
+      return '慢查询统计需要数据库开启 performance_schema，见错误提示里的说明';
+    }
+    if (/Access denied|denied for user|权限/i.test(msg)) {
+      return '当前账号没有 performance_schema 的读取权限：请让 DBA 授予 SELECT ON performance_schema.* 后再试';
+    }
+    if (/2002|2003|refused|Can't connect|连接|timed out|超时/i.test(msg)) {
+      return '检查实例连接配置：数据库是否已启动、地址与端口（默认 3306）是否正确，再点「分析」重试';
+    }
+    return '先确认实例连通，再降低耗时阈值或换一个库重试；仍失败请把下方原始信息交给 DBA';
+  }
+  // fmtMS 把毫秒压成 1 位小数的 ms 或 2 位小数的 s。
+  function fmtMS(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return '—';
+    return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : ms.toFixed(1) + ' ms';
+  }
+  function paintSlowlog() {
+    var formHost = S.slowlogFormHost, resultHost = S.slowlogHost;
+    if (!formHost || !resultHost) return;
+    formHost.textContent = '';
+    if (S.slowlogMetaHost) S.slowlogMetaHost.textContent = '';
+    resultHost.textContent = '';
+    // 实例：跟随当前选中实例，只读展示（不在本面板里切换实例，避免与左栏状态打架）。
+    var instWrap = add(formHost, el('label', null, '实例'));
+    var instSel = add(instWrap, el('select', null));
+    instSel.setAttribute('aria-label', '实例（跟随当前选中实例）');
+    instSel.disabled = true;
+    var instOpt = add(instSel, el('option', null, S.selected || '未选择'));
+    instOpt.value = S.selected || '';
+    // 库：全部 + 已加载的库列表。
+    var schemaWrap = add(formHost, el('label', null, '库'));
+    var schemaSel = add(schemaWrap, el('select', null));
+    schemaSel.setAttribute('aria-label', '统计范围（库）');
+    add(schemaSel, el('option', null, '全部库')).value = '';
+    (S.dbs || []).forEach(function (db) {
+      // S.dbs 统一存库名字符串（loadDbs 已把 PG 的对象形态压平）；这里仍兼容对象。
+      var name = typeof db === 'string' ? db : (db && db.name) || '';
+      if (name) add(schemaSel, el('option', null, name)).value = name;
+    });
+    schemaSel.value = S.slowlogSchema || '';
+    schemaSel.addEventListener('change', function () { S.slowlogSchema = schemaSel.value; });
+    // 阈值：预设三档。
+    var msWrap = add(formHost, el('label', null, '阈值'));
+    var msSel = add(msWrap, el('select', null));
+    msSel.setAttribute('aria-label', '慢查询耗时阈值');
+    SLOWLOG_MIN_MS.forEach(function (ms) {
+      add(msSel, el('option', null, '≥ ' + ms + ' ms')).value = String(ms);
+    });
+    msSel.value = String(S.slowlogMinMS || 500);
+    msSel.addEventListener('change', function () { S.slowlogMinMS = parseInt(msSel.value, 10) || 500; });
+    // 条数：预设三档，缺省 20。
+    var limitWrap = add(formHost, el('label', null, '条数'));
+    var limitSel = add(limitWrap, el('select', null));
+    limitSel.setAttribute('aria-label', '返回条数（按总耗时倒序）');
+    SLOWLOG_LIMITS.forEach(function (n) {
+      add(limitSel, el('option', null, String(n) + ' 条')).value = String(n);
+    });
+    limitSel.value = String(S.slowlogLimit || 20);
+    limitSel.addEventListener('change', function () { S.slowlogLimit = parseInt(limitSel.value, 10) || 20; });
+    var run = add(formHost, el('button', 'btn btn-primary', '分析'));
+    run.type = 'button';
+    run.disabled = !!S.slowlogBusy || !S.selected;
+    on(run, runSlowlog);
+
+    if (S.slowlogError) {
+      add(resultHost, el('p', 'db-slow-hint', slowlogHintFor(S.slowlogError)));
+      add(resultHost, el('p', 'db-slow-raw', '原始信息：' + stripErrCode(S.slowlogError)));
+      return;
+    }
+    if (S.slowlogBusy) { add(resultHost, el('p', 'muted', '正在分析慢查询…')); return; }
+    if (!S.slowlogLoaded) {
+      add(resultHost, el('p', 'muted',
+        '选好库与阈值后点「分析」；阈值越低、条数越多，聚合查询本身越慢（只读，不改服务端）。'));
+      return;
+    }
+    var data = S.slowlog || {};
+    // 后端已按总耗时倒序，这里再排一次，保证表格顺序不依赖后端实现。
+    var queries = (data.queries || []).slice().sort(function (a, b) {
+      return (Number(b.total_ms) || 0) - (Number(a.total_ms) || 0);
+    });
+    if (S.slowlogMetaHost) {
+      S.slowlogMetaHost.textContent = fmtInt(data.count != null ? data.count : queries.length) + ' 条' +
+        ' · ' + (data.schema ? '库 ' + data.schema : '全部库') +
+        ' · 阈值 ≥ ' + fmtInt(data.min_ms || 0) + ' ms';
+    }
+    if (data.hint) add(resultHost, el('p', 'db-pg-note', String(data.hint)));
+    if (!queries.length) {
+      add(resultHost, el('p', 'muted', '当前阈值下没有聚合慢查询：把阈值调到 100 ms 或选「全部库」再看。'));
+      return;
+    }
+    var table = add(resultHost, el('table', 'db-slow-table'));
+    var headRow = add(add(table, el('thead')), el('tr'));
+    ['SQL 摘要', '执行次数', '总耗时', '平均', '最大', '扫描行数'].forEach(function (title, index) {
+      add(headRow, el('th', index > 0 ? 'num' : null, title));
+    });
+    var tbody = add(table, el('tbody'));
+    queries.forEach(function (q) {
+      var row = add(tbody, el('tr'));
+      var cell = add(row, el('td'));
+      var full = String(q.sql_text || q.digest || '').trim();
+      var sql = add(cell, el('span', 'db-slow-sql', full.length > 120 ? full.slice(0, 120) + '…' : full));
+      sql.title = full + (q.digest ? '\n\ndigest: ' + q.digest : '');
+      if (q.schema) sql.title += '\n库: ' + q.schema;
+      add(row, el('td', 'num', fmtInt(q.executions)));
+      add(row, el('td', 'num', fmtMS(q.total_ms)));
+      add(row, el('td', 'num', fmtMS(q.avg_ms)));
+      add(row, el('td', 'num', fmtMS(q.max_ms)));
+      add(row, el('td', 'num', typeof q.rows_examined_avg === 'number'
+        ? fmtInt(Math.round(q.rows_examined_avg)) : '—'));
+    });
+    if (data.warnings && data.warnings.length) {
+      add(resultHost, el('p', 'db-slow-raw', '有 ' + data.warnings.length + ' 行无法解析，已跳过（不影响其余结果）'));
+    }
+  }
+  // runSlowlog 调 db-mysql.slowlog：参数固定为 instance/schema/min_ms/limit。
+  function runSlowlog() {
+    if (!S.selected || S.slowlogBusy || isPg()) return;
+    var instance = S.selected;
+    S.slowlogBusy = true; S.slowlogError = ''; S.slowlog = null; S.slowlogLoaded = false;
+    paintSlowlog();
+    var params = { instance: instance, min_ms: S.slowlogMinMS, limit: S.slowlogLimit };
+    if (S.slowlogSchema) params.schema = S.slowlogSchema;
+    invoke('db-mysql.slowlog', params).then(function (data) {
+      if (S.destroyed || S.selected !== instance) return;
+      S.slowlogBusy = false; S.slowlog = data; S.slowlogLoaded = true;
+      paintSlowlog();
+    }, function (err) {
+      if (S.destroyed || S.selected !== instance) return;
+      S.slowlogBusy = false; S.slowlogError = (err && err.message) || String(err);
+      paintSlowlog();
+    });
+  }
+
   function paintDetail() {
     var host = S.detailHost;
     host.textContent = '';
     S.l2UsersHandle = null; S.l2NoticeHost = null;
+    S.slowlogFormHost = null; S.slowlogMetaHost = null; S.slowlogHost = null;
     var inst = currentInstance();
     if (!inst) return;
     var statusPanel = add(host, el('section', 'panel'));
@@ -630,6 +792,23 @@
     S.queryNoticeHost = add(sqlPanel, el('div', 'db-query-notice'));
     S.resultHost = add(sqlPanel, el('div', 'db-result'));
     paintQueryNotice(); paintRunState(); paintResult();
+    // 慢查询分析放在折叠区：不展开就不发查询；PG 无 db-mysql.slowlog，不渲染。
+    if (!isPg()) {
+      var slow = add(host, el('details', 'panel db-l2-panel'));
+      var slowSum = add(slow, el('summary', 'db-l2-summary'));
+      add(slowSum, el('span', 'panel-title', '慢查询分析'));
+      S.slowlogMetaHost = add(slowSum, el('span', 'panel-meta', '按总耗时排序'));
+      add(slow, el('p', 'db-pg-note',
+        '基于 performance_schema 的 digest 聚合（只读）：需要 performance_schema=ON 且当前账号有读取权限；' +
+        '不读 slow_query_log 文件。'));
+      var slowBody = add(slow, el('div', 'db-l2-users'));
+      S.slowlogFormHost = add(slowBody, el('div', 'db-slow-form'));
+      S.slowlogHost = add(slowBody, el('div', 'db-slow-result'));
+      slow.addEventListener('toggle', function () {
+        if (slow.open) paintSlowlog();
+      });
+      paintSlowlog();
+    }
     // 用户管理放在折叠区：账号列表要额外查 mysql.user，不展开就不发这次查询。PG 无 L2，不渲染。
     if (!isPg()) {
       var users = add(host, el('details', 'panel db-l2-panel'));
@@ -650,6 +829,8 @@
     if (!name || S.selected === name) return;
     S.selected = name; S.status = null; S.dbs = []; S.result = null; S.selectedDb = '';
     S.statusError = ''; S.dbError = ''; S.queryError = ''; S.dbLoaded = false; S.busy = false;
+    S.slowlog = null; S.slowlogError = ''; S.slowlogBusy = false; S.slowlogLoaded = false;
+    S.slowlogSchema = '';
     paintInstances();
     paintDetail();
     loadStatus();
@@ -709,9 +890,11 @@
         return typeof db === 'string' ? db : (db && db.name) || '';
       }).filter(function (dbName) { return dbName; });
       S.dbLoaded = true; paintDbs();
+      if (S.slowlogFormHost) paintSlowlog();
     }, function (err) {
       if (S.destroyed || S.selected !== name) return;
       S.dbError = err.message; S.dbLoaded = true; paintDbs();
+      if (S.slowlogFormHost) paintSlowlog();
     });
   }
   function loadInstances(reset) {
