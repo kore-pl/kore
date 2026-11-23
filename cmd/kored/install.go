@@ -68,7 +68,14 @@ func runScenarioInstall(id string, stderr io.Writer) int {
 // runPackageInstall 先做无副作用的包前置校验，再打开状态库并原子安装单个包。
 //
 // 顺序刻意把「包不存在/包名非法」挡在状态目录之前：只读或错误路径不该先撞权限。
+// 统一前置：先解析并对齐「配置文件 + 状态目录」并打印，配置文件缺失且没给 --config 时 fail-closed。
 func runPackageInstall(opts installOptions, stdout, stderr io.Writer) int {
+	targets, err := resolveCLITargets(opts.config, opts.stateDir, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "安装失败: %v\n", err)
+		return exitConfig
+	}
+	printCLITargets(stdout, targets)
 	if err := installer.ValidatePackage(opts.packagePath); err != nil {
 		fmt.Fprintf(stderr, "安装失败: %v\n", err)
 		return exitConfig

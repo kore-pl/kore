@@ -415,6 +415,18 @@ curl -s -o /dev/null -w 'new=%{http_code}\n' -X POST http://127.0.0.1:8787/api/v
 - 显式指定：`kored admin-password --generate --config /path/to/config.yaml`。
 - 不确定时看 `kored serve` 启动日志里的配置告警行，或 `curl -s 127.0.0.1:8787/api/v1/system/info`。
 
+### 7.2.1 CLI 与服务的配置一致性（为什么必须带同一个 `--config`）
+
+`kored serve` 与所有 CLI 子命令**各自**解析 `KORE_CONFIG` > `--config` > profile 默认路径。只要有一边回落到默认值，两边就算出**两个不同的 state.db**。
+
+- 2026-11-23 实测事故：serve 用 `--config .kore-local.yaml`（`paths.state_dir: kore-state`），`kored install` 没带 `--config` → 装进 `data/state.db`；实例 `GET /plugins` 仍为空，而且**不报错**。
+- 现在的行为（宁可吵，不许静默）：
+  - 读写状态的 CLI 先打印 `配置: <绝对路径>（存在/不存在）｜状态目录: <绝对路径>`，不一致一眼可见；
+  - 配置文件不存在、且没有显式给 `--config` → **退出码 2 fail-closed**，绝不按默认值新建库；`--config` 给了但文件不存在同样退出 2；
+  - `kored status [--config ...]` 打印配置路径 / 状态目录 / profile / healthz 与 state.db 持有者 pid；实例未运行给「未运行」，不是异常栈。
+  - `paths.state_dir` 等相对路径按**进程 cwd** 归一化为绝对路径；写配置时用绝对路径，避免同一份配置在不同目录下算出不同库。
+- 正确姿势：先 `kored status --config <与 serve 相同>` 核对路径，再 `kored install --config <同一个> --package ...`。
+
 ### 7.3 配置文件被改坏 / 完全没配置
 
 `kored serve` 启动时会自检：配置不存在或哈希为空时，终端里直接引导输入新口令（非终端只提示、不阻塞）。救急也可以让命令自己建配置——`admin-password --generate --config <path>` 会创建父目录（0700）并写出只含 `auth` 段的新文件，再按需补 `server.addr` 等键。

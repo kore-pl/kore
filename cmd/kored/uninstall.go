@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
@@ -20,6 +21,8 @@ type uninstallPaths struct {
 	installRoot string
 	// profile 是本次生效的零侵入 profile，决定是否真的存在 systemd unit / kore-* 用户。
 	profile string
+	// configPath 是本次生效配置文件的绝对路径（打印对齐用；空表示测试假实现未提供）。
+	configPath string
 }
 
 // uninstallDeps 是卸载链的注入点（测试用假实现，绝不删真实用户 / unit）。
@@ -68,10 +71,15 @@ func defaultUninstallDeps() uninstallDeps {
 			if err != nil {
 				return uninstallPaths{}, err
 			}
+			configPath := coreconfig.ResolvePath(opts.config)
+			if abs, absErr := filepath.Abs(configPath); absErr == nil {
+				configPath = abs
+			}
 			return uninstallPaths{
 				stateDir:    snap.Paths.StateDir,
 				installRoot: coreconfig.InstallRoot(),
 				profile:     snap.Profile,
+				configPath:  configPath,
 			}, nil
 		},
 		removeAll: os.RemoveAll,
@@ -111,6 +119,15 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 	stateDir, installRoot := paths.stateDir, paths.installRoot
 	portable := paths.profile == coreconfig.ProfilePortable
 	unitPath := platform.UnitFileName(opts.unitDir, opts.unitName)
+	// 与 install / status 同一行格式：卸载前先让"配置 + 状态目录"可见，避免删错库。
+	if paths.configPath != "" {
+		printCLITargets(stdout, cliTargets{
+			ConfigPath:   paths.configPath,
+			StateDir:     stateDir,
+			Profile:      paths.profile,
+			ConfigExists: fileExists(paths.configPath),
+		})
+	}
 	fmt.Fprintf(stdout, "[INFO] 安装根：%s\n", installRoot)
 	fmt.Fprintf(stdout, "[INFO] 状态目录：%s\n", stateDir)
 	fmt.Fprintf(stdout, "[INFO] profile：%s\n", paths.profile)
