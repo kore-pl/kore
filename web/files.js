@@ -311,6 +311,72 @@
     });
     updateSelection();
   }
+  // b64ToBytes / bytesToB64 / sha256Hex 是编辑器的最小工具：
+  // 后端 readRange/writeRange 用 base64 过协议，乐观锁摘要由浏览器 WebCrypto 计算（127.0.0.1/localhost 为安全上下文）。
+  function b64ToBytes(b64) {
+    var raw = atob(b64 || '');
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function bytesToB64(bytes) {
+    var chunks = [], step = 0x8000;
+    for (var i = 0; i < bytes.length; i += step) {
+      chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + step)));
+    }
+    return btoa(chunks.join(''));
+  }
+  function sha256Hex(bytes) {
+    if (!(window.crypto && window.crypto.subtle && window.crypto.subtle.digest)) return Promise.resolve(null);
+    return window.crypto.subtle.digest('SHA-256', bytes).then(function (buf) {
+      var view = new Uint8Array(buf), hex = '';
+      for (var i = 0; i < view.length; i++) hex += (view[i] < 16 ? '0' : '') + view[i].toString(16);
+      return hex;
+    }, function () { return null; });
+  }
+  // startEdit 通过 readRange 一次性取回整文件（≤∞.95 MiB），做二进制判定并算乐观锁摘要。
+  function startEdit(entry) {
+    if (entry.size > MAX_INLINE) { setStatus('文件过大，仅支持预览，不支持在线编辑', 'fail'); return; }
+    setStatus('正在加载编辑器…');
+    invoke('file.readRange', { path: entry.path, offset: 0, limit: MAX_INLINE }).then(function (data) {
+      var bytes = b64ToBytes(data.data_base64);
+      for (var i = 0; i < bytes.length; i++) {
+        if (bytes[i] === 0) { setStatus('二进制文件不支持编辑', 'fail'); return; }
+      }
+      var text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+      catch (err) { setStatus('文件不是 UTF-8 文本，暂不支持在线编辑', 'fail'); return; }
+      return sha256Hex(bytes).then(function (sha) {
+        S.editor = { path: entry.path, text: text, sha: sha, size: bytes.length };
+        paintPreview();
+        setStatus('已加载 ' + fmtSize(bytes.length) + (sha ? '，保存时校验摘要' : '（浏览器不支持摘要，关闭乐观锁）'), 'ok');
+      });
+    }, function (err) {
+      setStatus('打开编辑器失败：' + errText(err), 'fail');
+    });
+  }
+  // saveEdit 走 writeRange：整文件覆盖写 + expected_sha256 乐观锁；冲突给人话而不是 E_CONFLICT。
+  function saveEdit(entry, editor, save, status) {
+    var bytes = new TextEncoder().encode(editor.value);
+    if (bytes.length > MAX_INLINE) { status.textContent = '内容超过单帧上限，请拆分文件'; return; }
+    var params = { path: entry.path, offset: 0, data_base64: bytesToB64(bytes) };
+    if (S.editor.sha) params.expected_sha256 = S.editor.sha;
+    save.disabled = true;
+    invoke('file.writeRange', params).then(function (res) {
+      S.editor = null;
+      status.className = 'row-note-ok';
+      status.textContent = '已保存（' + fmtSize(res.size) + '）';
+      refresh();
+    }, function (err) {
+      save.disabled = false;
+      status.className = 'row-note-fail';
+      if (err && err.code === 'E_CONFLICT') {
+        status.textContent = '文件已被其他会话修改，请刷新后重试';
+        return;
+      }
+      status.textContent = '保存失败：' + errText(err);
+    });
+  }
   function paintPreview() {
     if (!S.previewHost) return;
     var host = S.previewHost;
@@ -325,31 +391,35 @@
     add(meta, el('span', 'tag-muted', entry.mode || '—'));
     var metaSize = add(meta, el('span', 'muted', fmtSize(entry.size) + ' · ' + fmtTime(entry.mod_time)));
     var body = add(host, el('div', 'files-preview-body'));
+    if (S.editor && S.editor.path === entry.path) {
+      var editor = add(body, el('textarea', 'files-editor'));
+      editor.value = S.editor.text;
+      editor.setAttribute('aria-label', '编辑文件：' + entry.name);
+      var bar = add(body, el('div', 'files-save-bar'));
+      var status = add(bar, el('span', 'muted', '保存会用乐观锁校验；被其他会话改过会提示刷新。'));
+      var save = add(bar, el('button', 'btn btn-primary', '保存')); save.type = 'button';
+      var cancel = add(bar, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
+      on(save, function () { saveEdit(entry, editor, save, status); });
+      on(cancel, function () { S.editor = null; paintPreview(); setStatus('已退出编辑', 'ok'); });
+      return;
+    }
+    var ops = add(host, el('div', 'files-actions'));
+    var editBtn = add(ops, el('button', 'btn', '编辑')); editBtn.type = 'button';
+    editBtn.disabled = entry.is_dir || entry.size > MAX_INLINE;
+    on(editBtn, function () { startEdit(entry); });
+    if (entry.size > MAX_INLINE) add(ops, el('span', 'files-selected muted', '文件过大，仅支持预览，不支持在线编辑'));
+    else if (!entry.is_dir) add(ops, el('span', 'files-selected muted', '在线编辑上限 ' + fmtSize(MAX_INLINE)));
+    if (entry.is_dir) { add(body, el('div', 'panel-empty', '目录不预览；点击左侧进入。')); return; }
     invoke('file.read', { path: entry.path, max_bytes: MAX_READ }).then(function (data) {
       if (S.selected !== entry) return;
       if (data.is_binary) {
         add(body, el('div', 'panel-empty', '二进制文件，不支持预览；可用「下载」保存到本机'));
         return;
       }
-      var editor = add(body, el('textarea', 'files-editor')); editor.value = data.content || '';
-      editor.setAttribute('aria-label', '文件内容：' + entry.name);
-      var bar = add(body, el('div', 'files-save-bar'));
-      var status = add(bar, el('span', 'muted', '可编辑后保存；单次读取上限 1 MiB。'));
-      var save = add(bar, el('button', 'btn btn-primary', '保存')); save.type = 'button';
-      on(save, function () {
-        save.disabled = true;
-        invoke('file.write', { path: entry.path, content: editor.value, create_if_missing: false })
-          .then(function (res) {
-            entry.size = res.size; entry.mod_time = res.mod_time;
-            metaSize.textContent = fmtSize(res.size) + ' · ' + fmtTime(res.mod_time);
-            save.disabled = false; status.className = 'row-note-ok';
-            status.textContent = '已保存 ' + disp(entry.path) + '（' + fmtSize(res.size) + '）';
-            paintList();
-          }, function (err) {
-            save.disabled = false; status.className = 'row-note-fail';
-            status.textContent = '保存失败：' + errText(err);
-          });
-      });
+      var view = add(body, el('textarea', 'files-editor')); view.value = data.content || '';
+      view.readOnly = true;
+      view.setAttribute('aria-label', '文件内容（只读预览）：' + entry.name);
+      if (entry.size > MAX_READ) add(body, el('div', 'panel-empty muted', '仅预览前 ' + fmtSize(MAX_READ) + '；完整内容请下载'));
     }, function (err) {
       if (S.selected === entry) add(body, el('div', 'panel-empty', '读取失败：' + errText(err)));
     });
