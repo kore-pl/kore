@@ -105,7 +105,7 @@
     var form = add(box, el('div', 'cred-form'));
     var owner = el('select', 'cred-select'); owner.setAttribute('aria-label', '所属插件');
     options(owner, S.plugins.length ? S.plugins.map(function (p) { return [p.id, p.id + (p.name !== p.id ? ' · ' + p.name : '')]; }) : [['', '没有已安装插件']], S.plugins[0] ? S.plugins[0].id : '');
-    var name = el('input', 'cred-input'); name.placeholder = '例如 mysqlRoot'; name.maxLength = 64;
+    var name = el('input', 'cred-input'); name.id = 'cred-name-input'; name.placeholder = '例如 mysqlRoot'; name.maxLength = 64;
     var envVar = el('select', 'cred-select'); envVar.setAttribute('aria-label', '环境变量名');
     options(envVar, ENV_PRESETS.concat([['__custom__', '自定义…']]), 'MYSQL_PWD');
     var custom = el('input', 'cred-input cred-custom'); custom.placeholder = '自定义环境变量名（大写字母/数字/下划线）'; custom.hidden = true;
@@ -227,7 +227,16 @@
     var refresh = add(head, btn('刷新', 'btn-ghost'));
     on(refresh, function () { load(); });
     if (!S.rows.length) {
-      add(box, el('p', 'panel-empty', '还没有凭据。先在上方新建一条，再授权给需要它的插件。'));
+      var empty = add(box, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-title', '还没有凭据'));
+      add(empty, el('p', 'empty-state-text',
+        '凭据让插件读取数据库/Redis 密码，不用在多个页面重复填；新建后再授权给需要它的插件即可。'));
+      var first = add(empty, el('button', 'btn btn-primary', '新建第一条凭据'));
+      first.type = 'button';
+      on(first, function () {
+        var input = document.getElementById('cred-name-input');
+        if (input) { input.scrollIntoView({ block: 'center' }); input.focus(); }
+      });
       return;
     }
     var wrap = add(box, el('div', 'cred-table-wrap'));

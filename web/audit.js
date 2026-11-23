@@ -148,8 +148,11 @@
         reset.addEventListener('click', function () { S.action = ''; S.result = ''; S.shown = PAGE; paint(); });
         empty.appendChild(reset);
       } else {
-        empty.appendChild(el('p', 'empty-state-title', '暂无审计记录'));
-        empty.appendChild(el('p', 'empty-state-text', '操作记录会在这里留痕，包括登录、插件启停、危险动作'));
+        empty.appendChild(el('p', 'empty-state-title', '还没有审计记录'));
+        empty.appendChild(el('p', 'empty-state-text', '有写操作或权限拒绝时会自动记录在这里。'));
+        var refresh = el('button', 'btn', '刷新'); refresh.type = 'button';
+        refresh.addEventListener('click', function () { load(); });
+        empty.appendChild(refresh);
       }
       panel.appendChild(empty);
     } else {

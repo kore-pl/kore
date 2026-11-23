@@ -214,7 +214,7 @@
       (r.action || '') + ' ' + (r.direction || 'in') + ' ' + (r.proto || 'any') + '/' + fmtPort(r.port) +
       ' from ' + (r.from || '0.0.0.0/0')));
     add(box, el('pre', 'fw-cmd', (S.deletePreview.command || []).join(' ')));
-    add(box, el('p', 'fw-preview-note', S.canWrite ? '预览模式，确认后执行删除；SSH 放行规则会被后端拒绝。'
+    add(box, el('p', 'fw-preview-note', S.canWrite ? '预览模式，确认后执行删除；SSH 放行规则会被防火墙引擎拒绝。'
       : '当前环境没有 root 权限，只能预览，无法执行删除。'));
     var ops = add(box, el('div', 'fw-ops'));
     var ok = add(ops, el('button', 'btn fw-danger', '确认删除')); ok.type = 'button'; ok.disabled = !S.canWrite;
@@ -328,7 +328,7 @@
     S.root = add(container, el('section', 'fw'));
     var head = add(S.root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '防火墙'));
-    add(head, el('p', 'view-sub', '查看后端与规则；放行/拒绝端口先预览真实命令，确认后再执行。'));
+    add(head, el('p', 'view-sub', '查看防火墙引擎与规则；放行/拒绝端口先预览真实命令，确认后再执行。'));
     S.noticeHost = add(S.root, el('div', 'redis-notice-host'));
     var status = panel('状态', ''); add(S.root, status.panel);
     var refresh = add(status.meta, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
