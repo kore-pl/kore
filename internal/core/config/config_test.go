@@ -175,3 +175,33 @@ func TestPluginDirFromConfig(t *testing.T) {
 		t.Fatalf("应使用配置项，实际 %q", snap.Paths.PluginDir)
 	}
 }
+
+// TestSessionTTLBoundary 钉住 auth.session_ttl 的 1m–720h 取值域（正反例）。
+// 本仓裁决不加 300s 下限：默认 168h + 绝对 30d 上限已定，下限只是 GUI 滑块的
+// UX 护栏，手写 YAML 不需要，短 TTL 也不降低安全性（见 .agents/LOG/DECISIONS.md）。
+func TestSessionTTLBoundary(t *testing.T) {
+	for _, ttl := range []string{"1m", "168h", "720h"} {
+		path := writeConfig(t, t.TempDir(), "auth:\n  session_ttl: \""+ttl+"\"\n")
+		snap, _, err := loadFile(t, path)
+		if err != nil {
+			t.Fatalf("session_ttl=%s 属合法域，应通过，实际: %v", ttl, err)
+		}
+		want, err := time.ParseDuration(ttl)
+		if err != nil {
+			t.Fatalf("测试用例 %s 非法: %v", ttl, err)
+		}
+		if snap.Auth.SessionTTL != want {
+			t.Fatalf("session_ttl=%s 应落为 %s，实际 %s", ttl, want, snap.Auth.SessionTTL)
+		}
+	}
+	for _, ttl := range []string{"59s", "721h"} {
+		path := writeConfig(t, t.TempDir(), "auth:\n  session_ttl: \""+ttl+"\"\n")
+		_, _, err := loadFile(t, path)
+		if err == nil {
+			t.Fatalf("session_ttl=%s 越界应拒绝，实际通过", ttl)
+		}
+		if !strings.Contains(err.Error(), "auth.session_ttl") {
+			t.Fatalf("session_ttl=%s 错误信息应含字段名，实际 %q", ttl, err.Error())
+		}
+	}
+}

@@ -74,7 +74,7 @@
 | protocol_minor | int | 否 | 0 | 见 §13 |
 | web | `{entry: string}` | 否 | 无 | `entry` 固定 `web/index.js`；无前端时省略 |
 
-> 口径说明：`idle_timeout_s` 默认 60s 为 M2 实现口径（更早释放空闲 lazy 进程，贴合资源零侵占锚点）；配置可设 60–1800，需 300s 语义时显式配置。
+> 口径说明：`idle_timeout_s` 默认 60s 为 M2 实现口径（更早释放空闲 lazy 进程，贴合资源零侵占锚点）；配置可设 60–1800，需 300s 语义时显式配置。**不做 300s 下限**：该字段是 lazy 进程的**资源释放旋钮**，取小更贴合「资源零侵占」，加下限会让文档化的 60s 默认值变成非法配置，并让空闲 lazy 进程多占 5 倍内存；1Panel 的「min 300s」是**会话空闲**超时语义（对应 `auth.session_ttl`），不属于本字段（裁决见 `.agents/LOG/DECISIONS.md` 2026-11-23 条）。
 
 - `requires_kore` 区间语义（R3）：MVP 只支持 `">=X.Y.Z <A.B.C"` 与 `">=X.Y.Z"` 两种写法；不支持 `^`/`~`/`||`；解析器用标准库自实现，不引第三方库（G-02）。
 - 匹配规则：按 semver 比较 kore 版本；kore 版本含预发布号（如 `0.2.0-rc.1`）时拒绝匹配（MVP 不认 pre-release）。

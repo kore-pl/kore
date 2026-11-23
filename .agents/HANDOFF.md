@@ -173,9 +173,13 @@
 6. **无 UA / IP 指纹绑定**：会话只凭 `kore_session` cookie，不绑 UA / IP；`User-Agent` 仅用于**审计记录**
    并截断到 100 字符（`internal/core/httpapi/audit_http.go:259`），`RemoteAddr` 只用于通道识别与 IP 脱敏
    （`local_access.go:64-71`、`audit_http.go:231`）。
-7. **最小空闲超时 300s 未进配置校验**：`idle_timeout_s` 的校验区间是 **60–1800s**
-   （`internal/core/registry/validate.go:27-28`），没有任何 300s 下限；`docs/PLUGIN-PROTOCOL.md:77` 的口径是
-   「配置可设 60–1800，需 300s 语义时显式配置」——即 300s 是**建议值**，不是门禁值。
+7. ~~最小空闲超时 300s 未进配置校验~~ **已裁决不做（2026-11-23）**：`idle_timeout_s` 是 lazy 进程的
+   **资源释放旋钮**，区间保持 **60–1800s**（`internal/core/registry/validate.go:27-28`），不加 300s 下限——
+   加下限会让文档化的 60s 默认值变成非法配置，并让空闲 lazy 进程多占 5 倍内存，与「资源零侵占」/ ≤48 MiB
+   预算冲突。1Panel 的「min 300s」是**会话空闲**超时语义（对应 `auth.session_ttl`），不属于本字段；
+   `auth.session_ttl` 同样不加 300s 下限（手写 YAML 不需要 GUI 滑块护栏，短 TTL 不降低安全性）。
+   裁决与被否决选项见 [`LOG/DECISIONS.md`](LOG/DECISIONS.md) 2026-11-23 条；`.agents/verify/benchmark-auth-design.md`
+   第 8 条的「待办」口径随之作废（该文件为冻结证据，不改写）。`docs/PLUGIN-PROTOCOL.md:77` 已同步写明。
 8. **ADR-0041 状态已回填为 `superseded-in-part`（`9b5d4dc`）——不是 `proposed`，也不是整篇 `superseded`**：
    `docs/DECISIONS/0041-passwordless-server-admin.md:1-2` 现为 `状态: superseded-in-part`，文末「取代关系（2026-11-23）」
    按 §2.A / §2.B / §2.C / §2.D / §2.E / §4 六组共 12 条逐档标注：A 组「本机通道即认证」被 ADR-0043 取代并已撤除
@@ -183,8 +187,10 @@
    token 从未实施需重新提案。**别再写成「仍标 proposed」（与头部不符）或整篇 `superseded by 0043`（会把仍生效的
    B 组与 §4 一并判死）**（G-06）。
 9. **插件 UI 分发链未实现**：ADR-0040 裁决 v1.0 前不补；`web/app.js` 的 `frame.src` 仍指向不存在路径。
-10. **`kored install --scenario` 只解析不落库**：`cmd/kored/install.go:62-65` 直接回 `E_UNSUPPORTED`
-    （「场景预设归 M2，不假装成功」）；`--package` 才是真装路径。
+10. **`kored install --scenario` 未实现（M2）但已不再"看起来能用"**：`cmd/kored/install.go` 对 `--scenario`
+    返回 `E_UNSUPPORTED` + 「未实现（M2 支持批量预设安装）」，并列出**当前真实可用**的替代路径
+    （`--package` 单包 / 面板商店逐插件安装；预设卡片「一键安装」为禁用态）；`--package` 才是真装路径。
+    `--help` 与 `docs/CORE.md` §2.12/§10 已同步标注未实现（不再把 `--offline-dir`/`--yes` 写成可用参数）。
 11. **waf 0.4.4 整链真机证据未落本仓**：0.4.4 的两条修复（`rules.chain` 恒 `null`、内置徽标永不生效）
     在插件仓 CHANGELOG 记为由真机 e2e 抓出，但 `.agents/verify/` 里最新 WAF e2e 仍是 `waf-e2e-043.md`（0.4.3）。
     → 0.4.4 的端到端证据**未确认**。

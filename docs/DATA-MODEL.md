@@ -41,7 +41,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `server.socket` | string | `/run/kore/kore.sock` | 主壳 UDS 路径，父目录启动时创建（0700） |
 | `server.tls` | bool | `false` | MVP 固定 off；置 true 启动拒绝并提示走反向代理 |
 | `auth.admin_password_hash` | string | `""` | 空 = 首次启动生成 24 字符随机口令、写回哈希并置 `auth.initialized=true`；非空必须是 §3.3 的 PBKDF2 存储串 |
-| `auth.session_ttl` | duration | `168h`（7 天） | 1m–720h；未显式配置时 168h。**滑动续期阈值 = `min(24h, ttl/2)`**（7 天→24h、12h→6h、1h→30m）：仅当剩余寿命低于阈值才把 `expires_at` 推到 `now+ttl` 并重发 cookie（相邻续期至少间隔 `ttl/2`，避免每次鉴权写盘）；**绝对上限 30 天**（`created+30d`，续期不得越过）；改后需重启内核生效（SIGHUP 不热更） |
+| `auth.session_ttl` | duration | `168h`（7 天） | 1m–720h；未显式配置时 168h。**滑动续期阈值 = `min(24h, ttl/2)`**（7 天→24h、12h→6h、1h→30m）：仅当剩余寿命低于阈值才把 `expires_at` 推到 `now+ttl` 并重发 cookie（相邻续期至少间隔 `ttl/2`，避免每次鉴权写盘）；**绝对上限 30 天**（`created+30d`，续期不得越过）；改后需重启内核生效（SIGHUP 不热更）；**不做 300s 下限**（下限只是 GUI 滑块的 UX 护栏，手写 YAML 不需要；短 TTL 不降低安全性，只会让配置者更频繁重登——裁决见 `.agents/LOG/DECISIONS.md`） |
 | `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` = TLS 或回环 Host 时给会话 cookie 加 `Secure`，否则不加并 WARN |
 | `auth.initialized` | bool | `false` | 首次生成口令后由内核置 `true`；`true` 时启动不再打印临时口令。重置 = 人工置 `false` 并清空 `auth.admin_password_hash`；`initialized=true` 但哈希为空视为不一致，拒绝启动 |
 | `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `state.db`、`plugins/`、`tasks/` |
@@ -64,12 +64,18 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供（`kored db dum
 | `security.login_rate_limit.window` | duration | `60s` | 10s–1h |
 | `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；触发后锁定 IP 时长 |
 | `audit.invoke_all` | bool | `false` | false = 只审计按插件 capabilities 需要 admin 的写/管理类 invoke（只读类不审计，防日志爆炸）；true = 审计全部 invoke（调试用）；SIGHUP 可热更 |
+| `audit.retention` | duration | `"2160h"`（90 天） | 24h–8760h；审计记录保留期，早于 `now - retention` 的记录由内置清理任务删除（§11）；需重启生效 |
+| `audit.clean_enabled` | bool | `true` | false = 不注册按龄清理内置任务（回到"审计无界增长"状态）；需重启生效 |
+| `audit.clean_interval` | duration | `"6h"` | 30s–168h；清理周期（调度器内置任务 `interval_s`）；需重启生效 |
+| `audit.clean_batch` | int | `1000` | 1–10000；单次清理删除上限，超出部分留到下个周期（防一次长事务）；需重启生效 |
 | `cert_renew.enabled` | bool | `false` | 唯一允许的常驻定时器开关；关闭时内核不创建任何 ticker |
 | `cert_renew.interval` | duration | `"6h"` | 仅 `enabled=true` 时生效；范围 1h–24h；非法值 → 退出码 2 |
 
 `store.*` 与包签名的边界：`store.allow_unsigned` 管的是**索引仓签名**（`index/plugins.json.sig`，M2 的 ed25519 验签），零值 `false` 即默认拒绝未签名/验签失败的索引；它由 Go 结构体零值兜底，**刻意不在 `Default()` 中显式设置**，只允许显式配置并写 WARN 审计。它与 `plugins.allow_unsigned`（**插件包签名**，M4）是两个完全独立的开关，作用对象、里程碑与默认值都不同，不得互相替代或混写。
 
 `cert_renew.*` 的设计约束（ADR-0019 起迁移为 `scheduler` 的内置任务）：默认 `enabled: false`，严格守住「默认零后台定时器」资源锚点；关闭时对应的内置任务被禁用，无任何启用任务时内核不创建 ticker。内核**不做 ACME、不联网**，到点只标记 `cert.renew_due` 并写执行记录，实际续期由插件完成（内核只定规则不做业务）。**诚实披露**：bus 的事件投递面尚未落地，内置任务当前只记录到点执行、不广播事件。唯一周期源是 `internal/core/scheduler/` 的单 ticker，代码层门禁见 CORE 的 `grep time.NewTicker` 检查。
+
+`audit.*` 保留策略（ADR-0044）：`audit.retention` 默认 `2160h`（90 天），清理由 scheduler 内置任务 `builtin-audit-clean`（`plugin=kore`、`method=audit.clean`、`interval_s=audit.clean_interval`、`params={retention_seconds,batch}`）执行——复用既有单 ticker，**不新增任何定时器**。与 `cert_renew` 的差别是**默认开启**：审计无界增长是真实运维问题，所以默认配置下调度器会常驻一个 ticker（仍是单实例单 ticker，ADR-0019）；要严格零 ticker 可设 `audit.clean_enabled: false`，代价是审计重新无界增长。四项 `audit.*` 清理参数需重启生效（SIGHUP 报 ignored），因为内置任务在 `scheduler.New` 时装配。
 
 ### 3.2 完整示例（含注释）
 

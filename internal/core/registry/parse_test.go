@@ -221,3 +221,33 @@ func TestParseTriggers(t *testing.T) {
 		t.Fatalf("trigger 应原样保留，实际 %q", got.Triggers[0])
 	}
 }
+
+// TestParseIdleTimeoutBoundary 钉住 idle_timeout_s 的 60–1800 取值域：
+// 合法值通过、越界拒绝；300 在域内——本仓裁决不把 300 当最小值
+// （该字段是 lazy 进程的资源释放旋钮，取小更贴合「资源零侵占」，理由见 .agents/LOG/DECISIONS.md）。
+func TestParseIdleTimeoutBoundary(t *testing.T) {
+	for _, sec := range []int{60, 300, 1800} {
+		manifest := baseManifest()
+		manifest["lifecycle"] = "lazy"
+		manifest["idle_timeout_s"] = sec
+		got := parse(t, manifest)
+		if got.IdleTimeoutS != sec {
+			t.Fatalf("idle_timeout_s=%d 应原样落盘，实际 %d", sec, got.IdleTimeoutS)
+		}
+	}
+	for _, sec := range []int{1, 59, 1801} {
+		manifest := baseManifest()
+		manifest["lifecycle"] = "lazy"
+		manifest["idle_timeout_s"] = sec
+		_, err := registry.Parse(encode(t, manifest))
+		if err == nil {
+			t.Fatalf("idle_timeout_s=%d 应拒绝，实际解析成功", sec)
+		}
+		if code := codeOf(t, err); code != pluginapi.E_INVALID {
+			t.Fatalf("idle_timeout_s=%d 错误码应为 %s，实际 %s（%v）", sec, pluginapi.E_INVALID, code, err)
+		}
+		if !strings.Contains(err.Error(), "idle_timeout_s") {
+			t.Fatalf("idle_timeout_s=%d 错误信息应含字段名，实际 %q", sec, err.Error())
+		}
+	}
+}

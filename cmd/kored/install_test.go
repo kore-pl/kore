@@ -172,3 +172,42 @@ func TestStatusNotRunning(t *testing.T) {
 		t.Fatalf("不应有堆栈：%s", errOut.String())
 	}
 }
+
+// TestRunScenarioInstallUnimplemented 验证 --scenario 明确回 E_UNSUPPORTED，
+// 且替代路径都是当前真实可用的能力（不宣传尚未实现的批量预设安装）。
+func TestRunScenarioInstallUnimplemented(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runInstall([]string{"--scenario", "web"}, &stdout, &stderr)
+	if code != exitConfig {
+		t.Fatalf("--scenario 未实现应返回 exitConfig(2)，实际 %d", code)
+	}
+	text := stderr.String()
+	for _, want := range []string{
+		"E_UNSUPPORTED",
+		`"web"`,
+		"未实现（M2 支持批量预设安装）",
+		"替代路径（当前可用）",
+		"kored install --package",
+		"POST /api/v1/store/install",
+		"禁用态",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("--scenario 输出缺少 %q：\n%s", want, text)
+		}
+	}
+}
+
+// TestInstallUsageMarksScenarioUnimplemented 验证帮助文案不把 --scenario 说成可用。
+func TestInstallUsageMarksScenarioUnimplemented(t *testing.T) {
+	var buf bytes.Buffer
+	printInstallUsage(&buf)
+	text := buf.String()
+	for _, want := range []string{
+		"（--scenario 未实现，M2）",
+		"--scenario 场景预设批量安装：未实现（M2）",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("帮助文案缺少 %q：\n%s", want, text)
+		}
+	}
+}

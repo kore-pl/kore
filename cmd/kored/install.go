@@ -21,7 +21,7 @@ type installOptions struct {
 	stateDir string
 	// packagePath 是本地包路径（--package）。
 	packagePath string
-	// scenario 是场景预设 id（--scenario，M2 实现）。
+	// scenario 是场景预设 id（--scenario）：批量预设安装归 M2，当前明确返回 E_UNSUPPORTED。
 	scenario string
 }
 
@@ -33,7 +33,7 @@ func parseInstallFlags(args []string, stderr io.Writer) (installOptions, error) 
 	fs.StringVar(&opts.config, "config", "", "配置文件路径（默认取 KORE_CONFIG）")
 	fs.StringVar(&opts.stateDir, "state-dir", "", "状态目录（默认取 KORE_STATE_DIR / 配置文件）")
 	fs.StringVar(&opts.packagePath, "package", "", "插件包路径 <id>-<version>.tar.gz")
-	fs.StringVar(&opts.scenario, "scenario", "", "场景预设 id（M2 实现）")
+	fs.StringVar(&opts.scenario, "scenario", "", "场景预设 id（未实现，M2；请用 --package 或面板商店逐插件安装）")
 	fs.Usage = func() { printInstallUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return installOptions{}, err
@@ -51,7 +51,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	case opts.scenario != "":
 		return runScenarioInstall(opts.scenario, stderr)
 	case opts.packagePath == "":
-		fmt.Fprintln(stderr, "install: 必须指定 --package 或 --scenario")
+		fmt.Fprintln(stderr, "install: 必须指定 --package（单包）；--scenario 未实现（M2）")
 		printInstallUsage(stderr)
 		return exitConfig
 	default:
@@ -59,9 +59,17 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// runScenarioInstall 明确回 E_UNSUPPORTED 语义：场景预设归 M2，不假装成功。
+// runScenarioInstall 明确回 E_UNSUPPORTED：批量预设安装归 M2，不假装成功。
+//
+// 错误文本必须给出**当前真实可用**的替代路径：单包 CLI 安装 + 面板商店逐插件安装。
+// 刻意不写「面板一键装预设」——商店预设卡片的「一键安装」当前是禁用态（M2 才落地），
+// 指向不存在的批量路径就是另一种「点了才发现不行」（G-06）。
 func runScenarioInstall(id string, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "%s: 安装场景预设 %q 未实现（M2 支持场景预设）\n", pluginapi.E_UNSUPPORTED, id)
+	fmt.Fprintf(stderr, "%s: 安装场景预设 %q 未实现（M2 支持批量预设安装）\n", pluginapi.E_UNSUPPORTED, id)
+	fmt.Fprintln(stderr, "替代路径（当前可用）：")
+	fmt.Fprintln(stderr, "  1) 单包安装：kored install --package <id>-<version>.tar.gz")
+	fmt.Fprintln(stderr, "  2) 面板商店：商店页逐个插件点「安装」（POST /api/v1/store/install）；预设卡片「一键安装」当前为禁用态")
+	fmt.Fprintln(stderr, "  3) 查看可用预设：GET /api/v1/store/presets（只读元数据，需 KORE_PRESETS_DIR）")
 	return exitConfig
 }
 
@@ -162,9 +170,9 @@ func storeExitCode(err error) int {
 
 // printInstallUsage 打印 install 参数说明。
 func printInstallUsage(w io.Writer) {
-	fmt.Fprintln(w, "用法: kored install --package <tar.gz> | --scenario <id>")
-	fmt.Fprintln(w, "  --package  安装本地插件包 <id>-<version>.tar.gz")
-	fmt.Fprintln(w, "  --scenario 安装场景预设（M2 支持）")
+	fmt.Fprintln(w, "用法: kored install --package <tar.gz>   （--scenario 未实现，M2）")
+	fmt.Fprintln(w, "  --package  安装本地插件包 <id>-<version>.tar.gz（当前唯一可用的安装方式）")
+	fmt.Fprintln(w, "  --scenario 场景预设批量安装：未实现（M2），会返回 E_UNSUPPORTED 并列出替代路径")
 	fmt.Fprintln(w, "  --config    配置文件路径（缺省按 profile 解析）")
 	fmt.Fprintln(w, "  --state-dir 状态目录（覆盖配置）")
 	fmt.Fprintln(w, "注意: install 与 serve 独占同一 state.db，serve 运行时请用 POST /api/v1/store/install 安装；CLI install 仅离线使用（在线运行会撞锁 exit 3）")

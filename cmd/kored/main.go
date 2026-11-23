@@ -76,7 +76,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "用法: kored <子命令> [参数]")
 	fmt.Fprintln(w, "  serve     启动主壳（无子命令时默认）")
 	fmt.Fprintln(w, "  version   打印版本与协议版本")
-	fmt.Fprintln(w, "  install   安装插件（M1 只解析 --package / --scenario，实现归 M2）")
+	fmt.Fprintln(w, "  install   安装插件（--package 单包安装；--scenario 场景预设未实现，M2）")
 	fmt.Fprintln(w, "  audit     查询审计记录（--since 必填，--action 过滤，--csv 导出）")
 	fmt.Fprintln(w, "  uninstall 卸载链：清 systemd unit / kore-* 用户 / 变更账本（ADR-0023；--dry-run 看计划）")
 	fmt.Fprintln(w, "  status    打印生效配置 / 状态目录 / 实例 healthz 与 state.db 持有者 pid")

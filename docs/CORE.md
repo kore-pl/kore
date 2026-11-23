@@ -117,11 +117,11 @@
 ### 2.12 `internal/core/installer`
 
 - **职责**：预设解析（构建期 `//go:embed presets/` 快照 + `--offline-dir` 本地目录优先）、sha256 校验、`requires_kore` 区间校验、依赖 DAG 拓扑排序、按序安装并 enable、**失败整预设回滚**（逆序卸载 + 恢复启用状态 + 清已写状态目录）、运行时预检结果透传（只报缺什么/多大，不装运行时）。
-- **输入输出**：输入 `Preset{id,plugins[{id,version_range,optional}],config_template}`（schema 见 [SCENARIOS.md](./SCENARIOS.md) §2）；输出安装计划 `{steps[],resident_quota,disk_bytes,runtime_gaps[]}` 或异步 `job_id`。HTTP `POST /api/v1/store/install|update` 与 CLI `kored install --scenario <id> [--offline-dir] [--yes]`、`kored install --package <tar.gz>` **共用同一实现**。
+- **输入输出**：输入 `Preset{id,plugins[{id,version_range,optional}],config_template}`（schema 见 [SCENARIOS.md](./SCENARIOS.md) §2）；输出安装计划 `{steps[],resident_quota,disk_bytes,runtime_gaps[]}` 或异步 `job_id`。HTTP `POST /api/v1/store/install|update` 与 CLI `kored install --package <tar.gz>` **共用同一实现**。**实现状态（2026-11-23 核实）**：单包安装链路已落地；**预设解析与 `--scenario` / `--offline-dir` / `--yes` 属 M2 未实现**——CLI 对 `--scenario` 直接返回 `E_UNSUPPORTED` 并列出**当前真实可用**的替代路径（`--package` 单包 / 面板商店逐插件安装），不假装成功。
 - **包下载（`InstallFromURL`，索引 `download_url`）**：内核**唯一出站口**——先把已验签索引声明的 `https://` 地址流式拉到 `<state_dir>/tmp/pkg-*/<id>-<version>.tar.gz`，**边下边算 sha256**（不整包读入内存），单包上限 64 MiB（超限立即中止并删临时文件），摘要必须与索引声明一致才交回 `Install` 复用本地包安装链路；摘要不符/超限/非 200 一律拒并删除临时目录。只允许 `https://`（拒 `http://` / `file://` / `gopher://` 等），客户端 60 s 总超时且禁用 keep-alive（G-19：装完不留空闲连接）。失败不落盘：`defer` 删下载目录 + `Install` 自清 staging。
 - **失败模式与处理**：预设 id 未知 / 版本区间不可解析 → 400 `E_INVALID`；sha256 不符 → 400 `E_INVALID`（不落盘）；`requires_kore` 不满足 → 409 `E_UNSUPPORTED`；常驻配额超限（>3 个或 >24 MiB）→ **安装前** 409 `E_CONFLICT` 并给"需先停用 <id>"建议；包下载失败 / 下载内容与索引声明摘要不符 → **502 `E_UPSTREAM`**（market 按 installer 错误分类映射，可重试或换源）；任一步失败即整预设回滚，回滚自身失败则写 `audit` 并保留现场（不删证据）。
 - **明确不做什么**：不实现第二条安装链路——下载安装与本地包安装共用同一套校验/解包/落位/落库（下载只多"拉到临时文件 + 摘要比对"一步），URL 与 sha256 只能来自已验签索引、不由本包决定；不安装运行时（运行时由插件调宿主包管理器，kore 不下载）；不做版本求解（只按索引区间取满足的最高版并 pin）；不做包签名校验（M4 由 market 负责 ed25519）。
-- **运行期安装约束（state.db 独占锁）**：`serve` 常驻时以独占方式持有 `state.db`，CLI `kored install --package` 与 `--scenario` 同为独立进程、会争同一把锁并退出码 3（状态库被占用）——**这是设计使然，不是缺陷**。serve 运行时请走 `POST /api/v1/store/install`（经同一 installer 校验落盘，并由装配层**真正重载** registry/supervisor：运行中的旧版本先 Stop → 丢弃旧 instance → 从状态库与磁盘重新装载新版本清单 → `Replace` 登记 → 按持久化 `desired_state` 决定是否拉起）；同 id 升级后 `GET /plugins` 报新版本、新方法可直接调用，无需重启内核；`POST /store/update` 走同一重载路径。响应新增 `reload` 字段（`reloaded` / `restarted`）与升级语义字段 `previous_version`（安装前版本，首次安装为空）、`stale_versions`（磁盘上残留的旧版本目录名，**不自动删除**，供前端提示清理），重载失败显式 500 而非假装成功。`GET /api/v1/plugins` 的每条已装记录由 httpapi 用已验签索引对齐 `latest_version` / `latest_sha256` / `update_available`（纯数据对齐，不判升级方向，G-01）。CLI install **仅离线使用**（serve 未启动）。
+- **运行期安装约束（state.db 独占锁）**：`serve` 常驻时以独占方式持有 `state.db`，CLI `kored install --package`（`--scenario` 未实现，M2）同为独立进程、会争同一把锁并退出码 3（状态库被占用）——**这是设计使然，不是缺陷**。serve 运行时请走 `POST /api/v1/store/install`（经同一 installer 校验落盘，并由装配层**真正重载** registry/supervisor：运行中的旧版本先 Stop → 丢弃旧 instance → 从状态库与磁盘重新装载新版本清单 → `Replace` 登记 → 按持久化 `desired_state` 决定是否拉起）；同 id 升级后 `GET /plugins` 报新版本、新方法可直接调用，无需重启内核；`POST /store/update` 走同一重载路径。响应新增 `reload` 字段（`reloaded` / `restarted`）与升级语义字段 `previous_version`（安装前版本，首次安装为空）、`stale_versions`（磁盘上残留的旧版本目录名，**不自动删除**，供前端提示清理），重载失败显式 500 而非假装成功。`GET /api/v1/plugins` 的每条已装记录由 httpapi 用已验签索引对齐 `latest_version` / `latest_sha256` / `update_available`（纯数据对齐，不判升级方向，G-01）。CLI install **仅离线使用**（serve 未启动）。
 
 ### 2.13 `internal/core/privilege`（提权通道，ADR-0018）
 
@@ -141,7 +141,7 @@
 - **验签顺序**：该端点先过 market 强制验签门；索引验签失败即 401，且**不读预设**。
 - **失败模式与处理**：索引缺失/过期 → 200 + `stale=true`（不阻塞首装，用 embed 快照兜底）；刷新失败 → **保留旧缓存**并返回 `E_UPSTREAM`（禁止清空）；job 不存在 → 404 `E_NOTFOUND`；包 sha256 不符 → job `failed` + `E_INVALID`；同一插件并发安装 → 409 `E_CONFLICT`。
 - **明确不做什么**：不做审核 / 账号 / 评分 / 评论；不做自动后台刷新（**零轮询**，G-19）；不代理第三方下载（按索引 URL 取包后**自算 sha256**，索引不是信任源）；不长期存包（安装完成即删临时文件）。
-- **端点实现状态（M2-B 快照；终态规格见上文"输入输出"）**：7 个 store 端点中，M2-B 已接通 4 个路由——`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/install`、`GET /store/jobs/{id}`；其余 `POST /store/refresh`、`GET /store/presets`、`POST /store/update`、`DELETE /store/plugins/{id}` 属后续里程碑。**路由接通 ≠ 功能完成**：`GET /store/jobs/{id}` 虽已注册，handler 当前返回 **501 `E_UNSUPPORTED`**（message 标注 M3 支持），任务进度查询到 M3 才落地；M2-B 阶段该端点仅占位，不返回真实 job 状态。
+- **端点实现状态（2026-11-23 核实；终态规格见上文"输入输出"）**：7 个 store 路由均已注册——`GET /store/plugins`、`GET /store/plugins/{id}`、`POST /store/refresh`、`GET /store/presets`、`POST /store/install`、`POST /store/update`、`GET /store/jobs/{id}`。**路由接通 ≠ 功能完成**：`GET /store/jobs/{id}` 的 handler 固定返回 **501 `E_UNSUPPORTED`**（异步 job 队列 M3 落地）；`GET /store/presets` **只返回元数据、不支持批量安装**（商店预设卡片「一键安装」为禁用态，批量预设安装 M2 未实现）；`DELETE /store/plugins/{id}` 未注册（卸载走 `DELETE /api/v1/plugins/{id}`）。
 
 ### 2.15 `internal/core/scheduler`（定时任务，ADR-0019）
 
@@ -345,7 +345,7 @@ WantedBy=multi-user.target
 | `serve`（默认） | 启动主壳（§4–§7 全流程） | 是 |
 | `db dump <bucket>` / `backup <out>` / `restore <in>` | 只读导出 bucket / 停写快照 / 恢复（恢复前校验 sha256 与 schema 版本） | 否 |
 | `invoke <plugin> <method> [--json]` | 一次性调用，仅拉起目标插件 | 否 |
-| `install --scenario <id> [--offline-dir <dir>] [--yes]` | 按预设安装（与 HTTP `store/install` 共用 installer） | 否 |
+| `install --scenario <id>` | **未实现（M2）**：当前返回 `E_UNSUPPORTED` 并列出替代路径（`--package` 单包 / 面板商店逐插件安装；无批量预设一键装） | 否 |
 | `install --package <tar.gz>` | 单包安装（离线/内网） | 否 |
 | `version` | 版本 / 协议版本 / commit | 否 |
 
