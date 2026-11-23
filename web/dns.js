@@ -418,6 +418,8 @@
       '.dns-empty span{flex:1 1 260px;}',
       '@media (max-width:639px){',
       '.dns-grid,.dns-form{grid-template-columns:1fr;}',
+      '.dns .panel-head{flex-wrap:wrap;row-gap:var(--kore-space-1);}',
+      '.dns .panel-meta{white-space:normal;}',
       '.dns-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}',
       '.dns-table,.dns-table tbody,.dns-table tr,.dns-table td{display:block;width:100%;}',
       '.dns-table tr{padding:var(--kore-space-2) 0 var(--kore-space-3);border-top:1px solid var(--kore-border-2);}',
@@ -439,7 +441,7 @@
     add(head, el('p', 'view-sub', '查看本机 DNS 服务与区域记录，并直接查询任意域名的解析结果。'));
 
     // ① 状态
-    var status = panel('解析状态', '只读探测，跟随宿主已装的 DNS 服务');
+    var status = panel('解析状态', '只读探测');
     add(S.root, status.panel);
     var sOps = add(status.meta, el('div', 'actions'));
     var cfg = add(sOps, el('button', 'btn btn-ghost', 'DNS 设置')); cfg.type = 'button'; on(cfg, openConfig);
