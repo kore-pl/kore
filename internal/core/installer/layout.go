@@ -72,7 +72,7 @@ func (in *Installer) commit(staging string, manifest *registry.Manifest, sum str
 		// 不阻断安装：符号链接在部分平台（Tier B Windows）需要额外权限。
 		// 但绝不留下指向旧版本的稳定链接——那正是本机制要消灭的“静默跑旧版本”；
 		// 移除后 cron.list 会报 missing，降级可见。
-		in.logger.Warn("维护插件稳定路径失败，安装继续（cron 等插件会退化为版本路径并依赖启动迁移）",
+		in.logger.Warn("维护插件稳定路径失败，安装继续（部分插件会退化为版本路径并依赖启动迁移）",
 			"plugin_id", manifest.ID, "version", manifest.Version,
 			"stable", filepath.Join(filepath.Dir(final), currentLinkName), "err", linkErr)
 		if rmErr := in.replaceCurrentLink(filepath.Dir(final), ""); rmErr != nil {
