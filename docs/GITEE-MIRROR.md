@@ -120,6 +120,10 @@ bash scripts/gitee-release-fill.sh --dir ../kore-plugin-app-deploy
 # 3) 全量补建；补完先看保留策略再决定是否清理
 bash scripts/gitee-release-fill.sh --all
 bash scripts/gitee-release-prune.sh --dry-run --repo pengtang1024/kore-plugin-app-deploy
+
+# 4) 按「每仓最新 5 个 tag」策略补建（2026-11-24 起的主口径）
+bash scripts/gitee-release-fill.sh --dry-run --latest 5 --require-dist --dir ../kore-plugin-site
+bash scripts/gitee-release-fill.sh          --latest 5 --require-dist --dir ../kore-plugin-site
 ```
 
 行为约定：
@@ -128,7 +132,10 @@ bash scripts/gitee-release-prune.sh --dry-run --repo pengtang1024/kore-plugin-ap
 - **资产命名**：`dist/<id>-<version>.tar.gz`（`<id>` = 仓库名去掉 `kore-plugin-` 前缀），与 GitHub 侧同 sha256，可离线复用；
 - **回读校验**：上传后下载资产、比对本地 sha256，不一致非零退出；
 - **tag 过滤**：只处理 `^v[0-9]`，`pkg/pluginapi/v*` 这类子模块 tag 不建 release；
-- **保留策略**：补建后超过 `--keep`（默认 5）只 WARN，不自动删除——清理是破坏性动作，必须先 `--dry-run`。
+- **窗口过滤**：`--latest N` 只处理最新 N 个 tag（按版本倒序取头 N）——Gitee 只留最新 5 个，补的必须是最新窗口；
+- **产物前置**：`--require-dist` 下本地无 `dist/<id>-<ver>.tar.gz` 则**跳过该 tag**，不建空 release（计入「无法补建」）；
+- **保留策略**：补建后超过 `--keep`（默认 5）只 WARN，不自动删除——清理是破坏性动作，必须先 `--dry-run`；
+- **公开视角校验**：非 dry-run 追加未鉴权 `GET /releases/tags/<tag>`（403/429 退避重试）；并发跑多仓时可置 `SKIP_PUBLIC_CHECK=1`，事后串行复核。
 
 ### 8.5 两个 Gitee API 坑（2026-11-24 实测）
 
@@ -171,3 +178,38 @@ bash scripts/gitee-release-prune.sh --dry-run --repo pengtang1024/kore-plugin-ap
 
 **这张表的读法**：release 从来只在「首次发版」时集中建过（各仓前 1–5 个），后续 tag 推上去了但没补 release——是**批量流程缺口**，不是个别仓漏操作。缺口合计 **90** 个 tag（不含 `kore` 的 6 个子模块 tag）；补建顺序建议：先补「最新 5 个窗口内」的 tag（做完仍在保留策略内，不需要立刻清理），再决定是否用 `--keep` 更小值做历史清退。
 
+
+### 8.7 2026-11-24 最新 5 补齐后快照
+
+按「每仓最新 5 个 tag 必须有 release」补建 **83 个 tag / 24 个仓**（0 失败，0 无法补建），补建后合计 **157 个 release**。
+验收报告：[.agents/verify/gitee-release-fill-latest5.md](../.agents/verify/gitee-release-fill-latest5.md)。
+
+| 仓库 | 补建前 | 新建 | 补建后 | 超 5 |
+| --- | ---: | ---: | ---: | :--: |
+| kore-plugin-app-deploy | 4 | 3 | 7 | 是 |
+| kore-plugin-backup | 3 | 4 | 7 | 是 |
+| kore-plugin-container | 3 | 4 | 7 | 是 |
+| kore-plugin-cron | 2 | 4 | 6 | 是 |
+| kore-plugin-db-mysql | 4 | 3 | 7 | 是 |
+| kore-plugin-db-postgres | 4 | 4 | 8 | 是 |
+| kore-plugin-discover | 2 | 2 | 4 | 否 |
+| kore-plugin-dns | 2 | 5 | 7 | 是 |
+| kore-plugin-echo | 3 | 2 | 5 | 否 |
+| kore-plugin-file | 3 | 3 | 6 | 是 |
+| kore-plugin-firewall | 5 | 2 | 7 | 是 |
+| kore-plugin-integrity | 3 | 5 | 8 | 是 |
+| kore-plugin-logs | 4 | 4 | 8 | 是 |
+| kore-plugin-monitor | 4 | 1 | 5 | 否 |
+| kore-plugin-process | 2 | 4 | 6 | 是 |
+| kore-plugin-redis | 3 | 3 | 6 | 是 |
+| kore-plugin-runtime-node | 3 | 4 | 7 | 是 |
+| kore-plugin-runtime-php | 3 | 2 | 5 | 否 |
+| kore-plugin-runtime-python | 3 | 5 | 8 | 是 |
+| kore-plugin-site | 2 | 5 | 7 | 是 |
+| kore-plugin-ssh-guard | 3 | 4 | 7 | 是 |
+| kore-plugin-ssl | 3 | 5 | 8 | 是 |
+| kore-plugin-terminal | 3 | 1 | 4 | 否 |
+| kore-plugin-waf | 3 | 4 | 7 | 是 |
+
+**19 仓超 5，共 39 个老 release 待清退**——本轮**只列清单、未删除**，清单与保留集见验收报告 §8；
+授权后走 `scripts/gitee-release-prune.sh --dry-run --keep 5` 复核再执行。缺口总数 90 中另有 7 个落在最新 5 窗口之外（更老版本），按策略不动。

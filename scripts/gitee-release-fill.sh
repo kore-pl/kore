@@ -13,14 +13,18 @@
 #   5) 上传后下载回读 sha256，与本地 dist 比对
 #
 # 用法:
-#   scripts/gitee-release-fill.sh [--dry-run] [--keep N] [--dir PATH]... [--repo owner/name]... [--all]
+#   scripts/gitee-release-fill.sh [--dry-run] [--keep N] [--latest N] [--require-dist]
+#                                 [--dir PATH]... [--repo owner/name]... [--all]
 #
-#   --dry-run    只读：打印缺口与计划，不发写请求（无需 token）
-#   --keep N     保留上限，默认 5；补建后超限只 WARN，并提示先跑 prune --dry-run
-#   --dir PATH   本地仓库目录，可重复；默认当前目录
-#   --repo o/r   远端仓库，可重复；缺省由 --dir 的 gitee remote 推断
-#   --all        扫描上级目录下 kore / kore-plugins / kore-plugin-*
+#   --dry-run       只读：打印缺口与计划，不发写请求（无需 token）
+#   --keep N        保留上限，默认 5；补建后超限只 WARN，并提示先跑 prune --dry-run
+#   --latest N      只处理最新的 N 个 tag（按版本倒序），0=全部（默认 0）
+#   --require-dist  本地无 dist 产物时跳过该 tag（不建空 release），计入「无法补建」
+#   --dir PATH      本地仓库目录，可重复；默认当前目录
+#   --repo o/r      远端仓库，可重复；缺省由 --dir 的 gitee remote 推断
+#   --all           扫描上级目录下 kore / kore-plugins / kore-plugin-*
 #
+# 校验: 建完逐个 tag 走「公开未鉴权 GET /releases/tags/<tag>」+ 资产下载回读 sha256。
 # 凭据: 环境变量 GITEE_TOKEN（必填，--dry-run 除外）。禁止把 token 写进本文件、
 #       提交历史或日志（G-30）。
 # 退出码: 0 全部达成；1 任一仓库失败或 sha 校验不一致。
@@ -28,12 +32,14 @@ set -uo pipefail
 
 API_BASE="${GITEE_API_BASE:-https://gitee.com/api/v5}"
 KEEP=5
+LATEST=0
+REQUIRE_DIST=0
 DRY_RUN=0
 SCAN_ALL=0
 DIRS=()
 REPOS=()
 
-usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 die()  { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
 info() { printf '   %s\n' "$*"; }
@@ -42,6 +48,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --keep)    [ $# -ge 2 ] || die "--keep 需要参数"; KEEP="$2"; shift 2 ;;
+    --latest)  [ $# -ge 2 ] || die "--latest 需要参数"; LATEST="$2"; shift 2 ;;
+    --require-dist) REQUIRE_DIST=1; shift ;;
     --dir)     [ $# -ge 2 ] || die "--dir 需要参数"; DIRS+=("$2"); shift 2 ;;
     --repo)    [ $# -ge 2 ] || die "--repo 需要参数"; REPOS+=("$2"); shift 2 ;;
     --all)     SCAN_ALL=1; shift ;;
@@ -52,6 +60,7 @@ done
 
 case "$KEEP" in ''|*[!0-9]*) die "--keep 必须是正整数（当前 '$KEEP'）" ;; esac
 [ "$KEEP" -ge 1 ] || die "--keep 必须 >= 1"
+case "$LATEST" in ''|*[!0-9]*) die "--latest 必须是非负整数（当前 '$LATEST'）" ;; esac
 
 if [ "$DRY_RUN" = 0 ]; then
   [ -n "${GITEE_TOKEN:-}" ] || die "GITEE_TOKEN 未设置（export GITEE_TOKEN=... 后再跑；只读审计可用 --dry-run）"
@@ -162,10 +171,13 @@ fill_repo() {
 
   # 本地 tag：仅 v<major>，跳过 pkg/pluginapi/* 这类子模块 tag
   local tags tag
-  tags="$(git -C "$dir" tag --sort=v:refname | grep -E '^v[0-9]' || true)"
+  tags="$(git -C "$dir" tag --sort=-v:refname | grep -E '^v[0-9]' || true)"
+  if [ "$LATEST" -gt 0 ] && [ -n "$tags" ]; then
+    tags="$(printf '%s\n' "$tags" | head -n "$LATEST")"
+  fi
   [ -n "$tags" ] || { info "无 v* tag，跳过"; rm -f "$tmp"; return 0; }
 
-  local created=0 uploaded=0 skipped=0
+  local created=0 uploaded=0 skipped=0 planned=0 nodist=0
   while IFS= read -r tag; do
     [ -n "$tag" ] || continue
     local rid asset
@@ -191,6 +203,10 @@ fill_repo() {
     fi
 
     # 无 release：建
+    if [ "$REQUIRE_DIST" = 1 ] && [ -z "$asset" ]; then
+      info "[SKIP] $tag：本地无 dist 资产 → 无法补建（不建空 release）"
+      nodist=$((nodist + 1)); continue
+    fi
     local sha bodyfile
     sha="$(git -C "$dir" rev-parse "$tag^{commit}" 2>/dev/null || true)"
     [ -n "$sha" ] || { warn "$tag 无法解析 commit，跳过"; rc=1; continue; }
@@ -198,6 +214,7 @@ fill_repo() {
     changelog_body "$dir" "${tag#v}" > "$bodyfile"
 
     if [ "$DRY_RUN" = 1 ]; then
+      planned=$((planned + 1))
       info "[DRY] $tag：缺 release（@ $sha）→ 计划创建$([ -n "$asset" ] && printf '并挂 %s' "$(basename "$asset")" || printf '（无 dist 资产）')"
       rm -f "$bodyfile"
       continue
@@ -236,6 +253,12 @@ except Exception: print("")' "$bodyfile.resp")"
     rm -f "$bodyfile" "$bodyfile.resp" "$bodyfile.up"
   done <<< "$tags"
 
+  if [ "$DRY_RUN" = 1 ]; then
+    info "[DRY] 计划：新建 $planned 个 release；补建后 release 数 $((total + planned))（现有 $total，保留上限 $KEEP）$([ "$nodist" -gt 0 ] && printf '；无法补建 %s 个' "$nodist")"
+    rm -f "$tmp"
+    return 0
+  fi
+
   # 回读校验：数量 + 资产 sha256（仅非 dry-run）
   if [ "$DRY_RUN" = 0 ]; then
     local after; after="$(mktemp)"
@@ -273,6 +296,27 @@ for line in open(sys.argv[1]):
         rc=1
       fi
       rm -f "$dl"
+    done <<< "$tags"
+    # 公开视角校验：未鉴权 GET /releases/tags/<tag> 必须 200（证明镜像对外可见）
+    # 并发跑多仓时可置 SKIP_PUBLIC_CHECK=1 跳过（匿名 API 有 IP 级限流），事后单独串行复核
+    while [ "${SKIP_PUBLIC_CHECK:-0}" != "1" ] && IFS= read -r tag; do
+      [ -n "$tag" ] || continue
+      local pcode pub try
+      pub="$(mktemp)"
+      pcode=""
+      for try in 1 2 3 4; do   # 匿名 API 有 IP 级限流，403/429 退避重试
+        pcode="$(curl -sS --max-time 60 "$API_BASE/repos/$repo/releases/tags/$tag" -o "$pub" -w '%{http_code}')"
+        [ "$pcode" = "200" ] && break
+        sleep $((try * 2))
+      done
+      sleep 1
+      if [ "$pcode" = "200" ]; then
+        printf '   [OK] %s 公开视角 GET /releases/tags/%s → 200\n' "$tag" "$tag"
+      else
+        printf '   [FAIL] %s 公开视角 GET /releases/tags/%s → HTTP %s\n' "$tag" "$tag" "$pcode"
+        rc=1
+      fi
+      rm -f "$pub"
     done <<< "$tags"
     rm -f "$after"
   fi
