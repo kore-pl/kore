@@ -497,6 +497,168 @@
       });
     });
   }
+  // ---------------- 流量统计（site.traffic，只读）----------------
+  var TRAFFIC_REASONS = {
+    no_log_file: '未开启访问日志，或在默认路径找不到日志文件',
+    permission_denied: '日志文件存在，但插件没有读取权限',
+    no_entries: '日志文件里没有可解析的访问记录'
+  };
+  function trafficEmptyText(r) {
+    var why = TRAFFIC_REASONS[r.reason] || r.reason || '没有可用的访问日志';
+    var lines = [why + '。'];
+    if (r.reason === 'no_log_file') lines.push('在站点配置里加 `access_log /var/log/nginx/' + r.domain + '.access.log;` 后续访问就会开始记录。');
+    if (r.reason === 'permission_denied') lines.push('日志通常是 root:adm 0640，需要让插件用户可读，或把日志放到插件数据目录后用日志路径指定。');
+    if (r.reason === 'no_entries') lines.push('确认 access_log 使用 nginx 默认的 combined 格式。');
+    if (r.hint) lines.push(r.hint);
+    return lines.join(' ');
+  }
+  function paintTraffic(host, r) {
+    host.textContent = '';
+    if (!r.available) {
+      var empty = add(host, el('div', 'empty-state'));
+      add(empty, el('p', 'empty-state-text', trafficEmptyText(r)));
+      if (r.tried && r.tried.length) {
+        add(empty, el('p', 'field-hint', '已尝试：' + r.tried.join('、')));
+      }
+      add(empty, el('div', 'field-hint',
+        '统计口径：最近 ' + (r.lines || 0) + ' 行日志；当前没有数据，不展示任何推算值。'));
+      return;
+    }
+    var summary = add(host, el('table', 'rows site-traffic-table'));
+    summary.appendChild(row('请求数', String(r.total_requests || 0)));
+    summary.appendChild(row('发送字节', fmtBytes(r.bytes_sent)));
+    summary.appendChild(row('独立 IP', String(r.unique_ips || 0)));
+    summary.appendChild(row('时间范围', (r.window_start || '—') + ' ~ ' + (r.window_end || '—')));
+    summary.appendChild(row('解析行数', (r.parsed || 0) + ' 行' + (r.skipped ? '（跳过 ' + r.skipped + ' 行）' : '')));
+    var statusRows = (r.status || []).map(function (x) { return x.class + '：' + x.count; });
+    if (statusRows.length) summary.appendChild(row('状态分布', statusRows.join(' · ')));
+    function topTable(title, items, key) {
+      if (!items || !items.length) return;
+      var box = add(host, el('details', 'site-traffic-detail'));
+      box.open = items.length <= 5;
+      add(box, el('summary', null, title + '（' + items.length + '）'));
+      var t = add(box, el('table', 'rows site-traffic-table'));
+      items.forEach(function (item, i) {
+        t.appendChild(row(String(i + 1), el('span', 'mono', item[key]) + ' · ' + item.count + ' 次'));
+      });
+    }
+    topTable('热门路径 Top 10', r.top_paths, 'path');
+    topTable('请求来源 IP Top 10', r.top_ips, 'ip');
+    if (r.hint) add(host, el('p', 'field-hint', r.hint));
+  }
+  function loadTraffic(domain, host) {
+    if (!host) return;
+    host.textContent = '';
+    add(host, el('p', 'muted', '正在读取访问日志统计…'));
+    invoke('site.traffic', { domain: domain, lines: 500 }).then(function (r) {
+      paintTraffic(host, r);
+    }, function (err) {
+      host.textContent = '';
+      add(host, el('div', 'site-result-error', '流量统计读取失败：' + errText(err) + '（插件 0.4.2 之前没有该方法，请升级插件）'));
+    });
+  }
+  function buildTrafficPanel(box, d) {
+    var panel = add(box, el('section', 'panel site-edit-section'));
+    var head = add(panel, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', '流量统计'));
+    add(head, el('span', 'panel-meta', '解析 nginx 访问日志（只读）'));
+    var refresh = add(head, el('button', 'btn btn-ghost', '刷新'));
+    refresh.type = 'button';
+    var host = add(panel, el('div', 'site-traffic-host'));
+    on(refresh, function () { loadTraffic(d.domain, host); });
+    loadTraffic(d.domain, host);
+  }
+
+  // ---------------- 访问保护（site.setPassword / clearPassword）----------------
+  function passwordErrorText(err) {
+    var code = err && err.code ? err.code : '';
+    if (code === 'E_INVALID' && /密码/.test(String(err.message || ''))) {
+      return '密码不符合要求：至少 8 个字符，不能包含换行。请换一个更长的密码。';
+    }
+    if (code === 'E_INVALID' && /用户名/.test(String(err.message || ''))) {
+      return '用户名不合法：只允许字母、数字、点、下划线、连字符，1–32 位，且以字母或数字开头。';
+    }
+    if (code === 'E_NOTFOUND') return '站点不在插件清单里，请刷新站点列表后重试。';
+    return errText(err);
+  }
+  function buildAccessPanel(box, d) {
+    var panel = add(box, el('section', 'panel site-edit-section'));
+    var head = add(panel, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', '访问保护'));
+    var stateHost = add(head, el('span', 'site-state'));
+    function paintState(mode, username) {
+      stateHost.textContent = '';
+      if (mode === 'protected') stateHost.appendChild(chip('ok', '已保护' + (username ? ' · ' + username : '')));
+      else if (mode === 'public') stateHost.appendChild(chip('na', '公开访问'));
+      else stateHost.appendChild(chip('na', '未确认'));
+    }
+    paintState(S.authState ? S.authState[d.domain] : undefined, S.authUser ? S.authUser[d.domain] : '');
+    add(panel, el('p', 'field-hint',
+      '开启后浏览器会弹出登录框；密码只保存为加盐哈希，本页面不会显示，也不会回传。'));
+    var form = add(panel, el('form', 'site-form'));
+    var userField = add(form, el('label', 'field'));
+    add(userField, el('span', 'field-label', '用户名'));
+    var username = add(userField, el('input', 'field-input'));
+    username.type = 'text';
+    username.value = 'site';
+    username.autocomplete = 'username';
+    username.setAttribute('data-field', 'auth-username');
+    var passField = add(form, el('label', 'field'));
+    add(passField, el('span', 'field-label', '密码（至少 8 个字符）'));
+    var password = add(passField, el('input', 'field-input'));
+    password.type = 'password';
+    password.autocomplete = 'new-password';
+    password.setAttribute('data-field', 'auth-password');
+    var msg = add(form, el('div', 'site-status muted'));
+    msg.setAttribute('role', 'status');
+    var ops = add(form, el('div', 'site-edit-ops'));
+    var submit = add(ops, el('button', 'btn btn-primary', '启用密码保护'));
+    submit.type = 'submit';
+    var clear = add(ops, el('button', 'btn btn-ghost', '关闭密码保护'));
+    clear.type = 'button';
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var user = username.value.trim(), pass = password.value;
+      if (!user) { msg.textContent = '请填写用户名。'; msg.className = 'site-status row-note-fail'; return; }
+      if (!pass) { msg.textContent = '请填写密码（至少 8 个字符）。'; msg.className = 'site-status row-note-fail'; return; }
+      submit.disabled = true;
+      submit.textContent = '正在设置…';
+      invoke('site.setPassword', { domain: d.domain, username: user, password: pass }).then(function (r) {
+        submit.disabled = false;
+        submit.textContent = '启用密码保护';
+        password.value = '';
+        S.authState = S.authState || {}; S.authState[d.domain] = true;
+        S.authUser = S.authUser || {}; S.authUser[d.domain] = r.username || user;
+        paintState('protected', S.authUser[d.domain]);
+        msg.textContent = '已设置访问保护（用户名 ' + (r.username || user) + '）' + (r.changed ? '' : '；密码未变化') +
+          '。密码不会显示也不回传，请自己妥善保存。';
+        msg.className = 'site-status row-note-ok';
+        setStatus('已为 ' + d.domain + ' 开启访问保护', 'ok');
+      }, function (err) {
+        submit.disabled = false;
+        submit.textContent = '启用密码保护';
+        msg.textContent = '设置失败：' + passwordErrorText(err);
+        msg.className = 'site-status row-note-fail';
+      });
+    });
+    on(clear, function () {
+      clear.disabled = true;
+      invoke('site.clearPassword', { domain: d.domain }).then(function (r) {
+        clear.disabled = false;
+        S.authState = S.authState || {}; S.authState[d.domain] = false;
+        paintState('public');
+        msg.textContent = r.changed ? '已关闭访问保护，站点恢复公开访问。' : '该站点本来就没有开启密码保护。';
+        msg.className = 'site-status row-note-ok';
+        setStatus('已关闭 ' + d.domain + ' 的访问保护', 'ok');
+      }, function (err) {
+        clear.disabled = false;
+        msg.textContent = '关闭失败：' + passwordErrorText(err);
+        msg.className = 'site-status row-note-fail';
+      });
+    });
+    add(panel, el('p', 'field-hint',
+      '说明：插件当前不提供"读取是否已开启"的接口，所以重新打开详情时状态显示为「未确认」；以设置/关闭的成功提示为准。'));
+  }
   function paintDetail() {
     if (!S.detailHost) return;
     var d = S.detail;
@@ -544,6 +706,8 @@
     on(recheck, function () { loadStatus(d.domain, statusHost); });
     loadStatus(d.domain, statusHost);
     buildClonePanel(box, d);
+    buildTrafficPanel(box, d);
+    buildAccessPanel(box, d);
     S.editHost = add(box, el('div', 'site-edit-host'));
     loadEditor(d);
   }
