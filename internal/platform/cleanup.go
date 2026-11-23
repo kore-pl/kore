@@ -5,6 +5,15 @@
 // 独立接口同时让 CLI 层能用假实现测试，测试里绝不触碰真实系统用户。
 package platform
 
+import "strings"
+
+// UnitFileName 返回 unit 文件的绝对路径（供 CLI 拼装）。
+//
+// 放在无 build tag 的文件里：纯字符串拼接，与平台无关；卸载链 CLI 在非 Linux
+// 也要能拼出路径再交给 stub 返回 ErrUnsupported，避免 !linux 构建缺符号。
+// 只保留这一份实现——重复声明同类 helper 正是本文件所在包踩过的坑。
+func UnitFileName(dir, name string) string { return strings.TrimRight(dir, "/") + "/" + name }
+
 // UnitCleanup 描述一个 systemd unit 的清理计划或结果（幂等：不存在即跳过）。
 type UnitCleanup struct {
 	// UnitName 是 unit 名（如 kore.service）。

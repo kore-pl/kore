@@ -161,6 +161,3 @@ func firstExecutable(candidates []string) string {
 	}
 	return ""
 }
-
-// UnitFileName 返回 unit 文件的绝对路径（供 CLI 拼装）。
-func UnitFileName(dir, name string) string { return strings.TrimRight(dir, "/") + "/" + name }
