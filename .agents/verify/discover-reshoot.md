@@ -40,7 +40,7 @@
 输出: {"authenticated":true,"expires_at":"2026-11-23T17:45:18Z"}
 ```
 
-浏览器侧不注入 cookie，走 `web/app.js` 登录表单（`#kore-password` → `POST /api/v1/auth/login`）；登录后 discover 视图的 `POST /api/v1/invoke/discover/*` 均带 `X-Kore-CSRF`（值取自 `kore_csrf` cookie），真实模式下页面无 403/401。
+浏览器侧不注入 cookie，走 `web/app.js` 登录表单（`#kore-password` → `POST /api/v1/auth/login`）；登录后 discover 视图的 `POST /api/v1/invoke/discover/*` 均带 `X-Kore-CSRF`（值取自 `kore_csrf` cookie），登录后 discover 页自身无 403/401（首屏未登录时出现的那一次 `GET /api/v1/system/info` 401 是登录门按预期拦下，不是页面缺陷）。
 
 ## 3. 安装 discover（索引版本 0.3.1）
 
@@ -132,7 +132,7 @@ discover-degraded-mobile-01.png:     PNG image data, 390 x 844
 ## 8. 清理
 
 ```text
-命令: kill 1585244 && sleep 1 && ss -ltn | grep ':18869 '
+命令: kill 1585244 && sleep 2 && ss -ltn | grep ':18869 '
 输出: （空）→ 端口释放，插件的 lazy 进程随之退出
 命令: rm -rf /tmp/kore-discover-reshoot
 ```
