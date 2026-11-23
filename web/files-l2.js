@@ -321,6 +321,25 @@
           close(); ctx.refresh();
         }, function (err) {
           ok.disabled = false;
+          if (err && err.code === 'E_CONFLICT') {
+            msg.textContent = '';
+            dialog({
+              title: '目标已存在', okLabel: '覆盖复制', action: 'copy',
+              text: '目标位置已有同名项。覆盖会用当前内容替换它（文件替换文件、空目录替换空目录），此操作不可撤销。',
+              onSubmit: function (_, inner) {
+                return ctx.invoke('file.copy', { src: entry.path, dst: dst, overwrite: true }).then(function (res) {
+                  inner.close(); close();
+                  ctx.setStatus('已覆盖复制 ' + ctx.disp(res.from) + ' → ' + ctx.disp(res.to), 'ok');
+                  ctx.refresh();
+                  return false;
+                }, function (err2) {
+                  inner.msg.textContent = ctx.errText(err2);
+                  return true;
+                });
+              }
+            });
+            return;
+          }
           msg.textContent = ctx.errText(err) + (ctx.hintFor('copy', err) ? ' ' + ctx.hintFor('copy', err) : '');
         });
       });
@@ -337,26 +356,32 @@
         text: '将把：' + names + ' 移入回收站，可在「回收站」里恢复。彻底删除需要到回收站里再操作一次。',
         fields: [{ key: 'recursive', type: 'check', value: false, label: '递归删除非空目录（连同目录内全部内容）', hint: '不勾选时非空目录会返回 E_CONFLICT 并跳过' }],
         onSubmit: function (values, ui) {
-          var failed = [], chain = Promise.resolve();
-          entries.forEach(function (entry) {
-            chain = chain.then(function () {
-              ui.msg.textContent = '正在删除 ' + ctx.disp(entry.path) + '…';
-              return ctx.invoke('file.delete', { path: entry.path, recursive: !!values.recursive }).then(function () {}, function (err) {
-                failed.push(ctx.disp(entry.path) + '：' + ctx.errText(err));
-              });
-            });
+          // 批量删除走 file.batch（单请求、逐项结果）：部分失败不静默，按成功/失败分组展示。
+          var items = entries.map(function (entry) {
+            return { path: entry.path, recursive: !!values.recursive };
           });
-          return chain.then(function () {
+          ui.msg.textContent = '正在提交批量删除 ' + items.length + ' 项…';
+          return ctx.invoke('file.batch', { op: 'delete', items: items }).then(function (data) {
+            var okList = [], failList = [];
+            (data.items || []).forEach(function (item) {
+              if (item.ok) okList.push(ctx.disp(item.path));
+              else failList.push(ctx.disp(item.path) + '：' + (item.error ? (item.error.message || item.error.code) : '失败'));
+            });
             ctx.state.checked = {};
             return ctx.refresh().then(function () {
-              if (!failed.length) {
-                ctx.setStatus('已移入回收站：' + entries.length + ' 项（可在「回收站」恢复）', 'ok');
+              if (!failList.length) {
+                ctx.setStatus('已移入回收站：' + data.succeeded + ' 项（可在「回收站」恢复）', 'ok');
                 return false;
               }
-              ctx.setStatus('删除完成：成功 ' + (entries.length - failed.length) + ' 项进回收站，失败 ' + failed.length + ' 项', 'fail');
-              ui.msg.textContent = '失败明细：' + failed.join('；');
+              ctx.setStatus('批量删除：成功 ' + data.succeeded + ' 项 / 失败 ' + data.failed + ' 项（失败项未进回收站）', 'fail');
+              ui.msg.textContent = '成功 ' + data.succeeded + ' 项：' + (okList.slice(0, 5).join('、') || '—') +
+                (okList.length > 5 ? ' 等' : '') + '；失败 ' + data.failed + ' 项：' + failList.slice(0, 5).join('；') +
+                (failList.length > 5 ? ' 等' : '') + '（失败项保持原样，可勾选「递归删除」重试）';
               return true;
             });
+          }, function (err) {
+            ui.msg.textContent = ctx.errText(err) + (ctx.hintFor('batch', err) ? ' ' + ctx.hintFor('batch', err) : '');
+            return true;
           });
         }
       });

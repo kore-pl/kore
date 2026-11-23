@@ -67,7 +67,8 @@
     if (action === 'chmod') return 'mode 用八进制；目录必须保留执行位（如 0755）。';
     if (action === 'search') return '按文件名支持通配（如 *.log）；按内容只搜文本文件，单文件上限 1 MiB。';
     if (action === 'copy' && err && err.code === 'E_CONFLICT') return '目标已存在：勾选「覆盖同名」后重试，或换一个目录。';
-    if (action === 'rename') return '只支持同目录改名；要换目录请用「移动」。';
+    if (action === 'rename') return '只支持同目录改名；同名冲突时换个名字，要换目录请用「移动」。';
+    if (action === 'batch') return '批量里单条失败不影响其他条目；失败项会逐条列出原因，可修好后重试。';
     if (action === 'restore') return '原路径已有同名项：确认覆盖恢复，或先移走它。';
     return '';
   }
@@ -134,6 +135,28 @@
       }, function (err) { msg.textContent = errText(err); ok.disabled = false; });
     });
   }
+  // batchMove 走 file.batch 的 move：一条请求搬多个，逐项成功/失败分组交代。
+  function batchMove() {
+    var entries = checkedEntries();
+    if (!entries.length) { setStatus('请先勾选要移动的条目', 'fail'); return; }
+    ask('批量移动到', '目标目录（相对根目录，如 docs；不能为空）', null, function (value, close, msg, ok) {
+      var target = String(value || '').trim();
+      var items = entries.map(function (entry) { return { src: entry.path, dst: join(target, entry.name) }; });
+      ok.disabled = true;
+      invoke('file.batch', { op: 'move', items: items }).then(function (data) {
+        var failed = (data.items || []).filter(function (item) { return !item.ok; })
+          .map(function (item) { return disp(item.src || item.path) + '：' + (item.error ? (item.error.message || item.error.code) : '失败'); });
+        S.checked = {};
+        close();
+        refresh();
+        if (!failed.length) { setStatus('已移动 ' + data.succeeded + ' 项到 ' + (target ? '/' + target : '/'), 'ok'); return; }
+        setStatus('批量移动：成功 ' + data.succeeded + ' 项 / 失败 ' + data.failed + ' 项', 'fail');
+      }, function (err) {
+        ok.disabled = false;
+        msg.textContent = errText(err) + ' ' + hintFor('batch', err);
+      });
+    });
+  }
   // removeEntry 走 file.delete 的默认语义：移入回收站（可恢复），不在这里提供彻底删除。
   function removeEntry(entry) {
     ask('移入回收站确认', null,
@@ -196,6 +219,7 @@
     if (S.selLabel) S.selLabel.textContent = list.length ? '已选 ' + list.length + ' 项' : '';
     if (S.compressBtn) S.compressBtn.disabled = !list.length;
     if (S.batchDel) S.batchDel.disabled = !list.length;
+    if (S.batchMove) S.batchMove.disabled = !list.length;
     var single = targetEntry();
     if (S.renameBtn) S.renameBtn.disabled = !single;
     if (S.copyBtn) S.copyBtn.disabled = !single;
@@ -295,19 +319,43 @@
       var mod = add(tr, el('td', null, fmtTime(entry.mod_time))); mod.dataset.label = '修改时间';
       var mode = add(tr, el('td', null, entry.mode || '—')); mode.dataset.label = '权限';
       var ops = add(tr, el('td', 'cell-ops')); ops.dataset.label = '操作';
-      if (!entry.is_dir) rowOp(ops, '下载', 'files-download', 'download', entry);
-      if (!entry.is_dir && isArchive(entry.name)) rowOp(ops, '解压', 'files-extract', 'extract', entry);
-      var rn = add(ops, el('button', 'btn btn-ghost files-rename', '改名'));
-      rn.type = 'button'; rn.setAttribute('data-action', 'rename');
-      rn.addEventListener('click', function (ev) { ev.stopPropagation(); startRename(entry, name); });
-      var cp = add(ops, el('button', 'btn btn-ghost files-copy', '复制'));
-      cp.type = 'button'; cp.setAttribute('data-action', 'copy');
-      cp.addEventListener('click', function (ev) { ev.stopPropagation(); runL2('copy', entry); });
-      rowOp(ops, '权限', 'files-chmod', 'chmod', entry);
-      rowOp(ops, '移动', 'files-move', 'move', entry);
-      var del = add(ops, el('button', 'btn btn-ghost files-del', '删除'));
-      del.type = 'button'; del.setAttribute('data-action', 'delete');
-      del.addEventListener('click', function (ev) { ev.stopPropagation(); removeEntry(entry); });
+      // 行操作清单：桌面平铺；手机收进「⋯」菜单（每个菜单项 min-height 44px，满足触摸目标）。
+      var opList = [];
+      if (!entry.is_dir) opList.push(['下载', 'files-download', 'download', function () { runL2('download', entry); }]);
+      if (!entry.is_dir && isArchive(entry.name)) opList.push(['解压', 'files-extract', 'extract', function () { runL2('extract', entry); }]);
+      opList.push(['改名', 'files-rename', 'rename', function () { startRename(entry, name); }]);
+      opList.push(['复制到…', 'files-copy', 'copy', function () { runL2('copy', entry); }]);
+      opList.push(['权限', 'files-chmod', 'chmod', function () { runL2('chmod', entry); }]);
+      opList.push(['移动', 'files-move', 'move', function () { runL2('move', entry); }]);
+      opList.push(['删除', 'files-del', 'delete', function () { removeEntry(entry); }]);
+      var narrow = window.matchMedia('(max-width: 639px)').matches;
+      if (narrow) {
+        ops.style.position = 'relative';
+        var more = add(ops, el('button', 'btn btn-ghost files-more', '⋯'));
+        more.type = 'button'; more.setAttribute('aria-label', '更多操作：' + entry.name);
+        more.setAttribute('aria-haspopup', 'true'); more.setAttribute('aria-expanded', 'false');
+        more.style.minHeight = '44px';
+        var menu = add(ops, el('div', 'files-ops-menu'));
+        menu.style.cssText = 'position:absolute;right:4px;top:100%;z-index:20;display:none;flex-direction:column;gap:4px;padding:6px;' +
+          'background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.35)';
+        opList.forEach(function (def) {
+          var item = add(menu, el('button', 'btn btn-ghost ' + def[1], def[0]));
+          item.type = 'button'; item.style.minHeight = '44px'; item.setAttribute('data-action', def[2]);
+          item.addEventListener('click', function (ev) { ev.stopPropagation(); menu.style.display = 'none'; def[3](); });
+        });
+        more.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var open = menu.style.display === 'flex';
+          menu.style.display = open ? 'none' : 'flex';
+          more.setAttribute('aria-expanded', open ? 'false' : 'true');
+        });
+      } else {
+        opList.forEach(function (def) {
+          var btn = add(ops, el('button', 'btn btn-ghost ' + def[1], def[0]));
+          btn.type = 'button'; btn.setAttribute('data-action', def[2]); btn.setAttribute('data-path', entry.path);
+          btn.addEventListener('click', function (ev) { ev.stopPropagation(); def[3](); });
+        });
+      }
     });
     updateSelection();
   }
@@ -720,7 +768,7 @@
     return chain.then(function () {
       if (!conflicts.length) return finishRestore(failed, ids.length);
       ask('覆盖恢复确认', null,
-        conflicts.length + ' 项的原路径已被占用。覆盖恢复会用回收站里的内容替换同名项（文件替换文件、空目录替换空目录）。',
+        conflicts.length + ' 项的原路径已被占用。可以先在原目录把同名项改名或移走，再回来恢复；也可以直接覆盖恢复（文件替换文件、空目录替换空目录）。',
         function (_, close, msg, ok) {
           var inner = Promise.resolve();
           var innerFailed = [];
@@ -821,6 +869,7 @@
         refresh();
       }, function (err) {
         save.disabled = false;
+        if (err && err.code === 'E_CONFLICT') { setStatus('同名已存在，换个名字', 'fail'); input.focus(); input.select(); return; }
         setStatus('改名失败：' + errText(err) + ' ' + hintFor('rename', err), 'fail');
       });
     }
@@ -860,6 +909,10 @@
     S.batchDel = add(actions, el('button', 'btn btn-ghost files-del', '批量删除'));
     S.batchDel.type = 'button'; S.batchDel.disabled = true;
     S.batchDel.setAttribute('data-action', 'batch-delete');
+    S.batchMove = add(actions, el('button', 'btn btn-ghost', '批量移动'));
+    S.batchMove.type = 'button'; S.batchMove.disabled = true;
+    S.batchMove.setAttribute('data-action', 'batch-move');
+    on(S.batchMove, batchMove);
     on(S.batchDel, function () { runL2('removeMany', checkedEntries()); });
     S.selLabel = add(actions, el('span', 'files-selected muted', ''));
     var mk = add(actions, el('button', 'btn', '新建目录')); mk.type = 'button';
