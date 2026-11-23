@@ -206,6 +206,19 @@ M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何
   - **第 34 次重签未做**：`waf` 0.3.0 与本轮新发版插件尚未入索引（第 33 次只覆盖 12 条），索引同步是滚动量。
   - **R5-1 真 root 端到端未在降权后复验**：`--pipe` 修复与真 root 通道验证发生在降权提交前，降权后未重跑同一命令。
 
+### CS-20261123-07 · container 降级矩阵补齐（`docker.sock` 无权 → `E_NEED_ROOT`）
+
+> **前提勘误（P8 必须留痕）**：本卡派发时的缺口描述「`pkg/pluginapi` 里没有 `E_NEED_ROOT`」**已不成立**——该常量早在 `d398ad7`（提权通道 v0.x）随 `pkg/pluginapi` 落地，`pkg/pluginapi/v0.1.3`（container 当前钉的版本）模块缓存内已含 `E_NEED_ROOT` / `E_NO_SYSTEMD`，`docs/PLUGIN-PROTOCOL.md` §9 错误码表也早已有该行。**故 `kore` 侧本次零改动、无新提交、无 SDK 版本 bump**（非破坏性新增早在 v0.1.3 完成，MINOR/PATCH 判定无需再做）。真正缺口只在 `container` 用错了码。
+
+| 仓库 | commit / 版本 | 内容 |
+| --- | --- | --- |
+| `kore` | **无提交**（前置：`d398ad7`，SDK tag `pkg/pluginapi/v0.1.3`） | 常量与协议 §9 表在本次改动前即已齐备，只做只读核对，不改任何文件 |
+| `kore-plugin-container` | `9de3bd9` + `bd21937`（v0.5.3 → **0.5.4**） | `docker.sock` 无权返回 `E_NEED_ROOT`（原 `E_UNSUPPORTED`），`detail.reason=need_root`；权限分支前移到 daemon 不可达之前；README 错误码表与 CHANGELOG 同步；新增双向回归测试；`size_bytes` 1530284 收敛 |
+
+- **合并顺序**：前置已就绪（v0.1.3 已发布）→ 仅 `container` 0.5.4 单仓合入，无跨仓等待。
+- **验收**：`gofmt -l` 空、`GOWORK=off go vet ./...` exit 0、`GOWORK=off go test -count=1 -timeout 200s ./...` exit 0（4 包全 ok）；`make dist` 两次同 sha `940d220b6ebbc5b9e516d615eaa2b2ab91ddaa6cf8f76c3007e5a8f3ae539ddc` / 1530283 B，`git archive HEAD` 干净树复现逐字节 `cmp` 一致；声明 1530284 vs 实测 1530283 偏差 1（KNOWN 自指，WARN 口径内）。
+- **状态**：`completed`（本地验收通过；未 push / 未打 tag，按发版卡统一处理）。
+
 ### §9.1 任务队列（Gitea 权威源）
 
 **BOARD 仍是权威台账**（G-15/G-23）；Issues 是**公开镜像 + 可认领队列**，双向可查。GitHub Issues 保留为公开镜像，**后续更新以 Gitea 为准**：
