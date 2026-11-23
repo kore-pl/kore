@@ -1698,7 +1698,8 @@ button:disabled, .btn:disabled {
 .term-ok { color: var(--kore-success); }
 .term-fail { color: var(--kore-danger); }
 .term-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); }
-.term-ops .btn { min-height: 32px; padding: 0 var(--kore-space-3); font-size: var(--kore-font-12); }
+/* 手机命中区硬约束，勿用固定 px 覆盖 */
+.term-ops .btn { min-height: var(--kore-touch); padding: 0 var(--kore-space-3); font-size: var(--kore-font-12); }
 
 .term-stage {
   position: relative;
@@ -1886,7 +1887,8 @@ button:disabled, .btn:disabled {
 .proc-table th:nth-child(4) { width: 60px; }
 .proc-table th:nth-child(5) { width: 84px; }
 .proc-table th:nth-child(6) { width: 72px; }
-.proc-sort { min-height: 24px; padding: 0; color: inherit; background: transparent; border: 0; font-size: inherit; }
+/* 手机命中区硬约束，勿用固定 px 覆盖 */
+.proc-sort { min-height: var(--kore-touch); min-width: var(--kore-touch); padding: 0 var(--kore-space-2); color: inherit; background: transparent; border: 0; font-size: inherit; text-align: left; }
 .proc-sort:hover { color: var(--kore-text-1); }
 .proc-sort-arrow { margin-left: var(--kore-space-1); color: var(--kore-info); }
 .proc-row { cursor: pointer; }
@@ -2170,7 +2172,8 @@ button:disabled, .btn:disabled {
 .redis-stat-label { color: var(--kore-text-3); font-size: var(--kore-font-12); }
 .redis-stat-value { font-size: var(--kore-font-14); font-variant-numeric: tabular-nums; word-break: break-word; }
 .redis-keyspace { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2); margin-top: var(--kore-space-3); }
-.redis-ks-chip { padding: 0 var(--kore-space-2); min-height: 20px; color: var(--kore-text-2); background: var(--kore-bg-2); border: 1px solid var(--kore-border-2); border-radius: var(--kore-radius-control); font-size: var(--kore-font-12); font-variant-numeric: tabular-nums; }
+/* 手机命中区硬约束，勿用固定 px 覆盖（keyspace 芯片可点，需 ≥44×44） */
+.redis-ks-chip { padding: 0 var(--kore-space-2); min-height: var(--kore-touch); color: var(--kore-text-2); background: var(--kore-bg-2); border: 1px solid var(--kore-border-2); border-radius: var(--kore-radius-control); font-size: var(--kore-font-12); font-variant-numeric: tabular-nums; }
 .redis-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--kore-space-2); padding: var(--kore-space-3) var(--kore-space-4); }
 .redis-field { display: flex; flex-direction: column; gap: 2px; }
 .redis-label { color: var(--kore-text-3); font-size: var(--kore-font-12); }

@@ -1930,5 +1930,67 @@
     });
   }
 
+  // 共享 root 权限错误组件（task-145）：KoreUI.rootErrorHint(reason, {retry, command})。
+  var ROOT_ERROR_CMD = 'sudo systemctl restart kore';
+
+  function copyText(text, button, code) {
+    var done = function (ok) {
+      button.textContent = ok ? '已复制' : '已选中，请 Ctrl+C';
+      window.setTimeout(function () { button.textContent = '复制修法命令'; }, 2500);
+    };
+    var fallback = function () {
+      code.focus();
+      window.getSelection().selectAllChildren(code);
+      done(false);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+      return;
+    }
+    fallback();
+  }
+
+  function rootErrorHint(reason, options) {
+    var opts = typeof options === 'function' ? { retry: options } : (options || {});
+    var command = opts.command || ROOT_ERROR_CMD;
+    var box = el('section', 'root-error');
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'display:flex;flex-direction:column;gap:8px;padding:12px 16px;border:1px solid var(--kore-warning);border-radius:8px';
+    var title = el('p', 'panel-title', '这项操作需要系统管理员权限');
+    title.style.margin = '0';
+    box.appendChild(title);
+    box.appendChild(el('p', 'row-note', reason ? String(reason) : 'Kore 服务当前没有该权限，需要管理员授权后重试。'));
+    var row = el('div', 'files-actions');
+    var code = el('code', null, command);
+    code.style.cssText = 'flex:1 1 200px;min-width:0;padding:6px 8px;border:1px solid var(--kore-border-1);border-radius:8px;background:var(--kore-bg-0);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;overflow-x:auto';
+    row.appendChild(code);
+    var copy = el('button', 'btn btn-ghost', '复制修法命令');
+    copy.type = 'button';
+    copy.addEventListener('click', function () { copyText(command, copy, code); });
+    row.appendChild(copy);
+    box.appendChild(row);
+    var why = el('details');
+    var summary = el('summary', null, '为什么需要 root');
+    summary.style.cssText = 'min-height:44px;display:flex;align-items:center;cursor:pointer;font-size:12px;color:var(--kore-text-3)';
+    why.appendChild(summary);
+    why.appendChild(el('p', 'row-note', '绑定低位端口、管理服务与切换用户需要管理员权限；详见部署手册。'));
+    box.appendChild(why);
+    if (typeof opts.retry === 'function') {
+      var actions = el('div', 'files-actions');
+      var retry = el('button', 'btn btn-primary', '重试');
+      retry.type = 'button';
+      retry.addEventListener('click', function () {
+        var finish = function () { retry.disabled = false; };
+        retry.disabled = true;
+        Promise.resolve(opts.retry()).then(finish, finish);
+      });
+      actions.appendChild(retry);
+      box.appendChild(actions);
+    }
+    return box;
+  }
+  window.KoreUI = window.KoreUI || {};
+  window.KoreUI.rootErrorHint = rootErrorHint;
+
   start();
 })();
