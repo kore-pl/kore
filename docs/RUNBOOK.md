@@ -199,6 +199,8 @@ systemctl show -p User --value kore      # 判据：root
 ps -o user= -C kored                     # 判据：root
 ```
 
+一次性真机验证包：`sudo bash scripts/verify-root-service.sh --yes`（六步：装 root unit → 身份 → polkit 零判定 → 假安装根上升级/回滚 → 自卸载只预演）。期望输出、回滚与风险清单见 [VERIFY-ROOT.md](./VERIFY-ROOT.md)。
+
 **为什么必须 root**：`systemd-run --uid=0` 由非 root 调用会走 polkit 交互认证；本机实测 `--no-ask-password` 被拒。以 root 启动 kored 后，transient unit 由已授权的 systemd 直接拉起，**uid=0 不进入 polkit 判定、`systemd-run --uid=0` 没有 authorization check**，所以运行期不需要任何交互（ADR-0042 方案 B；对照降级路径 A，每次操作仍过一次判定、只是规则返回 YES 不弹框）。
 
 ### 5.2 通道验证（root 环境）
