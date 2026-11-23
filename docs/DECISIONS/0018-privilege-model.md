@@ -116,7 +116,7 @@ file（自身权限内）、logs、process（同 uid）、terminal（当前用�
 **v1.0（真提权）**
 
 1. 交付 systemd unit（`deploy/systemd/kore.service`，当前仓库尚无此文件）：`User=root`（或用户显式选择 `User=kore` + `Delegate=yes`，后者需同步重划 `/run/kore`、`/etc/kore`、`/var/lib/kore` 的属主）。
-2. 实现 `root_actions` 执行器：`systemd-run --uid=0 --collect --pipe --unit=... -- <argv...>`，超时杀 unit，收集 exit code 与 stdout 上限。
+2. 实现 `root_actions` 执行器：`systemd-run --uid=0 --collect --wait -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=... -- <argv...>`，超时杀 unit，收集 exit code 与 stdout 上限。**已移除 `--pipe`**：`--pipe` 与 `-p StandardOutput=file:` 并存时 systemd 会静默忽略文件属性，unit 的 stdout/stderr 永远为空（R5-1 真机实测；systemd-run 仍退出 0，属静默错误）；等待与退出码透传由 `--wait` 负责，不需要 `--pipe`。
 3. **插件独立 uid `kore-<id>`（已落地，2026-11-23）**：root 内核下按需创建系统账户、`exec.Cmd.SysProcAttr.Credential` 降 uid/gid、socket chown + SO_PEERCRED 校验、状态目录属主与父链可穿越。实现选择、被否决方案、降级矩阵与未证明项见本文「实现记录」。
 4. 非 systemd 环境：文档给出 B 的 sudoers 片段（运维手写、`visudo -c` 校验、限定 `kore` 用户与精确 argv），或直接 `available=false`。
 5. 不可回滚动作的护栏全量生效（见下）。
