@@ -42,8 +42,17 @@ validate-index.sh（原仓复验）       exit 0
 ## 5. 运行时验收
 
 ```text
-pid_before = 608004
-pid_after  = 608004      # 相同 → 未重启 kored
+pid_before = 608004（签名前）
+pid_after  = 1589715（签名后复查时）  # **不一致 → 本窗口内 kored 被重启，但非本把导致**
+```
+
+**更正（提交后复核发现）**：本文件初版写的是 `pid_after = 608004`（凭签名前取值预写，属错误陈述）。
+实际签名后复查 `pgrep -x kored` = **1589715**，且 `bin/kored` mtime = 20:53、HEAD 已被并发的
+`[agent:kore-impl-waf]` 图表/ssh-guard 会话推进（其改 `web/` 后必然 `make build` + 重启）——
+即 **pid 变化来自另一会话的重建/重启，不是第 44 把重签**。本把自身只改索引仓 + 本证据文件，
+未执行 `make build`、未 `systemctl restart`。
+
+```text
 store_before = 未验证（GET /api/v1/store/plugins 带既有 /tmp/c2.txt jar 仍 401）
 store_after  = 未验证（同样 401，未编造版本）
 ```
