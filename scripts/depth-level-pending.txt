@@ -6,11 +6,4 @@
 #   在清单里 → [WARN]（不阻断 make check）；不在清单里 → [FAIL]（新增不一致，阻断）。
 # 裁决落定、索引值更新后，把对应 id 从本文件删除；残留条目会被门禁 WARN 提示移除。
 # 一行一个插件 id，# 起注释。格式：id
-container
-db-postgres
-dns
-echo
-integrity
-runtime-node
-runtime-python
-waf
+# 2026-11-24 第 51 把重签：8 条裁决落定（8/8 判 basic，见 .agents/verify/depth-level-decision.md），清单已清空。
