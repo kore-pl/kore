@@ -19,6 +19,7 @@
     'nav.backup': 'Backups',
     'nav.redis': 'Redis',
     'nav.firewall': 'Firewall',
+    'nav.waf': 'Web Firewall',
     'nav.runtimes': 'Runtimes',
     'nav.integrity': 'Integrity',
     'nav.container': 'Containers',

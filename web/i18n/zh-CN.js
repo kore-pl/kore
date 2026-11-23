@@ -19,6 +19,7 @@
     'nav.backup': '备份',
     'nav.redis': 'Redis',
     'nav.firewall': '防火墙',
+    'nav.waf': 'Web 防火墙',
     'nav.runtimes': '运行环境',
     'nav.integrity': '完整性',
     'nav.container': '容器',
