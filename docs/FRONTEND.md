@@ -239,6 +239,7 @@ iframe 加载、桥握手、前缀校验、子帧渲染全部包在 `try/catch` 
 | CSS | 原子化 | UnoCSS preset-wind，禁止引入完整 UI 框架样式包 |
 | 状态管理 | 无 | composables + `provide/inject`，不引 Pinia |
 | 首屏请求数 | ≤ 3 | 静态资源合并出 1 CSS + 1 JS + 1 字体，字体 `font-display: swap` |
+| 图表（ECharts 5） | **不进首屏**（`d(首屏)/d(图表数)=0`） | 按需 ESM + 懒加载 vendor chunk（`web/dist/charts.js` + `charts-echarts.js`），首屏 `FILES` 不列图表产物，见 §13 / [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md) |
 
 预算自检（构建后执行，数值为 gzip 后字节数之和）：
 
@@ -294,6 +295,7 @@ var Dist embed.FS
 - **鉴权边界**：`/` 与 `/assets/` 前缀在 `middleware.go` 的 `isPublicPath` 白名单内（面板壳无敏感数据，未登录也要能加载登录界面）。白名单**只认前缀一条**、不枚举文件名；所有 `/api/v1/*` 端点仍强制会话校验，鉴权与 CSRF 逻辑不因静态托管削弱；插件资产前缀 `/plugin-assets/*` 不在白名单内。视图模块自身的数据请求走 `/api/v1/*`，未登录照样 401——放行只覆盖静态文件本体。
 - **访问方式**：kored 默认只开 UDS（`server.addr` 为空），浏览器访问需在配置里显式写 `server.addr: 127.0.0.1:8787`（MVP 只允许回环地址），然后打开 `http://127.0.0.1:8787/`。完整步骤见根 [QUICKSTART.md](../QUICKSTART.md)。
 - 单二进制 ≤ 25 MiB（含 embed 前端）是门禁级预算，前端合计体积贡献上限按 300 KiB gzip 反推。
+- **图表 vendor chunk（§13 / [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)）**：`make charts`（`scripts/build-charts.sh`）产出 `web/dist/charts.js` 与 `web/dist/charts-echarts.js`，必须平铺、禁 `*.map`；是否纳入 `web/embed.go` 的显式清单由实现方按 §13 落定。首屏口径不变——`scripts/frontend-check.sh` 的 `FILES` 仍只列六件套，图表文件进 `web/dist` 但**不进首屏预算**。体积影响复核：`make charts` 后 `gzip -9 -c web/dist/charts*.js | wc -c` 记录 vendor + 封装合计，纳入 embed 后 `make build` 再按 `ls -l bin/kored` 与 `make budget-check` 复核单二进制 ≤ 25 MiB；体积累计见 `make frontend` 输出。
 
 ## 10. 可访问性底线
 
@@ -342,3 +344,17 @@ var Dist embed.FS
 - 与 §6 反样板红线、§10 可访问性底线叠加生效：折叠不等于可以跳过键盘可达、label 关联与 `aria-describedby`。
 
 > 判定：任一条不满足，UI 交付不得声明完成；G-28 的双端截图必须能证明首屏默认态（原则 1）、字段已自动填（原则 2）与空态按钮（原则 4）。
+
+## 13. 自研 SVG 图表约定
+
+**前提**：主壳是零依赖静态产物（无打包器、无 `node_modules`，`web/*.js` 直接 `go:embed`）。图表一律**自研 SVG**，**不引入任何第三方图表库**（ECharts / D3 / Chart.js 等均不引入）。[ADR-0027](./DECISIONS/0027-echarts-chart-standard.md) 现为 **proposed（已驳回）**，只记录候选方案，不生效；将来若要引入第三方运行时，须用户明确同意 + 另开 ADR 论证「继续自研为什么不够」 + 首屏 ≤300 KiB gzip 与单二进制 ≤25 MiB 实测不变。
+
+| # | 约定 | 可判定判据（违反即返工） |
+| --- | --- | --- |
+| 1 | **单图实例控制**：同一图表容器同一时刻只挂一个 SVG 根；重绘先清空/替换，禁止追加叠加 | 容器 `querySelectorAll('svg').length ≤ 1`；重绘路径先清空 |
+| 2 | **销毁**：视图 teardown / 切 Tab 必须移除图表节点、解绑事件、清空引用；禁止只 `display:none` 或只 detach | teardown 路径可见移除 + 解绑调用；无全局残留数组 |
+| 3 | **resize 统一 100ms 防抖**：由单一入口（`web/monitor.js` 的共享 resize）绑定，页面不各自绑定 | `grep -rn "addEventListener('resize'" web/` 仅命中该入口 |
+| 4 | **单序列数据点 ≤ 1000**：超出由后端预聚合或前端抽样（LTTB/等距），不得直绘全量 | 序列点数 ≤1000，或显式声明已聚合 |
+| 5 | **迷你卡不建坐标系**：高度 ≤64px、只有走势无坐标轴的小卡用 DOM/CSS 进度条或轻量 canvas | 迷你卡路径不出现坐标轴/刻度/SVG 坐标系 |
+
+口径：本节是**实现约定**，不是对第三方库的授权；任何新增图表运行时依赖按 G-02（依赖白名单）与上述前提退回。
