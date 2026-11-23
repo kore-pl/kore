@@ -336,7 +336,8 @@
         more.setAttribute('aria-haspopup', 'true'); more.setAttribute('aria-expanded', 'false');
         more.style.minHeight = '44px';
         var menu = add(ops, el('div', 'files-ops-menu'));
-        menu.style.cssText = 'position:absolute;right:4px;top:100%;z-index:20;display:none;flex-direction:column;gap:4px;padding:6px;' +
+        // 菜单用 fixed 定位：表格容器 overflow-x:auto 会裁剪 absolute 子元素（实测菜单不可见）。
+        menu.style.cssText = 'position:fixed;z-index:40;display:none;flex-direction:column;gap:4px;padding:6px;width:200px;' +
           'background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.35)';
         opList.forEach(function (def) {
           var item = add(menu, el('button', 'btn btn-ghost ' + def[1], def[0]));
@@ -346,6 +347,11 @@
         more.addEventListener('click', function (ev) {
           ev.stopPropagation();
           var open = menu.style.display === 'flex';
+          if (!open) {
+            var rect = more.getBoundingClientRect();
+            menu.style.left = Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208)) + 'px';
+            menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 260) + 'px';
+          }
           menu.style.display = open ? 'none' : 'flex';
           more.setAttribute('aria-expanded', open ? 'false' : 'true');
         });
