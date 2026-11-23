@@ -14,6 +14,7 @@ import (
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/bus"
+	coreconfig "github.com/pengtang1024/kore/internal/core/config"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/core/registry"
 	"github.com/pengtang1024/kore/internal/core/scheduler"
@@ -96,8 +97,10 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		Transport: app.Transport, Manifests: catalog, RunDir: runPlugins,
 		LogDir: filepath.Join(cfg.LogDir, "plugins"), Version: version,
 		KernelSocket: channelSocket, ChannelGroup: channelGroup,
-		ResidentMax: cfg.snapshot.Resources.ResidentMax,
-		Auditor:     &storeAuditor{db: db},
+		PluginDataRoot: filepath.Join(cfg.StateDir, "plugin-data"),
+		InstallDir:     coreconfig.InstallRoot(),
+		ResidentMax:    cfg.snapshot.Resources.ResidentMax,
+		Auditor:        &storeAuditor{db: db},
 	})
 	if err != nil {
 		slog.Error("supervisor 装配失败", "err", err)

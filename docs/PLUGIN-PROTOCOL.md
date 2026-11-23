@@ -447,6 +447,6 @@ func (e *echo) Ping(context.Context) (pluginapi.PingResponse, error) { return pl
 - Linux/macOS：`accept` 后用内核凭据（Linux `SO_PEERCRED`、macOS `LOCAL_PEERCRED`）取 uid/pid，必须等于登记的 `kore-<id>` uid 与 hello 的 pid，否则关闭连接并写审计。
 - Windows：无 peercred，hello **必须**携带 `auth` 字段：`{"plugin_id":"site","nonce":"<32B base64url>","hmac":"<base64>"}`；`hmac = HMAC-SHA256(KORE_PLUGIN_TOKEN, plugin_id|nonce|pid|started_at)`（UTF-8、`|` 分隔、无空格）。token 由主壳 spawn 时经环境变量 `KORE_PLUGIN_TOKEN` 下发，每插件每版本独立、进程启动后不落盘；校验失败关闭连接并写审计。
 
-**插件进程环境变量（唯一名，禁止别名）**：`KORE_PLUGIN_ID`（插件 id）、`KORE_PLUGIN_SOCK`（自身 socket 路径）、`KORE_PLUGIN_TOKEN`（Windows HMAC 密钥；Linux/macOS 也注入但仅用于审计关联）、`KORE_STATE_DIR`、`KORE_LOG_DIR`；旧别名一律删除、禁止再用，插件读到未知变量必须忽略而非报错。
+**插件进程环境变量（唯一名，禁止别名）**：`KORE_PLUGIN_ID`（插件 id）、`KORE_PLUGIN_SOCK`（自身 socket 路径）、`KORE_PLUGIN_TOKEN`（Windows HMAC 密钥；Linux/macOS 也注入但仅用于审计关联）、`KORE_STATE_DIR`、`KORE_LOG_DIR`、`KORE_PLUGIN_DATA`（插件可写数据根，内核按 0700 创建并 chown 到 `kore-<id>`）、`KORE_INSTALL_DIR`（安装根，只读资源定位）；旧别名一律删除、禁止再用，插件读到未知变量必须忽略而非报错。
 
 **Windows 同用户残余风险**：Windows 无独立系统用户等价物，同用户进程理论上可读主壳内存；但插件只经 UDS 与主壳通信（无 TCP、无共享内存、无环境变量泄漏 token）、token 进程内不落盘、`%ProgramData%\kore\run\` 的 ACL 仅 SYSTEM/Administrators/服务账户可写。已能读主壳内存的进程早已越过边界，故该残余风险可接受，并在 ADR 记录 M3 复核条件（引入 AppContainer 或独立服务账户时重评）。

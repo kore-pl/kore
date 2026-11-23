@@ -32,6 +32,13 @@ type Options struct {
 	// KORE_KERNEL_SOCK，供插件经 root-action 通道请求内核代理提权。空串表示通道
 	// 不可用（非 root / 未启用），插件据此显式返回 E_NEED_ROOT，而不是去连管理面。
 	KernelSocket string
+	// PluginDataRoot 是插件数据根的父目录（portable 下 <install>/data/plugin-data）；
+	// 非空时启动前创建 <root>/<id>（0700，属主 kore-<id>）并注入 KORE_PLUGIN_DATA。
+	// 与 plugin_dir 安装树**必须分离**：数据根可写，安装树不可写（防篡改自身包）。
+	PluginDataRoot string
+	// InstallDir 是安装根（<install>）；非空时注入 KORE_INSTALL_DIR，供插件定位
+	// 自身只读资源（模板/默认配置），不得用于写。
+	InstallDir string
 	// ChannelGroup 是通道 socket 的共享属组（Linux，默认 kore）：插件用户会在
 	// 降权时被加入该组，并随 Credential 获得该 gid，从而能 connect 0660 的通道
 	// socket；socket 本身由 httpapi 以 root:<group> 0660 创建。

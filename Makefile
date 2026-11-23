@@ -323,12 +323,12 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 	@echo "[RUN ] case-check"
 	@bash scripts/case-check.sh
 
-check: ## 聚合门禁（13 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）
+check: ## 聚合门禁（14 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）+ 公钥单一真源（ADR-0025）
 	@fail=0; \
-	echo "[RUN ] 1/13 docs-check"; \
+	echo "[RUN ] 1/14 docs-check"; \
 	if ! bash scripts/docs-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 2/13 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
+	echo "[RUN ] 2/14 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
 	s=0; \
 	if ! grep -qE '^GOAMD64[[:space:]]*\?=[[:space:]]*v1$$' Makefile; then echo "[FAIL] GOAMD64 基线漂移（应 GOAMD64 ?= v1）"; s=1; fi; \
 	if ! grep -qE '^GOARM64[[:space:]]*\?=[[:space:]]*v8\.0$$' Makefile; then echo "[FAIL] GOARM64 基线漂移（应 GOARM64 ?= v8.0）"; s=1; fi; \
@@ -341,7 +341,7 @@ check: ## 聚合门禁（13 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[INFO] 依赖白名单（第三方 ≤3 个；同仓 module 不计配额，须 replace => ./）"; \
 	if ! bash scripts/dep-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 3/13 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
+	echo "[RUN ] 3/14 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
 	if [ ! -d ./cmd ] && [ ! -d ./internal ]; then \
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
@@ -351,38 +351,41 @@ check: ## 聚合门禁（13 段）：docs-check + 明文凭据 + 依赖白名单
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 4/13 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
+	echo "[RUN ] 4/14 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
 	if ! $(MAKE) --no-print-directory repo-check; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 5/13 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
+	echo "[RUN ] 5/14 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
 	if ! bash scripts/canonical-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 6/13 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 6/14 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
 	log_out=$$(bash scripts/log-check.sh 2>&1 || true); printf '%s\n' "$$log_out"; \
 	log_warn=$$(printf '%s\n' "$$log_out" | grep -c '^\[WARN\]' || true); log_warn=$${log_warn:-0}; \
 	if [ "$$log_warn" -gt 0 ]; then echo "[WARN] 台账有 $$log_warn 处缺口（WARN 级，不阻断；里程碑收口时人工判）"; fi; \
 	echo ""; \
-	echo "[RUN ] 7/13 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 7/14 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
 	wt_out=$$(bash scripts/wt-check.sh 2>&1 || true); printf '%s\n' "$$wt_out"; \
 	wt_warn=$$(printf '%s\n' "$$wt_out" | grep -c '^\[WARN\]' || true); wt_warn=$${wt_warn:-0}; \
 	if [ "$$wt_warn" -gt 0 ]; then echo "[WARN] worktree 卫生有 $$wt_warn 处残留（WARN 级，不阻断；里程碑收口前必须清空）"; fi; \
 	echo ""; \
-	echo "[RUN ] 8/13 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
+	echo "[RUN ] 8/14 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
 	if ! bash scripts/oss-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 9/13 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
+	echo "[RUN ] 9/14 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
 	if ! bash scripts/case-check.sh; then fail=1; fi; \
-	echo "[RUN ] 10/13 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
+	echo "[RUN ] 10/14 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
 	if ! $(MAKE) --no-print-directory frontend; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 11/13 零侵入门禁（ADR-0023：隔离安装根下系统路径零新增 / 豁免项单列）"; \
+	echo "[RUN ] 11/14 零侵入门禁（ADR-0023：隔离安装根下系统路径零新增 / 豁免项单列）"; \
 	if ! bash scripts/zero-intrusion-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 12/13 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
+	echo "[RUN ] 12/14 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
 	if ! bash scripts/secret-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 13/13 插件仓开源资产（G-26 延伸：25 仓九件套 + .github 模板 + CI，见 scripts/plugin-oss-check.sh）"; \
+	echo "[RUN ] 13/14 插件仓开源资产（G-26 延伸：25 仓九件套 + .github 模板 + CI，见 scripts/plugin-oss-check.sh）"; \
 	if ! bash scripts/plugin-oss-check.sh; then fail=1; fi; \
+	echo ""; \
+	echo "[RUN ] 14/14 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \
+	if ! bash scripts/pubkey-sync-check.sh; then fail=1; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"

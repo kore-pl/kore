@@ -145,3 +145,17 @@ func TestInstallRootEnv(t *testing.T) {
 		t.Fatalf("测试目录应存在: %v", err)
 	}
 }
+
+// TestFHSDefaultLayoutKeepsSystemIndex 锁定 fhs 下 index_dir 仍回落系统路径（ADR-0023 §9）：
+// portable 默认必须落在 <install>/data/index（TestPortableDefaultLayout 已断言），
+// 只有显式 fhs 才允许 /var/lib/kore/index。
+func TestFHSDefaultLayoutKeepsSystemIndex(t *testing.T) {
+	t.Setenv(EnvProfile, ProfileFHS)
+	snap := Default()
+	if snap.Paths.IndexDir != "/var/lib/kore/index" {
+		t.Fatalf("fhs index_dir 应为 /var/lib/kore/index，实际 %q", snap.Paths.IndexDir)
+	}
+	if snap.Profile != ProfileFHS {
+		t.Fatalf("profile 应为 fhs，实际 %q", snap.Profile)
+	}
+}

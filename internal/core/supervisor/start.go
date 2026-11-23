@@ -46,12 +46,16 @@ func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 	if err != nil {
 		return m.failStart(inst, err)
 	}
+	dataDir, err := m.preparePluginData(inst, acct)
+	if err != nil {
+		return m.failStart(inst, err)
+	}
 	listener, err := m.listen(inst, acct)
 	if err != nil {
 		return m.failStart(inst, err)
 	}
 	inst.attachListener(listener)
-	if err := m.spawn(inst, acct); err != nil {
+	if err := m.spawn(inst, acct, dataDir); err != nil {
 		return m.failStart(inst, err)
 	}
 	conn, err := m.handshake(ctx, inst)
@@ -68,7 +72,7 @@ func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 //
 // acct 为零值表示未启用降权（kored 非 root 的显式降级形态）；非零值时必须由
 // 平台层写入 SysProcAttr.Credential，写入失败即拒绝启动（不允许退回同 uid）。
-func (m *Manager) spawn(inst *instance, acct platform.Account) error {
+func (m *Manager) spawn(inst *instance, acct platform.Account, dataDir string) error {
 	stateDir := filepath.Dir(inst.manifest.Dir)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return errf(pluginapi.E_INTERNAL, "创建插件状态目录 %s 失败：%v", stateDir, err)
@@ -86,7 +90,7 @@ func (m *Manager) spawn(inst *instance, acct platform.Account) error {
 	}
 	cmd := exec.Command(filepath.Join(inst.manifest.Dir, inst.manifest.Entry))
 	cmd.Dir = stateDir
-	cmd.Env = append(os.Environ(), m.pluginEnv(inst, stateDir, token)...)
+	cmd.Env = append(os.Environ(), m.pluginEnv(inst, stateDir, dataDir, token)...)
 	cmd.Stdout, cmd.Stderr = writer, writer
 	if acct.UID > 0 {
 		if err := m.identity.Apply(cmd, acct); err != nil {
@@ -106,11 +110,36 @@ func (m *Manager) spawn(inst *instance, acct platform.Account) error {
 	return nil
 }
 
+// preparePluginData 创建插件数据根并收口属主，返回 KORE_PLUGIN_DATA 的值。
+//
+// 数据根与安装树分离（安装树只读）：降权后必须属主 kore-<id> 且 0700，
+// 否则插件写不进自己的数据目录（例如 site 的 www 根、ssl 的证书目录）。
+func (m *Manager) preparePluginData(inst *instance, acct platform.Account) (string, error) {
+	if m.opts.PluginDataRoot == "" {
+		return "", nil
+	}
+	dir := filepath.Join(m.opts.PluginDataRoot, inst.manifest.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", errf(pluginapi.E_INTERNAL, "创建插件数据根 %s 失败：%v", dir, err)
+	}
+	if acct.UID > 0 {
+		if err := m.access.Own(dir, acct, 0o700); err != nil {
+			return "", errf(pluginapi.E_INTERNAL,
+				"把插件数据根 %s 交给 %s(%d:%d) 失败：%v", dir, acct.Name, acct.UID, acct.GID, err)
+		}
+		return dir, nil
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", errf(pluginapi.E_INTERNAL, "设置插件数据根 %s 权限失败：%v", dir, err)
+	}
+	return dir, nil
+}
+
 // pluginEnv 返回注入插件的环境变量（唯一名，不设协议/capabilities 变量）。
 //
-// 5 个固定变量之外，仅在装配了内核 socket 时追加 KORE_KERNEL_SOCK
-// （root-action 通道入口；缺省不注入，插件据此判定内核是否支持提权）。
-func (m *Manager) pluginEnv(inst *instance, stateDir, token string) []string {
+// 5 个固定变量 + KORE_KERNEL_SOCK（root-action 通道，装配后才有）+
+// KORE_PLUGIN_DATA（插件数据根，装配后才有）+ KORE_INSTALL_DIR（安装根，装配后才有）。
+func (m *Manager) pluginEnv(inst *instance, stateDir, dataDir, token string) []string {
 	env := []string{
 		"KORE_PLUGIN_ID=" + inst.manifest.ID,
 		"KORE_PLUGIN_SOCK=" + inst.socket,
@@ -120,6 +149,12 @@ func (m *Manager) pluginEnv(inst *instance, stateDir, token string) []string {
 	}
 	if m.opts.KernelSocket != "" {
 		env = append(env, "KORE_KERNEL_SOCK="+m.opts.KernelSocket)
+	}
+	if dataDir != "" {
+		env = append(env, "KORE_PLUGIN_DATA="+dataDir)
+	}
+	if m.opts.InstallDir != "" {
+		env = append(env, "KORE_INSTALL_DIR="+m.opts.InstallDir)
 	}
 	return env
 }
