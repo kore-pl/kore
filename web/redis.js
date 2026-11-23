@@ -1,9 +1,12 @@
 /* kore 主壳 · Redis 管理（web/redis.js）——零框架 / 零 CDN / 无外链。
    调用形态：POST /api/v1/invoke/redis/redis.<action>（插件 id 与业务域名一致，
    方法段写完整限定名；裸动词只是插件侧兼容，不得依赖）。
-   数据：redis.instances / redis.info / redis.keys / redis.get / redis.delete；
-   连接配置复用通用面板（redis.config.get/set），密码只保存环境变量名。
-   界面只把键名/类型/值写 textContent，不拼 HTML；删除是页面内二次确认并列出键名。 */
+   数据：redis.instances / redis.info / redis.keys / redis.get / redis.delete
+        + 运维四方法 redis.persistence / redis.memory / redis.slowlog / redis.keyInfo。
+   交互：键表行点开先看「键详情」（类型/编码/TTL/内存，keyInfo，O(1)），
+   点「读取值」才真正 redis.get——不再对未知键盲目取值；连接配置复用通用面板。
+   本视图新增样式（redis-ops-* / redis-detail-* / redis-slow-*）随视图注入，
+   不改 style.css；界面只把键名/类型/值写 textContent，不拼 HTML。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/redis/', DISCOVER = '/api/v1/invoke/discover/', TIMEOUT_MS = 15000;
@@ -11,7 +14,9 @@
     return { root: null, instances: [], selected: '', loadError: '', info: null, infoError: '',
       keys: [], pattern: '*', limit: 200, scanned: 0, truncated: false, keysLoaded: false, keysError: '',
       shown: 50, step: 50, totalKeys: 0, loadingMore: false,
-      activeKey: null, value: null, valueError: '', checked: Object.create(null), notice: '',
+      activeKey: null, value: null, valueError: '', valueAsked: false, checked: Object.create(null), notice: '',
+      persist: null, persistError: '', memory: null, memoryError: '',
+      slowlog: null, slowlogError: '', slowlogLoaded: false, keyInfo: null, keyInfoError: '',
       busy: false, destroyed: false, discoveryState: 'loading', discovery: null, discoveryError: '',
       autoNotice: null, autoPending: false };
   }
@@ -60,6 +65,30 @@
     if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) return '—';
     if (sec < 60) return sec + ' 秒'; if (sec < 3600) return Math.floor(sec / 60) + ' 分';
     if (sec < 86400) return Math.floor(sec / 3600) + ' 小时'; return Math.floor(sec / 86400) + ' 天';
+  }
+  function fmtBytes(n) {
+    if (typeof n !== 'number' || !isFinite(n) || n < 0) return '—';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'], v = n, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return (i ? v.toFixed(v < 10 ? 2 : 1) : String(v)) + ' ' + units[i];
+  }
+  function fmtDurUS(us) {
+    if (typeof us !== 'number' || !isFinite(us) || us < 0) return '—';
+    if (us < 1000) return us + ' µs';
+    if (us < 1000000) return (us / 1000).toFixed(us < 10000 ? 2 : 1) + ' ms';
+    return (us / 1000000).toFixed(2) + ' s';
+  }
+  function fmtClock(sec) {
+    if (typeof sec !== 'number' || !isFinite(sec) || sec <= 0) return '—';
+    var d = new Date(sec * 1000);
+    return d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+  function fmtAgo(sec) {
+    if (typeof sec !== 'number' || !isFinite(sec) || sec <= 0) return '—';
+    var diff = Math.max(0, Math.floor(Date.now() / 1000) - sec);
+    if (diff < 90) return diff + ' 秒前';
+    if (diff < 90000) return Math.floor(diff / 60) + ' 分前';
+    return Math.floor(diff / 86400) + ' 天前';
   }
   function chip(tone, text) {
     var c = el('span', 'chip chip-' + tone), dot = el('span', 'dot');
@@ -390,8 +419,8 @@
         tr.classList.toggle('is-selected', box.checked); paintDeleteBtn();
       });
       add(tr, el('td', 'redis-key', entry.key)); add(tr, el('td', 'redis-type', entry.type || '—'));
-      add(tr, el('td', 'redis-ttl', fmtTTL(entry.ttl_s))); on(tr, function () { loadValue(entry); });
-      tr.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); loadValue(entry); } });
+      add(tr, el('td', 'redis-ttl', fmtTTL(entry.ttl_s))); on(tr, function () { loadKeyDetail(entry); });
+      tr.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); loadKeyDetail(entry); } });
     });
     paintKeyFooter();
   }
@@ -422,6 +451,174 @@
       S.loadingMore = false; S.keysError = err.message; paintKeys();
     });
   }
+  // ── 运维面板：4 张指标卡（persistence/memory/slowlog）+ 慢查询表 + 键详情侧栏 ──
+  var OPS_SLOWLOG_WINDOW_S = 86400; // 指标卡口径：最近 24h 慢查询条数
+  function paintOpsCards() {
+    if (!S.opsHost) return;
+    S.opsHost.hidden = !S.selected;
+    S.opsHost.textContent = '';
+    if (!S.selected) return;
+    var grid = add(S.opsHost, el('div', 'redis-ops-grid'));
+    // 卡 1：内存用量（进度条 + used/maxmemory）
+    var memCard = add(grid, el('div', 'redis-ops-card'));
+    add(memCard, el('span', 'redis-ops-label', '内存用量'));
+    if (S.memoryError) {
+      var errV = add(memCard, el('div', 'redis-ops-value', '—'));
+      errV.title = S.memoryError; add(memCard, el('div', 'redis-ops-sub', '读取失败'));
+    } else if (!S.memory) {
+      add(memCard, el('div', 'redis-ops-value', '…'));
+    } else {
+      var used = S.memory.used, max = S.memory.maxmemory, pct = max > 0 ? Math.min(100, used / max * 100) : 0;
+      var big = add(memCard, el('div', 'redis-ops-value', fmtBytes(used)));
+      if (S.memory.maxmemory_policy) big.title = '淘汰策略：' + S.memory.maxmemory_policy;
+      var fill = add(add(memCard, el('div', 'redis-ops-bar')), el('div', 'redis-ops-bar-fill' + (max > 0 && pct >= 80 ? ' is-hot' : '')));
+      if (max > 0) fill.style.width = pct.toFixed(1) + '%'; else fill.classList.add('is-none');
+      add(memCard, el('div', 'redis-ops-sub', max > 0
+        ? fmtBytes(used) + ' / ' + fmtBytes(max) + '（' + pct.toFixed(1) + '%）'
+        : '未设上限（maxmemory=0）' + (S.memory.maxmemory_policy ? ' · ' + S.memory.maxmemory_policy : '')));
+    }
+    // 卡 2：碎片率（mem_fragmentation_ratio；≥1.5 提示关注）
+    var fragCard = add(grid, el('div', 'redis-ops-card'));
+    add(fragCard, el('span', 'redis-ops-label', '内存碎片率'));
+    if (S.memoryError) { fragV(fragCard, '—', '读取失败', S.memoryError); }
+    else if (!S.memory) { add(fragCard, el('div', 'redis-ops-value', '…')); }
+    else if (S.memory.fragmentation_ratio > 0) {
+      var ratio = S.memory.fragmentation_ratio;
+      var fv = add(fragCard, el('div', 'redis-ops-value', ratio.toFixed(2)));
+      fv.classList.add(ratio >= 1.5 ? 'is-warn' : 'is-ok');
+      add(fragCard, el('div', 'redis-ops-sub', ratio >= 1.5 ? '偏高（≥1.5），关注淘汰与内存交换' : '正常（<1.5）'));
+    } else fragV(fragCard, '—', '实例未返回碎片率', '');
+    // 卡 3：AOF / RDB 状态点
+    var persCard = add(grid, el('div', 'redis-ops-card'));
+    add(persCard, el('span', 'redis-ops-label', 'AOF / RDB'));
+    if (S.persistError) { fragV(persCard, '—', '读取失败', S.persistError); }
+    else if (!S.persist) { add(persCard, el('div', 'redis-ops-value', '…')); }
+    else {
+      var dots = add(persCard, el('div', 'redis-ops-dots'));
+      var aofOn = S.persist.aof_enabled, aofOK = S.persist.aof_last_write_status === 'ok';
+      dots.appendChild(opDot(aofOn ? (aofOK ? 'ok' : 'fail') : 'na',
+        'AOF ' + (aofOn ? (aofOK ? '开启 · 写入正常' : '开启 · 写入异常') : '关闭'),
+        aofOn && !aofOK ? 'AOF 最近一次写入状态异常，可能丢数据' : ''));
+      if (S.persist.rdb_bgsave_in_progress) dots.appendChild(opDot('warn', 'RDB BGSAVE 进行中', ''));
+      else dots.appendChild(opDot('ok', 'RDB 上次保存 ' + fmtAgo(S.persist.rdb_last_save_time), '上次保存时刻 ' + fmtClock(S.persist.rdb_last_save_time)));
+      add(persCard, el('div', 'redis-ops-sub', '未落盘变更 ' + fmtInt(S.persist.rdb_changes_since_save) + ' 个键'));
+    }
+    // 卡 4：慢查询（24h）
+    var slowCard = add(grid, el('div', 'redis-ops-card'));
+    add(slowCard, el('span', 'redis-ops-label', '慢查询（24h）'));
+    if (S.slowlogError) { fragV(slowCard, '—', '读取失败', S.slowlogError); }
+    else if (!S.slowlogLoaded) { add(slowCard, el('div', 'redis-ops-value', '…')); }
+    else {
+      var cutoff = Math.floor(Date.now() / 1000) - OPS_SLOWLOG_WINDOW_S;
+      var recent = (S.slowlog.entries || []).filter(function (e) { return e && e.ts >= cutoff; }).length;
+      var sv = add(slowCard, el('div', 'redis-ops-value', fmtInt(recent)));
+      sv.classList.add(recent > 0 ? 'is-warn' : 'is-ok');
+      add(slowCard, el('div', 'redis-ops-sub', '缓冲区共 ' + fmtInt(S.slowlog.count || 0) + ' 条 · 明细见下方「慢查询」'));
+    }
+  }
+  function fragV(card, text, sub, title) {
+    var v = add(card, el('div', 'redis-ops-value', text));
+    if (title) v.title = title;
+    add(card, el('div', 'redis-ops-sub', sub));
+  }
+  function opDot(tone, text, title) {
+    var row = el('div', 'redis-ops-dot-row');
+    if (title) row.title = title;
+    var dot = add(row, el('span', 'dot ' + tone));
+    if (tone === 'na') dot.classList.add('dot-na'); // 注入样式补灰色（style.css 的 dot 无 na 档）
+    add(row, el('span', null, text));
+    return row;
+  }
+  function paintSlowlog() {
+    if (!S.slowHost) return;
+    S.slowPanel.hidden = !S.selected; S.slowHost.textContent = '';
+    if (!S.selected) return;
+    add(S.slowHost, el('p', 'redis-slow-note',
+      '仅记录执行时间超过 slowlog-log-slower-than（默认 10000µs = 10ms）的命令；缓冲区上限 slowlog-max-len（默认 128）条，读取时可能被截断。本页只读，不改动慢日志配置。'));
+    if (S.slowlogError) { S.slowHost.appendChild(notice('慢查询读取失败：' + S.slowlogError)); return; }
+    if (!S.slowlogLoaded) { add(S.slowHost, el('div', 'muted redis-loading', '正在读取慢查询…')); return; }
+    var entries = S.slowlog.entries || [];
+    if (!entries.length) { add(S.slowHost, el('div', 'panel-empty', '暂无慢查询记录——所有命令都在阈值之内。')); return; }
+    var scroll = add(S.slowHost, el('div', 'redis-key-host'));
+    var table = add(scroll, el('table', 'redis-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['#', '时间', '耗时', '命令 / 参数'].forEach(function (t) { add(htr, el('th', null, t)); });
+    var tbody = add(table, el('tbody'));
+    entries.forEach(function (entry) {
+      var tr = add(tbody, el('tr'));
+      add(tr, el('td', 'redis-slow-id', fmtInt(entry.id)));
+      add(tr, el('td', 'redis-slow-time', fmtClock(entry.ts)));
+      add(tr, el('td', 'redis-slow-dur', fmtDurUS(entry.duration_us)));
+      var full = entry.command + (entry.args_summary ? ' ' + entry.args_summary : '');
+      var cmd = add(tr, el('td', 'redis-slow-cmd', full));
+      cmd.title = full; cmd.setAttribute('title', full);
+    });
+  }
+  function loadOps() {
+    var name = S.selected; if (!name) return;
+    S.persist = null; S.persistError = ''; S.memory = null; S.memoryError = '';
+    S.slowlog = null; S.slowlogError = ''; S.slowlogLoaded = false;
+    paintOpsCards(); paintSlowlog();
+    invoke('redis.persistence', { instance: name }).then(function (data) {
+      if (S.destroyed || S.selected !== name) return;
+      S.persist = data; paintOpsCards();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.persistError = err.message; paintOpsCards();
+    });
+    invoke('redis.memory', { instance: name }).then(function (data) {
+      if (S.destroyed || S.selected !== name) return;
+      S.memory = data; paintOpsCards();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.memoryError = err.message; paintOpsCards();
+    });
+    invoke('redis.slowlog', { instance: name, limit: 128 }).then(function (data) {
+      if (S.destroyed || S.selected !== name) return;
+      S.slowlog = data; S.slowlogLoaded = true; paintOpsCards(); paintSlowlog();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.slowlogError = err.message; S.slowlogLoaded = true; paintOpsCards(); paintSlowlog();
+    });
+  }
+  // loadKeyDetail：键行点开 → 键详情（redis.keyInfo，O(1)），值改为显式点「读取值」。
+  function loadKeyDetail(entry) {
+    if (!S.selected) return;
+    S.activeKey = entry; S.keyInfo = null; S.keyInfoError = '';
+    S.value = null; S.valueError = ''; S.valueAsked = false;
+    paintKeys(); paintKeyDetail(); paintValue();
+    var name = S.selected;
+    invoke('redis.keyInfo', { instance: name, key: entry.key }).then(function (data) {
+      if (S.destroyed || S.selected !== name || !S.activeKey || S.activeKey.key !== entry.key) return;
+      S.keyInfo = data; paintKeyDetail();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.keyInfoError = err.message; paintKeyDetail();
+    });
+  }
+  function paintKeyDetail() {
+    if (!S.detailHost) return;
+    S.detailPanel.hidden = !S.activeKey; S.detailHost.textContent = '';
+    if (!S.activeKey) return;
+    S.detailMeta.textContent = S.activeKey.key;
+    if (S.keyInfoError) {
+      S.detailHost.appendChild(notice('键详情读取失败：' + S.keyInfoError + '。怎么办：' + hintFor(S.keyInfoError)));
+      return;
+    }
+    if (!S.keyInfo) { add(S.detailHost, el('div', 'muted redis-loading', '正在读取键详情…')); return; }
+    var ki = S.keyInfo, grid = add(S.detailHost, el('div', 'redis-detail-kv'));
+    [['类型', ki.type || '—'], ['编码', ki.encoding || '（实例未返回）'], ['TTL', fmtTTL(ki.ttl_s)],
+      ['内存占用', ki.memory_bytes > 0 ? fmtBytes(ki.memory_bytes) : '—']].forEach(function (item) {
+      add(grid, el('span', 'redis-detail-label', item[0]));
+      add(grid, el('span', 'redis-detail-value', item[1]));
+    });
+    add(S.detailHost, el('div', 'redis-detail-hint', ki.memory_bytes > 0
+      ? '内存占用含键与值的结构与数据（MEMORY USAGE 采样估算）。'
+      : '实例未返回内存占用（MEMORY USAGE 需 Redis ≥ 4.0）。'));
+    var actions = add(S.detailHost, el('div', 'redis-actions'));
+    actions.appendChild(btn(S.value ? 'btn-ghost' : 'btn-primary', S.value ? '重新读取值' : '读取值', function () { loadValue(S.activeKey); }));
+    add(S.detailHost, el('div', 'redis-detail-note', S.valueAsked ? '' : '读取值可能带来大对象传输，默认不自动执行。'));
+  }
   function valueTable(headers, rows) {
     var table = el('table', 'redis-value-table'), htr = add(add(table, el('thead')), el('tr'));
     headers.forEach(function (h) { add(htr, el('th', null, h)); });
@@ -434,9 +631,9 @@
   }
   function paintValue() {
     if (!S.valueHost) return;
-    S.valuePanel.hidden = !S.activeKey; S.valueHost.textContent = '';
+    S.valueHost.textContent = '';
     if (!S.activeKey) return;
-    S.valueMeta.textContent = (S.activeKey.type || '—') + ' · ' + fmtTTL(S.activeKey.ttl_s);
+    if (!S.valueAsked) { add(S.valueHost, el('div', 'muted redis-loading', '未读取值——点上方「读取值」查看内容。')); return; }
     if (S.valueError) { S.valueHost.appendChild(notice('读取值失败：' + S.valueError)); return; }
     if (!S.value) { add(S.valueHost, el('div', 'muted redis-loading', '正在读取值…')); return; }
     var v = S.value, value = v.value;
@@ -456,10 +653,16 @@
   function selectInstance(name) {
     if (!name || S.selected === name) return;
     S.selected = name; S.info = null; S.infoError = ''; S.keys = []; S.keysLoaded = false;
-    S.keysError = ''; S.activeKey = null; S.value = null; S.valueError = ''; S.notice = ''; S.truncated = false; S.scanned = 0;
+    S.keysError = ''; S.activeKey = null; S.value = null; S.valueError = ''; S.valueAsked = false;
+    S.keyInfo = null; S.keyInfoError = '';
+    S.persist = null; S.persistError = ''; S.memory = null; S.memoryError = '';
+    S.slowlog = null; S.slowlogError = ''; S.slowlogLoaded = false;
+    S.notice = ''; S.truncated = false; S.scanned = 0;
     S.shown = S.step; S.totalKeys = 0; S.loadingMore = false;
-    S.checked = Object.create(null); paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintValue(); loadInfo(); loadKeys(); }
-  function loadInstances(reset) {
+    S.checked = Object.create(null);
+    paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog();
+    loadInfo(); loadKeys(); loadOps();
+  }  function loadInstances(reset) {
     if (reset) { S.selected = ''; S.info = null; S.keys = []; S.keysLoaded = false; S.autoNotice = null; }
     S.loadError = ''; paintInstances();
     invoke('redis.instances', {}).then(function (data) {
@@ -515,12 +718,12 @@
     });
   }
   function loadValue(entry) {
-    if (!S.selected) return;
-    S.activeKey = entry; S.value = null; S.valueError = ''; paintKeys(); paintValue();
+    if (!S.selected || !entry) return;
+    S.valueAsked = true; S.value = null; S.valueError = ''; paintValue();
     var name = S.selected;
     invoke('redis.get', { instance: name, key: entry.key }).then(function (data) {
       if (S.destroyed || S.selected !== name || !S.activeKey || S.activeKey.key !== entry.key) return;
-      S.value = data; paintValue(); paintKeys();
+      S.value = data; paintValue();
     }, function (err) { if (!S.destroyed && S.selected === name) { S.valueError = err.message; paintValue(); } });
   }
   function askDelete() {
@@ -542,8 +745,8 @@
       if (S.destroyed) return;
       S.busy = false; S.confirmHost.textContent = ''; S.checked = Object.create(null);
       S.notice = '已删除 ' + fmtInt(data.deleted || 0) + ' 个键';
-      if (S.activeKey && keys.indexOf(S.activeKey.key) >= 0) { S.activeKey = null; S.value = null; }
-      paintNotice(); paintKeys(); paintValue(); loadInfo(); loadKeys();
+      if (S.activeKey && keys.indexOf(S.activeKey.key) >= 0) { S.activeKey = null; S.value = null; S.valueAsked = false; S.keyInfo = null; }
+      paintNotice(); paintKeys(); paintKeyDetail(); paintValue(); loadInfo(); loadKeys(); loadOps();
     }, function (err) {
       if (S.destroyed) return;
       S.busy = false; S.notice = ''; paintDeleteBtn(); S.confirmHost.textContent = '';
@@ -599,7 +802,12 @@
     S.instBody = add(inst.panel, el('div', 'redis-instance-body'));
     var info = panel('实例信息', '内存 / 连接 / 命中率 / keyspace');
     S.infoPanel = info.panel; S.infoPanel.hidden = true; add(S.root, S.infoPanel); S.infoHost = add(S.infoPanel, el('div', 'redis-info'));
-    var keys = panel('键浏览', ''); add(S.root, keys.panel); S.keyCount = add(keys.meta, el('span', null, ''));
+    // 运维指标卡：内存用量 / 碎片率 / AOF·RDB / 慢查询（选中实例后加载）。
+    S.opsHost = add(S.root, el('div', 'redis-ops-host')); S.opsHost.hidden = true;
+    var keys = panel('键浏览', '');
+    var value = panel('键详情', '');
+    var columns = add(S.root, el('div', 'redis-columns'));
+    add(columns, keys.panel); S.keyCount = add(keys.meta, el('span', null, ''));
     S.delBtn = add(keys.meta, el('button', 'btn redis-danger', '删除选中'));
     S.delBtn.type = 'button'; S.delBtn.disabled = true; on(S.delBtn, askDelete);
     var bar = add(keys.panel, el('div', 'redis-toolbar'));
@@ -617,13 +825,65 @@
     on(query, runSearch);
     S.patternInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') runSearch(); });
     S.keysHost = add(keys.panel, el('div', 'redis-keys')); S.keysMoreHost = add(keys.panel, el('div', 'redis-keys-more')); S.confirmHost = add(keys.panel, el('div', 'redis-confirm-host'));
-    var value = panel('值', ''); S.valuePanel = value.panel; S.valuePanel.hidden = true; add(S.root, S.valuePanel);
-    S.valueMeta = add(value.meta, el('span', null, '')); add(value.meta, el('span', null, '点击任意键查看'));
-    S.valueHost = add(S.valuePanel, el('div', 'redis-value'));
+    // 键详情侧栏：keyInfo（类型/编码/TTL/内存）+ 显式「读取值」；替代旧的行点击即盲取值。
+    S.detailPanel = value.panel; S.detailPanel.hidden = true; add(columns, S.detailPanel);
+    S.detailMeta = add(value.meta, el('span', null, ''));
+    S.detailHost = add(S.detailPanel, el('div', 'redis-detail'));
+    S.valueHost = add(S.detailPanel, el('div', 'redis-value'));
+    var slow = panel('慢查询', 'SLOWLOG');
+    S.slowPanel = slow.panel; S.slowPanel.hidden = true; add(S.root, slow.panel);
+    S.slowHost = add(slow.panel, el('div', 'redis-slowlog'));
+    injectStyles();
     autoBanner();
     detect();
-    paintInstances(); paintInfo(); paintKeys(); paintValue(); loadInstances();
+    paintInstances(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog(); loadInstances();
     return { destroy: function () { S.destroyed = true; } };
+  }
+  // injectStyles 把本视图新增样式随视图注入 S.root；不改 web/style.css。
+  function injectStyles() {
+    if (!S.root) return;
+    var css = [
+      '.redis-ops-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4)}',
+      '.redis-ops-card{display:flex;flex-direction:column;gap:var(--kore-space-1);padding:var(--kore-space-3);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}',
+      '.redis-ops-label{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.redis-ops-value{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;word-break:break-word}',
+      '.redis-ops-value.is-ok{color:var(--kore-success)}',
+      '.redis-ops-value.is-warn{color:var(--kore-warning)}',
+      '.redis-ops-sub{color:var(--kore-text-3);font-size:var(--kore-font-12);word-break:break-word}',
+      '.redis-ops-bar{height:6px;margin-top:2px;background:var(--kore-bg-2);border-radius:3px;overflow:hidden}',
+      '.redis-ops-bar-fill{height:100%;background:var(--kore-info);transition:width .3s ease}',
+      '.redis-ops-bar-fill.is-hot{background:var(--kore-danger)}',
+      '.redis-ops-bar-fill.is-none{width:100%;background:var(--kore-text-3);opacity:.25}',
+      '.redis-ops-dots{display:flex;flex-direction:column;gap:6px;margin-top:2px}',
+      '.redis-ops-dot-row{display:flex;align-items:center;gap:6px;font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.redis .dot.na{background:var(--kore-text-3)}',
+      '.redis-ops-host[hidden]{display:none}',
+      '.redis-columns{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:var(--kore-space-3);align-items:start}',
+      '.redis-columns > .panel:last-child{position:sticky;top:var(--kore-space-3)}',
+      '.redis-detail{padding:var(--kore-space-3) var(--kore-space-4) 0}',
+      '.redis-detail-kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:var(--kore-font-13)}',
+      '.redis-detail-label{color:var(--kore-text-3)}',
+      '.redis-detail-value{font-variant-numeric:tabular-nums;word-break:break-word;text-align:right}',
+      '.redis-detail-hint{margin-top:var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.redis-detail-note{margin-top:var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.redis-detail .redis-actions{margin-top:var(--kore-space-2);display:flex;gap:var(--kore-space-2)}',
+      '.redis-value{padding:var(--kore-space-3) var(--kore-space-4) var(--kore-space-4)}',
+      '.redis-slow-note{margin:0;padding:var(--kore-space-3) var(--kore-space-4) 0;color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.redis-slow-id{font-variant-numeric:tabular-nums}',
+      '.redis-slow-time{font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.redis-slow-dur{font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.redis-slow-cmd{word-break:break-all;max-width:520px}',
+      '@media (max-width:960px){',
+      '  .redis-ops-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:var(--kore-space-3)}',
+      '  .redis-columns{grid-template-columns:1fr}',
+      '  .redis-columns > .panel:last-child{position:static}',
+      '  .redis-slow-cmd{max-width:none}',
+      '}'
+    ].join('\n');
+    var style = document.createElement('style');
+    style.setAttribute('data-kore-view', 'redis');
+    style.textContent = css;
+    add(S.root, style);
   }
   window.KoreRedis = { render: render };
 })();
