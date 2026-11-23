@@ -1,5 +1,5 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
-> ADR 状态: proposed（待 lead 裁决，不自行标 accepted）· 关联: ../SECURITY.md §3.3/§4、../CORE.md §2.3/§2.4、../RUNBOOK.md、0018-privilege-model.md、0026-credential-transport.md
+> 状态: superseded-in-part · 归属: architect · 更新: 2026-11-23 · 里程碑: M5 · 取代: [0043-login-gate-vs-passwordless-ops](./0043-login-gate-vs-passwordless-ops.md)（仅核心「本机通道即认证」；逐条见文末「取代关系」）
+> ADR 状态: superseded-in-part（**不是 rejected**：§2.A 本机免密被 ADR-0043 取代并已撤除，§2.B 会话参数与 §4 兼容条款仍有效且已落地；按档位逐条见文末「取代关系（2026-11-23）」）· 关联: ../SECURITY.md §3.2–§3.4/§4、../CORE.md §2.3/§2.4、../RUNBOOK.md、[0018-privilege-model](./0018-privilege-model.md)、[0026-credential-transport](./0026-credential-transport.md)、[0043-login-gate-vs-passwordless-ops](./0043-login-gate-vs-passwordless-ops.md)
 
 # ADR-0041: 服务器管理免密认证（本机 socket 免密 + 长会话 + 可撤销 token）
 
@@ -235,3 +235,27 @@ GET /-/healthz            （TCP）→ 200
 **§1.1 中仍然成立的部分**：会话层「无 UA/IP 绑定」成立（`ua_hash` / `last_seen` 在 `*.go` 全仓零命中）；`auth.session_ttl` 取值域 1m–720h 成立（`internal/core/config/validate.go:62`）。
 
 **接口路径**：`GET /api/v1/self` 在实现中不存在，实际注册为 `GET /api/v1/auth/session`（`internal/core/httpapi/handlers.go:87`），响应 `{authenticated, expires_at}`；`docs/CORE.md` §2.3 已按实际路由改写。
+
+## 取代关系（2026-11-23）
+
+**性质**：本节按 ADR 惯例只追加，上文（含 §1.1 与 §6）一字未改。本 ADR 立项时把「服务器管理不该每次输密码」实现成「本机通道不经登录即管理员」；用户同日裁决「面板必须要有登录页面，我是说操作必须免密」后，[ADR-0043](./0043-login-gate-vs-passwordless-ops.md) 转 accepted 并由 `a68c4b1` 恢复登录门、撤除本机免登身份。故本 ADR 的状态是 **superseded-in-part（部分被取代）**，不是 rejected，也不是 accepted。
+
+**为什么不能标 `rejected`**：rejected 会把整篇连同仍在生效的条款一起判死，读者会以为 §2.B 的「7d + 滑动 + 30d 绝对上限」与 §4 的「不删口令哈希 / 不删登录端点」也作废——而它们正是 ADR-0043 §1「保留 ADR-0041 成果」明文继承的部分，且已是现行代码事实。**为什么也不能标 `accepted`**：本 ADR 从未整体获批，其核心档（§2.A 本机免密）已被否决。三档里只有「按档位逐条判定」能同时表达这两件事，故取 `superseded-in-part` 一词，`· 取代:` 限定字段沿用 [0018](./0018-privilege-model.md) 头部 `· 实现进度:` 的既有写法。
+
+| # | 0041 的决策 | 现状 | 证据 |
+| --- | --- | --- | --- |
+| A-1 | §2.A 本机特权免密：UDS 读 `SO_PEERCRED`，对端 uid == socket 属主即注入「本机管理员」actor，不要求 cookie/CSRF（`0041:104-115`，§3 三档表 A 行 `0041:162`） | **被 0043 取代**：`withAuth` 对全部 `/api/v1/*` 一律会话校验，UDS / loopback 不再跳过；`defaultCapabilityResolver` 只认 `kore_session`，删除「本机通道 = admin 全权」旁路 | `0043:18-19`、`a68c4b1`、`internal/core/httpapi/middleware.go:106`（认证放行只剩 `/-/healthz`、`/api/v1/auth/login` 与主壳静态资源）、`internal/core/httpapi/local_access.go:11-23`（文件头注释已收窄为「通道识别，不是身份」） |
+| A-2 | §1.5 / §3 判定口径：装完本机 `curl --unix-socket .../system/info` 无 cookie 即 200（`0041:95`、`0041:166`） | **被 0043 取代（契约反转）**：同一请求现为 401，登录后 200；只读端点也不按通道分级放行 | `0043:45-49`（未登录 loopback / UDS 均 401、登录 200）、`a68c4b1` |
+| A-3 | §2.A 审计：新增 `local.access{uid,pid,comm}` 事件（`0041:110`） | **被 0043 取代**：`local.access` 审计与 context actor 一并删除；本机通道只保留 CSRF 令牌引导与 UDS 的 CSRF 豁免两项**非认证**用途 | `0043:22`、`internal/core/httpapi/local_access.go:11-23`（只剩 CSRF 引导 / UDS 豁免两项用途的说明）、`a68c4b1` |
+| A-4 | §4.5 配置开关 `auth.local_socket_admin`（默认 true，可回落到 B/C 档，`0041:174`） | **作废且从未实现**：登录门无开关，全仓只有本 ADR 自身提到该键 | `grep -rn "local_socket_admin"` 仅命中本文件 `0041:174` |
+| A-5 | §4.6 安全叙述「本机免密 = 能登机且是运行用户的人就能管 Kore」，要求写进 SECURITY（`0041:175`） | **被 0043 取代**：SECURITY §3.2 改为「本机通道不是认证，登录是唯一入口」，本机浏览器未登录同样 401 + 登录页 | `docs/SECURITY.md:73`、`docs/SECURITY.md:79`、`docs/SECURITY.md:84` |
+| B-1 | §2.B 面板会话默认 7d + 滑动续期（剩余 < `min(24h, ttl/2)`）+ 30d 绝对上限（`0041:117-124`） | **仍有效，已落地**，并被 0043 §1 明文保留 | `internal/core/auth/session.go:26`（DefaultTTL 7d）、`:29`（AbsoluteTTL 30d）、`:164-186`（Slide）、`:188-200`（阈值）、`:297`（cookie MaxAge）、`0cae448`、`72bb463`、`0043:20` |
+| B-2 | §4.4 旧会话（value 只有 expiry 整数）双格式兼容，不强制全员下线（`0041:173`） | **仍有效，已落地**：value 写为「expiry created」两段纳秒，旧单整数按 TTL 反推 created | `internal/core/auth/session.go:101-107`（writeExpiry）、`:139-158`（parseSessionValue 双格式）、`0cae448` |
+| B-3 | §4.3 显式 `auth.session_ttl` 优先于新默认值（升级不改变已声明行为，`0041:172`） | **仍有效，已落地**：显式配置优先，未配置才取 7d 默认；取值域 1m–720h 未变 | `internal/core/config/parse.go:131-132`、`internal/core/config/types.go:167`、`internal/core/config/validate.go:62` |
+| C-1 | §2.C 可撤销长期 API token：`kored token create/list/revoke`、bbolt `api_tokens` bucket、`withAuth` 的 `Authorization: Bearer` 分支（`0041:126-134`） | **未实施，且与 0043 §1「认证只有一个入口」冲突 → 需重新提案**（既非「仍有效」也非「被 0043 取代」：0043 未否决 token 机制本身，但把所有 `/api/v1/*` 收口到会话校验后，Bearer 分支当前无落点） | 全仓 `grep -rn "api_tokens"` 零命中；`cmd/kored/` 无 `token.go`；`0043:18`、`0043:14` |
+| D-1 | §2.D passkey / WebAuthn / TOTP v1.0 不做（`0041:136-143`） | **仍有效**：依赖白名单未放开，第三方直接依赖仍是 bbolt / yaml.v3（+ 同仓 pluginapi 嵌套 module）；0043 同轮再次否决 PAM / 系统账号 | `go.mod:5-11`、`0043:32` |
+| E-1 | §2.E 否决清单：口令进 argv / 进 env 明文 / 每操作弹一次口令 / 管理 API 完全无鉴权 / 口令进 URL query / 用 JWT 代替 session（`0041:145-154`） | **仍有效**，其中「管理 API 完全无鉴权」一条被 0043 的真机后果反向加强：未登录即可操作全部管理 API 正是 0043 §0 判定必须收回的现状 | `0043:10`、`0043:29` |
+| F-1 | §4.1 不删除 `auth.admin_password_hash`（`0041:170`） | **仍有效，且升级为唯一凭据**：0043 把 kore 自己的 Web 登录定为唯一认证入口，凭据即该哈希 | `0043:14`、`internal/core/auth/password.go:3`、`docs/SECURITY.md:75` |
+| F-2 | §4.2 不删除 `POST /api/v1/auth/login`（`0041:171`） | **仍有效，且升级为唯一入口**：认证放行白名单里除 `/-/healthz` 与主壳静态资源，只有它 | `internal/core/httpapi/middleware.go:106`、`0043:18` |
+
+**分组结论**：A 组（本机通道即认证，及其判定口径 / 审计 / 配置开关 / 安全叙述）整组退出；B 组（会话时长与升级兼容）是本 ADR 的净遗产，已被 0043 继承并落地；C 组（长期 token）悬空待重新提案；D / E / F 组不受 0043 影响，继续有效。**任何按本 ADR §2.A 重新引入「本机通道即认证」的改动，一律按 `0043:57` 的复审条件退回提案阶段**（须先回答「登录页是否仍然必须存在」）。
