@@ -1,6 +1,6 @@
 # 数据模型（配置 · 状态 · 日志）
 
-> 状态: draft · 归属: architect · 更新: 2026-11-22 · 里程碑: M0
+> 状态: draft · 归属: architect · 更新: 2026-11-23 · 里程碑: M0
 
 kore 只有三类持久数据：**明文配置**、**单文件 bbolt 状态**、**文件日志**。不引入任何数据库服务进程。本文件是字段与落盘格式的唯一来源；协议字段见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)，预算与度量见 [RESOURCE-MODEL.md](./RESOURCE-MODEL.md)。
 
@@ -162,6 +162,7 @@ cert_renew:                     # 迁移为 scheduler 内置任务，默认关�
 | `audit` | `%020d-%06d`（unix 纳秒, 序号），字典序 = 时间序 | `{subject,action,plugin,target,result:"ok"\|"denied"\|"error",detail{}}` | 保留 90 天 |
 | `scheduler_tasks` | 任务 id（`tsk-<16 hex>`；内置任务 `builtin-cert-renew`） | `{id,name,plugin,method,params,schedule,interval_s,enabled,timeout_s,next_run_at,last_run_at,last_result,missed_count,created_at}`（`schedule` 为 5 段 cron 表达式）（ADR-0019；`params` 是插件方法参数原始 JSON，属 G-24 受控例外） | 删除任务即删；内置任务随 `cert_renew.enabled` 启停 |
 | `scheduler_runs` | `%020d-<task-id>-%06d`（unix 纳秒 + 序号），字典序 = 时间序 | `{task_id,started_at,finished_at,status:"ok"\|"failed"\|"timeout"\|"skipped"\|"missed",error,dur_ms}` | 保留最近 100 条（写入时裁剪） |
+| `alerts`（嵌套子桶 `events`） | `%020d-%06d`（unix 纳秒 + 序号，与 `audit` 同编码），字典序 = 时间序；键即对外 `id` | `{id,ts,severity:"critical"\|"warning"\|"info",source:"audit"\|"plugin"\|"resource"\|"slot",title,detail,seen,count}`——`id`/`ts` 由键派生不落库（与 `audit`「时间由键承载」同口径）；`count` 为同 `title+source` 5 分钟窗口内的合并次数（合并即删旧键按当前时刻重写，`seen` 归 false——新发生重新计未读）；校验方 `store.PutAlert`：severity/source 取值受控、title 1..200 字符、detail ≤512 字符（按 rune 计），非法拒绝写入不落库 | 保留最近 500 条（写入时裁剪）；同 `title+source` 5 分钟内去重合并 `count+1` |
 
 **`triggers`（`info.json` 与 `plugins` bucket 同名字段）**：**`[]string`**，每项格式 **`<type>:<name>`**（**前缀即类型**；不是对象数组，也不是无前缀裸名）：
 
