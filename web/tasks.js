@@ -95,7 +95,7 @@
     S.status.textContent = text;
     S.status.className = 'task-status ' + (tone === 'fail' ? 'row-note-fail' : tone === 'ok' ? 'row-note-ok' : 'muted');
   }
-  // root 权限提示：优先用共享组件（P0-2），组件缺失或原因为空时回退到不含内部实现词的人话。
+  // 管理员权限提示：优先用共享组件（P0-2），组件缺失或原因为空时回退到不含内部实现词的人话。
   function rootHint(reason, options) {
     if (!reason) return null;
     var ui = window.KoreUI;
@@ -310,7 +310,7 @@
   function submitForm(ev) {
     ev.preventDefault();
     if (S.locked) {
-      setStatus('当前为只读：需要 root 权限才能写入系统计划任务', 'fail');
+      setStatus('当前为只读：需要系统管理员权限才能写入系统计划任务', 'fail');
       return;
     }
     var schedule = S.form.schedule.value.trim();
@@ -621,7 +621,7 @@
       setLocked(blocked);
       showWarning(blocked ? '' : S.warning);
       paintList();
-      if (S.locked) setStatus('当前为只读：需要 root 权限才能读取/写入系统计划任务，见上方说明', 'fail');
+      if (S.locked) setStatus('当前为只读：需要系统管理员权限才能读取/写入系统计划任务，见上方说明', 'fail');
       else if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
       else setStatus(S.entries.length ? '计划任务已刷新' : '还没有任务，先从上面挑一个常用任务', 'ok');
     }, function (err) {
@@ -629,7 +629,7 @@
       if (blocked) {
         // 权限错误不是"读取失败"，而是环境不满足前置条件：锁表单 + 黄底说明。
         S.entries = []; S.warning = blocked; setLocked(blocked); showWarning(''); paintList();
-        setStatus('当前为只读：需要 root 权限才能读取/写入系统计划任务，见上方说明', 'fail');
+        setStatus('当前为只读：需要系统管理员权限才能读取/写入系统计划任务，见上方说明', 'fail');
         return;
       }
       setStatus('计划任务读取失败：' + err.message, 'fail');
