@@ -33,7 +33,7 @@
 
 每个模块四小节。配置字段名与默认值以 `DATA-MODEL.md` §3 为**唯一真源**，本文件不复写键表，只写内核行为与失败码。
 
-15 个小节中，`config/store/auth/registry/supervisor/bus/httpapi` 对应 `internal/core` 的 7 个子包；`installer`（§2.12）、`privilege`（§2.13，ADR-0018 提权通道）、`market`（§2.14）与 `scheduler`（§2.15，ADR-0019 定时任务）是后续里程碑新增的内核模块（包名用 `market` 避开 §2.2 持久化 `store`，对外 API/UI 仍叫「商店」）；`logger`、`static`、`sse` 物理上是 `internal/core/httpapi` 的包内子包（不单开顶层目录，避免"7 个子包"契约漂移）；`envprobe`（§2.11）是启动期一次性探测，放 `cmd/kored/envprobe`，不进内核规则集。
+**§2 共 18 小节 = 15 个内核模块 + 3 个支撑小节**。模块数唯一口径是**代码事实**：`ls internal/core/` 的 15 个包，一包一节——`auth` / `bus` / `config` / `credential` / `envprobe` / `filewrite` / `httpapi` / `installer` / `market` / `metrics` / `privilege` / `registry` / `scheduler` / `store` / `supervisor`（§2.1–§2.7、§2.11–§2.18；编号沿用历史不重排，避免外部交叉引用失效）。其中 `installer`（§2.12）、`privilege`（§2.13，ADR-0018 提权通道）、`market`（§2.14）、`scheduler`（§2.15，ADR-0019 定时任务）、`credential`（§2.16，ADR-0026 托管凭据）、`filewrite`（§2.17，ADR-0028 受控文件写）、`metrics`（§2.18，请求路径惰性采样）是后续里程碑新增模块（包名用 `market` 避开 §2.2 持久化 `store`，对外 API/UI 仍叫「商店」）。`envprobe`（§2.11）是启动期一次性探测，**包在 `internal/core/envprobe`**、由 `cmd/kored` 装配，属内核包、计入模块数。3 个支撑小节**不是包、不计入模块数**：`logger`（§2.8，跨包 `log/slog` 约定，无独立目录）、`static`（§2.9，`internal/core/httpapi/server.go` 的 `staticRoutes()` + `embed.FS`）、`sse`（§2.10，`internal/core/httpapi/sse.go`）。
 
 ### 2.1 `internal/core/config`
 
@@ -86,14 +86,14 @@
 - **失败模式与处理**：帧长 > 8 MiB 或 < 2 字节 → 断开该连接 + `E_INVALID`（超长帧是攻击或 bug，不尝试读一半）；JSON 解析失败 → `E_INVALID` 并记 method 摘要；调用目标未运行（lazy/oneshot）→ 触发冷启动并排队（上限 32，超限 429 `E_RATELIMIT`）；插件 15 s 不响应（默认，envelope 可覆盖至 120 s）→ 504 `E_UPSTREAM`；连接断开 → 该插件所有在途请求立即 `E_UPSTREAM`（不重试，避免重复副作用）；缓冲满 → 丢最旧 + WARN（事件是通知不是事实来源）。
 - **明确不做什么**：不做消息持久化；不做自动重试（重连由 supervisor 负责）；不保证跨插件事件顺序；不做流式分片（单帧必须完整）。
 
-### 2.8 `internal/core/logger`（`log/slog`，无第三方）
+### 2.8 logger（跨包 `log/slog` 约定，非独立包）
 
 - **职责**：JSON 行日志写 `/var/log/kore/kore.log`（`0640 root:kore`），同时启动期镜像 stderr；字段固定 `ts,level,mod,req_id,msg`，可选 `plugin,method,dur_ms,err_code`；级别由 `log.level` 控制，热更即时生效。
 - **输入输出**：`Logger(mod)` 派生带 `mod` 的子 logger；调用方传 `req_id`/`plugin`/`method` 字段；输出单行 JSON（≤ 4 KiB/条，超长截断并记 `truncated=true`）。
 - **失败模式与处理**：日志文件不可写 → 降级 stderr 一次 WARN，并在内存保留最近 100 条供 `/system/info` 诊断；磁盘满 → WARN 一次后继续尝试（不阻塞业务）；时间戳统一 RFC3339 带毫秒与本地时区偏移。
 - **明确不做什么**：不做轮转（M3 落地：内核 10 MiB × 5、插件 10 MiB × 2，口径见 `DATA-MODEL.md`）；不做聚合/检索/上报；不打口令、Cookie、token、插件 payload 正文、Authorization 头；不在循环内逐条打印（批量操作只记汇总）。
 
-### 2.9 `internal/core/static`（含 embed）
+### 2.9 static（`internal/core/httpapi` 包内静态托管，含 embed）
 
 - **职责**：`//go:embed web/dist` 打进二进制；`GET /` 返回 `index.html`（SPA fallback：非 `/api/`、非 `/assets/` 的 404 回落到 index）；`/assets/*` 用构建期预压缩产物（`.gz`/`.br`），按 `Accept-Encoding` 直接发，`Cache-Control: public,max-age=31536000,immutable`；`/plugin-assets/<id>/*` 从 `/var/lib/kore/plugins/<id>/<version>/web/` 读，需会话，`Cache-Control: no-cache`（升级后必须刷新）。
 - **输入输出**：输入 URL 路径 + `Accept-Encoding`；输出字节流 + `Content-Type`（按扩展名白名单）+ `ETag`（文件 mtime+size 的 sha256 前 16 位）。
@@ -107,7 +107,7 @@
 - **失败模式与处理**：无 `http.Flusher` 或装配层未注入 `TaskEvents` → 501 `E_UNSUPPORTED`；订阅者通道满（16 帧）→ 丢弃该帧，不阻塞安装主流程；客户端断开 → `r.Context().Done()` 退订并关闭通道，连接级回收。
 - **明确不做什么**：不做 WebSocket/双向通道；不做 `Last-Event-ID` 补发与心跳定时器（G-19：禁止后台 goroutine 续命）；不做并发上限与 429（连接随请求生命周期结束）；不做事件持久化或跨进程广播。
 
-### 2.11 `cmd/kored/envprobe`（启动期探测，非内核规则）
+### 2.11 `internal/core/envprobe`（启动期探测）
 
 - **职责**：启动第 2 步一次性探测 **10** 项环境能力（平台/架构、OS 版本、AF_UNIX、对端身份、资源后端、委派可写、服务管理器、SELinux、AppArmor、状态目录文件系统）并产出不可变 capability report；按 Tier 判定后绑定 `internal/platform` 五接口。硬要求（平台/架构、OS 版本低于下限、状态目录文件系统）失败 **exit 6**；软要求（cgroup/Job Objects、委派、systemd/SCM/launchd、SELinux、AppArmor）缺失只 WARN + 降级。
 - **输入输出**：输入 `*config.Config`（只用 `paths.state_dir`）与只读探测；输出 `Report{arch,os,os_version,tier,kernel,cgroup_mode,cgroup_enforced,delegation,service_manager,selinux,apparmor,peer_identity,fs_type}`（**13 字段**，非适用平台记 `N/A`），由 `cmd/kored` 注入 httpapi，`GET /api/v1/system/info` 原样返回。探测项与矩阵见 [COMPATIBILITY.md](./COMPATIBILITY.md) §5–§7。
@@ -152,6 +152,27 @@
 - **失败模式与处理**：表达式非法 / 参数非对象 / `schedule` 与 `interval_s` 同给或都不给 → 400 `E_INVALID`；任务不存在 → 404 `E_NOTFOUND`；执行中手动触发或任务已禁用 → 409 `E_CONFLICT`；内置处理器或插件调用面未装配 → 执行失败并记 `failed`（不假装成功）；单条任务记录损坏 → 跳过 + WARN（不猜内容、不自动删）。
 - **端点**：`GET /api/v1/scheduler/tasks`、`POST /api/v1/scheduler/tasks`、`POST /api/v1/scheduler/tasks/{id}/run`、`DELETE /api/v1/scheduler/tasks/{id}`，全部要求 `system:admin`。
 - **明确不做什么**：不做秒级精度、不做 per-task 时区、不做分布式锁与跨机调度、不做业务参数校验、不写系统 crontab（那是插件自治）、不主动联网（G-10）。
+
+### 2.16 `internal/core/credential`（托管凭据库，ADR-0026 方案 A）
+
+- **职责**：凭据只落 `<install>/data/credentials/`（目录 `0700`）、元数据 `index.json`（`0600`，字段显式）、每条密钥 `<id>.secret`（`0600`，原子写）；读取只对 owner 或显式 grantee 放行，越权返回 `E_NEED_GRANT`；授权 / 撤销 / 删除先写审计（`credential.grant` / `credential.revoke` / `credential.delete`），审计写失败按 **fail-closed** 拒绝（`E_AUDIT`），操作不生效。
+- **输入输出**：`Set` / `Get` / `Grant` / `Revoke` / `List` / `Delete` / `EnvFor(pluginID)`；HTTP 侧 5 个端点集中为 `POST /credentials` · `GET /credentials` · `POST /credentials/{id}/grants` · `DELETE /credentials/{id}/grants/{grantee}` · `DELETE /credentials/{id}`，响应只回 `{id}` 或元数据，**永不返回 secret**。
+- **失败模式与处理**：既非 owner 也无授权 → `E_NEED_GRANT`；审计写失败 → `E_AUDIT` 且授权 / 删除不生效；secret 与索引均为原子写（临时文件 → rename），失败不留半文件。
+- **明确不做什么**：不写日志、不回显 secret（G-30）；结构体字段全部显式、不用 `map[string]any`（G-24）；不做外部 KMS / 加密托管（方案 A 是文件权限模型），也不把 secret 写进配置、state 或日志。
+
+### 2.17 `internal/core/filewrite`（受控文件写原语，ADR-0028 一期）
+
+- **职责**：只往白名单目录下的文件写受控内容——路径规范化 + 白名单前缀校验（拒绝 `..`、非规范路径、软链接目标与父目录）、内容 ≤ 256 KiB 且禁 NUL、`mode ∈ {0644,0600,0640}`、写前备份到 `<copyRoot>/<plugin>/<timestamp>/`（备份失败即中止）、审计 **fail-closed**（审计写不进去就不写文件，只记 sha256 / size / mode / 备份路径，不记全文）、原子替换（同目录 `O_CREAT|O_EXCL` 临时文件 → chmod → fsync → rename → fsync(dir)）。
+- **输入输出**：`ValidatePath` / `ValidateContent` / `ValidateMode` / `ValidatePlugin` 先校验，再由 `Write(Options)` 落盘并返回 `Result`（sha256 / size / mode / 备份路径），不返回文件全文。
+- **失败模式与处理**：路径越界（`..`、非规范、软链逃逸）→ 拒绝且不落盘；内容超 256 KiB 或含 NUL → 拒绝；`mode` 不在白名单 → 拒绝；备份失败 → 中止（不留未备份的新内容）；审计失败 → 不写文件（fail-closed）。
+- **明确不做什么**：不做内容语义校验（内核不认识 sshd / nginx 语法，G-01）；不做整文件替换以外的变更集（ADR-0028 §7 复审条件 3）；白名单只允许 drop-in 片段目录——这不是「任意路径写」。
+
+### 2.18 `internal/core/metrics`（请求路径惰性资源采样）
+
+- **职责**：在请求路径上惰性采集宿主资源快照——**零后台 goroutine、零周期定时器**（G-19）：每次 `Collect` 现读 `/proc`，CPU 百分比用两次 `/proc/stat` 差值算、基线懒缓存；进程启动时刻在包初始化时记录，用于 uptime。
+- **输入输出**：`Collect() (Snapshot, error)`；`Snapshot{CPUPercent,RSSKiB,DiskUsedKiB,DiskTotalKiB,Load1,Goroutines,FDs,UptimeSec,TakenAt}` 字段与 HTTP 契约一一对应，由 `GET /api/v1/system/metrics` 原样返回，并供 `GET /system/metrics` 观测点的资源红线告警埋点（RSS > 16 MiB / goroutine > 20）。
+- **失败模式与处理**：当前构建目标无采样实现 → `ErrUnsupported`（Tier B 降级**必须可见，不静默填 0**）；首次采样只建立基线、无差值可算；`/proc` 读取失败 → 返回错误，不虚构数值。
+- **明确不做什么**：不起后台采样 goroutine、不注册周期定时器（周期只允许 scheduler）；不存历史序列（无时序库，客户端按需轮询）；不做跨平台指标归一（缺失走 `ErrUnsupported` 降级，不伪造读数）。
 
 ## 3. 中间件链
 
