@@ -114,3 +114,11 @@
 | 实施 | 另行派发（`kore-verify-privilege`，39 把流程亲历者）；本 ADR 只落裁决，不改代码/脚本 |
 
 **实施前必须补齐**（沿用 §5）：密钥生成与离线备份 SOP、泄漏响应流程（吊销 + 换钥 + 重发）、两端常量单一真源（由脚本抽取比较替代人工 grep）。密钥属不可回滚资产，生成/销毁前必须用户确认。
+
+## 8. 实现记录（2026-11-23，方案 A 一期）
+
+- **脚本**：`kore-plugins/scripts/sign-index.sh` 改为读长期私钥——优先 `$KORE_SIGNING_KEY`，缺省 `~/.config/kore/signing/index-signing.seed`；缺失时 **exit 2** 并指向 [SIGNING-KEY-SOP](../SIGNING-KEY-SOP.md)，不再静默生成新钥；`--generate` 仅首次播种（已存在则 exit 3，拒绝覆盖），打印公钥供两端常量固定；兼容旧 `KORE_INDEX_KEY`（已弃用，仅过渡）。
+- **文档**：新增 [SIGNING-KEY-SOP](../SIGNING-KEY-SOP.md)（首次生成/备份/日常重签/轮换=二期 B/泄漏应急/复核周期）；[RELEASE](../RELEASE.md) 第 7–8 步改为“重签免 build 免重启”。
+- **不动**：`verify.go` 与 `validate-index.sh` 的公钥常量本轮**未变**（仍 `8b4fe19f…`）；不重签真索引（第 41 把另派）。
+- **自测**：临时密钥目录 + 副本索引：`--generate` 0、缺钥 2、重签 0、验签 0、篡改 1；两端公钥常量 before==after；真索引 `git status` 干净。
+- **残余**：私钥轮换仍需一次 rebuild+restart（二期 B）；`KORE_INDEX_KEY` 旧路径保留一个周期后删除。

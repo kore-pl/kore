@@ -43,6 +43,12 @@ Thumbs.db
 *.pem
 *.key
 
+# ---- 签名私钥（ADR-0025：长期密钥托管在仓库外，仅兜底防误提交）----
+*.seed
+.index-signing*
+index-signing*
+keys/index-signing*
+
 # ---- agent 临时产物 ----
 .agents/tmp/
 

@@ -32,8 +32,8 @@ sha256sum dist/<id>-<version>.tar.gz          # 与索引同版本 sha 比对
 4. **提交**：`chore(release): bump vX.Y.Z`（只含 `info.json` / `manifest.json` / `CHANGELOG.md`，用 `kore/scripts/safe-commit.sh`）。
 5. **发布**：`git tag -a vX.Y.Z`（**必须 annotated**，见 §5）→ `git push origin vX.Y.Z` → `gh release create vX.Y.Z dist/<id>-<version>.tar.gz`。
 6. **索引**：更新 `kore-plugins/index/plugins.json` 的 `version` / `sha256` / `size_bytes` / `download_url`；把新版本追加到 `index/versions.lock.json`；同步 `presets/*.json` 的固定版本。
-7. **重签**：`KORE_INDEX_KEY=<seed> bash scripts/sign-index.sh` → `bash scripts/validate-index.sh` 正向 exit 0、篡改正文反例非 0 → `make check`。
-8. **市场页 + 重启**：`bash scripts/build-market.sh`；换公钥必须 `cd ../kore && make build` 并重启 kored（公钥是编译期常量），见 [RUNBOOK](./RUNBOOK.md) §1。
+7. **重签**（长期密钥，ADR-0025）：`KORE_SIGNING_KEY=~/.config/kore/signing/index-signing.seed bash scripts/sign-index.sh` → `bash scripts/validate-index.sh` 正向 exit 0、篡改正文反例非 0 → `make check`。首次播种用 `--generate`，流程见 [SIGNING-KEY-SOP](./SIGNING-KEY-SOP.md)。
+8. **市场页（免重启）**：`bash scripts/build-market.sh`。公钥是编译期常量且**永不随重签变化**，日常重签**不需要** `make build`、不需要重启 kored；只有轮换/泄漏应急换公钥时才 `cd ../kore && make build` + 重启一次，见 [RUNBOOK](./RUNBOOK.md) §1。
 
 ## 3. 门禁
 
