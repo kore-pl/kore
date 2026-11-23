@@ -18,7 +18,12 @@
       persist: null, persistError: '', memory: null, memoryError: '',
       slowlog: null, slowlogError: '', slowlogLoaded: false, keyInfo: null, keyInfoError: '',
       busy: false, destroyed: false, discoveryState: 'loading', discovery: null, discoveryError: '',
-      autoNotice: null, autoPending: false };
+      autoNotice: null, autoPending: false,
+      // 写入键（redis.set）：类型/键/文本/行数据/TTL 预设；值按类型由 buildSetValue 组装。
+      setKey: '', setType: 'string', setText: '', setTTL: 0, setBusy: false, setError: '', setNotice: '',
+      setFormHost: null, setResultHost: null, writePanel: null,
+      // 服务端配置（redis.serverConfig.get/set）：三个白名单参数。
+      cfg: null, cfgError: '', cfgBusy: false, cfgNotice: '', cfgHost: null, cfgPanel: null, bgBusy: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -502,6 +507,8 @@
       if (S.persist.rdb_bgsave_in_progress) dots.appendChild(opDot('warn', 'RDB BGSAVE 进行中', ''));
       else dots.appendChild(opDot('ok', 'RDB 上次保存 ' + fmtAgo(S.persist.rdb_last_save_time), '上次保存时刻 ' + fmtClock(S.persist.rdb_last_save_time)));
       add(persCard, el('div', 'redis-ops-sub', '未落盘变更 ' + fmtInt(S.persist.rdb_changes_since_save) + ' 个键'));
+      var saveNow = add(persCard, el('button', 'btn btn-ghost redis-ops-action', S.bgBusy ? '触发中…' : '立即落盘（BGSAVE）'));
+      saveNow.type = 'button'; saveNow.disabled = !!S.bgBusy; on(saveNow, runBgsave);
     }
     // 卡 4：慢查询（24h）
     var slowCard = add(grid, el('div', 'redis-ops-card'));
@@ -558,7 +565,7 @@
     var name = S.selected; if (!name) return;
     S.persist = null; S.persistError = ''; S.memory = null; S.memoryError = '';
     S.slowlog = null; S.slowlogError = ''; S.slowlogLoaded = false;
-    paintOpsCards(); paintSlowlog();
+    paintOpsCards(); paintSlowlog(); loadServerConfig();
     invoke('redis.persistence', { instance: name }).then(function (data) {
       if (S.destroyed || S.selected !== name) return;
       S.persist = data; paintOpsCards();
@@ -617,6 +624,13 @@
       : '实例未返回内存占用（MEMORY USAGE 需 Redis ≥ 4.0）。'));
     var actions = add(S.detailHost, el('div', 'redis-actions'));
     actions.appendChild(btn(S.value ? 'btn-ghost' : 'btn-primary', S.value ? '重新读取值' : '读取值', function () { loadValue(S.activeKey); }));
+    // TTL 预设：1h / 1d / 7d + 清除过期（persist）；不让人填任意秒数。
+    var ttlOps = add(S.detailHost, el('div', 'redis-actions redis-ttl-ops'));
+    add(ttlOps, el('span', 'redis-detail-label', '过期时间'));
+    [[3600, '1 小时'], [86400, '1 天'], [604800, '7 天']].forEach(function (item) {
+      ttlOps.appendChild(btn('btn-ghost', item[1], function () { runKeyTTL(item[0]); }));
+    });
+    ttlOps.appendChild(btn('btn-ghost', '永久（清除过期）', runKeyPersist));
     add(S.detailHost, el('div', 'redis-detail-note', S.valueAsked ? '' : '读取值可能带来大对象传输，默认不自动执行。'));
   }
   function valueTable(headers, rows) {
@@ -650,6 +664,290 @@
     } else add(S.valueHost, el('pre', 'redis-value-pre', JSON.stringify(value, null, 2)));
     if (v.truncated) add(S.valueHost, el('div', 'db-truncated', '集合类最多显示前 100 项'));
   }
+  // ── 写入键 / TTL / 持久化 / 服务端配置 ──────────────────────────────────────
+  // 前端只做「类型 + 数据」表单：类型决定 value 形状，绝不让人直接拼 Redis 命令。
+  // 后端（redis 0.5.0）负责 RESET/覆盖语义、元素数与字节上限校验。
+  var REDIS_SET_TYPES = [
+    { value: 'string', label: '字符串 string', hint: '整段文本，写入即 SET（覆盖原值）' },
+    { value: 'hash', label: '哈希 hash', hint: '每行「字段=值」，写入 HSET' },
+    { value: 'list', label: '列表 list', hint: '每行一个元素，追加到 RPUSH 尾部' },
+    { value: 'set', label: '集合 set', hint: '每行一个成员，SADD' },
+    { value: 'zset', label: '有序集合 zset', hint: '每行「成员=分值」，分值必须是数字' }
+  ];
+  var REDIS_TTL_PRESETS = [
+    { value: 0, label: '不设置过期' }, { value: 3600, label: '1 小时' },
+    { value: 86400, label: '1 天' }, { value: 604800, label: '7 天' }
+  ];
+  // splitPairs 把 textarea 的「A=B」行拆成二元组；任一行缺分隔符即报错（不静默丢行）。
+  function splitPairs(text) {
+    var lines = String(text || '').split('\n'), pairs = [], bad = 0;
+    lines.forEach(function (line, index) {
+      if (!line.trim()) return;
+      var at = line.indexOf('=');
+      if (at <= 0) { bad = index + 1; return; }
+      pairs.push([line.slice(0, at).trim(), line.slice(at + 1).trim()]);
+    });
+    return { pairs: pairs, badLine: bad };
+  }
+  // buildSetValue 按当前类型把表单内容组装成后端 value 形状。
+  function buildSetValue() {
+    var type = S.setType;
+    if (type === 'string') return { ok: true, value: S.setText };
+    if (type === 'list' || type === 'set') {
+      var items = String(S.setText || '').split('\n').filter(function (line) { return line.length > 0; });
+      if (!items.length) return { ok: false, error: '至少填一个元素（每行一个）' };
+      return { ok: true, value: items };
+    }
+    var parsed = splitPairs(S.setText);
+    if (parsed.badLine) return { ok: false, error: '第 ' + parsed.badLine + ' 行缺少「=」：格式是「字段=值」' };
+    if (!parsed.pairs.length) return { ok: false, error: type === 'zset' ? '至少填一个「成员=分值」' : '至少填一个「字段=值」' };
+    if (type === 'hash') {
+      return { ok: true, value: parsed.pairs.map(function (pair) { return { field: pair[0], value: pair[1] }; }) };
+    }
+    for (var i = 0; i < parsed.pairs.length; i++) {
+      if (!isFinite(Number(parsed.pairs[i][1])) || String(parsed.pairs[i][1]).trim() === '') {
+        return { ok: false, error: '第 ' + (i + 1) + ' 个分值不是数字：zset 的「成员=分值」右侧必须是数字' };
+      }
+    }
+    return { ok: true, value: parsed.pairs.map(function (pair) { return { member: pair[0], score: pair[1] }; }) };
+  }
+  function setTypeMeta(type) {
+    for (var i = 0; i < REDIS_SET_TYPES.length; i++) if (REDIS_SET_TYPES[i].value === type) return REDIS_SET_TYPES[i];
+    return REDIS_SET_TYPES[0];
+  }
+  function paintSetForm() {
+    var host = S.setFormHost, result = S.setResultHost;
+    if (!host) return;
+    S.writePanel.hidden = !S.selected;
+    host.textContent = ''; result.textContent = ''; result.hidden = true;
+    if (!S.selected) return;
+    var grid = add(host, el('div', 'redis-set-grid'));
+    // 键名
+    var keyWrap = add(grid, el('label', 'redis-field'));
+    add(keyWrap, el('span', 'redis-label', '键名'));
+    var keyInput = add(keyWrap, el('input', 'redis-input'));
+    keyInput.value = S.setKey; keyInput.spellcheck = false; keyInput.placeholder = '例如 kore:demo:cache';
+    keyInput.addEventListener('input', function () { S.setKey = keyInput.value; });
+    // 类型：五档预设下拉
+    var typeWrap = add(grid, el('label', 'redis-field'));
+    add(typeWrap, el('span', 'redis-label', '类型'));
+    var typeSel = add(typeWrap, el('select', 'redis-input'));
+    REDIS_SET_TYPES.forEach(function (item) {
+      var opt = add(typeSel, el('option', null, item.label)); opt.value = item.value;
+      if (item.value === S.setType) opt.selected = true;
+    });
+    typeSel.addEventListener('change', function () {
+      S.setType = typeSel.value; S.setError = ''; paintSetForm();
+    });
+    // TTL 预设
+    var ttlWrap = add(grid, el('label', 'redis-field'));
+    add(ttlWrap, el('span', 'redis-label', '过期时间'));
+    var ttlSel = add(ttlWrap, el('select', 'redis-input'));
+    REDIS_TTL_PRESETS.forEach(function (item) {
+      var opt = add(ttlSel, el('option', null, item.label)); opt.value = String(item.value);
+      if (item.value === S.setTTL) opt.selected = true;
+    });
+    ttlSel.addEventListener('change', function () { S.setTTL = parseInt(ttlSel.value, 10) || 0; });
+    // 值：单行提示随类型变化（USABILITY：不解释命令，只解释数据形状）
+    var valueWrap = add(host, el('label', 'redis-field redis-set-value'));
+    add(valueWrap, el('span', 'redis-label', '值 · ' + setTypeMeta(S.setType).hint));
+    var area = add(valueWrap, el('textarea', 'redis-input redis-set-text'));
+    area.rows = 4; area.spellcheck = false;
+    area.value = S.setText;
+    area.placeholder = S.setType === 'string' ? '任意文本'
+      : (S.setType === 'hash' ? 'name=alice\nage=30'
+      : (S.setType === 'zset' ? 'alice=1\nbob=2'
+      : '每行一个元素'));
+    area.addEventListener('input', function () { S.setText = area.value; });
+    var ops = add(host, el('div', 'redis-actions'));
+    var submit = add(ops, el('button', 'btn btn-primary', S.setBusy ? '写入中…' : '写入'));
+    submit.type = 'button'; submit.disabled = !!S.setBusy || !S.selected;
+    on(submit, runSet);
+    add(host, el('p', 'redis-set-note',
+      '写入会覆盖同键的旧值（字符串 SET / 集合增量写）；一次写入的元素数与单值字节由后端上限约束。' +
+      (S.setTTL > 0 ? ' 写入后设置过期：' + fmtTTL(S.setTTL) + '。' : '')));
+    result.hidden = !(S.setError || S.setNotice);
+    if (S.setError) result.appendChild(notice('写入失败：' + S.setError + '。怎么办：' + redisWriteHint(S.setError)));
+    if (S.setNotice) result.appendChild(notice(S.setNotice, true));
+  }
+  // redisWriteHint 把写方法的错误翻成下一步（不展示 E_* 码）。
+  function redisWriteHint(text) {
+    var msg = String(text || '');
+    if (/READONLY/i.test(msg)) return '当前连到的是只读副本（replica）：请切换到主节点再写';
+    if (/NOAUTH|WRONGPASS|NO_PERM|ACL/i.test(msg)) return '当前账号没有写权限：请用有 SET/HSET/RPUSH/SADD/ZADD 权限的账号连接';
+    if (/OOM|maxmemory/i.test(msg)) return '实例内存已满（maxmemory）：先扩容或在「服务端配置」里调整淘汰策略';
+    if (/E_INVALID|非法|不得为空|超过上限/i.test(msg)) return '键名或值不合法：键名不能为空，元素数与单值字节需在后端上限内';
+    return hintFor(msg);
+  }
+  function runSet() {
+    if (!S.selected || S.setBusy) return;
+    var key = String(S.setKey || '').trim();
+    S.setError = ''; S.setNotice = '';
+    if (!key) { S.setError = '键名不能为空'; paintSetForm(); return; }
+    var built = buildSetValue();
+    if (!built.ok) { S.setError = built.error; paintSetForm(); return; }
+    var params = { instance: S.selected, key: key, type: S.setType, value: built.value };
+    if (S.setTTL > 0) params.ttl_s = S.setTTL;
+    S.setBusy = true; paintSetForm();
+    invoke('redis.set', params).then(function (data) {
+      if (S.destroyed) return;
+      S.setBusy = false;
+      S.setNotice = '已写入 ' + (data.key || key) + '（' + (data.type || S.setType) + '，TTL ' + fmtTTL(data.ttl_s) + '）';
+      paintSetForm(); loadKeys(); loadInfo();
+      if (S.activeKey && S.activeKey.key === key) loadKeyDetail({ key: key });
+    }, function (err) {
+      if (S.destroyed) return;
+      S.setBusy = false; S.setError = (err && err.message) || String(err);
+      paintSetForm();
+    });
+    paintSetForm();
+  }
+  // runKeyTTL 改 TTL（expire）或清除过期（persist），成功后刷新键详情。
+  function runKeyTTL(seconds) {
+    if (!S.selected || !S.activeKey) return;
+    var key = S.activeKey.key;
+    invoke('redis.expire', { instance: S.selected, key: key, ttl_s: seconds }).then(function () {
+      if (S.destroyed) return;
+      S.notice = '键「' + key + '」过期时间已设为 ' + fmtTTL(seconds);
+      paintNotice(); loadKeyDetail({ key: key }); loadInfo();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.noticeHost.appendChild(notice('设置过期失败：' + err.message + '。怎么办：' + redisWriteHint(err.message)));
+    });
+  }
+  function runKeyPersist() {
+    if (!S.selected || !S.activeKey) return;
+    var key = S.activeKey.key;
+    invoke('redis.persist', { instance: S.selected, key: key }).then(function (data) {
+      if (S.destroyed) return;
+      S.notice = data.persisted ? '键「' + key + '」已清除过期（永久保留）' : '键「' + key + '」本来就没有过期时间';
+      paintNotice(); loadKeyDetail({ key: key }); loadInfo();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.noticeHost.appendChild(notice('清除过期失败：' + err.message + '。怎么办：' + redisWriteHint(err.message)));
+    });
+  }
+  // runBgsave 触发后台 RDB 落盘，随后回读 persistence（bgsave 是异步的，稍后再刷一次）。
+  function runBgsave() {
+    if (!S.selected || S.bgBusy) return;
+    S.bgBusy = true; paintOpsCards();
+    invoke('redis.bgsave', { instance: S.selected }).then(function (data) {
+      if (S.destroyed) return;
+      S.bgBusy = false;
+      S.notice = '已触发 BGSAVE：' + (data.message || '后台落盘已开始') + '（完成状态见 AOF/RDB 卡片）';
+      paintNotice(); loadOps();
+      setTimeout(function () { if (!S.destroyed) loadOps(); }, 1500);
+    }, function (err) {
+      if (S.destroyed) return;
+      S.bgBusy = false; paintOpsCards();
+      S.noticeHost.appendChild(notice('触发 BGSAVE 失败：' + err.message + '。怎么办：' + redisWriteHint(err.message)));
+    });
+  }
+  // ── 服务端配置面板（maxmemory / maxmemory_policy / timeout）──
+  var REDIS_MAXMEMORY_POLICIES = ['volatile-lru', 'allkeys-lru', 'volatile-lfu', 'allkeys-lfu',
+    'volatile-random', 'allkeys-random', 'volatile-ttl', 'noeviction'];
+  function loadServerConfig() {
+    var name = S.selected; if (!name) return;
+    S.cfg = null; S.cfgError = ''; S.cfgNotice = ''; paintServerConfig();
+    invoke('redis.serverConfig.get', { instance: name }).then(function (data) {
+      if (S.destroyed || S.selected !== name) return;
+      S.cfg = data; paintServerConfig();
+    }, function (err) {
+      if (S.destroyed || S.selected !== name) return;
+      S.cfgError = err.message; paintServerConfig();
+    });
+  }
+  // cfgHint 把 CONFIG 相关错误翻成「怎么办」，重点回答「为什么这个参数改不了」。
+  function cfgHint(text) {
+    var msg = String(text || '');
+    if (/E_UNSUPPORTED/.test(msg) || /redis\.conf|不支持的参数|危险/.test(msg)) {
+      return '该参数需改 redis.conf：本页只允许热改 maxmemory / maxmemory_policy / timeout，' +
+        'dir / appendonly / requirepass / save 等必须写配置文件并重启 Redis';
+    }
+    if (/E_INVALID/.test(msg)) {
+      return '值不合法：maxmemory 只接受字节整数或 kb/mb/gb 后缀（0 = 不限制），策略必须是 8 种之一，' +
+        'timeout 必须是非负整数秒（0 = 不断开空闲连接）';
+    }
+    if (/CONFIG|disabled|rename-command|unknown command/i.test(msg)) {
+      return '实例禁用了 CONFIG 命令（rename-command 或 ACL）：请在 redis.conf 里启用 CONFIG，' +
+        '或改用允许 CONFIG 的管理账号';
+    }
+    return hintFor(msg);
+  }
+  function paintServerConfig() {
+    var host = S.cfgHost;
+    if (!host) return;
+    S.cfgPanel.hidden = !S.selected;
+    host.textContent = '';
+    if (!S.selected) return;
+    if (S.cfgError) {
+      add(host, el('div', 'db-notice', '服务端配置读取失败：' + S.cfgError + '。怎么办：' + cfgHint(S.cfgError)));
+      return;
+    }
+    if (!S.cfg) { add(host, el('div', 'muted redis-loading', '正在读取服务端配置…')); return; }
+    var cfg = S.cfg.config || {};
+    var grid = add(host, el('div', 'redis-cfg-grid'));
+    function cfgField(labelText, helpText, control) {
+      var wrap = add(grid, el('label', 'redis-field'));
+      add(wrap, el('span', 'redis-label', labelText));
+      add(wrap, control);
+      add(wrap, el('span', 'redis-set-note', helpText));
+      return control;
+    }
+    var maxInput = el('input', 'redis-input');
+    maxInput.value = cfg.maxmemory || '';
+    maxInput.placeholder = '例如 256mb 或 268435456；0 = 不限制';
+    cfgField('最大内存 maxmemory', '写入后立即生效（CONFIG SET maxmemory）', maxInput);
+    var policySel = el('select', 'redis-input');
+    REDIS_MAXMEMORY_POLICIES.forEach(function (name) {
+      var opt = add(policySel, el('option', null, name)); opt.value = name;
+      if (name === cfg.maxmemory_policy) opt.selected = true;
+    });
+    cfgField('淘汰策略 maxmemory-policy', '内存达到上限时按该策略淘汰键', policySel);
+    var timeoutInput = el('input', 'redis-input');
+    timeoutInput.value = cfg.timeout || '';
+    timeoutInput.placeholder = '空闲连接超时秒数；0 = 不断开';
+    cfgField('空闲超时 timeout', '客户端空闲多少秒后断开；0 = 不断开', timeoutInput);
+    var ops = add(host, el('div', 'redis-actions'));
+    var save = add(ops, el('button', 'btn btn-primary', S.cfgBusy ? '保存中…' : '保存配置'));
+    save.type = 'button'; save.disabled = !!S.cfgBusy;
+    on(save, function () { saveServerConfig(maxInput.value, policySel.value, timeoutInput.value); });
+    if (S.cfgNotice) add(host, el('div', 'db-notice redis-notice-ok', S.cfgNotice));
+    add(host, el('p', 'redis-set-note',
+      '只热改三个白名单参数；其它参数请改 redis.conf 并重启。maxmemory 需带单位或字节数，' +
+      '策略见下拉，timeout 为秒。'));
+  }
+  function saveServerConfig(maxmemory, policy, timeout) {
+    if (!S.selected || S.cfgBusy) return;
+    S.cfgNotice = '';
+    var patch = { instance: S.selected };
+    if (!/^[0-9]+(kb|mb|gb)?$/i.test(String(maxmemory || '').trim())) {
+      S.cfgError = ''; paintServerConfig();
+      S.cfgHost.appendChild(notice('maxmemory 格式不对：只允许字节整数或 kb/mb/gb 后缀（0 表示不限制）'));
+      return;
+    }
+    patch.maxmemory = String(maxmemory).trim();
+    patch.maxmemory_policy = policy;
+    if (!/^[0-9]+$/.test(String(timeout || '').trim())) {
+      S.cfgHost.appendChild(notice('timeout 必须是 0 或正整数秒'));
+      return;
+    }
+    patch.timeout = String(timeout).trim();
+    S.cfgBusy = true; paintServerConfig();
+    invoke('redis.serverConfig.set', patch).then(function (data) {
+      if (S.destroyed) return;
+      S.cfgBusy = false;
+      S.cfg = { instance: data.instance, config: data.config };
+      S.cfgNotice = '已保存：' + ((data.changed || []).join(' / ') || '无变化') + '（已回读生效值）';
+      paintServerConfig(); loadOps();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.cfgBusy = false; S.cfgError = (err && err.message) || String(err);
+      paintServerConfig();
+      S.cfgHost.appendChild(notice('保存失败：' + S.cfgError + '。怎么办：' + cfgHint(S.cfgError)));
+    });
+  }
+
   function selectInstance(name) {
     if (!name || S.selected === name) return;
     S.selected = name; S.info = null; S.infoError = ''; S.keys = []; S.keysLoaded = false;
@@ -660,7 +958,9 @@
     S.notice = ''; S.truncated = false; S.scanned = 0;
     S.shown = S.step; S.totalKeys = 0; S.loadingMore = false;
     S.checked = Object.create(null);
-    paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog();
+    S.setKey = ''; S.setText = ''; S.setTTL = 0; S.setError = ''; S.setNotice = ''; S.setBusy = false;
+    S.cfg = null; S.cfgError = ''; S.cfgNotice = ''; S.cfgBusy = false;
+    paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog(); paintSetForm(); paintServerConfig();
     loadInfo(); loadKeys(); loadOps();
   }  function loadInstances(reset) {
     if (reset) { S.selected = ''; S.info = null; S.keys = []; S.keysLoaded = false; S.autoNotice = null; }
@@ -833,10 +1133,19 @@
     var slow = panel('慢查询', 'SLOWLOG');
     S.slowPanel = slow.panel; S.slowPanel.hidden = true; add(S.root, slow.panel);
     S.slowHost = add(slow.panel, el('div', 'redis-slowlog'));
+    // 写入键：类型下拉 + 对应数据形状 + TTL 预设（不暴露 Redis 命令）。
+    var write = panel('写入键', 'SET / HSET / RPUSH / SADD / ZADD');
+    S.writePanel = write.panel; S.writePanel.hidden = true; add(S.root, write.panel);
+    S.setFormHost = add(write.panel, el('div', 'redis-set-form'));
+    S.setResultHost = add(write.panel, el('div', 'redis-set-result'));
+    // 服务端配置：三个白名单参数（其余需改 redis.conf）。
+    var cfgPanel = panel('服务端配置', 'maxmemory / maxmemory-policy / timeout');
+    S.cfgPanel = cfgPanel.panel; S.cfgPanel.hidden = true; add(S.root, cfgPanel.panel);
+    S.cfgHost = add(cfgPanel.panel, el('div', 'redis-cfg'));
     injectStyles();
     autoBanner();
     detect();
-    paintInstances(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog(); loadInstances();
+    paintInstances(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog(); paintSetForm(); paintServerConfig(); loadInstances();
     return { destroy: function () { S.destroyed = true; } };
   }
   // injectStyles 把本视图新增样式随视图注入 S.root；不改 web/style.css。
@@ -873,7 +1182,18 @@
       '.redis-slow-time{font-variant-numeric:tabular-nums;white-space:nowrap}',
       '.redis-slow-dur{font-variant-numeric:tabular-nums;white-space:nowrap}',
       '.redis-slow-cmd{word-break:break-all;max-width:520px}',
+      '.redis-set-form{padding:var(--kore-space-3) var(--kore-space-4) 0}',
+      '.redis-set-grid{display:grid;grid-template-columns:minmax(0,1fr) 180px 160px;gap:var(--kore-space-2);align-items:end}',
+      '.redis-set-value{margin-top:var(--kore-space-2)}',
+      '.redis-set-text{width:100%;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
+      '.redis-set-note{margin:var(--kore-space-1) 0 0;color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.5}',
+      '.redis-set-result{padding:0 var(--kore-space-4) var(--kore-space-3)}',
+      '.redis-cfg{padding:var(--kore-space-3) var(--kore-space-4)}',
+      '.redis-cfg-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--kore-space-3)}',
+      '.redis-ops-action{margin-top:var(--kore-space-2);align-self:flex-start}',
       '@media (max-width:960px){',
+      '  .redis-set-grid{grid-template-columns:1fr 1fr}',
+      '  .redis-cfg-grid{grid-template-columns:1fr}',
       '  .redis-ops-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:var(--kore-space-3)}',
       '  .redis-columns{grid-template-columns:1fr}',
       '  .redis-columns > .panel:last-child{position:static}',
