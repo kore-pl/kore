@@ -18,7 +18,7 @@ M2 的主壳前端是**零依赖静态产物**：没有打包器、没有 `node_
 | 项 | 裁决 |
 | --- | --- |
 | 版本与形态 | ECharts 5，**按需 ESM**：唯一入口 `web/charts/echarts-entry.js` 显式 import 所需图表 / 组件 / 渲染器；构建为 `web/dist/charts-echarts.js`（vendor chunk） |
-| 运行时封装 | `web/charts.js`：ESM，导出 `loadEcharts` / `createLineChart` / `disposeChart` / `disposeAll` + 实例计数；页面只经它建图，不直接 import ECharts |
+| 运行时封装 | `web/charts.js`：ESM，导出 `loadEcharts` / `createLineChart` / `disposeChart` / `disposeAll` / `count()`（活动实例数）；同一 host 复用实例，页面只经它建图，不直接 import ECharts |
 | 构建 | `scripts/build-charts.sh` + `Makefile` 的 `make charts`；产物 `web/dist/charts.js` 与 `web/dist/charts-echarts.js`，**必须平铺**（静态路由 `/assets/{file}` 只接受单段文件名） |
 | 首屏 | 图表不进首屏：`scripts/frontend-check.sh` 的 `FILES` 仍只列六件套，`d(首屏)/d(图表数)=0`；300 KiB gzip 预算不因图表增长 |
 | 二进制 | vendor chunk 是否进 `web/embed.go` 由实现方按 §13 / 本 ADR 落定；一旦纳入，仍受单二进制 ≤ 25 MiB 门禁（G-03 / ADR-0016），且禁 `*.map` |
