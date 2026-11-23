@@ -891,3 +891,52 @@ M3 开工前置（写任务卡时逐项带验收命令，不接受"顺手做了"
 - **事实**：agent 在工具调用里用 `setsid nohup ./bin/kored serve … &` 重启主实例（pid 3796220），5 分钟后该 bash 调用的 systemd transient scope（`dsh-subprocess-3949643-546ed4477b74.scope`）被 DSH 清理，journal 显示 "on client request" 对整 scope 发 SIGTERM → kored + site + terminal 全灭；kored 日志只有「插件进程意外退出 signal: terminated」，无正常关闭路径。
 - **判断**：`setsid`/`nohup` 只改会话与控制终端，**不脱离 cgroup v2**；「后台运行」≠「脱离工具调用的生命周期」。服务必须落进独立 unit（`systemd-run --user --unit=kored-local`），否则每次工具调用结束都可能顺手杀掉它。
 - **规则**：本地/开发机重启 kored 一律用 `systemd-run --user --unit=kored-local --collect …` 或 `systemctl --user restart kored-local`（RUNBOOK §1 步骤 6）；重启后必须核对 `cat /proc/<MainPID>/cgroup` 不含 `dsh-subprocess`。**MEMORY.md 2026-11-22 已有 live-games 的同款教训，但 kore RUNBOOK 未落流程——教训记在记忆里不落文件等于没记。**
+
+## 本轮复盘：2026-11-23（M5 收口前，教训密度最高的一轮）
+
+### 1. 并发会话归因误判（错怪了两个本树 agent）
+
+- **现象**：`d7b8e7b` / `fe33eba` / `cc47bac` 三次「越权提交」被当成树内 agent 违规，lead 据此错怪 `kore-impl-redis2` 与 `kore-impl-release-r5`（后者用逐条工具调用记录自证清白）。
+- **根因**：这些提交来自**用户另一个会话**（`docs-scribe`）在**同一 kore 工作树**并行工作；工作区 git 身份统一为 `pengtang1024`，`git show` 的 author 无法区分 agent 或会话。
+- **机制**：①每次提交首行带 `[agent:<name>]`（写进 `AGENTS.md` §3）；②碰 `AGENTS.md` / `ADR-0027` / `FRONTEND.md §13` 前先确认是否有另一会话在改（`git status` + 最近提交前缀 + 横向询问）；③归因未确认前不得点名，台账写「未能确认提交者」。
+
+### 2. ECharts 三次回退：错误条款会自我复制
+
+- **现象**：ADR-0027 被写成 accepted + `AGENTS.md` 新增 G-32，回退三次仍被重新提交（`d7b8e7b` → `edc14b6` → `ec94dd8` → `fe33eba`+`cc47bac` → 再清理）。
+- **根因**：不是某个 agent 不听话，而是**治理文件里的错误条款会自我复制**——`G-32` 留在 `AGENTS.md` 里，每个新回合的 agent 都读到它并当作硬门禁去实现，于是条款不断被"实现"回来。
+- **机制**：回退必须**连条款带产物一起清**（条款 + ADR 状态 + 构建链 + 入口文件），只改代码不改条款等于没改；治理文件改动前先确认并发会话（见第 1 条）。最终口径由用户裁定：**工程判据为准，ECharts5 首选但非硬指标**。
+
+### 3. `v0.4.1` tag 事故：发版窗口内仍有源码提交
+
+- **现象**：tag 打到 `244ddad`（该提交 `info.json` 已是 0.4.2），release 资产却来自 `23f8b7a`——tag 与资产不一致。
+- **根因**：**发版窗口内该仓仍有源码提交**，发版方按 HEAD 打了 tag，而不是按"资产实际来自哪个 sha"钉。
+- **机制**：发版窗口冻结该仓；`git tag -a v<ver> <sha>` **钉 sha 不钉 HEAD**；发布后三条自查（tag sha / 资产 sha / 索引 sha 三方一致）已写进 `docs/RELEASE.md §2.1`。
+
+### 4. `size_bytes` 自指：改数字会改包体
+
+- **现象**：`size_bytes` 写在 `info.json` 里，而 `info.json` 在 tarball 内——改数字会改变包体，进而让数字再次不匹配。
+- **根因**：自指字段没有解析不动点；实测 `diff` 在 **−29…+32** 呈稀疏混沌映射，**不是 ±1/±2** 的线性收敛。
+- **机制**：索引记**实测值**；`container` 用「±64 窗口精确优先搜索」拿不动点；**不批量改 23 仓**（24 次版本 bump 只为内部一致性，用户无感，不值）。
+
+### 5. 接口涟漪预算：加一个方法 = 一串连锁红
+
+- **现象**：`container.exec` 加方法后 4 个测试替身 + 6 条期望断言连锁变红；两人并行各改一半，出现 `file-changed` 冲突与 `AssertionError` 半路中断，最后只剩一行 `c504ded` 补绿。
+- **根因**：接口涟漪穿过所有实现与期望表，"不同文件"不等于"不同写域"；两人并行时谁都不是完整改动的 owner。
+- **机制**：「公共接口新增方法 + 测试替身 + 方法清单类断言」**视为同一写域、禁止并行**；此类卡窗口 ≥20 分钟，或拆成「实现+编译」与「测试涟漪+版本/dist」两张卡（已写进 `AGENTS.md` §4）。
+
+### 6. 用户旅程实测暴露产品级 P0：「没跑过的文档就是假文档」
+
+- **现象**：新装用户**无法登录**（QUICKSTART 要求手跑 python 生成 PBKDF2 哈希，不填则永远 401）；`install --package` 与运行中服务互斥未文档化；非 root `uninstall` **exit 0 假成功**。新手到能用 **11 步、其中 6 步文档没写**。
+- **根因**：文档与流程从未按"新用户"路径实测过；退出码没有与真实结果对齐（dry-run / 非 root 场景）。
+- **机制**：修 P0（`kored admin-password` + 首启引导 + uninstall 退出码与提示 + 安装占用提示）；确立「**没跑过的文档就是假文档**」——运维/安装流程必须实测并留证据，禁止只凭代码推断。
+
+## 本轮度量变化（2026-11-23）
+
+| 指标 | 本轮前 | 本轮后 | 判据 |
+| --- | --- | --- | --- |
+| L 分布 | L1.5 18 / L2 5 | **L1.5 2 / L2 21** | 23 可分级仓（`echo` 验证件不计） |
+| 方法面 | 220 | **252**（213 case + 20 site + 19 redis） | §6 命令实测 |
+| 主壳视图 | 21 导航项 / 19 懒加载模块 | **22 / 20** | `web/shell.js` + `Makefile` |
+| 首屏 gzip | 59,709 B | **60,926 B**（≤307,200） | `.agents/verify/v1-budget-measure.md` |
+| 主壳空载 VmRSS | — | **13.18 MiB**（红线 16） | 同上 |
+| 单二进制 | — | **9.99 MiB**（红线 25） | 同上 |
