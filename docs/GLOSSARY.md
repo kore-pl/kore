@@ -75,7 +75,7 @@
 | ADR | Architecture Decision Record | `docs/DECISIONS/<4 位序号>-<kebab-slug>.md`，记录备选、决策、后果、复审条件 | V·A·C | 不是变更日志；ADR 只记不可逆或跨模块的选择 |
 | 门禁 | gate | 可执行检查项的集合（`make gate` / `make docs-check`），不过不得合并 | V·A | 不是"建议"；门禁失败时禁止用"下次补"绕过 |
 | 蓝军 | red-team | 只出问题单、不修代码的对抗角色，专攻膨胀/越权/崩溃/资源 | V·A·C | 不是 verifier；verifier 复跑门禁，蓝军主动构造攻击 |
-| 会话 | session | 单用户登录后的服务端凭证，Cookie `kore_session`，TTL 12 h | A·C | 不是插件会话；插件无会话概念，只有连接 |
+| 会话 | session | 单用户登录后的服务端凭证，Cookie `kore_session`，默认 TTL 168h（7 天，可配 1m–720h；滑动阈值 `min(24h, ttl/2)`，绝对上限 30 天） | A·C | 不是插件会话；插件无会话概念，只有连接 |
 | 中间件链 | middleware chain | 固定 8 层：req_id→recover→access_log→body_limit→auth→csrf→rate_limit→router | A·C | 顺序不可调换；调换即评审拒绝 |
 | 请求标识 | req_id | 16 位 hex 的请求追踪标识，贯穿 HTTP 头、日志、插件帧 | A·C | 不是协议 `id`；`id` 用于请求-响应配对，`req_id` 用于跨进程追日志 |
 | 孤儿进程 | orphan process | 主壳崩溃后残留的插件进程，靠 `run.json` 的 pid + start_time 核对回收 | A·C | 不是僵尸进程；僵尸是已退出未 wait，孤儿是还活着但没人管 |

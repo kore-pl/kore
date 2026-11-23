@@ -213,3 +213,25 @@ GET /-/healthz            （TCP）→ 200
 2. **Tier B（macOS/Windows preview）的本机免密等价物**：Windows 命名管道 ACL、macOS `LOCAL_PEERCRED` 需分别验证，本 ADR 只定 Linux GA（Tier A）口径，Tier B 降级方案未设计。
 3. **7d / 24h / 30d 三个数值的最终取舍**：属可调参数，需 lead 拍板；代码只保证"默认值 + 显式配置优先"。
 4. **`local.access` 审计是否会显著增加写放大**：本机高频调用（agent 轮询）下每条请求写一条审计可能过密，建议只记写操作与首次连接；需在第 3 步实测后再定。
+
+## 实施注记（2026-11-23 追加；上文正文按 ADR 惯例保持历史原样，冲突处以代码为准）
+
+**性质**：本节只追加事实说明，不改写 §1.1 与 §6 的原始记录。§1.1 是 ADR 立项时（2026-11-23 早）的实测快照，其「固定 12h」结论已被同一日的后续实现取代。
+
+| §1.1 原文（立项时事实） | 现行事实 | 证据 |
+| --- | --- | --- |
+| 默认 TTL **12 小时**（`DefaultTTL = 12 * time.Hour`）、cookie `MaxAge` 43200 | `DefaultTTL = 7 * 24 * time.Hour`（168h）；cookie `MaxAge = int(m.ttl.Seconds())`，默认 604800 | `internal/core/auth/session.go:26`、`:297` |
+| `sessions` value **只存一个整数** `expiry.UnixNano()` | value 为 `"<expiryUnixNano> <createdUnixNano>"` 两段纳秒戳；旧单整数格式仍可读（按 TTL 反推 created）；bucket 内另有保留键 `password-fingerprint` | `internal/core/auth/session.go:103`、`:139-158`、`:36` |
+| 活跃**不续期，固定过期**（无滑动、无 cookie 重发） | 已实现滑动续期 `Slide`：仅当剩余寿命 < `min(24h, ttl/2)` 时把 expiry 推到 `now+ttl`（不越过 `created+30d`）并重发 cookie | `internal/core/auth/session.go:164-206` |
+| 绝对上限 **7 天** | `AbsoluteTTL = 30 * 24 * time.Hour`（30 天） | `internal/core/auth/session.go:29` |
+| §6 步骤 1 写「把文档纠偏成**固定 12h**」 | 该步已被实现取代：文档改为描述「默认 168h 滑动 + 阈值 `min(24h, ttl/2)` + 绝对 30 天」，**不是**「固定 12h」 | 见下方取代提交 |
+
+**取代本 ADR §1.1 现状描述的提交**：
+
+- `0cae448` `feat(auth): 面板会话 TTL 7 天 + 滑动续期` —— 改 `DefaultTTL` 为 7d、新增 `Slide`、value 增加 created 段、引入 30d 绝对上限。
+- `72bb463` `fix(core/auth): 滑动续期阈值改为 min(24h, ttl/2) 消除短 TTL 写放大` —— 续期阈值由固定 24h 改为 `min(24h, ttl/2)`。
+- `51dde8e` `docs(core): 会话 TTL 口径同步代码现状（默认 7d / 阈值 min(24h,ttl/2) / 绝对 30d）` —— `docs/CORE.md` §2.3 与 `docs/DATA-MODEL.md` §3.1 已按代码同步。
+
+**§1.1 中仍然成立的部分**：会话层「无 UA/IP 绑定」成立（`ua_hash` / `last_seen` 在 `*.go` 全仓零命中）；`auth.session_ttl` 取值域 1m–720h 成立（`internal/core/config/validate.go:62`）。
+
+**接口路径**：`GET /api/v1/self` 在实现中不存在，实际注册为 `GET /api/v1/auth/session`（`internal/core/httpapi/handlers.go:87`），响应 `{authenticated, expires_at}`；`docs/CORE.md` §2.3 已按实际路由改写。

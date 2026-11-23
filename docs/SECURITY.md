@@ -29,7 +29,7 @@
 | 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；本机 UDS/loopback 以操作系统身份免密（§3.2，ADR-0041），**远程**仍需 PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时远程口令走明文 |
 | 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（进程内存全局桶，见 §3.5）、恒定时间比较 | 慢速低频爆破（单机场景收益低）；锁定期随重启清零 |
 | CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token + `X-Kore-CSRF` + Origin 校验 | 同站 XSS 可绕过全部三层 |
-| 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、12h 滑动 TTL、登出即删、绑 UA 指纹哈希 | 同机 root 可读浏览器进程内存 |
+| 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、默认 168h（7 天）滑动 TTL（阈值 `min(24h, ttl/2)`，绝对上限 30 天）、登出即删 | 同机 root 可读浏览器进程内存；**无 UA/IP 指纹绑定**，被盗 cookie 可在其它浏览器重放 |
 | 插件越权调用 | 低权插件请求 `system:admin` 方法 | 宿主被改写 | capabilities 三处校验（安装/授予/调用）+ 审计 | 用户安装时授予过宽能力 |
 | 恶意插件包 | 安装来路不明的包 | 以 `kore-<id>` 执行任意代码 | M4 起 ed25519 强制签名；独立 uid + cgroup | M0–M3 未签名期无法证明来源 |
 | 索引仓库被篡改 | 索引指向恶意包，或把 sha256 换成攻击者的值 | 用户安装到恶意插件 | 索引只是**发现渠道，不是信任源**：kore 只信安装时计算并记录的 `plugins.package_sha256`，M4 起以 ed25519 验包 | 首次安装前索引与包同时被篡改且用户未核对来源时，sha256 自洽但包仍恶意（M4 签名后消失） |
@@ -88,9 +88,10 @@ kore 是**单管理员、本机管理**的产品（G-11：不做多用户 RBAC�
 
 ### 3.3 会话
 
-- 服务端存 bbolt `sessions`：key 为 32 字节随机 hex，value 含 `created`、`last_seen`、`ua_hash`、`ip_hash`。
-- TTL **12h 滑动**：每次鉴权通过刷新 `last_seen`；绝对上限 7 天，到期强制重新登录。
-- cookie：`kore_session=<hex>; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`，`Secure` 见 3.4。
+- 服务端存 bbolt `sessions`：key 为 token 的 `sha256`（64 位小写 hex，明文 token 不落库），value 为 `"<expiryUnixNano> <createdUnixNano>"` 两段纳秒戳（旧单整数格式仍可读）；bucket 内另有保留键 `password-fingerprint`（存 `sha256(admin_password_hash)`，启动时比对以决定是否全局吊销）。
+- TTL **默认 168h（7 天）滑动**：仅当剩余寿命低于 `min(24h, ttl/2)` 时把 `expiry` 推到 `now+ttl` 并重发 cookie（相邻两次续期至少间隔 `ttl/2`，避免每次鉴权写盘）；绝对上限 **30 天**（`created+30d`，续期不得越过），到点强制重新登录。`auth.session_ttl` 可配置，取值 1m–720h。
+- **不绑定 UA/IP**：会话与客户端指纹无关，全仓无 `ua_hash` / `last_seen` 字段；持有 token 即可重放（残余风险见 §1.3）。
+- cookie：`kore_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=<ttl 秒数>`（默认 604800），`Secure` 见 3.4。
 - 登出：删除服务端记录 + `Set-Cookie: kore_session=; Max-Age=0; Path=/`；服务端删除是唯一失效依据，不依赖浏览器。
 
 ### 3.4 `Secure` 在纯 HTTP 下的取舍
@@ -246,8 +247,8 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ## 11. 审计与日志脱敏
 
-- 审计写 bbolt `audit` bucket，保留 30 天或 10 万条（先到为准）：`login.success`、`login.failed`、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`invoke.<plugin>.<method>`（写/管理类；`audit.invoke_all=true` 时全量）、`invoke.burst`（同方法 1s 内超 10 次合并）、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。登录审计的 `ip` 保留前 3 段、`user_agent` 截断 100 字符，口令不落库。
-- **日志字段白名单**：`ts`、`level`、`event`、`req_id`、`plugin_id`、`method`、`code`、`dur_ms`、`ip_hash`、`ua_hash`、`bytes`。实现上先 marshal 成 map 再按白名单重建，**白名单外字段丢弃而非透传**（fail-closed）。
+- 审计写 bbolt `audit` bucket，**保留目标 90 天**（与 [DATA-MODEL](./DATA-MODEL.md) §11 一致；截至 2026-11-23 **无自动清理实现**，超期需手工清理）：`login.success`、`login.failed`、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`invoke.<plugin>.<method>`（写/管理类；`audit.invoke_all=true` 时全量）、`invoke.burst`（同方法 1s 内超 10 次合并）、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。登录审计的 `ip` 保留前 3 段、`user_agent` 截断 100 字符，口令不落库。
+- **日志字段白名单（M1-14 计划，当前未实现）**：目标字段集合为 `ts`、`level`、`event`、`req_id`、`plugin_id`、`method`、`code`、`dur_ms`、`bytes` 等，落地后按白名单重建、白名单外字段丢弃而非透传（fail-closed）。**现状**：`access_log` 中间件与白名单重建均未实现（`internal/core/httpapi/middleware.go:269` 标注归 M1-14），当前只有 `req_id` 注入；该集合**不含** `ua_hash` / `ip_hash`（全仓无此日志字段）。
 - 禁止记录：口令、token、cookie、secret、`Authorization`、完整请求体、签名原文；`ip`/`ua` 只存 sha256 前 16 字节。
 - 日志文件 `/var/log/kore/kore.log`（插件为 `/var/log/kore/plugins/<id>.log`）权限 `0640 root:kore`；轮转容量以 [DATA-MODEL](./DATA-MODEL.md) 为唯一真源（内核 10 MiB × 5、插件 10 MiB × 2），本文件不另立数字。
 
@@ -276,7 +277,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 | HTTP 监听 | 关闭（仅 UDS） | `KORE_HTTP_ADDR` | 开启即把攻击面从本机扩到网络 |
 | 监听地址 | `127.0.0.1:8787`（开启时） | 配置 | 改 `0.0.0.0` 暴露到内网 |
 | `auth.cookie_secure` | `auto` | 配置 | 纯 HTTP 非回环时不设 `Secure` |
-| 会话 TTL | 12h 滑动 / 7d 绝对 | 配置 | 调大增加劫持窗口 |
+| 会话 TTL | 168h（7d）滑动 / 30d 绝对 | `auth.session_ttl`（1m–720h） | 调大增加劫持窗口；阈值 `min(24h, ttl/2)` 决定写盘频率 |
 | 登录限速 | 60s 内 5 次失败锁 300s | 配置 | 调严易自锁，调松增爆破面 |
 | 插件签名 | `allow_unsigned=true`（M4 改 `false`） | 配置 | 未签名期无法证明来源 |
 | 插件包大小 | 以 [CORE](./CORE.md) `body_limit` 为真源 | 配置 | 调大增加解压炸弹面 |
