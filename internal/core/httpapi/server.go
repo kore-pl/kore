@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
+	"github.com/pengtang1024/kore/internal/core/credential"
 	"github.com/pengtang1024/kore/internal/core/envprobe"
 	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/core/privilege"
@@ -113,6 +114,8 @@ type Options struct {
 	// Scheduler 是内核定时任务调度器（ADR-0019）；nil 时 scheduler/* 端点回 501。
 	// 由 cmd/kored 注入（本包不 import store、不持有任务持久化逻辑）。
 	Scheduler *scheduler.Service
+	// Credentials 是 ADR-0026 凭据库；nil 时 credentials/* 端点回 501。
+	Credentials *credential.Service
 	// Alerts 是告警中心持久层（alerts bucket）；nil 时 alerts/* 端点回 501、
 	// 各检查点埋点静默跳过。由 cmd/kored 注入（本包不 import store，G-01）。
 	Alerts AlertSink

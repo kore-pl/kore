@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -14,6 +15,12 @@ type Manifests interface {
 	Manifest(id string) (*registry.Manifest, bool)
 	// Enabled 报告插件是否已 enable。
 	Enabled(id string) bool
+}
+
+// Credentials 是凭据注入的最小依赖（credential.Service 实现）。
+type Credentials interface {
+	// EnvFor 返回 KEY=value 形式的环境变量；调用方不得记录其内容（G-30）。
+	EnvFor(ctx context.Context, pluginID string) ([]string, error)
 }
 
 // Options 是 Manager 的构造参数，全部由装配层（cmd/kored）注入。
@@ -59,6 +66,9 @@ type Options struct {
 	// Auditor 是审计出口（M3-C）；nil 表示不审计。由装配层注入 store 实现，
 	// supervisor 只依赖该单方法接口，不 import config/store（G-01）。
 	Auditor Auditor
+	// Credentials 在启插件时返回该插件可见的凭据 env（ADR-0026）；nil 不注入。
+	// 只返回 owner 或显式 grantee 的条目，未授权不注入、不降级。
+	Credentials Credentials
 	// Identity 是插件低权身份的解析/创建/应用（ADR-0018）；nil 用宿主实现。
 	// 平台专有 API 全部收在 internal/platform（G-16）。
 	Identity platform.Identity

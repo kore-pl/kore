@@ -130,3 +130,9 @@ GET /api/v1/credentials?owner=db-mysql
 1. 需要跨主机 / 多租户凭据 → 重新评估（可能引入外部 secret store，属新 ADR）；
 2. Tier B（macOS/Windows preview）没有 `kore-<id>` 降权 → 凭据通道在该平台降级为 `E_NEED_GRANT` + 说明，不静默共享；
 3. v1.0 后若插件数量增长导致 UI 授权面板过载 → 引入"凭据策略"（按插件类别批量授权），单独立 ADR。
+
+## 8. 实现记录（2026-11-23，内核一期）
+
+- 已落地：`internal/core/credential/`（`Set` / `Get` / `Grant` / `Revoke` / `List` / `Delete` / `EnvFor`；目录 0700、`index.json` 与 `<id>.secret` 均 0600、原子写；越权 `E_NEED_GRANT`；Grant/Revoke **先审计后生效**，审计未装配或写失败一律 `E_AUDIT` 且不改索引）；supervisor `Credentials` 选项按 owner/grantee 注入 env（未授权不注入；读取失败 fail-closed 拒绝启动）；httpapi 4 端点（全部 `system:admin`，响应无 secret）。
+- 测试：`credential_test.go` 覆盖 Set/Get 往返、越权、Grant 后可见、Revoke 后失效、审计 fail-closed（错误 sink + nil sink）、0600/0700 断言、EnvFor 只对 owner/grantee 注入、List/Delete。
+- **未落地（需装配层补齐）**：`cmd/kored` 尚未构造 `credential.Service` 并注入 httpapi/supervisor——本任务写域不含 `cmd/`，端点与注入能力已就绪但生产路径未接线；补线后还需把 `Auditor` 适配到 store 审计出口。

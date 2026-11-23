@@ -90,7 +90,15 @@ func (m *Manager) spawn(inst *instance, acct platform.Account, dataDir string) e
 	}
 	cmd := exec.Command(filepath.Join(inst.manifest.Dir, inst.manifest.Entry))
 	cmd.Dir = stateDir
-	cmd.Env = append(os.Environ(), m.pluginEnv(inst, stateDir, dataDir, token)...)
+	env := m.pluginEnv(inst, stateDir, dataDir, token)
+	if m.opts.Credentials != nil {
+		credEnv, err := m.opts.Credentials.EnvFor(context.Background(), inst.manifest.ID)
+		if err != nil {
+			return errf(pluginapi.E_INTERNAL, "注入插件 %s 的凭据环境失败：%v", inst.manifest.ID, err)
+		}
+		env = append(env, credEnv...)
+	}
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = writer, writer
 	if acct.UID > 0 {
 		if err := m.identity.Apply(cmd, acct); err != nil {
