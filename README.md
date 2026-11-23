@@ -30,6 +30,17 @@ Kore 是**多仓库项目**：内核一仓、插件中心一仓、每个插件�
 
 插件只依赖 `kore/pkg/pluginapi`；`kore` 不 import 任何插件仓库（依赖单向，见 [AGENTS.md](AGENTS.md) G-13）。
 
+## 镜像仓库
+
+**GitHub 为主，Gitee 同步**：issue / PR / CI / release 全量以 GitHub 为准，Gitee 只做代码与发行物的可用性镜像，不在 Gitee 上开发。
+
+| 平台 | 地址 | 说明 |
+| --- | --- | --- |
+| GitHub（主） | <https://github.com/pengtang1024/kore> | 开发、评审、发版基线；release 全量保留 |
+| Gitee（镜像） | <https://gitee.com/pengtang1024/kore> | 同步 `main` 与 tag；release 只保留最新 5 个 |
+
+26 个仓库（内核 + 插件中心 + 24 个插件仓）同一策略；推送约定、失败处理与清理脚本见 [docs/GITEE-MIRROR.md](docs/GITEE-MIRROR.md)。
+
 ## 能力来源
 
 内核不含任何运维业务：功能由 **18–22 个插件仓库**提供，每个插件独立仓库、独立版本线、独立 CI，可以只装需要的那些。
