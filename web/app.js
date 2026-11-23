@@ -358,11 +358,17 @@
     return bar;
   }
 
-  // residentText 与监控页同源（system/info.supervisor.resident），分母明确标注上限；
+  // residentText 与监控页同源（system/info.supervisor）：分子=当前常驻，分母=常驻上限
+  // resident_max（R5-5 槽位保护：resident 限 2、lazy 保底 1 槽），lazy_slots 为可拉起的剩余槽位。
   // 概要页不再自己数插件，避免"概览 2 / 监控 3"的双口径。
-  function residentText(value) {
-    var n = fmtInt(value);
-    return n === '—' ? '—' : n + ' / 上限 3';
+  function residentText(sup) {
+    var n = fmtInt(sup.resident);
+    if (n === '—') return '—';
+    var max = fmtInt(sup.resident_max);
+    var text = max === '—' ? n + ' / 上限 3' : n + ' / ' + max;
+    var lazy = fmtInt(sup.lazy_slots);
+    if (lazy !== '—') text += ' · lazy 可用 ' + lazy;
+    return text;
   }
 
   // humanWarnings 把技术字符串翻成人话；原始细节留在 title，供排查时展开。
@@ -384,7 +390,7 @@
     var sup = data.supervisor && typeof data.supervisor === 'object' ? data.supervisor : {};
     var rows = [];
     rows.push(row('版本', data.version || '—'));
-    rows.push(row('常驻插件', residentText(sup.resident)));
+    rows.push(row('常驻插件', residentText(sup)));
     rows.push(row('插件总数', fmtInt(state.plugins.length)));
     var platform = [data.os, data.arch].filter(Boolean).join(' · ');
     rows.push(row('平台', platform || '—'));
