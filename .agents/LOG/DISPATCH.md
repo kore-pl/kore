@@ -56,6 +56,13 @@
 | 2026-11-23 | Issues 体系（Gitea 权威源）：`kore` 5 个 + 插件仓 3 个，标签 8 个 | architect | `.agents/BOARD.md` §9.1、Gitea issue | 无 | 8 issue 建成并回填 BOARD；GitHub 8 个加迁移标注 | `9118249` + 本批 | confirmed |
 | 2026-11-23 | 文档 GitHub URL 迁移（仓库地址 → `kore-pl`，module 路径保持 `pengtang1024`） | architect（`8c3265e`）+ release-r5 | `docs/`、`.agents/`、`README.md`、`AGENTS.md` | 迁移完成 | 13 文件提交；136 个 `.go` import 误改已回退，`go build`/`go vet` exit 0 | `8c3265e` / `2e17105` / `3876009` / `9118249` | confirmed |
 
+| 2026-11-23 | Round 7 · 零侵入阶段 B（kore uninstall 卸载链：unit/userdel/结构化账本） | implementer（零侵入 B 轨） | `internal/core/installer/`、`cmd/kored/`、`.agents/verify/` | 零侵入 A（ADR-0023） | 卸载链 + 结构化账本 + 验收证据；`593d224` + `1e1ad76` | `593d224` / `1e1ad76` | confirmed（三端已推） |
+| 2026-11-23 | Round 7 · WAF 视图（第 18 个视图）+ R5-2 基线口径更正 | implementer（WAF 轨） | `web/waf.js`、`web/shell.js`、`web/i18n/`、`docs/verify` | 视图框架 | WAF 视图接线 + 基线口径更正（原 sha 是权限错误文本）；`60307af` + `30a7f89` | `60307af` / `30a7f89` | confirmed（三端已推） |
+| 2026-11-23 | Round 7 · file 视图补搜索/回收站/改名/复制 | implementer（file 视图轨） | `web/files.js`、`web/shell.js` | file 插件 0.3.0 | 四项操作接线 + 双端验收；`a960749` | `a960749` | confirmed（三端已推） |
+| 2026-11-23 | Round 7 · 降权 P0 双修（独立通道 socket + 安装 mode 归一） | kore-verify-privilege（接手） | `internal/core/privilege/`、`internal/core/installer/` | 降权基线（`6ceeba8`） | `kore-channel.sock` 0660 `root:kore` + 四关校验；安装文件 mode 归一；`2310226` | `2310226` | confirmed（三端已推） |
+| 2026-11-23 | Round 7 · 推送收口（三端） | release-r5 / scribe | `kore` 三端（origin=gitea → github → gitee） | 上述四轨 | 三端推送回读一致、`make check` 13 段、主实例重启复核 healthz/商店全绿、三端一致性 0/78；本批台账提交 | 本次提交 | confirmed |
+
+
 ## 未回收与待补
 
 1. **`internal/core/config` / `registry` 的派发记录缺失**：文件已落盘（2026-11-22 00:2x），但会话内没有对应的 `team_task_*` 或派发消息可引；owner 列留 `—`，等 lead 补登记后再回填。

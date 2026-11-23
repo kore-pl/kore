@@ -129,6 +129,20 @@ M1 之后 18–22 个插件仓各自一张卡，**一个仓库一个 owner**，�
 
 | CS-20261123-05 | 拓扑与发布链收口：GitHub 迁 `kore-pl` 组织 + Gitea 唯一权威源 + 8 仓 production 升级 + 第 35 次重签（8 条新版本）+ process 视图接线 + 文档 URL 迁移（module 路径保持 `pengtang1024`） | `kore` @ `8c1578e`（第 35 把新公钥）→ `c43aed6`（process 视图 0.2.1 适配）→ `8c3265e` / `2e17105` / `3876009`（文档迁移：仓库地址 `kore-pl`、module 声明 `pengtang1024`）→ `9118249`（BOARD §9.1 issue 映射）；`kore-plugins` @ `f586c0e`（第 35 次重签，8 条新版本入索引，三端已推）；插件仓 8 个新版本：`container` 0.4.1、`db-postgres` 0.3.1、`dns` 0.3.1、`integrity` 0.3.2、`runtime-node` 0.2.3、`runtime-python` 0.2.3、`ssh-guard` 0.2.3、`waf` 0.3.1（均 `depth_level: production`，各仓 CHANGELOG / RELEASE-EVIDENCE 为证） | 无协议破坏性变更；module 路径保持 `github.com/pengtang1024/kore`（ADR-0024 决策 C），仓库地址统一 `github.com/kore-pl/*`；8 仓仅升 depth 与补 fault 测试，方法契约不变 | 插件仓（bump → dist 两打 → tag 干净树复现）→ `kore-plugins`（`versions.lock` + 8 条索引 + 第 35 次重签）→ `kore`（新公钥 `8c1578e` + process 视图 `c43aed6` + 文档迁移）；三端推送顺序 origin（Gitea）→ github → gitee | 三端推送完成（`kore` / `kore-plugins` / 8 插件仓）；商店复核全绿（索引 24 条、8 新版可安装、无 401）；`make check` 12 段 exit 0；`go build ./...` / `go vet ./...` exit 0；文档 `make docs-check` exit 0 | confirmed |
 
+
+### CS-20261123-06 · Round 7（零侵入 B + 双视图 + 降权 P0，已推三端）
+
+| 仓库 | commit | 内容 |
+|---|---|---|
+| kore | `593d224` + `1e1ad76` | 零侵入阶段 B：kore uninstall 卸载链（unit/userdel/结构化账本）+ 验收证据 |
+| kore | `60307af` + `30a7f89` | WAF 视图（第 18 个）+ R5-2 基线口径更正 |
+| kore | `a960749` | file 视图补搜索/回收站/改名/复制 |
+| kore | `2310226` | 降权 P0 双修：独立通道 socket（kore-channel.sock 0660 root:kore + 四关校验）+ 安装 mode 归一 |
+
+状态：`confirmed`（三端推送回读一致、make check 13 段、主实例重启复核 healthz/商店全绿、三端一致性 0/78）
+关联：Gitea #2（零侵入 B）closed；Gitea #3（前端接线）closed。
+
+
 ## 6. 里程碑裁决记录
 
 M0 / M1 期间产生过分歧、且必须以裁决收口的口径。后续任何任务先读这里，不要再以"某份正文当前这么写"为依据推翻。**M1 的裁决（第 21–30 条）不复制到本表**，以 [LOG/DECISIONS.md](LOG/DECISIONS.md) 为唯一真源；下表 1–11 是 M0 期间直接以 BOARD 收口的口径。
