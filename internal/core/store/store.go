@@ -37,10 +37,11 @@ const (
 	schemaKey = "schema_version"
 )
 
-// 8 个固定 bucket（键结构见 docs/DATA-MODEL.md §5）。
+// 9 个固定 bucket（键结构见 docs/DATA-MODEL.md §5）。
 //
-// scheduler_tasks / scheduler_runs 是 ADR-0019 的追加 bucket：additive 变更，
-// 旧二进制忽略新 bucket，schema 版本不变。
+// scheduler_tasks / scheduler_runs 是 ADR-0019 的追加 bucket；alerts 是告警中心
+// 的追加 bucket（顶层 `alerts` + 嵌套子桶 `events`，alerts.go）：均为 additive
+// 变更，旧二进制忽略新 bucket，schema 版本不变。
 const (
 	bucketMeta           = "meta"
 	bucketPlugins        = "plugins"
@@ -50,13 +51,14 @@ const (
 	bucketAudit          = "audit"
 	bucketSchedulerTasks = "scheduler_tasks"
 	bucketSchedulerRuns  = "scheduler_runs"
+	bucketAlerts         = "alerts"
 )
 
 // bucketNames 是建库时必须齐备的 bucket 列表。
 var bucketNames = []string{
 	bucketMeta, bucketPlugins, bucketPluginState,
 	bucketTasks, bucketSessions, bucketAudit,
-	bucketSchedulerTasks, bucketSchedulerRuns,
+	bucketSchedulerTasks, bucketSchedulerRuns, bucketAlerts,
 }
 
 // Store 是已打开的状态库句柄；Close 幂等。
@@ -65,9 +67,11 @@ type Store struct {
 	path      string
 	closeOnce sync.Once
 	closeErr  error
+	// now 是时间源；Open 时固定为 time.Now，测试可替换（去重窗口/键序测试用）。
+	now func() time.Time
 }
 
-// Open 创建状态目录并打开状态库，建齐 6 个 bucket 后校验 schema。
+// Open 创建状态目录并打开状态库，建齐 9 个 bucket（含 alerts 的嵌套 events）后校验 schema。
 func Open(stateDir string, logger *slog.Logger) (*Store, error) {
 	if stateDir == "" {
 		return nil, fmt.Errorf("%w: 路径为空", ErrStateDir)
@@ -93,7 +97,7 @@ func Open(stateDir string, logger *slog.Logger) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("%w: 收紧 %s 权限: %v", ErrStateDir, path, err)
 	}
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, path: path, now: time.Now}
 	if err := s.prepare(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -128,6 +132,14 @@ func (s *Store) prepare() error {
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 				return err
 			}
+		}
+		// alerts 的嵌套子桶 events（additive：旧库升级时自动补建，schema 不变）。
+		alerts := tx.Bucket([]byte(bucketAlerts))
+		if alerts == nil {
+			return fmt.Errorf("%w: %s 缺失", ErrBucket, bucketAlerts)
+		}
+		if _, err := alerts.CreateBucketIfNotExists([]byte(bucketAlertEvents)); err != nil {
+			return err
 		}
 		meta := tx.Bucket([]byte(bucketMeta))
 		raw := meta.Get([]byte(schemaKey))
@@ -175,7 +187,7 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
-// BucketNames 返回 8 个固定 bucket 的副本。
+// BucketNames 返回 9 个固定 bucket 的副本。
 func BucketNames() []string {
 	out := make([]string, len(bucketNames))
 	copy(out, bucketNames)
