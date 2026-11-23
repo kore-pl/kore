@@ -1,5 +1,5 @@
 // web/store.js — kore 软件商店：卡片网格 + 内联图标 + 分类筛选 + 搜索 + 安装/停用。
-// 零框架 / 零 CDN / 无外链，图标全部内联 emoji，对外只暴露 window.KoreStore.render(container)。
+// 零框架 / 零 CDN / 无外链，图标全部内联线性 SVG（禁 emoji，FRONTEND 红线 8），对外只暴露 window.KoreStore.render(container)。
 // 数据：商店索引 / 预设 / 已安装列表；写：安装、停用（X-Kore-CSRF 双提交）。
 // 调用形态：POST /api/v1/invoke/<id>/<id>.<action> —— 本视图不调 invoke，只走下方管理端点；
 // 一旦引入插件业务方法，方法段必须写 <id>.<action>，不得用裸动词。
@@ -9,11 +9,51 @@
   'use strict';
   var U = { plugins: '/api/v1/store/plugins', presets: '/api/v1/store/presets',
     install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/' };
-  // 图标映射：按 id 固定 emoji，21 个插件两两可区分（无外链、无字体依赖）。
-  var ICONS = { echo: '🔁', site: '🌐', file: '📁', ssl: '🔒', integrity: '🧾', cron: '⏰',
-    'ssh-guard': '🔑', monitor: '📈', logs: '📜', dns: '🧭', 'runtime-php': '🧩', 'runtime-node': '🟢',
-    'runtime-python': '🐍', 'db-mysql': '🗄️', 'db-postgres': '🐘', redis: '⚡', backup: '💾',
-    firewall: '🛡️', waf: '🚧', container: '📦', 'app-deploy': '🚀' };
+  // 图标映射：按 id 固定线性 SVG 路径（viewBox 20×20，stroke 1.6 圆角，与 shell.js 导航同线型），
+  // 21 个插件两两可区分（无外链、无字体依赖、颜色继承 --kore-text-2）。
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var ICON_PATHS = {
+    echo: ['M16 9a6 6 0 0 0-10.9-2.1', 'M4 3.5V8h4.5', 'M4 11a6 6 0 0 0 10.9 2.1', 'M16 16.5V12h-4.5'],
+    site: ['M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z', 'M2 10h16', 'M10 2c2.7 2 2.7 14 0 16', 'M10 2c-2.7 2-2.7 14 0 16'],
+    file: ['M4 4h5l2 3h5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z'],
+    ssl: ['M6.5 9V6.5a3.5 3.5 0 0 1 7 0V9', 'M5 9h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z', 'M10 12.5v2'],
+    integrity: ['M5 2.5h10v15l-2.5-1.6L10 17.5l-2.5-1.6L5 17.5z', 'M8 7h4', 'M8 10.5h4'],
+    cron: ['M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z', 'M10 5.5V10l3 1.8'],
+    'ssh-guard': ['M16.5 6.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0z', 'M11.5 9.5 4.5 16.5v2h2.5v-2h2v-2h2l1.6-1.6'],
+    monitor: ['M3.5 3.5v13h13', 'M6.5 12.5l3-3.5 2.5 2.5 4-5'],
+    logs: ['M4.5 3a1 1 0 0 1 1-1H12l3.5 3.5V17a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z', 'M12 2v4h3.5', 'M7.5 9.5h5', 'M7.5 12.5h5', 'M7.5 15.5h3'],
+    dns: ['M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z', 'M13.8 6.2 11.7 11.7 6.2 13.8 8.3 8.3z'],
+    'runtime-php': ['M7 5.5 2.5 10 7 14.5', 'M13 5.5 17.5 10 13 14.5', 'M11.2 4 8.8 16'],
+    'runtime-node': ['M10 2.5 16.5 6.2v7.6L10 17.5 3.5 13.8V6.2z'],
+    'runtime-python': ['M13.5 4.5c0-1.2-1.2-2-3.5-2s-3.5 1-3.5 3 1.5 2.8 3.5 2.8 3.5 1 3.5 3-1.2 3-3.5 3-3.5-.8-3.5-2'],
+    'db-mysql': ['M3.5 5.5c0-1.4 2.9-2.5 6.5-2.5s6.5 1.1 6.5 2.5-2.9 2.5-6.5 2.5-6.5-1.1-6.5-2.5z', 'M3.5 5.5v9c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-9', 'M3.5 10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5'],
+    'db-postgres': ['M3.5 4.5c0-1.2 2.9-2 6.5-2s6.5.8 6.5 2-2.9 2-6.5 2-6.5-.8-6.5-2z', 'M3.5 4.5v11c0 1.2 2.9 2 6.5 2s6.5-.8 6.5-2v-11', 'M3.5 8.5c0 1.2 2.9 2 6.5 2s6.5-.8 6.5-2', 'M3.5 12.5c0 1.2 2.9 2 6.5 2s6.5-.8 6.5-2'],
+    redis: ['M11.5 2.5 5 11h4.2l-1.2 6.5L14.5 9h-4.2z'],
+    backup: ['M4.5 3.5h9.2l2.8 2.8V16.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z', 'M7 3.5V8h6V3.5', 'M6.5 17v-5.5h7V17'],
+    firewall: ['M10 2.5 16 4.8V10c0 3.9-2.5 6.4-6 7.5-3.5-1.1-6-3.6-6-7.5V4.8z'],
+    waf: ['M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z', 'M4.7 4.7l10.6 10.6'],
+    container: ['M3.5 6.7 10 3l6.5 3.7v6.6L10 17l-6.5-3.7z', 'M3.5 6.7 10 10.4l6.5-3.7', 'M10 10.4V17'],
+    'app-deploy': ['M10 12.5V4', 'M6.5 7.5 10 4l3.5 3.5', 'M4 12.5v3a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3']
+  };
+  // 内联 SVG 工厂：线性风格统一（stroke 继承 currentColor），成功勾复用同一线型。
+  function iconSvg(paths) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.6');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (var i = 0; i < paths.length; i++) {
+      var pa = document.createElementNS(SVG_NS, 'path');
+      pa.setAttribute('d', paths[i]);
+      svg.appendChild(pa);
+    }
+    return svg;
+  }
+  function storeIcon(id) { return iconSvg(ICON_PATHS[id] || ICON_PATHS.container); }
+  function checkSvg() { return iconSvg(['M4.5 10.5l3.5 3.5 7.5-8']); }
   // 分类按 scenario_tags 映射；多标签插件会出现在多个分类（file = ops + data）。
   var CATS = [{ id: 'all', label: '全部', tags: [] }, { id: 'site', label: '站点与运行时', tags: ['web', 'app'] },
     { id: 'data', label: '数据库', tags: ['data'] }, { id: 'ops', label: '运维', tags: ['ops'] },
@@ -193,7 +233,8 @@
     var card = el('article', 'store-card' + (ins ? ' is-installed' : ''));
     card.setAttribute('data-plugin-id', p.id);
     var top = add(card, el('div', 'store-card-top'));
-    var icon = add(top, el('span', 'store-icon', ICONS[p.id] || '📦'));
+    var icon = add(top, el('span', 'store-icon'));
+    icon.appendChild(storeIcon(p.id));
     icon.setAttribute('role', 'img'); icon.setAttribute('aria-label', (p.name || p.id) + ' 图标');
     var head = add(top, el('div', 'store-card-head'));
     add(head, el('div', 'store-card-name', p.name || p.id));
@@ -204,7 +245,9 @@
     add(badges, el('span', 'store-badge ' + depth, depth === 'production' ? 'production · 生产级' : 'basic · 基础级'));
     var state = cardState(ins, p.version);
     if (state === 'latest') {
-      add(badges, el('span', 'store-badge installed', '已安装 ✅'));
+      var installedBadge = add(badges, el('span', 'store-badge installed'));
+      installedBadge.appendChild(checkSvg());
+      add(installedBadge, el('span', null, '已安装'));
       add(badges, el('span', 'store-badge muted', '已是最新'));
     } else if (state === 'upgradable') {
       add(badges, el('span', 'store-badge installed', '已安装'));
@@ -215,7 +258,9 @@
     }
     add(card, el('p', 'store-desc', descOf(p)));
     var st = S.status[p.id];
-    var status = add(card, el('div', 'store-card-status' + (st ? ' is-' + st.kind : ''), st ? st.text : ''));
+    var status = add(card, el('div', 'store-card-status' + (st ? ' is-' + st.kind : '')));
+    if (st && st.kind === 'ok') status.appendChild(checkSvg()); // 成功勾用 SVG，不用 emoji
+    if (st) add(status, el('span', null, st.text));
     status.setAttribute('role', 'status');
     var ops = add(card, el('div', 'store-ops'));
     if (ins) {
@@ -236,7 +281,8 @@
         noReinstall.disabled = true;
         noReinstall.title = '索引未收录该版本，无法重装；可停用插件';
       }
-      var off = add(ops, el('button', 'btn store-btn-danger', '停用'));
+      // 「停用」可逆 → 中性灰（C7 危险色通胀治理），类名同步去 danger 语义
+      var off = add(ops, el('button', 'btn store-btn-muted', '停用'));
       off.title = unsupported.title;
       on(off, function () { doDisable(p.id); });
     } else {
@@ -490,7 +536,7 @@
       if (res.status === 401) return setStatus(p.id, 'fail', '登录已过期，请重新登录');
       if (!res.ok) return setStatus(p.id, 'fail', '重装失败：' + errText(res));
       var reload = (res.data && res.data.reload) ? '（' + res.data.reload + '）' : '';
-      setStatus(p.id, 'ok', '重装成功 ✅' + reload);
+      setStatus(p.id, 'ok', '重装成功' + reload);
       loadInstalled();
     }).catch(function (err) {
       stop();
@@ -579,7 +625,7 @@
         }
         return setStatus(p.id, 'fail', '安装失败：' + errText(res));
       }
-      setStatus(p.id, 'ok', '安装成功 ✅');
+      setStatus(p.id, 'ok', '安装成功');
       loadInstalled();
     }).catch(function (err) {
       stop();

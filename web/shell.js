@@ -399,8 +399,9 @@
     '.kore-alert-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
     '.kore-alert-trigger svg{width:16px;height:16px;flex:0 0 auto}' +
     '.kore-alert-badge{position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;' +
-    'border-radius:8px;background:var(--kore-danger);color:var(--kore-text-1);font-size:10px;' +
-    'line-height:16px;text-align:center;font-variant-numeric:tabular-nums}' +
+    'border-radius:8px;background:var(--kore-danger);color:var(--kore-text-1);font-size:var(--kore-font-12);' +
+    'line-height:16px;text-align:center;font-variant-numeric:tabular-nums;' +
+    'z-index:var(--z-badge);box-shadow:0 0 0 2px var(--kore-bg-0)}' +
     '.kore-alert-badge.is-warn{background:var(--kore-warning);color:var(--kore-bg-0)}' +
     '.kore-alert-badge[hidden]{display:none}' +
     '@media (max-width:639px){.kore-alert-trigger{min-width:44px;min-height:44px}}';
