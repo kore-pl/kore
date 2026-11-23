@@ -60,7 +60,7 @@ func (w Warning) String() string {
 	return fmt.Sprintf("%s: %s %s", where, w.Key, w.Message)
 }
 
-// ResolvePath 按 KORE_CONFIG > --config > DefaultPath 解析配置路径。
+// ResolvePath 按 KORE_CONFIG > --config > profile 默认路径 解析配置路径。
 func ResolvePath(flagPath string) string {
 	if v := os.Getenv(EnvConfigPath); v != "" {
 		return v
@@ -68,7 +68,17 @@ func ResolvePath(flagPath string) string {
 	if flagPath != "" {
 		return flagPath
 	}
-	return DefaultPath
+	return DefaultConfigPath()
+}
+
+// DefaultConfigPath 返回当前 profile 下的默认配置路径：
+//   - portable：<install>/config/config.yaml（零侵入，ADR-0023）；
+//   - fhs：/etc/kore/config.yaml（发行版打包）。
+func DefaultConfigPath() string {
+	if resolveProfile() == ProfileFHS {
+		return DefaultPath
+	}
+	return filepath.Join(InstallRoot(), "config", "config.yaml")
 }
 
 // Load 解析配置并返回不可变快照；不阻断的告警通过返回值与日志同时给出。
@@ -86,6 +96,7 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 	data, err := os.ReadFile(path)
 	var snap *Snapshot
 	var warnings []Warning
+	usedDefaultConfig := false
 	switch {
 	case err == nil:
 		snap, warnings, err = parse(path, data)
@@ -93,6 +104,7 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 			return nil, warnings, err
 		}
 	case errors.Is(err, os.ErrNotExist):
+		usedDefaultConfig = true
 		snap = Default()
 		snap.Source = path
 		warnings = append(warnings, Warning{
@@ -110,6 +122,8 @@ func load(opts Options) (*Snapshot, []Warning, error) {
 		return nil, warnings, err
 	}
 	warnings = append(warnings, pathWarnings...)
+	// 零侵入告警（fhs 提示 + 旧路径迁移提示）放在最后：此时路径已就绪。
+	warnings = append(warnings, profileWarnings(snap, opts, usedDefaultConfig)...)
 	return snap, warnings, nil
 }
 

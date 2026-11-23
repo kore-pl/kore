@@ -245,6 +245,10 @@ secret-check: ## 明文凭据门禁（docs/ 与 .agents/verify/ 中不得出现�
 	@echo "[RUN ] secret-check"
 	@bash scripts/secret-check.sh
 
+zero-intrusion-check: ## 零侵入门禁（ADR-0023：隔离安装根下验证"删除目录即卸载"，含豁免项说明）
+	@echo "[RUN ] zero-intrusion-check（ADR-0023）"
+	@bash scripts/zero-intrusion-check.sh
+
 # repo-check 说明：第 2、3 项（kore-plugin- 引用 / 旧 SDK 路径）排除 `.agents/verify/`：
 # 那是冻结的验收证据，必然引用旧路径做对照；不排除会让"一次 FAIL 永久自锁"。
 # 排除范围仅限 verify 目录，`.agents/` 其余文件（WORKFLOW / BOARD / ROLES 等）照常扫描。
@@ -313,12 +317,12 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 	@echo "[RUN ] case-check"
 	@bash scripts/case-check.sh
 
-check: ## 聚合门禁（11 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积（G-03 阻断级）
+check: ## 聚合门禁（12 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线 + 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积（G-03 阻断级）+ 零侵入（ADR-0023）
 	@fail=0; \
-	echo "[RUN ] 1/11 docs-check"; \
+	echo "[RUN ] 1/12 docs-check"; \
 	if ! bash scripts/docs-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 2/11 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
+	echo "[RUN ] 2/12 依赖白名单 + 兼容基线（G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false）"; \
 	s=0; \
 	if ! grep -qE '^GOAMD64[[:space:]]*\?=[[:space:]]*v1$$' Makefile; then echo "[FAIL] GOAMD64 基线漂移（应 GOAMD64 ?= v1）"; s=1; fi; \
 	if ! grep -qE '^GOARM64[[:space:]]*\?=[[:space:]]*v8\.0$$' Makefile; then echo "[FAIL] GOARM64 基线漂移（应 GOARM64 ?= v8.0）"; s=1; fi; \
@@ -331,7 +335,7 @@ check: ## 聚合门禁（11 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[INFO] 依赖白名单（第三方 ≤3 个；同仓 module 不计配额，须 replace => ./）"; \
 	if ! bash scripts/dep-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 3/11 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
+	echo "[RUN ] 3/12 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
 	if [ ! -d ./cmd ] && [ ! -d ./internal ]; then \
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
@@ -341,31 +345,34 @@ check: ## 聚合门禁（11 段）：docs-check + 明文凭据 + 依赖白名单
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 4/11 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
+	echo "[RUN ] 4/12 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
 	if ! $(MAKE) --no-print-directory repo-check; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 5/11 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
+	echo "[RUN ] 5/12 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
 	if ! bash scripts/canonical-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 6/11 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 6/12 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
 	log_out=$$(bash scripts/log-check.sh 2>&1 || true); printf '%s\n' "$$log_out"; \
 	log_warn=$$(printf '%s\n' "$$log_out" | grep -c '^\[WARN\]' || true); log_warn=$${log_warn:-0}; \
 	if [ "$$log_warn" -gt 0 ]; then echo "[WARN] 台账有 $$log_warn 处缺口（WARN 级，不阻断；里程碑收口时人工判）"; fi; \
 	echo ""; \
-	echo "[RUN ] 7/11 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 7/12 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
 	wt_out=$$(bash scripts/wt-check.sh 2>&1 || true); printf '%s\n' "$$wt_out"; \
 	wt_warn=$$(printf '%s\n' "$$wt_out" | grep -c '^\[WARN\]' || true); wt_warn=$${wt_warn:-0}; \
 	if [ "$$wt_warn" -gt 0 ]; then echo "[WARN] worktree 卫生有 $$wt_warn 处残留（WARN 级，不阻断；里程碑收口前必须清空）"; fi; \
 	echo ""; \
-	echo "[RUN ] 8/11 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
+	echo "[RUN ] 8/12 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
 	if ! bash scripts/oss-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 9/11 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
+	echo "[RUN ] 9/12 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
 	if ! bash scripts/case-check.sh; then fail=1; fi; \
-	echo "[RUN ] 10/11 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
+	echo "[RUN ] 10/12 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
 	if ! $(MAKE) --no-print-directory frontend; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 11/11 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
+	echo "[RUN ] 11/12 零侵入门禁（ADR-0023：隔离安装根下系统路径零新增 / 豁免项单列）"; \
+	if ! bash scripts/zero-intrusion-check.sh; then fail=1; fi; \
+	echo ""; \
+	echo "[RUN ] 12/12 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
 	if ! bash scripts/secret-check.sh; then fail=1; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \

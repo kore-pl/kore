@@ -1,5 +1,5 @@
-> 状态: proposed · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
-> ADR 状态: proposed · 日期: 2026-11-23 · 决策者: lead · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md
+> 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
+> ADR 状态: accepted（2026-11-23 lead 裁决）· 实现进度: 阶段 A（portable 默认）+ E（`make zero-intrusion-check`）已落地 · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md
 
 # ADR-0023: 零侵入设计规范——删掉安装目录即等于卸载
 
@@ -212,3 +212,21 @@ nft list tables 2>/dev/null | grep -c 'kore_waf'
 2. `userns` 在 Tier A 全矩阵（RHEL8/Alpine/Debian）验证通过 → 复审 §3.2；
 3. 出现清单外写入的第三方插件 → 复审 §3.5 是否需收紧为"内核拒绝"（而非文档约束）；
 4. v1.0 发布前 → 用 §3.6 对**全新机器**跑一次，作为发布门禁。
+
+## 9. 实现记录（阶段 A + E，2026-11-23）
+
+lead 裁决后先落地"默认值 + 判据"，阶段 B（uninstall / changes.jsonl）与 C（插件目录改造）仍待排期。
+
+| 项 | 实现 | 证据 |
+| --- | --- | --- |
+| profile 字段 | `Snapshot.Profile` + 配置文件顶层 `profile`；`KORE_PROFILE`（最高）> 配置 > 可执行文件推导 | `internal/core/config/{types.go,profile.go,parse.go}`；非法值退出码 2（不静默降级） |
+| `<install>` 推导 | `KORE_HOME` > `os.Executable()`（符号链接解析后：`.../bin/<exe>` → 父目录；否则所在目录；落在 `/usr/bin` 等系统目录 → 自动退回 fhs） | `internal/core/config/profile.go`；理由见 §3.1：可执行文件位置是"用户实际把 Kore 放哪"的唯一可靠信号，`KORE_HOME` 给运维显式覆盖 |
+| portable 默认 | `config` / `data`（state+plugins+index）/ `run`（socket）/ `logs` 全部 `<install>` 内；配置默认 `<install>/config/config.yaml` | `defaultsFor` / `defaultLayout` / `DefaultConfigPath` |
+| fhs 告警 | 选 fhs 启动打 WARN（"非零侵入模式，删目录不清理系统路径"） | `profileWarnings`；`docs/CORE.md` §2.1 |
+| 旧路径迁移提示 | 检测旧配置/旧 `state.db` 且新路径为空 → 只打可操作 WARN，**不自动迁移** | `profileWarnings`；`docs/RUNBOOK.md` §6.3 |
+| 门禁 | `make zero-intrusion-check`（隔离安装根、不设 `KORE_HOME`/`--config`）：系统路径零新增 / portable 目录与 socket 在内 / 未新建 `kore-*` 用户与 unit；既有用户、unit 单列为豁免项 | `scripts/zero-intrusion-check.sh`；接入 `make check` 11/12 段 |
+| 文档 | CORE §2.1（profile 与环境变量 5 个）、RUNBOOK §6（安装/卸载/迁移/门禁）、ARCHITECTURE §2.2、AGENTS G-31 | 本 ADR + 上述文件 |
+
+**首跑结果（2026-11-23，本机）**：隔离根 `/tmp/kore-zero-intrusion.XXXX`，11 PASS / 0 INFO / 0 FAIL——`<install>/data|run|logs` 齐备、socket 在 `<install>/run/kore.sock`、`/-/healthz` 200、`/etc/kore` `/var/lib/kore` `/var/log/kore` `/run/kore` 零新增、无新用户/组/unit。
+
+**已知遗留（阶段 B/C）**：`kore uninstall` 尚未提供（豁免 #1/#2 的清理目前靠 RUNBOOK 命令）；`changes.jsonl` 未落地（插件宿主变更无清单）；`site` / `ssl` / `app-deploy` 的默认目录仍偏系统路径；`cmd/kored` 里 `index_dir` 空值兜底仍写 `/var/lib/kore/index`（不在本阶段写域，随 B 收口）。

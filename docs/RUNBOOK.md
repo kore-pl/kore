@@ -194,3 +194,84 @@ curl -sS --unix-socket $S -b $J 'http://kore/api/v1/audit?action=root.action&lim
 | polkit / systemd 拒绝 | `502 E_UPSTREAM` + systemd-run 错误原文 | 查 `journalctl -u kore` 与 `systemctl status kore-root-*` |
 
 **不要**把 `E_NEED_ROOT` 当成参数错误重试；也不要绕过内核直接给插件 `sudo` / setuid / root —— 那会破坏 ADR-0018 的威胁模型。
+
+## 6. 安装 / 卸载（零侵入 profile，ADR-0023）
+
+判据：**删掉安装目录即等于卸载**。`portable`（默认）下 Kore 的全部状态都在 `<install>` 内；安装目录外只允许 ADR-0023 §3.5 的 4 项豁免。
+
+### 6.1 portable 安装（默认，推荐）
+
+```bash
+# 1) 解压即用：<install> 自包含，二进制在 <install>/bin/kored
+tar -xzf kored-linux-amd64.tar.gz -C /opt/kore
+install -d /opt/kore/bin && install -m 0755 kored /opt/kore/bin/kored
+
+# 2) 前台试跑：不写任何系统路径（/etc/kore、/var/lib/kore、/run/kore、/var/log/kore 都不会出现）
+/opt/kore/bin/kored serve
+#    ├─ 配置：/opt/kore/config/config.yaml（可选；缺失走内置默认 + WARN）
+#    ├─ 状态：/opt/kore/data（state.db / plugins / index）
+#    ├─ socket：/opt/kore/run/kore.sock
+#    └─ 日志：/opt/kore/logs
+
+# 3) 需要开机自启时才装 unit（唯一常规豁免，ADR-0023 §3.5 #1）
+sudo tee /etc/systemd/system/kore.service >/dev/null <<'UNIT'
+[Unit]
+Description=kore thin kernel
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/opt/kore/bin/kored serve
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+KillMode=mixed
+Delegate=yes
+LimitNOFILE=65536
+RuntimeDirectory=kore
+RuntimeDirectoryMode=0700
+TimeoutStartSec=30
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload && sudo systemctl enable --now kore
+```
+
+安装目录换位置时用 `KORE_HOME` 显式指定（服务脚本里写 `Environment=KORE_HOME=/opt/kore` 最稳）；若二进制被装进 `/usr/local/bin` 等系统目录，内核会**自动退回 `fhs` profile 并打 WARN**——那是发行版打包形态，不是默认形态。
+
+### 6.2 卸载（两条路径）
+
+```bash
+# portable：先停服务（若装了 unit）、清豁免项，再删目录
+sudo systemctl disable --now kore 2>/dev/null || true
+sudo rm -f /etc/systemd/system/kore.service && sudo systemctl daemon-reload   # 豁免 #1
+sudo getent passwd | awk -F: '$1 ~ /^kore-/ {print $1}' | xargs -r -n1 sudo userdel   # 豁免 #2（root 内核降权时才有）
+rm -rf /opt/kore                                                                       # 主体：状态/配置/socket/日志一起没
+# 断言（应全部无输出）
+! test -e /etc/kore && ! test -e /var/lib/kore && ! test -e /var/log/kore && ! test -e /run/kore
+! pgrep -x kored && ! ss -lx | grep -q kore
+
+# fhs（发行版打包 / 显式 KORE_PROFILE=fhs）：路径在系统目录，按包管理器或手工清
+sudo systemctl disable --now kore && sudo rm -f /etc/systemd/system/kore.service
+sudo rm -rf /etc/kore /var/lib/kore /var/log/kore /run/kore
+```
+
+**用户主动施加的宿主变更默认不回滚**（ADR-0023 §3.4）：`<install>/data/changes.jsonl` 里逐条记录了 nginx vhost / ufw·nft 规则 / crontab 行等，`kore uninstall --purge` 才会按 `purge` 字段执行；不带 `--purge` 只打印清单。
+
+### 6.3 从旧（fhs）布局迁移
+
+```bash
+# 只提示、不自动迁移（ADR-0023 §3.1）：旧配置/旧状态存在而新路径为空时，启动日志会打 WARN
+# 方式 A：继续用旧路径（非零侵入，兼容）
+KORE_PROFILE=fhs /opt/kore/bin/kored serve
+# 方式 B：迁到 portable（先停服务）
+sudo systemctl stop kore
+install -d /opt/kore/data /opt/kore/config
+sudo cp -a /var/lib/kore/. /opt/kore/data/
+sudo cp -a /etc/kore/config.yaml /opt/kore/config/config.yaml 2>/dev/null || true
+/opt/kore/bin/kored serve     # 校验 /api/v1/system/info 的 paths 指向 /opt/kore/*
+```
+
+### 6.4 门禁
+
+`make zero-intrusion-check`：在 `/tmp` 建隔离安装根、编译 `<install>/bin/kored`、**不设** `KORE_HOME`/`--config` 起实例，断言 `portable` 目录与 socket 全在安装目录内、系统路径零新增、未新建 `kore-*` 用户/unit（既有用户与 unit 单列为豁免项）。该段同时是 `make check` 的第 11/12 段。

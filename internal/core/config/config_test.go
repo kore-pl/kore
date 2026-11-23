@@ -31,6 +31,8 @@ func loadFile(t *testing.T, path string) (*Snapshot, []Warning, error) {
 	t.Setenv(EnvConfigPath, "")
 	t.Setenv(EnvStateDir, "")
 	t.Setenv(EnvPluginDir, "")
+	t.Setenv(EnvProfile, "")
+	t.Setenv(EnvHome, "")
 	return Load(Options{FlagPath: path, Logger: testLogger()})
 }
 
@@ -41,8 +43,11 @@ func TestMissingFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("文件缺失应继续启动，实际错误: %v", err)
 	}
-	if snap.Paths.StateDir != "/var/lib/kore" || snap.Paths.PluginDir != "/var/lib/kore/plugins" {
-		t.Fatalf("默认目录不匹配: state_dir=%q plugin_dir=%q", snap.Paths.StateDir, snap.Paths.PluginDir)
+	if snap.Profile != ProfilePortable {
+		t.Fatalf("默认 profile 应为 portable，实际 %q", snap.Profile)
+	}
+	if filepath.Base(snap.Paths.StateDir) != "data" || filepath.Base(snap.Paths.PluginDir) != "plugins" {
+		t.Fatalf("portable 默认目录不匹配: state_dir=%q plugin_dir=%q", snap.Paths.StateDir, snap.Paths.PluginDir)
 	}
 	if snap.Auth.SessionTTL != 12*time.Hour {
 		t.Fatalf("默认 TTL 不匹配: %s", snap.Auth.SessionTTL)

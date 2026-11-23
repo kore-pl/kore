@@ -64,7 +64,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-28 | UI 交付双端证据：任何涉及用户界面（页面 / 视图 / 组件 / 样式 / 交互 / 文案）的交付，声明"完成"时必须同时给 ① PC 截图（1440×900 或 1280×800，full-page）② 手机截图（390×844）③ 产品定位自评（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前"可用"还是"占位"）；截图存 `.agents/verify/screenshots/`，命名 `<场景>-desktop-*.png` / `<场景>-mobile-*.png` | 缺任一项不得声明完成（任务记 BLOCKED，不记 PASS）；拿接口 200 / DOM 断言 / 设计稿替代截图同判 | 验收报告逐项核对：`file` / `identify` 读 PNG 实际宽高 + 自评三问原文；禁止同图缩放冒充双端 |
 | G-29 | 运行态写边界：`.kore-local.yaml` / `.kore-local-state/`（state.db / plugins / ssl / backups）/ `.kore-local-run/`（socket）/ `bin/kored` 及任何被运行中 `kored` 持有的文件属**运行态资产**，`git status` 看不出但不能在共享工作区随手改；测试要"不同索引 / 配置 / 状态"必须起**隔离实例**（独立 `--config` + state/run/log 落 `/tmp`）；确需临时改主配置时任务卡写明**何时回切**、完成前回切 + 重启 + 复核，workaround 必须带**过期条件** | 主实例读到旧数据即判未完成（如 2026-11-23：04:53:06 指向 `signed-index` 快照 / 04:53:40 重签完成 / 04:59:59 回切，期间商店把 discover 0.2.0 显示成 0.1.0） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 必须等于配置的 `kore-plugins/index`，且商店版本 == 索引文件版本；验收报告必须声明"本轮是否改动过主实例的运行态配置" |
 | G-30 | 明文凭据：`docs/` 与 `.agents/verify/` 不得出现明文口令（`MYSQL_ROOT_PASSWORD=` / `MYSQL_PWD=` / `REDIS_PASSWORD=` / `REDISCLI_AUTH=` / `KORE_MYSQL_PASSWORD=` / `ADMIN_PASSWORD=`，以及 JSON 的 `"password"` / `"secret"` / `"token"`）；占位只允许 `***` / `[REDACTED]` / `$VAR` / `<placeholder>` / `********` / `...` | 明文凭据入库（2026-11-23 `round3-live.md` 把 MySQL root 口令写进验收报告并推送公开仓库） | `make secret-check`（第 11 段，阻断级）；命中后把值换成 `***`，禁止删证据 |
-| G-31 | **零侵入**：安装目录外只允许 [ADR-0023](docs/DECISIONS/0023-zero-intrusion.md) §3.5 豁免清单的 4 项——systemd unit（`/etc/systemd/system/kore.service` + enable 软链）、插件系统用户 `kore-<id>`、**用户批准的宿主变更**（须有 `<install>/data/changes.jsonl` 清单可回滚）、显式 `make install` 的二进制；**新增任何安装目录外写入必须先改 ADR-0023**，新增路径/用户/unit 一律退回 | 改动退回 | 评审对照 ADR-0023 §3.5；`make zero-intrusion-check` 落地前人工核对（判据见 ADR §3.6） |
+| G-31 | **零侵入**：安装目录外只允许 [ADR-0023](docs/DECISIONS/0023-zero-intrusion.md) §3.5 豁免清单的 4 项——systemd unit（`/etc/systemd/system/kore.service` + enable 软链）、插件系统用户 `kore-<id>`、**用户批准的宿主变更**（须有 `<install>/data/changes.jsonl` 清单可回滚）、显式 `make install` 的二进制；**新增任何安装目录外写入必须先改 ADR-0023**，新增路径/用户/unit 一律退回 | 改动退回 | 评审对照 ADR-0023 §3.5；`make zero-intrusion-check`（`make check` 11/12 段，判据见 ADR §3.6） |
 
 ## 3. 提交规范
 
@@ -109,7 +109,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（11 段）：docs-check + 明文凭据 + 依赖白名单 + 薄壳边界 + 跨仓库边界 | 可用：真跑 |
+| `make check` | 聚合门禁（12 段）：docs-check + 明文凭据 + 依赖白名单 + 薄壳边界 + 跨仓库边界 + 零侵入 | 可用：真跑 |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |

@@ -8,7 +8,7 @@ import (
 
 // 各层级的合法键名；未知键按"WARN + 建议最近键名"处理，不因拼写打死服务。
 var (
-	topKeys       = []string{"server", "auth", "paths", "log", "resources", "plugins", "store", "security", "audit", "cert_renew"}
+	topKeys       = []string{"profile", "server", "auth", "paths", "log", "resources", "plugins", "store", "security", "audit", "cert_renew"}
 	serverKeys    = []string{"addr", "socket", "tls"}
 	authKeys      = []string{"admin_password_hash", "session_ttl", "cookie_secure", "initialized"}
 	pathsKeys     = []string{"state_dir", "log_dir", "run_dir", "plugin_dir", "index_dir"}
@@ -39,9 +39,11 @@ func parse(source string, data []byte) (*Snapshot, []Warning, error) {
 	}
 	p := &parser{source: source, lines: make(map[string]int)}
 	snap := Default()
+	initialProfile := snap.Profile
 	if err := p.decode(&root, snap); err != nil {
 		return nil, p.warnings, err
 	}
+	p.warnings = append(p.warnings, reconcileProfile(snap, p.lines, initialProfile)...)
 	snap.Source = source
 	if err := p.validate(snap); err != nil {
 		return nil, p.warnings, err
@@ -69,6 +71,7 @@ func (p *parser) decode(root *yaml.Node, snap *Snapshot) error {
 		key string
 		fn  func(*yaml.Node) error
 	}{
+		{"profile", func(n *yaml.Node) error { return p.decodeProfile(n, snap) }},
 		{"server", func(n *yaml.Node) error { return p.decodeServer(n, &snap.Server) }},
 		{"auth", func(n *yaml.Node) error { return p.decodeAuth(n, &snap.Auth) }},
 		{"paths", func(n *yaml.Node) error { return p.decodePaths(n, &snap.Paths) }},
@@ -140,6 +143,20 @@ func (p *parser) decodeAuth(n *yaml.Node, out *Auth) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// decodeProfile 解析顶层 profile：portable / fhs（ADR-0023）。
+func (p *parser) decodeProfile(n *yaml.Node, out *Snapshot) error {
+	raw, err := p.str(n, "profile")
+	if err != nil {
+		return err
+	}
+	profile := normalizeProfile(raw)
+	if profile == "" {
+		return fmt.Errorf("%s: profile 只接受 %q 或 %q，实际 %q", p.source, ProfilePortable, ProfileFHS, raw)
+	}
+	out.Profile = profile
 	return nil
 }
 

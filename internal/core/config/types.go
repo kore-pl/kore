@@ -128,6 +128,8 @@ type CertRenew struct {
 
 // Snapshot 是一次解析产物；加载完成后调用方只读，不做原地修改。
 type Snapshot struct {
+	// Profile 是零侵入安装形态（portable / fhs，ADR-0023）。
+	Profile string
 	// Source 是本次解析使用的配置文件路径（文件不存在时仍记录期望路径）。
 	Source string
 	// Server 是入口配置。
@@ -152,20 +154,20 @@ type Snapshot struct {
 	CertRenew CertRenew
 }
 
-// Default 返回内置默认快照（不含任何文件与环境覆盖）。
-func Default() *Snapshot {
+// Default 返回内置默认快照（profile 由 KORE_PROFILE 与可执行文件位置决定，ADR-0023）。
+func Default() *Snapshot { return defaultsFor(resolveProfile()) }
+
+// defaultsFor 返回指定 profile 的默认快照：portable 全部落安装目录，fhs 用系统路径。
+func defaultsFor(profile string) *Snapshot {
+	paths, socket := defaultLayout(profile)
 	return &Snapshot{
-		Server: Server{Socket: "/run/kore/kore.sock"},
+		Profile: profile,
+		Server:  Server{Socket: socket},
 		Auth: Auth{
 			SessionTTL:   12 * time.Hour,
 			CookieSecure: "auto",
 		},
-		Paths: Paths{
-			StateDir: "/var/lib/kore",
-			LogDir:   "/var/log/kore",
-			RunDir:   "/run/kore",
-			IndexDir: "/var/lib/kore/index",
-		},
+		Paths:     paths,
 		Log:       Log{Level: "info", Rotate: Rotate{MaxSizeMB: 10, MaxBackups: 5}},
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true, ResidentMax: 2},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
@@ -177,9 +179,13 @@ func Default() *Snapshot {
 
 // ConfigDir 返回配置文件所在目录（供平台层创建目录使用）。
 func (s *Snapshot) ConfigDir() string {
-	dir := filepath.Dir(s.Source)
-	if dir == "." || dir == "" {
+	if s.Source != "" {
+		if dir := filepath.Dir(s.Source); dir != "." && dir != "" {
+			return dir
+		}
+	}
+	if s.Profile == ProfileFHS {
 		return "/etc/kore"
 	}
-	return dir
+	return filepath.Join(InstallRoot(), "config")
 }
