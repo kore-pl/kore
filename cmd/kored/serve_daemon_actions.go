@@ -67,6 +67,15 @@ func (d *daemon) Invoke(ctx context.Context, plugin, method string, params json.
 	return reply.Result, nil
 }
 
+// Demotion 回报插件降权是否真的生效（/system/info 的 demotion 段）。
+//
+// 非 root 内核 enabled=false 是合法形态，但必须让用户在接口里看得见——
+// 只打一条启动 WARN 日志，产品页面上完全无法判断插件到底有没有降权。
+func (d *daemon) Demotion() httpapi.DemotionInfo {
+	dem := d.manager.Demotion()
+	return httpapi.DemotionInfo{Enabled: dem.Enabled, KernelUID: dem.KernelUID, Reason: dem.Reason}
+}
+
 // Stats 汇总 resident 插件数、槽位余量与总重启数；读取时会顺带完成崩溃对账。
 func (d *daemon) Stats(ctx context.Context) (httpapi.SupervisorStats, error) {
 	plugins, err := d.Plugins(ctx)

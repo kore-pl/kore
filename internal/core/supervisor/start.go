@@ -42,10 +42,17 @@ func (m *Manager) start(ctx context.Context, inst *instance) error {
 func (m *Manager) startOnce(ctx context.Context, inst *instance) error {
 	inst.beginStart()
 	// 降权在 bind / exec 之前完成：用户不存在即本次启动失败（G-16 禁止静默降级）。
-	acct, err := m.prepareDemotion(inst)
+	// outcome.Demoted=false 是合法的「显式未降权」（非 root 内核），Reason 必有值；
+	// 这里不做静默处理：把结论落到日志，并继续以同 uid 运行（同 uid 是声明过的形态）。
+	dem, err := m.prepareDemotion(inst)
 	if err != nil {
 		return m.failStart(inst, err)
 	}
+	if !dem.Demoted {
+		m.logger.Debug("插件以未降权身份启动（显式降级形态）",
+			"plugin_id", inst.manifest.ID, "reason", dem.Reason)
+	}
+	acct := dem.Account
 	dataDir, err := m.preparePluginData(inst, acct)
 	if err != nil {
 		return m.failStart(inst, err)

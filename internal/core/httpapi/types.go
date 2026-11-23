@@ -76,6 +76,28 @@ type SupervisorStats struct {
 	LazySlots int `json:"lazy_slots"`
 }
 
+// DemotionInfo 是 /api/v1/system/info 的插件降权状态（ADR-0018）。
+//
+// 非 root 内核是合法形态（显式降级），但必须在接口里明说「未生效」：只打一条
+// WARN 日志不算告知，产品定位的「插件低权运行」会变成用户看不见的空话。
+type DemotionInfo struct {
+	// Enabled 为 true 表示插件进程确实以 kore-<id> 运行。
+	Enabled bool `json:"enabled"`
+	// KernelUID 是判定依据：内核进程的有效 uid。
+	KernelUID int `json:"kernel_uid"`
+	// Reason 是结论与可操作提示（未生效时说明如何生效）。
+	Reason string `json:"reason"`
+}
+
+// DemotionReporter 是装配层可选实现：回报插件降权是否生效。
+//
+// 未实现时 /system/info 的 demotion 段保持 enabled=false 且 reason 说明
+// 「装配层未回报」，不假装已降权。
+type DemotionReporter interface {
+	// Demotion 返回当前内核的降权结论。
+	Demotion() DemotionInfo
+}
+
 // metricsBody 是 GET /api/v1/system/metrics 的成功响应体。
 //
 // 字段名即前端契约（web/monitor.js），全部为显式标量（G-24，无 any/object）。

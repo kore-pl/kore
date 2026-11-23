@@ -25,6 +25,23 @@ type fakeIdentity struct {
 	account   platform.Account
 	ensured   []string
 	groups    []string
+	// removed 记录回滚删除的账户名；log 记录跨替身的调用序（可为 nil）。
+	removed []string
+	log     *callLog
+}
+
+// Remove 记录回滚删除（实现 platform.AccountRemover）。
+func (f *fakeIdentity) Remove(name string) error {
+	f.removed = append(f.removed, name)
+	f.record("remove:" + name)
+	return nil
+}
+
+// record 写跨替身调用序（log 为 nil 时不记）。
+func (f *fakeIdentity) record(event string) {
+	if f.log != nil {
+		f.log.add(event)
+	}
 }
 
 // Current 返回伪造的内核身份。
@@ -47,6 +64,7 @@ func (f *fakeIdentity) Ensure(name string, groups []string) (platform.Account, e
 	}
 	f.ensured = append(f.ensured, name)
 	f.groups = append(f.groups, groups...)
+	f.record("ensure:" + name)
 	acct := f.account
 	acct.Name = name
 	return acct, nil
@@ -54,6 +72,7 @@ func (f *fakeIdentity) Ensure(name string, groups []string) (platform.Account, e
 
 // Apply 复用真实平台实现（非 root 下是自降权），确保 Credential 真的写进 cmd。
 func (f *fakeIdentity) Apply(cmd *exec.Cmd, acct platform.Account) error {
+	f.record("apply:" + acct.Name)
 	return platform.SystemIdentity().Apply(cmd, acct)
 }
 
@@ -62,6 +81,11 @@ type fakeAccess struct {
 	mu        sync.Mutex
 	owned     []string
 	traversed []string
+	// ownErr 模拟属主移交失败（触发回滚删账户路径）。
+	ownErr error
+	// traverseErr 模拟「属主已移交之后」的可穿越失败（触发保留账户路径）。
+	traverseErr error
+	log         *callLog
 }
 
 // Own 记录路径并收紧 mode。
@@ -69,6 +93,12 @@ func (f *fakeAccess) Own(path string, _ platform.Account, mode os.FileMode) erro
 	f.mu.Lock()
 	f.owned = append(f.owned, path)
 	f.mu.Unlock()
+	if f.log != nil {
+		f.log.add("own:" + path)
+	}
+	if f.ownErr != nil {
+		return f.ownErr
+	}
 	return os.Chmod(path, mode)
 }
 
@@ -77,7 +107,10 @@ func (f *fakeAccess) Traversable(path string) error {
 	f.mu.Lock()
 	f.traversed = append(f.traversed, path)
 	f.mu.Unlock()
-	return nil
+	if f.log != nil {
+		f.log.add("traverse:" + path)
+	}
+	return f.traverseErr
 }
 
 // newDemotionIdentity 造一个「root 内核、kore-<id> 账户 uid=当前进程 uid」的假身份。

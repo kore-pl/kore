@@ -181,6 +181,18 @@ type Identity interface {
 	Apply(cmd *exec.Cmd, acct Account) error
 }
 
+// AccountRemover 是 Identity 的可选扩展：删除「本次启动刚创建、尚未接管任何文件」
+// 的插件系统账户，用于降权准备失败时的即时回滚。
+//
+// 刻意不并入 Identity：非 Linux 与测试替身不必实现，调用方用类型断言探测。
+// 只有在内核自己刚创建账户、且还没有把任何目录/文件交给它时才允许调用——
+// 一旦移交过属主，删用户会让文件挂在未分配的数字 uid 上（重试时新 uid 读不到，
+// 等价于丢数据），那种情况必须保留账户而不是回滚。
+type AccountRemover interface {
+	// Remove 删除系统账户（不含 home；插件账户本就无 home）。
+	Remove(name string) error
+}
+
 // Access 是插件降权所需的最小文件权限操作：属主与「可穿越」位。
 //
 // 只暴露两项能力（不提供任意 chmod 包装）：调用方无法借此放宽到 0777，

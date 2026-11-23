@@ -11,6 +11,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
@@ -43,11 +44,11 @@ type Manager struct {
 	logger   *slog.Logger
 	identity platform.Identity
 	access   platform.Access
-	// demote 表示插件进程必须降到 kore-<id>：kored 以 root 启动时为 true。
+	// demotion 是「插件降权是否生效」的显式结论（见 Demotion）。
 	// 非 root（开发 / 预览 / 容器）是 ADR-0018 的显式降级形态：插件与内核同 uid，
 	// 需要 root 的动作只能走 root-action 通道（禁止假装已经降权）。
-	demote  bool
-	mu      sync.Mutex
+	demotion Demotion
+	mu       sync.Mutex
 	plugins map[string]*instance
 	gates   map[string]*gate
 	// slotMu 串行全部槽位准入 + 冷启（resident enable/invoke 与 lazy 唤醒），
@@ -67,15 +68,29 @@ func New(opts Options) (*Manager, error) {
 		opts.Logger.Warn("槽位保护已关闭：resident_max 等于 max_slots，lazy 可能被 resident 饿死",
 			"resident_max", opts.ResidentMax, "max_slots", opts.MaxSlots)
 	}
-	demote := false
+	// demotion 必须给出「明确的是/否 + 理由」，不能只留一个 bool 让上层猜：
+	// 「未降权」是产品可见状态（/system/info 的 demotion 段），不是内部细节。
+	demotion := Demotion{Reason: "未生效：未知原因，插件与内核同 uid"}
 	switch current, err := opts.Identity.Current(); {
 	case err != nil:
 		// 非 Linux（Tier B）或无法判定身份：显式降级，不阻断启动（SECURITY §6.3）。
+		demotion.Reason = fmt.Sprintf(
+			"未生效：无法读取进程身份（%v）；非 Linux 为 Tier B 降级形态，插件与内核同 uid", err)
 		opts.Logger.Warn("无法读取进程身份，插件降权不可用（显式降级为同用户运行）", "err", err)
 	case current.UID == 0:
-		demote = true
+		demotion = Demotion{
+			Enabled:   true,
+			KernelUID: current.UID,
+			Reason:    "已生效：kored 以 root 运行，插件进程将以 kore-<id> 低权身份运行",
+		}
 		opts.Logger.Info("插件进程降权已启用：插件将以 kore-<id> 运行", "kernel_uid", current.UID)
 	default:
+		demotion = Demotion{
+			KernelUID: current.UID,
+			Reason: fmt.Sprintf(
+				"未生效：kored 以 uid=%d 运行（非 root），插件与内核同 uid；以 root 启动 kored 才会创建 kore-<id> 并降权。需要 root 的动作只能走 root-action 通道",
+				current.UID),
+		}
 		opts.Logger.Warn("kored 非 root：插件降权未生效（插件与内核同 uid）；需要 root 的动作只能走 root-action 通道",
 			"uid", current.UID)
 	}
@@ -84,11 +99,17 @@ func New(opts Options) (*Manager, error) {
 		logger:   opts.Logger,
 		identity: opts.Identity,
 		access:   opts.Access,
-		demote:   demote,
+		demotion: demotion,
 		plugins:  make(map[string]*instance),
 		gates:    make(map[string]*gate),
 	}, nil
 }
+
+// Demotion 返回「插件降权是否生效」的显式结论（供日志 / API / 测试读取）。
+//
+// Enabled=false 是合法形态（非 root 内核的显式降级），但必须是**可见**的：
+// 调用方不能靠「零值 Account」反推，因为零值同样可能来自降权路径的早期返回。
+func (m *Manager) Demotion() Demotion { return m.demotion }
 
 // Start 确保插件就绪。resident 走冷启动；lazy / oneshot 在 enable 阶段是 no-op
 // （只标记 desired=enabled，进程由首次 Ensure/invoke 按需拉起）。

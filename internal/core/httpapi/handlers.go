@@ -23,6 +23,8 @@ type systemInfo struct {
 	Supervisor SupervisorStats `json:"supervisor"`
 	// Paths 是已归一化为绝对路径的运行期目录（排障用）。
 	Paths PathsInfo `json:"paths"`
+	// Demotion 是插件降权是否真的生效（非 root 时 enabled=false + 原因）。
+	Demotion DemotionInfo `json:"demotion"`
 }
 
 // pluginsPath 是插件管理端点前缀。
@@ -124,7 +126,18 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	s.noteSlotAlerts(stats)
 	writeJSON(w, http.StatusOK, systemInfo{
 		Report: s.opts.Report, Version: s.opts.Version, Supervisor: stats, Paths: s.opts.Paths,
+		Demotion: s.demotionInfo(),
 	})
+}
+
+// demotionInfo 读取装配层的降权结论；未实现时不假装已降权。
+func (s *Server) demotionInfo() DemotionInfo {
+	if s.opts.Backend != nil {
+		if reporter, ok := s.opts.Backend.(DemotionReporter); ok {
+			return reporter.Demotion()
+		}
+	}
+	return DemotionInfo{Reason: "未生效：装配层未回报插件降权状态，插件与内核同 uid"}
 }
 
 // handleNotFound 把未知路由收敛成 404 E_NOTFOUND。

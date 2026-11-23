@@ -231,6 +231,29 @@ func (linuxIdentity) Apply(cmd *exec.Cmd, acct Account) error {
 	return nil
 }
 
+// Remove 删除系统账户（userdel，刻意不带 -r）。
+//
+// 只用于「刚创建、尚未接管任何文件」的回滚场景：插件账户 home 是 /nonexistent，
+// 带 -r 只会让 userdel 去动 /nonexistent，语义上没有收益、还多一次误删风险。
+// 账户已接管目录时的删除属卸载链（Cleanup.RemoveAccountsByPrefix），不在这里做。
+func (linuxIdentity) Remove(name string) error {
+	if err := validateAccountName(name); err != nil {
+		return err
+	}
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("%w: 删除系统用户 %s 需要 root", ErrAccount, name)
+	}
+	tool := firstExisting(userdelCandidates)
+	if tool == "" {
+		return fmt.Errorf("%w: 未找到 userdel，无法回滚删除系统用户 %s", ErrAccount, name)
+	}
+	if out, err := exec.Command(tool, name).CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: 删除系统用户 %s 失败：%v（%s）",
+			ErrAccount, name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // linuxAccess 是 Access 的 Linux 实现。
 type linuxAccess struct{}
 
