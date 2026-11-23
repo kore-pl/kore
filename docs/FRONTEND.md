@@ -239,7 +239,7 @@ iframe 加载、桥握手、前缀校验、子帧渲染全部包在 `try/catch` 
 | CSS | 原子化 | UnoCSS preset-wind，禁止引入完整 UI 框架样式包 |
 | 状态管理 | 无 | composables + `provide/inject`，不引 Pinia |
 | 首屏请求数 | ≤ 3 | 静态资源合并出 1 CSS + 1 JS + 1 字体，字体 `font-display: swap` |
-| 图表（ECharts 5） | **不进首屏**（`d(首屏)/d(图表数)=0`） | 按需 ESM + 懒加载 vendor chunk（`web/dist/charts.js` + `charts-echarts.js`），首屏 `FILES` 不列图表产物，见 §13 / [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md) |
+| 图表（自研 SVG） | **不进首屏**（`d(首屏)/d(图表数)=0`） | 零依赖内联 SVG（`web/monitor.js` 既有实现），无 vendor chunk、无第三方图表库；约定见 §13 |
 
 预算自检（构建后执行，数值为 gzip 后字节数之和）：
 
@@ -295,7 +295,7 @@ var Dist embed.FS
 - **鉴权边界**：`/` 与 `/assets/` 前缀在 `middleware.go` 的 `isPublicPath` 白名单内（面板壳无敏感数据，未登录也要能加载登录界面）。白名单**只认前缀一条**、不枚举文件名；所有 `/api/v1/*` 端点仍强制会话校验，鉴权与 CSRF 逻辑不因静态托管削弱；插件资产前缀 `/plugin-assets/*` 不在白名单内。视图模块自身的数据请求走 `/api/v1/*`，未登录照样 401——放行只覆盖静态文件本体。
 - **访问方式**：kored 默认只开 UDS（`server.addr` 为空），浏览器访问需在配置里显式写 `server.addr: 127.0.0.1:8787`（MVP 只允许回环地址），然后打开 `http://127.0.0.1:8787/`。完整步骤见根 [QUICKSTART.md](../QUICKSTART.md)。
 - 单二进制 ≤ 25 MiB（含 embed 前端）是门禁级预算，前端合计体积贡献上限按 300 KiB gzip 反推。
-- **图表 vendor chunk（§13 / [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)）**：`make charts`（`scripts/build-charts.sh`）产出 `web/dist/charts.js` 与 `web/dist/charts-echarts.js`，必须平铺、禁 `*.map`；是否纳入 `web/embed.go` 的显式清单由实现方按 §13 落定。首屏口径不变——`scripts/frontend-check.sh` 的 `FILES` 仍只列六件套，图表文件进 `web/dist` 但**不进首屏预算**。体积影响复核：`make charts` 后 `gzip -9 -c web/dist/charts*.js | wc -c` 记录 vendor + 封装合计，纳入 embed 后 `make build` 再按 `ls -l bin/kored` 与 `make budget-check` 复核单二进制 ≤ 25 MiB；体积累计见 `make frontend` 输出。
+- **图表无独立构建步骤**：自研 SVG 内联在主壳脚本（`web/monitor.js`），不产出 vendor chunk、无 `make charts`、无第三方图表库（ADR-0027 为 proposed/已驳回）。
 
 ## 10. 可访问性底线
 

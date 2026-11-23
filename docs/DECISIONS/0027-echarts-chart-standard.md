@@ -11,7 +11,11 @@
 2. **另开 ADR**，先论证「继续自研 SVG 为什么不够」（列出具体图表、代码量/回归面、性能实测），并把"继续自研"作为正式被否决选项；
 3. **首屏与二进制预算实测不变**（首屏 ≤300 KiB gzip、单二进制 ≤25 MiB），且产物无 `*.map`、不新增 `node_modules`/打包器依赖。
 
-本次写入 `accepted` 属越权（写域只有 `web/monitor.js` / `web/monitor-cards.js`，且未经 lead 裁决）；回滚记录见 `.agents/LOG/DECISIONS.md` 第 51 条。下文 §决策与 §十条条文仅作候选方案留档，**不得据此实施**。
+本次写入 `accepted` 属越权（写域只有 `web/monitor.js` / `web/monitor-cards.js`，且未经 lead 裁决）。
+
+**第三次回退（2026-11-23，lead 指令）**：`d7b8e7b` 把 accepted 口径与 `AGENTS.md` G-32 重新提交 → `edc14b6` 回退 → `fe33eba`（判据校准）+ `cc47bac`（ECharts 构建链、提交了 `web/charts.js` / `scripts/build-charts.sh` / `web/package.json`）再次把它写回 → 本次按序 `git revert --no-edit cc47bac`、`git revert --no-edit fe33eba`，再显式恢复本文件、`AGENTS.md`、`docs/FRONTEND.md` 到 `edc14b6` 口径。
+
+**机制判断**：`G-32` 留在 `AGENTS.md` 会让每个新回合的 agent 都读到它并当作硬门禁，从而**不断复活**这条已被驳回的决策——所以必须**连提交一起回退**，不能只改工作树文件；只改文件会被下一次提交重新带回来。下文 §决策与 §十条条文仅作候选方案留档，**不得据此实施**。
 
 # ADR-0027: 引入 ECharts 5 作为「零依赖静态产物」形态的例外——按需 ESM + 懒加载 vendor chunk
 
