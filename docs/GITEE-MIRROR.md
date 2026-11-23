@@ -34,11 +34,19 @@ git push gitee  main --tags || echo "WARN: gitee push failed (Gitea 已成功)" 
 | 平台 | 保留 | 说明 |
 | --- | --- | --- |
 | GitHub | 全量 | 公开镜像，release 基线（Gitea 为权威源） |
-| Gitee | 最新 5 个 release | 按 `created_at` 倒序，第 6 个起删除（含附件） |
+| Gitee | 最新 5 个 release | **按 tag 语义版本（`sort -V`）排序**，第 6 个起删除（含附件）；不使用 `created_at` / release `id` |
 
 - **建 release**：镜像 GitHub release 的 `tag_name` / `name` / `body`，附件用本地 `dist/<id>-<version>.tar.gz`（与 GitHub 同 sha256，可离线复用）；GitHub 无 release 的仓库只镜像分支与 tag。
 - **清理 release**：`scripts/gitee-release-prune.sh`，默认保留 5 个，先删附件再删 release。
-- 清理脚本支持 `--dry-run`（只打印计划）、`--keep N`、`--repo owner/name`（可重复、可跨仓库批量）。
+- 清理脚本支持 `--dry-run`（只打印判序依据与计划）、`--keep N`、`--repo owner/name`（可重复、可跨仓库批量）。
+
+**判序规则（为什么不用 `created_at`）**：补建批次按版本**倒序**创建，时间序 ≠ 版本序。2026-11-24 事故（`33088d9`）：脚本按 `created_at` 判序，把 `kore-plugin-integrity` 版本第 2 新的 `v0.4.0` 当第 6 新删掉、却漏删 `v0.3.0`，靠本地 `dist` 残留 tar.gz 才恢复（sha256 一致），**属运气**。现行规则：
+
+1. 只认 `^v[0-9]` 形态的 tag，`pkg/pluginapi/*` 等子模块 tag 不参与判序；
+2. 版本号用 GNU version sort（`sort -V`），`0.10.0` 排在 `0.9.0` 之后；
+3. 同版本多前缀（`v1.0.0` 与 `1.0.0` 并存）视为判序歧义 → **整仓跳过并 WARN**，绝不猜。
+
+**删除护栏**（任一不成立即中止该仓、不删）：① 删除后剩余数量 == `--keep`；② 被删版本**全部严格小于**保留集最小版本。`--dry-run` 对每仓打印「保留集（按版本序）+ 待删集 + 判序依据」与两条护栏的校验结果，可逐条人工核对。
 
 ```bash
 export GITEE_TOKEN=***            # 只从环境变量读取，禁止写进仓库（G-30）
