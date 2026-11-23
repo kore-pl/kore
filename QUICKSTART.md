@@ -117,7 +117,8 @@ python3 -c 'import hashlib,base64,os;s=os.urandom(16);h=hashlib.pbkdf2_hmac("sha
 拿到串之后两条路等价，都支持自动化（不交互、不读终端）：
 
 ```bash
-./bin/kored admin-password --hash '<上面输出的完整串>'    # 推荐：仍然走原子写 + 0600
+./bin/kored admin-password --hash '<上面输出的完整串>' --config ./kore-quickstart.yaml
+#    ↑ --config 与 §3 启动时相同；仍然走原子写 + 0600
 # 或直接把串填进配置文件的 auth.admin_password_hash（记得 chmod 600）
 ```
 
