@@ -165,6 +165,8 @@ func printInstallUsage(w io.Writer) {
 	fmt.Fprintln(w, "用法: kored install --package <tar.gz> | --scenario <id>")
 	fmt.Fprintln(w, "  --package  安装本地插件包 <id>-<version>.tar.gz")
 	fmt.Fprintln(w, "  --scenario 安装场景预设（M2 支持）")
+	fmt.Fprintln(w, "  --config    配置文件路径（缺省按 profile 解析）")
+	fmt.Fprintln(w, "  --state-dir 状态目录（覆盖配置）")
 	fmt.Fprintln(w, "注意: install 与 serve 独占同一 state.db，serve 运行时请用 POST /api/v1/store/install 安装；CLI install 仅离线使用（在线运行会撞锁 exit 3）")
 	fmt.Fprintln(w, "退出码: 0 正常 / 2 校验失败 / 3 状态目录或锁 / 4 存储")
 }

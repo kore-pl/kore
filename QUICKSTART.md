@@ -31,7 +31,7 @@ kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次
 提示：改 hash 后对后续登录立即生效（已建立的会话不受影响）；重启 kored 最稳妥（会踢掉旧会话）；忘记口令可再执行 `kored admin-password --set` 重置。
 ```
 
-- **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径，相对路径都按当前工作目录归一。
+- **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径；相对路径按**配置文件所在目录**解析（与启动目录无关），仍建议写绝对路径。
 - 忘记自己用了哪个路径时，看命令打印的绝对路径（`admin-password` 与 `serve` 启动日志里的配置路径是同一个）。
 - 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。
 - 命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。

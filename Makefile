@@ -323,7 +323,7 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 	@echo "[RUN ] case-check"
 	@bash scripts/case-check.sh
 
-store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 10 字段 + id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截）
+store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 字段 + 描述类字段四选一（全缺 WARN）+ id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截）
 	@bash scripts/store-check.sh
 
 presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积）

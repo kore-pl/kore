@@ -314,6 +314,8 @@ sudo kored uninstall --yes --purge
 | `--dry-run` | 只打印计划：命中的 unit / 账户 / 账本条目 / 将删的状态目录 |
 | `--yes` | 非交互确认；**无 TTY 且无它 → 零变更、退出码 2** |
 | `--purge` | 删状态目录 + 执行账本里可回滚的 `purge_op`（结构化操作，不执行 shell 字符串） |
+| `--config` | 配置文件路径（缺省按 profile 解析） |
+| `--state-dir` | 状态目录（覆盖配置） |
 | `--keep-service` / `--keep-users` | 保留 unit / 保留 `kore-*` 用户（只清另一项） |
 | `--unit-dir` / `--unit-name` / `--user-prefix` | 覆盖探测位置（默认 `/etc/systemd/system` / `kore.service` / `kore-`） |
 
