@@ -330,8 +330,9 @@ func New(opts Options, transport platform.Transport) *Server {
 	if server.auth != nil {
 		handler = server.withAuth(handler)
 		handler = server.withCSRF(handler)
-		// 本机免密不经过登录，kore_csrf 需在幂等请求上补发（详见 csrf_local.go）；
-		// 仅本机通道，远程仍必须登录换会话后才拿到令牌。
+		// 本机通道同样要过登录（ADR-0043：withAuth 对全部 /api/v1/* 一律会话校验，
+		// 本机未登录也是 401）；这里只在幂等请求上补发 kore_csrf 令牌、不放行请求
+		// （详见 csrf_local.go）。仅本机通道补发，远程仍必须登录换会话后才拿到令牌。
 		handler = server.withLocalCSRF(handler)
 	}
 	server.httpServer = &http.Server{

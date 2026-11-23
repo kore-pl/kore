@@ -176,9 +176,12 @@
 7. **最小空闲超时 300s 未进配置校验**：`idle_timeout_s` 的校验区间是 **60–1800s**
    （`internal/core/registry/validate.go:27-28`），没有任何 300s 下限；`docs/PLUGIN-PROTOCOL.md:77` 的口径是
    「配置可设 60–1800，需 300s 语义时显式配置」——即 300s 是**建议值**，不是门禁值。
-8. **ADR-0041 仍标 `proposed`，但其核心决策已被 ADR-0043（accepted）推翻**：
-   `docs/DECISIONS/0041-passwordless-server-admin.md` 头部 `ADR 状态: proposed`，而 ADR-0043 §0/§1 明确
-   「ADR-0041 把操作免密实现成免登录，是对需求的误读」。**状态未标 superseded**，读者会以为是待裁决项（G-06）。
+8. **ADR-0041 状态已回填为 `superseded-in-part`（`9b5d4dc`）——不是 `proposed`，也不是整篇 `superseded`**：
+   `docs/DECISIONS/0041-passwordless-server-admin.md:1-2` 现为 `状态: superseded-in-part`，文末「取代关系（2026-11-23）」
+   按 §2.A / §2.B / §2.C / §2.D / §2.E / §4 六组共 12 条逐档标注：A 组「本机通道即认证」被 ADR-0043 取代并已撤除
+   （`a68c4b1`）、B 组会话参数（7d 滑动 / `min(24h,ttl/2)` / 30d 绝对上限）与 §4 兼容条款仍有效且已落地、C 组长期
+   token 从未实施需重新提案。**别再写成「仍标 proposed」（与头部不符）或整篇 `superseded by 0043`（会把仍生效的
+   B 组与 §4 一并判死）**（G-06）。
 9. **插件 UI 分发链未实现**：ADR-0040 裁决 v1.0 前不补；`web/app.js` 的 `frame.src` 仍指向不存在路径。
 10. **`kored install --scenario` 只解析不落库**：`cmd/kored/install.go:62-65` 直接回 `E_UNSUPPORTED`
     （「场景预设归 M2，不假装成功」）；`--package` 才是真装路径。
@@ -198,7 +201,7 @@
 | 2 | 登录一次后读 `GET /api/v1/system/info`，复核 `paths.index_dir` == `kore-plugins/index` 且商店版本 == 索引 24 条 | 这是唯一没取到的验收项（被登录门挡住）。G-29 明确「回切后验数据不验配置」，只读 `.kore-local.yaml` 不算复核 | `paths.index_dir` 字面等于 `kore-plugins/index`；商店返回的 24 条版本与 `fbbec78` 索引逐条一致 |
 | 3 | 裁决权限语义：**改语义**（拆字段 / 改名）还是**加一层**（保留入站语义 + 新增「插件所需能力」）；裁决后补 `granted_capabilities` 写入路径，或把 `docs/SECURITY.md:129` / `docs/PLUGIN-PROTOCOL.md:119` 的承诺删掉 | 现在文档写「启用时用户确认并写入 `plugins` bucket」，代码里**没有写入路径**——这是 G-06 硬伤；且 20/24 插件声明 `system:admin`，语义反用（它表达的是「调用方要 admin」） | 二选一落地：要么 `granted_capabilities` 有写入 + 有测试，要么文档删承诺；`make docs-check` exit 0 且 `grep granted_capabilities` 与文档口径一致 |
 | 4 | 实现 `tasks` / `audit` 的按龄清理（或把 `docs/DATA-MODEL.md` 那两行保留窗口从表格移出，只留「目标」） | 文档已自己标注「尚未实现」，但表格仍列着具体保留天数，读者会当成现状。`tasks` bucket 甚至无读写方 | `grep -rn "retention" internal/core/` 有命中且接上调度；或表格改为「未实现」且无具体天数 |
-| 5 | ① `docs/DECISIONS/0041-*` 头部改标 `superseded by 0043`；② 给 waf 0.4.4 补一次整链 e2e（规则 CRUD → nft 回读 → 回滚）落 `.agents/verify/` | ① 0041 仍 `proposed`，但它的核心决策已被 accepted 的 0043 推翻，读者会误以为待裁决；② 0.4.4 修复来自真机 e2e，但本仓最新 WAF 证据仍是 0.4.3，交付无法复现 | ① 0041 头部状态与 0043 引用互指，`make docs-check` exit 0；② 新报告含命令 + 退出码 + nft 规则回读原文 |
+| 5 | ① ~~`docs/DECISIONS/0041-*` 头部改标 `superseded by 0043`~~ **已闭环（`9b5d4dc`）**：头部已是 `superseded-in-part` + 文末「取代关系」逐档表（整篇 `superseded by 0043` 与实际不符，会连带判死仍生效的 §2.B 与 §4）；② 给 waf 0.4.4 补一次整链 e2e（规则 CRUD → nft 回读 → 回滚）落 `.agents/verify/` | ① 0041 的核心「本机通道即认证」已被 accepted 的 0043 取代，但 §2.B 会话参数与 §4 兼容条款仍是现行代码事实——状态必须按档位表达，才不会被读成「待裁决」或「整篇作废」；② 0.4.4 修复来自真机 e2e，但本仓最新 WAF 证据仍是 0.4.3，交付无法复现 | ① 0041 头部与 0043 互指、`docs-check` exit 0（已达）；② 新报告含命令 + 退出码 + nft 规则回读原文 |
 
 ### D. 本轮「未确认」清单
 
