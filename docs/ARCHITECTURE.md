@@ -88,6 +88,7 @@ kore             ──✗ 不 import 任何 kore-plugin-* ───────
 ### 2.2 `internal/platform` 五接口（core 不得直接调用 `syscall`/`os/signal` 平台专有部分，必须经此层）
 
 - `paths`：配置/状态/运行/日志四类目录的唯一来源（Linux `/etc/kore`+`/var/lib/kore`；Windows `%ProgramData%\kore`；macOS `/usr/local/etc/kore`+`/usr/local/var/lib/kore`）。
+- **零侵入 profile（[ADR-0023](./DECISIONS/0023-zero-intrusion.md)，proposed）**：默认改为 `<install>/{config,data,run,logs}`，上面这条 FHS 路径降为 `fhs` profile（发行版打包）；安装目录外只允许 4 项豁免，清单与验收命令见 ADR §3.5 / §3.6。
 - `service`：服务注册与自启（systemd unit / SCM / launchd plist 的安装、卸载、查询）。
 - `signals`：停止信号归一化（`SIGTERM` / console control event / launchd `SIGTERM`）→ 统一 `context` cancel。
 - `resource`：资源后端（cgroup v2 / Job Objects / 仅观测），供 supervisor 建限额。
