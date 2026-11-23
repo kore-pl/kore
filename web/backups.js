@@ -31,7 +31,8 @@
       exclude: null, compression: null, submit: null, dims: null,
       jobs: [], jobsHost: null, jobsMsg: null,
       stats: null, summaryHost: null, listHost: null, count: null,
-      tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false };
+      tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
+      verify: { supported: null, version: '' } };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -478,7 +479,11 @@
       state.appendChild(b.corrupted ? chip('fail', 'corrupted') : chip('ok', '正常'));
       var ops = add(tr, el('td', 'cell-ops bak-ops')); ops.dataset.label = '操作';
       button(ops, '下载', 'btn-ghost', function () { downloadBackup(b); });
-      button(ops, '校验', 'btn-ghost', function () { verify(b); });
+      var vbtn = button(ops, '校验', 'btn-ghost', function () { verify(b, tr, vbtn); });
+      if (S.verify.supported === false) {
+        vbtn.disabled = true;
+        vbtn.title = '当前备份插件版本不支持校验，请升级插件';
+      }
       button(ops, '恢复', 'btn-ghost', function () { openConfirm('restore', b); });
       button(ops, '删除', 'btn-ghost bak-danger', function () { openConfirm('delete', b); });
     });
@@ -581,14 +586,91 @@
       setStatus('删除失败：' + err.message, 'fail');
     });
   }
-  function verify(b) {
-    setStatus('正在校验 ' + b.id + '…');
+  function versionAtLeast(version, want) {
+    var a = String(version || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+    var b = String(want || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+    for (var i = 0; i < Math.max(a.length, b.length); i++) {
+      var x = a[i] || 0, y = b[i] || 0;
+      if (x !== y) return x > y;
+    }
+    return true;
+  }
+  // 探测已装 backup 版本：<0.4.2 没有 checks[]/ok 契约，按钮从一开始就禁用而不是点了才报错。
+  function loadVerifySupport() {
+    fetch('/api/v1/plugins', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (S.destroyed || !data) return;
+        var found = null, list = data.plugins || [];
+        list.forEach(function (p) { if (p && p.id === 'backup') found = p; });
+        var supported = !!(found && versionAtLeast(found.version, '0.4.2'));
+        S.verify.version = found ? String(found.version || '') : '';
+        if (S.verify.supported !== supported) {
+          S.verify.supported = supported;
+          if (S.backups.length) paintList();
+        }
+      }, function () { /* 探测失败不阻断列表：verify 调用时仍按 404 降级 */ });
+  }
+  function firstFailedCheck(checks) {
+    var list = checks || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].ok === false) return list[i];
+    }
+    return null;
+  }
+  function verifyRowHost(tr) {
+    var next = tr.nextSibling;
+    while (next && next.nodeType === 1 && !next.classList.contains('bak-verify-row')) next = next.nextSibling;
+    if (next && next.classList.contains('bak-verify-row') && next.parentNode) next.parentNode.removeChild(next);
+    var row = el('tr', 'bak-verify-row');
+    var cell = el('td', 'bak-verify-cell'); cell.colSpan = 7;
+    add(row, cell);
+    if (tr.parentNode) tr.parentNode.insertBefore(row, tr.nextSibling);
+    return cell;
+  }
+  function paintVerifyResult(tr, b, data) {
+    var cell = verifyRowHost(tr);
+    var box = add(cell, el('div', 'bak-verify-inline'));
+    if (data.legacy) {
+      add(box, chip('warn', '旧备份未记录 sha256，仅检查了可读性'));
+    } else if (data.ok) {
+      add(box, chip('ok', '校验通过'));
+    } else {
+      add(box, chip('fail', '校验失败'));
+      var first = firstFailedCheck(data.checks);
+      if (first) add(box, el('p', 'row-note-fail bak-verify-detail', first.detail));
+    }
+    var meta = [];
+    if (data.sha256) meta.push('sha256 ' + String(data.sha256).slice(0, 12));
+    if (typeof data.size_bytes === 'number') meta.push(fmtSize(data.size_bytes));
+    if (data.created_at) meta.push(fmtTime(data.created_at));
+    if (meta.length) add(box, el('p', 'bak-verify-meta muted', meta.join(' · ')));
+  }
+  function paintVerifyError(tr, err) {
+    var cell = verifyRowHost(tr);
+    var box = add(cell, el('div', 'bak-verify-inline'));
+    add(box, chip('fail', '校验请求失败'));
+    add(box, el('p', 'row-note-fail bak-verify-detail', err.message || String(err)));
+  }
+  function verify(b, tr, btn) {
+    if (!b || !b.id || !btn || btn.disabled) return;
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = '校验中…';
     invoke('backup.verify', { id: b.id }).then(function (data) {
-      S.result = { kind: 'verify', id: b.id, data: data }; paintResult();
-      setStatus('校验完成：sha_match=' + data.sha_match + ' · entries=' + data.entries +
-        ' · uncompressed=' + fmtSize(data.uncompressed_bytes), data.sha_match ? 'ok' : 'fail');
-      loadList(true);
+      btn.disabled = false; btn.textContent = label;
+      paintVerifyResult(tr, b, data || {});
+      setStatus('校验完成：' + b.id, data && data.ok ? 'ok' : 'fail');
     }, function (err) {
+      btn.disabled = false; btn.textContent = label;
+      if (err.code === 'E_NOTFOUND') {
+        // 旧版插件没有 backup.verify：全局降级为禁用，并说明升级路径。
+        S.verify.supported = false;
+        paintList();
+        setStatus('当前备份插件版本不支持校验，请升级插件', 'fail');
+        return;
+      }
+      paintVerifyError(tr, err);
       setStatus('校验失败：' + err.message, 'fail');
     });
   }
@@ -751,6 +833,7 @@
     injectCSS();
     var root = add(container, el('section', 'backups'));
     build(root);
+    loadVerifySupport();
     loadList(false); loadStats(); loadTasks(true); loadJobs(true);
     return { destroy: function () { S.destroyed = true; } };
   }
