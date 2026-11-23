@@ -14,24 +14,48 @@ make build          # 产出 bin/kored（CGO_ENABLED=0 单二进制，已内嵌 
 
 > **换了索引验签公钥就必须重启 kored**：公钥编在二进制里，旧进程仍用旧公钥验新签名 → 商店全部 401。完整七步发布流程见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1。
 
-## 2. 准备配置（设置管理员口令 + 打开 TCP 监听）
+## 2. 设置管理员口令（一条命令）
 
-kored 默认**只开 UDS**（`server.addr` 为空），浏览器无法直连。要让浏览器访问，必须在配置文件里显式写回环地址；MVP 只允许 `127.0.0.1:<port>`，写 `0.0.0.0` 会被配置校验拒绝。
-
-先生成管理员口令哈希（`mypassword` 换成你自己的口令，命令不落盘任何临时文件）：
+新装没有管理员口令时面板能打开、但任何口令都登不进去。一条命令搞定：
 
 ```bash
-python3 -c 'import hashlib,base64,os;s=os.urandom(16);h=hashlib.pbkdf2_hmac("sha256",b"mypassword",s,600000,32);print("pbkdf2-sha256$600000$"+base64.b64encode(s).decode()+"$"+base64.b64encode(h).decode())'
+./bin/kored admin-password --generate
 ```
 
-把输出填进配置文件。下面示例用隔离目录，不碰系统目录（`/etc/kore`、`/var/lib/kore`）：
+kored 自己生成 24 字符随机口令（crypto/rand），**只显示这一次**，同时把 PBKDF2 哈希原子写进配置文件：
+
+```
+管理员口令（只显示这一次，请立即保存）：Xy7k...（24 字符）
+
+已将口令哈希写入 /opt/kore/config/config.yaml（权限 0600）
+提示：重启 kored 后生效；忘记口令可再执行 `kored admin-password --set` 重置。
+```
+
+- 配置文件路径默认 `<install>/config/config.yaml`（设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`），也可用 `--config <path>` 指定。
+- 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。
+- 命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。
+
+### 2.1 自己指定口令
+
+```bash
+./bin/kored admin-password --set          # 读两次、输入不回显；不一致直接报错且不写文件
+```
+
+非交互环境（CI / 容器）没有终端可交互，必须走管道：
+
+```bash
+printf '%s' "$KORE_ADMIN_PW" | ./bin/kored admin-password --set --stdin
+```
+
+### 2.2 打开 TCP 监听
+
+kored 默认**只开 UDS**（`server.addr` 为空），浏览器无法直连。要让浏览器访问，必须在配置文件里显式写回环地址；MVP 只允许 `127.0.0.1:<port>`，写 `0.0.0.0` 会被配置校验拒绝。口令哈希由上面命令写入，这里不必手填：
 
 ```yaml
 # ./kore-quickstart.yaml
 server:
   addr: "127.0.0.1:8787"        # ← 浏览器访问入口；空字符串则只开 UDS
 auth:
-  admin_password_hash: "pbkdf2-sha256$600000$<上一步的输出>"   # 填完整串，含三段 $ 分隔
   session_ttl: "12h"
   cookie_secure: "auto"
 paths:
@@ -40,7 +64,14 @@ paths:
   log_dir:   "./kore-log"
 ```
 
-> 若 `admin_password_hash` 留空，任何口令都无法登录（`Verify` 对空哈希一律返回失败），面板能打开但进不去。请务必填好。
+> 想先写 yaml 再生成口令也可以：`admin-password` 会往这个文件里补 `auth.admin_password_hash`，两者顺序无关。
+
+### 2.3 首启自动引导（忘了上面那步也不会卡死）
+
+`kored serve` 启动时如果发现「配置文件不存在 或 `auth.admin_password_hash` 为空」，不再只打一条干瘪 WARN：
+
+- **stdin 是终端** → 直接提示输入两次新口令，写入配置文件后用新口令启动；
+- **stdin 不是终端**（systemd / 容器 / 重定向）→ 只打印可操作提示、**不阻塞启动**，避免把服务卡在等输入上。此时面板能打开但登录不了，先离线执行 `kored admin-password --generate` 再重启即可。
 
 ## 3. 启动
 
@@ -72,3 +103,24 @@ http://127.0.0.1:8787/
 ## 停止
 
 在运行 kored 的终端按 Ctrl-C，进程会优雅关闭并释放端口与状态库锁。
+
+## 附录 A：高级 / 自动化场景（手工 PBKDF2 哈希）
+
+正常安装不需要读这一节——`admin-password --generate` 已经覆盖。只有「不跑 kored 的部署流水线」或「已有哈希生成脚本」时才手算；格式固定 `pbkdf2-sha256$600000$<base64(salt)>$<base64(hash)>`，迭代次数必须是 **600000**，否则生成的串无法通过校验：
+
+```bash
+python3 -c 'import hashlib,base64,os;s=os.urandom(16);h=hashlib.pbkdf2_hmac("sha256",b"mypassword",s,600000,32);print("pbkdf2-sha256$600000$"+base64.b64encode(s).decode()+"$"+base64.b64encode(h).decode())'
+```
+
+拿到串之后两条路等价，都支持自动化（不交互、不读终端）：
+
+```bash
+./bin/kored admin-password --hash '<上面输出的完整串>'    # 推荐：仍然走原子写 + 0600
+# 或直接把串填进配置文件的 auth.admin_password_hash（记得 chmod 600）
+```
+
+## 接下来
+
+- 升级 kore 自身、备份与恢复状态：[docs/OPERATIONS.md](docs/OPERATIONS.md)
+- 发布侧动作（索引重签 / 插件升级 / 回滚）：[docs/RUNBOOK.md](docs/RUNBOOK.md)
+- 全部文档索引（按「我想做什么」组织）：[docs/README.md](docs/README.md)

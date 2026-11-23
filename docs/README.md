@@ -6,6 +6,21 @@
 
 > 📄 **静态文档站**：打开 [site/index.html](./site/index.html) 可按分类浏览与搜索全部文档（`file://` 双击即开，零框架、零外链、零 fetch；索引文件 `site/docs.js` 由 `bash docs/site/build-index.sh` 生成）。
 
+## 0. 我想做什么？（先看这张表）
+
+| 我想… | 看哪个文档 |
+| --- | --- |
+| 把 kore 跑起来（构建 / 配置 / 启动 / 首次登录） | [../QUICKSTART.md](../QUICKSTART.md) |
+| 装插件、用场景预设配齐一套 | [SCENARIOS.md](./SCENARIOS.md)、[PLUGIN-CATALOG.md](./PLUGIN-CATALOG.md) |
+| 加固 SSH（审计 / 封禁 / fail2ban） | [../QUICKSTART.md](../QUICKSTART.md) 跑通后装 `kore-plugin-ssh-guard`（见该插件仓 `README.md`） |
+| 备份与恢复、升级 kore 自身 | [OPERATIONS.md](./OPERATIONS.md) |
+| 发布侧动作（重签索引 / 插件升级 / 回滚） | [RUNBOOK.md](./RUNBOOK.md) |
+| 排查「为什么点不动 / 提示说不清」 | [USABILITY.md](./USABILITY.md) |
+| 写一个自己的插件（30 分钟跑通 hello） | [PLUGIN-SDK.md](./PLUGIN-SDK.md)、[PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) |
+| 理解为什么这么设计 | [DECISIONS/](./DECISIONS/)（ADR 0001–0027 全量） |
+| 看内核规格 / 资源预算 / 数据落盘 | [CORE.md](./CORE.md)、[RESOURCE-MODEL.md](./RESOURCE-MODEL.md)、[DATA-MODEL.md](./DATA-MODEL.md) |
+| 贡献代码、报安全问题 | [../CONTRIBUTING.md](../CONTRIBUTING.md)、[../SECURITY.md](../SECURITY.md) |
+
 ## 1. 文档地图
 
 ### 1.1 愿景与设计
@@ -61,6 +76,15 @@
 ### 1.6 决策 ADR
 
 [DECISIONS/](./DECISIONS/) 目录收录全部架构决策记录，编号 0001–0024，覆盖协议选型、进程隔离、资源预算、多仓拓扑、兼容基线等不可逆选择。每篇含备选对比、后果与复审条件。可通过[文档站](./site/index.html)的「决策 ADR」分类统一浏览。
+
+### 1.7 运维与操作
+
+| 文档 | 作用 |
+| --- | --- |
+| [../QUICKSTART.md](../QUICKSTART.md) | 首次安装：构建、最小配置、启动、浏览器访问与登录 |
+| [OPERATIONS.md](./OPERATIONS.md) | 升级 kore 自身、备份与恢复状态（含回滚步骤） |
+| [RUNBOOK.md](./RUNBOOK.md) | 发布侧动作：索引重签、插件升级、新增插件、回滚 |
+| [USABILITY.md](./USABILITY.md) | 易用性四原则、术语对照与当前违反清单 |
 
 ## 2. 阅读顺序
 
