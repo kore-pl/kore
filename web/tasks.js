@@ -39,6 +39,7 @@
   var S = {
     entries: [], editIndex: null, warning: '', warnText: '', locked: false, lockReason: '',
     type: 'shell',
+    selected: {}, quickGrid: null, quickMeta: null,
     logs: { available: null, source: '', entries: [], note: '', loading: false, error: '' },
     run: { visible: false, error: '', result: null }
   };
@@ -202,6 +203,40 @@
     S.form.panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     S.form.submit.focus();
     setStatus('已填入「' + preset.name + '」：' + preset.why + '。检查后点「新增任务」即可（共 2 步）', 'ok');
+  }
+
+  // 预设卡优先来自后端 cron.templates；后端不可用（插件未装/版本旧）保持内置 4 张，不白屏。
+  function presetFromTemplate(t) {
+    return { id: t.id, name: t.name, why: t.description || '', type: t.type,
+      schedule: t.schedule, command: t.command, url: t.url, method: t.method, comment: t.comment };
+  }
+  function paintQuickPresets(list, source) {
+    if (!S.quickGrid) return;
+    S.quickGrid.textContent = '';
+    list.forEach(function (preset) {
+      var card = add(S.quickGrid, el('button', 'btn task-quick-card'));
+      card.type = 'button';
+      card.setAttribute('aria-label', '使用预设：' + preset.name);
+      card.style.cssText = 'display:block;text-align:left;min-height:88px;padding:12px 14px;line-height:1.45;';
+      add(card, el('strong', null, preset.name));
+      var meta = add(card, el('span', 'task-quick-meta', preset.why || ''));
+      meta.style.cssText = 'display:block;margin-top:6px;font-size:12px;color:var(--kore-text-3);';
+      var use = add(card, el('span', 'task-quick-use', '使用 →'));
+      use.style.cssText = 'display:block;margin-top:6px;font-size:12px;color:var(--kore-info);';
+      on(card, function () { applyQuickPreset(preset); });
+    });
+    if (S.quickMeta) S.quickMeta.textContent = source + ' · ' + list.length + ' 个';
+  }
+  function loadQuickTemplates() {
+    invoke('cron.templates', {}).then(function (data) {
+      var list = (data.templates || []).map(presetFromTemplate).filter(function (t) {
+        return t.id && t.name && t.type && t.schedule;
+      });
+      if (!list.length) throw new Error('empty');
+      paintQuickPresets(list, '来自插件模板');
+    }, function () {
+      if (S.quickMeta) S.quickMeta.textContent = '内置预设（插件模板不可用） · ' + QUICK_PRESETS.length + ' 个';
+    });
   }
 
   function cancelEdit() {
@@ -488,6 +523,59 @@
     return el('span', 'task-badge task-badge-' + label, label);
   }
 
+  function selectedIndexes() {
+    return Object.keys(S.selected).filter(function (k) { return S.selected[k]; })
+      .map(Number).sort(function (a, b) { return a - b; });
+  }
+  function paintBulkCount() {
+    if (!S.bulkCount) return;
+    var ids = selectedIndexes();
+    S.bulkCount.textContent = ids.length ? '已选 ' + ids.length + ' 条' : '未选择任务';
+    if (S.bulkEnable) S.bulkEnable.disabled = S.locked || !ids.length;
+    if (S.bulkDisable) S.bulkDisable.disabled = S.locked || !ids.length;
+  }
+  function batchTasks(action) {
+    var ids = selectedIndexes();
+    if (!ids.length) { setStatus('请先勾选要批量操作的任务', 'fail'); return; }
+    setStatus('正在批量' + (action === 'enable' ? '启用' : '停用') + ' ' + ids.length + ' 条任务…');
+    invoke('cron.batch', { action: action, ids: ids }).then(function (data) {
+      var ok = (data.succeeded || []).length;
+      var bad = data.failed || [];
+      var detail = bad.length ? '（' + bad.map(function (item) {
+        return '第 ' + item.id + ' 条：' + (item.error || '失败');
+      }).join('；') + '）' : '';
+      var msg = '批量' + (action === 'enable' ? '启用' : '停用') + '：成功 ' + ok + ' 条，失败 ' + bad.length + ' 条' + detail;
+      var tone = bad.length ? 'fail' : 'ok';
+      S.selected = {};
+      load().then(function () { setStatus(msg, tone); });
+    }, function (err) {
+      // 旧版插件没有 cron.batch（E_NOTFOUND）：给逐条操作指引，不在前端假装成功。
+      setStatus('批量操作未完成：' + (err.message || '当前插件版本不支持批量操作') + '；可逐条点「启用/停用」。', 'fail');
+    });
+  }
+  function paintBulkBar() {
+    var bar = add(S.listHost, el('div', 'task-bulk'));
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--kore-border-2);';
+    var allLabel = add(bar, el('label', 'task-bulk-all'));
+    allLabel.style.cssText = 'display:inline-flex;align-items:center;gap:6px;min-height:44px;';
+    var all = add(allLabel, el('input'));
+    all.type = 'checkbox'; S.bulkAll = all;
+    add(allLabel, el('span', null, '全选'));
+    all.checked = S.entries.length > 0 && selectedIndexes().length === S.entries.length;
+    all.disabled = S.locked;
+    all.addEventListener('change', function () {
+      S.selected = {};
+      if (all.checked) S.entries.forEach(function (e) { S.selected[e.index] = true; });
+      paintList();
+    });
+    S.bulkEnable = add(bar, el('button', 'btn', '批量启用')); S.bulkEnable.type = 'button';
+    S.bulkDisable = add(bar, el('button', 'btn btn-ghost', '批量停用')); S.bulkDisable.type = 'button';
+    on(S.bulkEnable, function () { batchTasks('enable'); });
+    on(S.bulkDisable, function () { batchTasks('disable'); });
+    S.bulkCount = add(bar, el('span', 'muted', ''));
+    paintBulkCount();
+  }
+
   function paintList() {
     if (!S.listHost) return;
     S.listHost.textContent = '';
@@ -499,9 +587,10 @@
         : '还没有任务，先从上面挑一个常用任务'));
       return;
     }
+    paintBulkBar();
     var table = add(S.listHost, el('table', 'tasks-table'));
     var head = add(table, el('thead')), htr = add(head, el('tr'));
-    ['索引', '类型', '时间表达式', '命令', '备注', '操作'].forEach(function (label) { add(htr, el('th', null, label)); });
+    ['选择', '索引', '类型', '时间表达式', '命令', '备注', '操作'].forEach(function (label) { add(htr, el('th', null, label)); });
     var body = add(table, el('tbody'));
     S.entries.forEach(function (entry) {
       var tr = add(body, el('tr'));
@@ -509,6 +598,15 @@
         tr.style.opacity = '0.55';
         tr.title = '该任务已停用（定义仍保留在 crontab 注释中）';
       }
+      var checkCell = add(tr, el('td', 'task-check'));
+      var check = add(checkCell, el('input'));
+      check.type = 'checkbox'; check.setAttribute('aria-label', '选择第 ' + entry.index + ' 条任务');
+      check.checked = !!S.selected[entry.index];
+      check.disabled = S.locked;
+      check.addEventListener('change', function () {
+        if (check.checked) S.selected[entry.index] = true; else delete S.selected[entry.index];
+        paintBulkCount();
+      });
       var index = add(tr, el('td', 'task-index', String(entry.index)));
       index.dataset.label = '索引';
       var type = add(tr, el('td')); type.dataset.label = '类型';
@@ -703,19 +801,10 @@
     var quickPanel = add(root, el('section', 'panel task-quick-panel'));
     var quickHead = add(quickPanel, el('div', 'panel-head'));
     add(quickHead, el('span', 'panel-title', '常用任务'));
-    add(quickHead, el('span', 'panel-meta', '点一下自动填好，确认保存即可'));
-    var quickGrid = add(quickPanel, el('div', 'task-quick-grid'));
-    quickGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:12px 16px;';
-    QUICK_PRESETS.forEach(function (preset) {
-      var card = add(quickGrid, el('button', 'btn task-quick-card'));
-      card.type = 'button';
-      card.setAttribute('aria-label', '使用预设：' + preset.name);
-      card.style.cssText = 'display:block;text-align:left;min-height:88px;padding:12px 14px;line-height:1.45;';
-      add(card, el('strong', null, preset.name));
-      var meta = add(card, el('span', 'task-quick-meta', preset.why));
-      meta.style.cssText = 'display:block;margin-top:6px;font-size:12px;color:var(--kore-text-3);';
-      on(card, function () { applyQuickPreset(preset); });
-    });
+    S.quickMeta = add(quickHead, el('span', 'panel-meta', '点一下自动填好，确认保存即可'));
+    S.quickGrid = add(quickPanel, el('div', 'task-quick-grid'));
+    S.quickGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:12px 16px;';
+    paintQuickPresets(QUICK_PRESETS, '内置预设');
     var formPanel = add(root, el('section', 'panel task-form-panel'));
     var formHead = add(formPanel, el('div', 'panel-head'));
     add(formHead, el('span', 'panel-title', '任务表单'));
@@ -800,11 +889,12 @@
     if (!container) return null;
     container.textContent = '';
     S.entries = []; S.editIndex = null; S.warning = ''; S.warnText = ''; S.locked = false; S.lockReason = '';
-    S.type = 'shell';
+    S.type = 'shell'; S.selected = {};
     S.logs = { available: null, source: '', entries: [], note: '', loading: false, error: '' };
     S.run = { visible: false, error: '', result: null };
     var root = add(container, el('section', 'tasks'));
     build(root);
+    loadQuickTemplates();
     setLocked('');
     load();
     loadLogs();
