@@ -29,9 +29,9 @@
 ## 决策
 
 - 仓库归属：**`pengtang1024`（个人账号）**
-- 内核 module：`github.com/kore-pl/kore`
-- SDK 子模块：`github.com/kore-pl/kore/pkg/pluginapi`（子目录 tag `pkg/pluginapi/v0.1.0`）
-- 插件仓：`github.com/kore-pl/kore-plugin-<id>`；索引仓 `github.com/kore-pl/kore-plugins`
+- 内核 module：`github.com/pengtang1024/kore`
+- SDK 子模块：`github.com/pengtang1024/kore/pkg/pluginapi`（子目录 tag `pkg/pluginapi/v0.1.0`）
+- 插件仓：`github.com/pengtang1024/kore-plugin-<id>`；索引仓 `github.com/pengtang1024/kore-plugins`
 
 ## 影响面（已落地的改动）
 

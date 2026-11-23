@@ -10,7 +10,7 @@
 | 作用 | 定义组件边界、依赖方向、进程模型、数据流、状态机、故障域与设计权衡 |
 | 不作用 | 不写单个模块的字段级规格（见 [CORE.md](./CORE.md)）、不写协议帧细节（由 `PLUGIN-PROTOCOL.md` 承载，本文件只给结论）、不写愿景（见 [VISION.md](./VISION.md)） |
 | 上位约束 | 五条红线：不做同进程动态库插件；不引入常驻中间件；主壳不含业务逻辑；不做容器化底座；无账号/联网校验/上报/封锁 |
-| 版本基线 | MVP 0.1.0；Go module `github.com/pengtang1024/kore`（仓库归属 `pengtang1024`）；单二进制 `kored`；协议 `kore.plugin.v1` |
+| 版本基线 | MVP 0.1.0；Go module `github.com/pengtang1024/kore`（仓库归属 `kore-pl`）；单二进制 `kored`；协议 `kore.plugin.v1` |
 
 本文件所有数字（RSS、超时、退避、帧上限、路径）为**门禁值**，改动必须同步 [CORE.md](./CORE.md) 并落 ADR。术语以 [GLOSSARY.md](./GLOSSARY.md) 为准。
 

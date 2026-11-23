@@ -19,7 +19,7 @@ kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属
 
 ### 2.1 仓库清单
 
-module 路径以 `docs/DECISIONS/0008-multi-repo-topology.md` 与 `docs/REPOS.md` 为准（仓库归属 `pengtang1024`）。
+module 路径以 `docs/DECISIONS/0008-multi-repo-topology.md` 与 `docs/REPOS.md` 为准（仓库归属 `kore-pl`）。
 
 | 仓库 | module 路径 | 定位 | 创建时点 |
 | --- | --- | --- | --- |

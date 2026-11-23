@@ -10,7 +10,7 @@
 | 作用 | 定义仓库清单、单向依赖、跨仓库规则 R1–R8、本地联调、版本兼容与发布流程 |
 | 不作用 | 不写内核模块规格（见 [CORE.md](./CORE.md)）、不写组件与数据流（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写协议字段（见 [PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md)） |
 | 硬约束 | 项目是**多 git 仓库**：`kore` 只含内核与主壳，插件各有独立仓库；"插件放在 kore 的 `plugins/` 子目录"这一旧假设**已作废** |
-| 仓库归属 | 全部 module 用 `github.com/pengtang1024/...`；发布仓库固定 `pengtang1024` 名下（迁入组织须走 ADR），不留第二套写法 |
+| 仓库归属 | 全部 module 用 `github.com/pengtang1024/...`；发布仓库在 `kore-pl` 组织下（2026-11-23 迁移，见 ADR-0017），不留第二套写法 |
 
 一句话：**内核一个仓库，插件一个仓库，索引一个仓库；三者的唯一连接是 tag 依赖与静态发布物，不是子目录。**
 

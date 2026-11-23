@@ -4,9 +4,9 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 **v1 定位**：覆盖 **22 项能力域：12 项生产级 / 8 项基础级（边界用例延 v1.1）/ 6 项明确不做**。**v1.0 = Linux GA，macOS / Windows 为 preview**；能力由 **18–22 个插件仓库**提供，内核只做调度与商店 / 预设机制。
 当前里程碑 **M0 · 文档与骨架**（只交付 `kore` 仓库：纯文档 + 空骨架，零业务代码）｜MVP 版本 0.1.0｜`kore-plugins` 与 `kore-plugin-echo` 归 M1，`site` / `backup` 归 M2。
 
-- `kore`（module `github.com/pengtang1024/kore`）：内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（**唯一协作中枢**）。
-- `kore-plugins`（module `github.com/pengtang1024/kore-plugins`）：纯静态索引 `index/plugins.json` + 校验脚本；不做审核、不代管包、无账号。
-- `kore-plugin-<id>`（module `github.com/pengtang1024/kore-plugin-<id>`）：每插件一仓库，含 `main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md`，只依赖 `kore/pkg/pluginapi`。
+- `kore`（module `github.com/pengtang1024/kore`，仓库地址 `github.com/kore-pl/kore`）：内核 + `pkg/pluginapi` 公开 SDK + 主壳前端 + `docs/` + `.agents/`（**唯一协作中枢**）。
+- `kore-plugins`（module `github.com/pengtang1024/kore-plugins`，仓库地址 `github.com/kore-pl/kore-plugins`）：纯静态索引 `index/plugins.json` + 校验脚本；不做审核、不代管包、无账号。
+- `kore-plugin-<id>`（module `github.com/pengtang1024/kore-plugin-<id>`，仓库地址 `github.com/kore-pl/kore-plugin-<id>`）：每插件一仓库，含 `main.go` / `info.json` / `web/` / `Makefile` / `CHANGELOG.md`，只依赖 `kore/pkg/pluginapi`。
 
 **读前必知**
 
