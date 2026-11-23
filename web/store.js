@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   var U = { plugins: '/api/v1/store/plugins', presets: '/api/v1/store/presets',
-    install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/' };
+    install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/', enable: '/api/v1/plugins/' };
   // 图标映射：按 id 固定线性 SVG 路径（viewBox 20×20，stroke 1.6 圆角，与 shell.js 导航同线型），
   // 21 个插件两两可区分（无外链、无字体依赖、颜色继承 --kore-text-2）。
   var SVG_NS = 'http://www.w3.org/2000/svg';
@@ -199,7 +199,10 @@
       return [p.id, p.name].concat(p.scenario_tags || []).join(' ').toLowerCase().indexOf(q) !== -1;
     });
   }
-  function setStatus(id, kind, text) { S.status[id] = { kind: kind, text: text }; renderGrid(); }
+  function setStatus(id, kind, text, href, linkText) {
+    S.status[id] = { kind: kind, text: text, href: href || '', linkText: linkText || '' };
+    renderGrid();
+  }
   function input(cls, ph, label, type) {
     var i = el('input', 'field-input ' + cls);
     i.type = type || 'text'; i.placeholder = ph; i.setAttribute('autocomplete', 'off');
@@ -260,7 +263,13 @@
     var st = S.status[p.id];
     var status = add(card, el('div', 'store-card-status' + (st ? ' is-' + st.kind : '')));
     if (st && st.kind === 'ok') status.appendChild(checkSvg()); // 成功勾用 SVG，不用 emoji
-    if (st) add(status, el('span', null, st.text));
+    if (st) {
+      add(status, el('span', null, st.text));
+      if (st.href) {
+        var go = add(status, el('a', 'store-status-link', st.linkText || '去处理'));
+        go.href = st.href;
+      }
+    }
     status.setAttribute('role', 'status');
     var ops = add(card, el('div', 'store-ops'));
     if (ins) {
@@ -281,10 +290,20 @@
         noReinstall.disabled = true;
         noReinstall.title = '索引未收录该版本，无法重装；可停用插件';
       }
-      // 「停用」可逆 → 中性灰（C7 危险色通胀治理），类名同步去 danger 语义
-      var off = add(ops, el('button', 'btn store-btn-muted', '停用'));
-      off.title = unsupported.title;
-      on(off, function () { doDisable(p.id); });
+      // 启用/停用成对出现：装完自动启用后显示「停用」，被停用时直接给「启用」。
+      var active = ins.enabled === true || ins.desired === 'enabled';
+      if (active) {
+        // 「停用」可逆 → 中性灰（C7 危险色通胀治理），类名同步去 danger 语义
+        var off = add(ops, el('button', 'btn store-btn-muted', '停用'));
+        off.title = '停用插件（可随时再启用）';
+        off.type = 'button';
+        on(off, function () { doDisable(p.id); });
+      } else {
+        var onBtn = add(ops, el('button', 'btn btn-primary store-btn-enable', '启用'));
+        onBtn.title = '启用该插件（装完默认会自动启用）';
+        onBtn.type = 'button';
+        on(onBtn, function () { doEnable(p.id); });
+      }
     } else {
       var offline = add(ops, el('button', 'btn btn-ghost store-btn-offline', '离线安装'));
       offline.title = '从服务器本地包安装';
@@ -476,7 +495,8 @@
         var msg = '已升级到 v' + target + (reenabled ? ' · 已重新启用' : ' · 保持停用');
         if (data.reload) msg += '（' + data.reload + '）';
         if (data.stale_versions && data.stale_versions.length) {
-          msg += ' · 旧版本 ' + data.stale_versions.join('、') + ' 目录保留，可手动清理';
+          msg += ' · 旧版本文件仍占用磁盘，可稍后手动删除 data/plugins/' + p.id + '/' +
+            data.stale_versions.join('、data/plugins/' + p.id + '/') + '。';
         }
         setStatus(p.id, 'ok', msg);
         return true;
@@ -626,19 +646,48 @@
         return setStatus(p.id, 'fail', '安装失败：' + errText(res));
       }
       setStatus(p.id, 'ok', '安装成功');
-      loadInstalled();
+      autoEnableAfterInstall(p);
     }).catch(function (err) {
       stop();
       setStatus(p.id, 'fail', '安装失败：' + (err && err.message ? err.message : '网络错误'));
     });
   }
-  // 无卸载能力：走停用，并明确说明当前版本只支持停用，不假装卸载成功。
+  // 卸载：后端没有 DELETE /api/v1/plugins 端点，只保留停用，不假装卸载成功。
+  function doEnable(id) {
+    setStatus(id, 'busy', '启用中…');
+    postJson(U.enable + encodeURIComponent(id) + '/enable', {}).then(function (res) {
+      if (!res.ok) return setStatus(id, 'fail', '启用失败：' + errText(res));
+      setStatus(id, 'ok', '已启用');
+      loadInstalled();
+    }, function (err) {
+      setStatus(id, 'fail', '启用失败：' + (err && err.message ? err.message : '网络错误'));
+    });
+  }
+
+  // 安装成功后默认启用；失败保留已安装状态，并把原因和「去处理」留在卡片上。
+  function autoEnableAfterInstall(p) {
+    setStatus(p.id, 'busy', '安装成功 · 正在启用…');
+    postJson(U.enable + encodeURIComponent(p.id) + '/enable', {}).then(function (res) {
+      if (!res.ok) {
+        setStatus(p.id, 'fail', '安装成功，但启用失败：' + errText(res) + ' · 去「已装插件」处理',
+          '#/plugins', '去处理');
+        loadInstalled();
+        return;
+      }
+      setStatus(p.id, 'ok', '安装成功 · 已自动启用');
+      loadInstalled();
+    }, function (err) {
+      setStatus(p.id, 'fail', '安装成功，但启用失败：' +
+        (err && err.message ? err.message : '网络错误') + ' · 去「已装插件」处理', '#/plugins', '去处理');
+      loadInstalled();
+    });
+  }
 
   function doDisable(id) {
     setStatus(id, 'busy', '停用中…');
     postJson(U.disable + encodeURIComponent(id) + '/disable', {}).then(function (res) {
       if (!res.ok) return setStatus(id, 'fail', '停用失败：' + errText(res));
-      setStatus(id, 'note', '已停用（当前版本暂不支持卸载）'); return loadInstalled();
+      setStatus(id, 'note', '已停用（可随时再启用）'); return loadInstalled();
     }).catch(function (err) { setStatus(id, 'fail', '停用失败：' + (err && err.message ? err.message : '网络错误')); });
   }
   function loadInstalled() {
