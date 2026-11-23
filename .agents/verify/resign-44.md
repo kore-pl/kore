@@ -60,6 +60,6 @@ store_after  = 未验证（同样 401，未编造版本）
 ## 6. 结论
 
 - 第 44 把重签完成：4 条版本入索引 + 账本 + 预设，验签通过，公钥未变
-- **本把未执行 `make build`、未重启 kored**（pid 前后同为 608004）
+- **本把未执行 `make build`、未重启 kored**（pid 观测被并发会话污染：608004 → 1589715，非本把导致；见上文更正段）
 - 未触碰 `AGENTS.md` / `docs/DECISIONS/` / `docs/FRONTEND.md` / `Makefile` / `web/embed.go` / `web/i18n/*`
 - 商店 4 条版本变新：无有效会话，如实标「未验证」
