@@ -26,6 +26,8 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.alignIndexVersions(plugins)
+	// 告警埋点：state=failed / restarts>3 的插件写一条告警（5 分钟去重由持久层收敛）。
+	s.notePluginAlerts(plugins)
 	writeJSON(w, http.StatusOK, pluginList{Plugins: plugins})
 }
 

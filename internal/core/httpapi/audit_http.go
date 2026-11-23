@@ -93,6 +93,8 @@ func (s *Server) recordAudit(ev AuditEvent) {
 // recordLoginSuccess 记录一次登录成功：action=login.success、result=ok，
 // detail={ip（脱敏）, user_agent（截断）, session_id_prefix}；绝不写口令。
 func (s *Server) recordLoginSuccess(r *http.Request, subject, token string) {
+	// 登录成功清零连续失败计数（告警「连续 ≥3 次」的口径配套）。
+	s.resetLoginStreak()
 	s.recordAudit(AuditEvent{
 		Subject: subject,
 		Action:  auditActionLoginSuccess,
@@ -119,6 +121,8 @@ func (s *Server) recordLoginFailed(r *http.Request, subject, reason string) {
 			"reason":     reason,
 		},
 	})
+	// 告警埋点：连续 ≥3 次合并一条（alerts.go noteLoginFailure；成功登录清零）。
+	s.noteLoginFailure()
 }
 
 // recordInvokeAudit 记录一次方法调用审计（只写操作 + 可选全量 + 突发合并）。

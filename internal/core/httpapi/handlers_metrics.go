@@ -54,6 +54,8 @@ func (s *Server) handleSystemMetrics(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	// 红线埋点：RSS>16 MiB / goroutine>20 时写一条 critical 告警（旁路，不影响响应）。
+	s.noteResourceAlerts(snap)
 	writeJSON(w, http.StatusOK, metricsBody{
 		CPUPercent: snap.CPUPercent, RSSKiB: snap.RSSKiB,
 		DiskUsedKiB: snap.DiskUsedKiB, DiskTotalKiB: snap.DiskTotalKiB,

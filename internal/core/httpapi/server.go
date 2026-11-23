@@ -113,6 +113,9 @@ type Options struct {
 	// Scheduler 是内核定时任务调度器（ADR-0019）；nil 时 scheduler/* 端点回 501。
 	// 由 cmd/kored 注入（本包不 import store、不持有任务持久化逻辑）。
 	Scheduler *scheduler.Service
+	// Alerts 是告警中心持久层（alerts bucket）；nil 时 alerts/* 端点回 501、
+	// 各检查点埋点静默跳过。由 cmd/kored 注入（本包不 import store，G-01）。
+	Alerts AlertSink
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
@@ -255,8 +258,13 @@ type Server struct {
 	pluginAuth     PluginTokenAuth
 	taskEvents     *TaskEvents
 	scheduler      *scheduler.Service
-	mu             sync.Mutex
-	listeners      []net.Listener
+	// alerts 是告警中心持久层；nil 时端点 501、埋点跳过。
+	alerts AlertSink
+	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
+	loginStreakMu   sync.Mutex
+	loginFailStreak int
+	mu              sync.Mutex
+	listeners       []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
@@ -268,7 +276,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
-		taskEvents: opts.TaskEvents, scheduler: opts.Scheduler,
+		taskEvents: opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
 	}
 	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {

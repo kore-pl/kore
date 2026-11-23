@@ -76,6 +76,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/auth/", s.handleUnsupported)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	// 告警中心：列表（system:read）/ 写入 / 标记已读（均 system:admin）。
+	s.mux.HandleFunc("GET "+alertsPath, s.handleAlertsList)
+	s.mux.HandleFunc("POST "+alertsPath, s.handleAlertsWrite)
+	s.mux.HandleFunc("POST "+alertsPath+"/{id}/seen", s.handleAlertSeen)
+	s.mux.HandleFunc(alertsPath+"/", s.handleNotFound)
 	// 定时任务（ADR-0019）：列表 / 创建 / 立即执行 / 删除；能力要求 system:admin。
 	s.mux.HandleFunc("GET "+schedulerTasksPath, s.handleSchedulerList)
 	s.mux.HandleFunc("POST "+schedulerTasksPath, s.handleSchedulerCreate)
@@ -103,6 +108,8 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 			stats = got
 		}
 	}
+	// 槽位埋点：resident 达硬上限时写一条告警（5 分钟去重由持久层收敛）。
+	s.noteSlotAlerts(stats)
 	writeJSON(w, http.StatusOK, systemInfo{
 		Report: s.opts.Report, Version: s.opts.Version, Supervisor: stats, Paths: s.opts.Paths,
 	})

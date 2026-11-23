@@ -196,12 +196,14 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 
 // auditDenied 走注入的审计出口；未注入时只记 WARN（挂点见 server.go）。
 // target 是被拒的目标动作：invoke 传方法名，enable/disable 传动作名，空串表示不细分。
+// 同时写一条告警埋点（capability.denied / root.action 拒绝，见 alerts.go）。
 func (s *Server) auditDenied(subject, plugin, target, reason string) {
 	if s.capAuditor != nil {
 		s.capAuditor(subject, plugin, target, reason)
-		return
+	} else {
+		slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "target", target, "reason", reason)
 	}
-	slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "target", target, "reason", reason)
+	s.noteDeniedAlert(subject, plugin, target, reason)
 }
 
 // sessionFrom 从 cookie 取 token 并校验，返回会话视图。
