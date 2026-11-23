@@ -31,6 +31,24 @@
 | G-29 | 运行态写边界 | 触发：任务涉及 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` / `bin/kored` 或任何被运行中 `kored` 持有的文件（`git status` 看不出，untracked）。取证：① `curl -s localhost:8787/api/v1/system/info \| jq .paths.index_dir` 必须**逐字等于**配置里的 `kore-plugins/index`（不得指向 `.kore-local-state/` 下任何索引快照）② 商店 `/api/v1/store/plugins` 返回的插件版本必须等于 `kore-plugins/index/plugins.json` 里的版本 ③ 验收报告必须显式声明"本轮是否改动过主实例的运行态配置"，改过则附回切 + 重启 + 复核三行证据 ④ 测试要"不同索引 / 配置 / 状态"时附隔离实例命令（独立 `--config` + state/run/log 落 `/tmp`）⑤ 运行态资产必须进 `.gitignore`——`.kore-local*` 覆盖 yaml/state/run/log/index 全系列，`git check-ignore` 对 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` 必须全部命中（否则一次 `git add .` 就把 123 MiB 的 state.db 带进提交） | ①② 必须相等（`paths.index_dir` == `kore-plugins/index`、商店版本 == 索引版本）；③ 声明齐全且与事实一致；④ 有隔离实例证据或写明"未触碰主实例"。防的事故：2026-11-23 为测试把 `index_dir` 指向 `signed-index` 快照（04:53:06），恰逢另一轮重签完成（04:53:40），04:59:59 回切前 8787 商店把 discover 0.2.0 显示成 0.1.0——配置回写了、主实例读到的仍是旧数据 | 任一不符即判未完成：回切 + 重启 + 复核后再验一次；未回切或只改配置文件不验 `/api/v1/system/info` 的，任务记 BLOCKED，不记 PASS；workaround 无过期条件（"当 X 发生时失效"）的，记 WARN 并要求补写 | implementer 取证 + verifier 独立复跑 | 检查点（运行态变更） |
 | G-30 | 明文凭据入库 | 触发：任何写 `docs/` 或 `.agents/verify/` 的提交 / 验收报告；取证：`make secret-check`，扫描 `MYSQL_ROOT_PASSWORD=` / `MYSQL_PWD=` / `REDIS_PASSWORD=` / `REDISCLI_AUTH=` / `KORE_MYSQL_PASSWORD=` / `KORE_REDIS_PASSWORD=` / `ADMIN_PASSWORD=` 以及 JSON 的 `"password"` / `"secret"` / `"token"` 键 | 非占位值零命中；占位只允许 `***` / `[REDACTED]` / `$VAR` / `<placeholder>` / `********` / `...` / `…`。防的事故：2026-11-23 `.agents/verify/round3-live.md` 把 `common-mysql` 的 root 明文口令写进验收报告并推送公开仓库（`3fa40f2`） | 命中即阻断：把凭据字面量替换为 `***` 后重跑；**禁止**为了让门禁变绿删证据或改判定结论——本门禁扫 `.agents/verify/` 是 §5.6 豁免规则的唯一例外，只许替换凭据字面量 | implementer 自跑 + verifier 复跑 | 检查点 |
 
+### 1.1 G-17（插件仓规范）/ G-18（预设一致性）判据与严重级别
+
+> **编号说明**：本节用**带横杠**的 `G-17` / `G-18`，指 [AGENTS.md](../AGENTS.md) §2 硬门禁表里的「插件仓规范」与「预设一致性」；**不要**和上表里的 `G17`（无 any/object 逃逸）/ `G18`（worktree 卫生）混淆——两套编号并存是历史遗留，本次不改号以避免大范围漂移。
+
+| ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
+| --- | --- | --- | --- | --- | --- | --- |
+| G-17 | 插件仓规范（`make store-check`） | `bash scripts/store-check.sh`（无参数扫 `../kore-plugin-*`；可传目录） | 逐仓 5 项：① 三件套 `info.json` / `Makefile` 的 `dist` 目标 / `CHANGELOG.md`；② `info.json` 必填 10 字段 `id` `version` `description` `depends_on` `conflicts` `scenario_tags` `size_bytes` `requires_kore` `depth_level` `capabilities`；③ `id` 匹配 `^[a-z][a-z0-9-]*$` 且 == 目录名后缀 `kore-plugin-<id>`；④ `info.json.version` == `manifest.json.version`（manifest 存在时）；⑤ `go.mod` 无 `=> ../` / 绝对路径 `replace`（`=> ./` 放行）。输出 `[OK]`/`[FAIL]` 行 + `store-check: N pass, M fail`，缺失指名到「仓 + 文件 + 字段」 | 单跑时任一 FAIL → exit 1；`make check` 内为 **WARN 级**（见下「严重级别裁决」） | implementer 自跑 + verifier 复跑 | 检查点（M1 起） |
+| G-18 | 预设一致性（`make presets-check`） | `bash scripts/presets-check.sh`（无参数扫 `../kore-plugins/presets/*.json` 并对 `index/plugins.json` 解析）；`--self-test` 验解析器正反用例 | 逐 preset 4 项：① 插件 `id` 可在索引解析；② `version` 区间被索引实际版本满足——**只认** 精确 `x.y.z` / `^x.y.z` / `~x.y.z` / 比较器集合（`>=x.y.z <a.b.c`、`>`、`<=`、`=`），其余写法（`*`、`1.x`、`latest`、`>=1.0`、`||`）**必须报 FAIL，不静默跳过**；③ 常驻（索引 `lifecycle=resident` 且 `desired=enabled`）RSS 合计 ≤48 MiB 红线（超即 FAIL）、≤24 MiB 目标（超即 WARN），同时常驻 ≤3（G-03 红线），单插件包体积 ≤25 MiB（G-03 单二进制红线）；④ 失败指名到「preset + id + 区间 + 原因」 | 任一 FAIL → exit 1；`make check` 内为**阻断级** | implementer 自跑 + verifier 复跑 | 合并前（M2 起） |
+
+**判据来源**：三件套与必填字段取自 AGENTS.md G-17 原文 + 本次出口任务书；`description` 为任务书点名项——**注意** `docs/PLUGIN-PROTOCOL.md` §3.1 的 info.json 字段表**没有** `description`（9 个必填 = `id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`），因此 24 仓 23 仓缺该字段属**口径缺口**而非仓库腐烂；放宽或改判据需用户裁决，门禁不自行降级。
+
+**严重级别裁决（当前接入态，2026-11-23）**：
+
+| 门禁 | `make check` 段位 | 级别 | 理由 | 转阻断条件 |
+| --- | --- | --- | --- | --- |
+| `store-check` | 14/16 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状 1 pass / 23 fail，且 23 仓缺的都是同一个 `description`——立刻阻断等于让所有人的每次提交全红，而修复路径在 24 个**本任务写域之外**的插件仓（本任务明令不得改插件仓）。WARN 保证「问题每次可见 + 数量可追踪」，同时不把全组提交锁死 | 二选一后切阻断：① 用户裁决把 `description` 从必填降为可选（与协议 §3.1 对齐），或 ② 24 仓补 `description`（跨仓变更集，按 G-15 登记） |
+| `presets-check` | 15/16 | **阻断** | 现状 8 pass / 0 warn / 0 fail，判据全绿；且 preset 是用户可见的装配入口，版本区间解析失败 = 装不上，属真实阻断面 | — |
+
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
 
 ## 2. 三层组合
