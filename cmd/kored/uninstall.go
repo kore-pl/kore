@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -34,6 +36,16 @@ type uninstallDeps struct {
 	loadPaths  func(opts uninstallOptions) (uninstallPaths, error)
 	removeAll  func(path string) error
 	euid       func() int
+	// isSelfService 判断"要清理的这个 unit 的主进程是不是我自己"（自卸载判定）。
+	isSelfService func(unitName string) bool
+	// selfRemoveUnit 为自卸载删 unit 文件但**不停自己**（disable → rm → daemon-reload）。
+	selfRemoveUnit func(unitName, unitPath string) ([]string, error)
+	// stopSelf 是自卸载的最后一步：--no-block 停自己（异步，不会中途杀掉正在卸载的进程）。
+	stopSelf func(unitName string) error
+	// binaryPath 返回当前可执行文件（root 下卸载时直接删掉它，不留手工步骤）。
+	binaryPath func() (string, error)
+	// removeFile 删除单个文件（注入点：测试绝不对真实二进制下手）。
+	removeFile func(path string) error
 }
 
 // uninstallOptions 是 `kored uninstall` 的参数快照。
@@ -84,6 +96,14 @@ func defaultUninstallDeps() uninstallDeps {
 		},
 		removeAll: os.RemoveAll,
 		euid:      os.Geteuid,
+		isSelfService: func(unitName string) bool {
+			pid, err := privilege.UnitMainPID(unitName)
+			return err == nil && pid > 0 && pid == os.Getpid()
+		},
+		selfRemoveUnit: privilege.DisableAndRemoveUnit,
+		stopSelf:       privilege.StopUnitNoBlock,
+		binaryPath:     os.Executable,
+		removeFile:     os.Remove,
 	}
 }
 
@@ -164,6 +184,14 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 		fmt.Fprintln(stderr, "uninstall: 当前不是 root：清理 systemd unit 与 kore-* 用户需要 root，"+
 			"本次跳过这两步、继续清理安装目录内可清理的内容；补做请用 `sudo kored uninstall`")
 	}
+	// 自卸载判定（模型切到 root 服务后的常态）：当前进程就是 unit 的 MainPID。
+	// 此时 **不能** 让 platform.Cleanup 先 `systemctl stop`——那会把正在卸载的自己杀掉，
+	// 卸载变成"删一半"。改为：先 disable + 删 unit + daemon-reload，文件全删完最后再停自己。
+	selfService := !opts.dryRun && !opts.keepUnit && !partial && deps.euid() == 0 &&
+		deps.isSelfService != nil && deps.isSelfService(opts.unitName)
+	if selfService {
+		fmt.Fprintf(stdout, "[INFO] 自卸载模式：本进程就是 %s 的 MainPID，unit 清理改为「先删文件、最后 --no-block 停自己」\n", opts.unitName)
+	}
 	var done, skippedRoot []string
 	failed := 0
 
@@ -174,6 +202,17 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 	case partial:
 		skippedRoot = append(skippedRoot, "systemd unit 清理（"+unitPath+"）")
 		fmt.Fprintf(stdout, "[SKIP] systemd unit：需要 root，本次跳过（补做：sudo kored uninstall --yes）\n")
+	case selfService && deps.selfRemoveUnit != nil:
+		actions, err := deps.selfRemoveUnit(opts.unitName, unitPath)
+		for _, action := range actions {
+			fmt.Fprintf(stdout, "[UNIT] %s\n", action)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "[FAIL] 自卸载 unit 清理失败: %v\n", err)
+			failed++
+		} else {
+			done = append(done, "systemd unit 已清理（自卸载：停止动作留到最后）")
+		}
 	default:
 		cleanup, err := deps.cleanup.RemoveServiceUnit(opts.unitName, unitPath, opts.dryRun)
 		if err != nil {
@@ -266,6 +305,24 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 		fmt.Fprintf(stdout, "[PURGE] 未指定 --purge：状态目录保留（%s）\n", stateDir)
 	}
 
+	// 7.5 二进制：root 下直接删自己（Linux 下运行中的 inode 仍可执行，删完不影响本进程收尾）。
+	if !opts.dryRun && deps.euid() == 0 && deps.binaryPath != nil && deps.removeFile != nil {
+		if exe, err := deps.binaryPath(); err != nil {
+			fmt.Fprintf(stderr, "[WARN] 解析当前可执行文件失败，跳过二进制删除: %v\n", err)
+		} else {
+			if resolved, evalErr := filepath.EvalSymlinks(exe); evalErr == nil {
+				exe = resolved
+			}
+			if err := deps.removeFile(exe); err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(stderr, "[FAIL] 删除二进制 %s 失败: %v\n", exe, err)
+				failed++
+			} else {
+				fmt.Fprintf(stdout, "[BIN] rm %s\n", exe)
+				done = append(done, "二进制已删除："+exe)
+			}
+		}
+	}
+
 	// 局部进度：供"部分完成"摘要逐条说明已做 / 跳过。
 	if len(entries) > 0 {
 		done = append(done, fmt.Sprintf("变更账本已列出（%d 条）", len(entries)))
@@ -311,6 +368,8 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 		}
 		fmt.Fprintf(stdout, "  怎么补做（拿到 root 后重跑，幂等）：%s\n", hint)
 		fmt.Fprintln(stdout, "  只想清安装目录、宿主侧自己处理：kored uninstall --yes --keep-service --keep-users（该写法返回 0）")
+		fmt.Fprintln(stdout, "  说明：以系统服务运行时不需要本步骤——内核自己就是 root，直接自卸载（无需 sudo）；")
+		fmt.Fprintln(stdout, "        当前为非 root 裸跑，请改用服务自卸载：由运行中的 kore.service 执行 `kored uninstall --yes [--purge]`")
 		fmt.Fprintln(stdout, "退出码 6 = 环境不满足（权限不足），脚本/CI 不得当作成功")
 		return exitEnv
 	}
@@ -320,6 +379,15 @@ func runUninstallWith(args []string, stdout, stderr io.Writer, deps uninstallDep
 		return 1
 	}
 	fmt.Fprintln(stdout, "[OK] uninstall 完成（可重复执行：幂等）")
+	// 10. 自卸载的**最后一步**：文件全部处理完，才异步停掉自己。
+	// 顺序不可颠倒：先停自己会让后面的删 unit / 删二进制 / purge 全部做不成。
+	if selfService && deps.stopSelf != nil {
+		fmt.Fprintf(stdout, "[UNIT] 提交停止：systemctl --no-block stop %s（本进程随后由 systemd 结束，输出已全部写完）\n", opts.unitName)
+		if err := deps.stopSelf(opts.unitName); err != nil {
+			fmt.Fprintf(stderr, "[FAIL] 提交停止失败: %v（文件已清理完成，可手工 systemctl stop %s）\n", err, opts.unitName)
+			return 1
+		}
+	}
 	return exitOK
 }
 

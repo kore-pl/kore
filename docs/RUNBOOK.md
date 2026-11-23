@@ -395,6 +395,103 @@ sudo cp -a /etc/kore/config.yaml /opt/kore/config/config.yaml 2>/dev/null || tru
 
 `make zero-intrusion-check`：在 `/tmp` 建隔离安装根、编译 `<install>/bin/kored`、**不设** `KORE_HOME`/`--config` 起实例，断言 `portable` 目录与 socket 全在安装目录内、系统路径零新增、未新建 `kore-*` 用户/unit（既有用户与 unit 单列为豁免项）。该段同时是 `make check` 的第 11/12 段。
 
+### 6.5 升级与卸载为什么不需要 sudo（一次性安装边界）
+
+**一句话**：sudo 只用在**安装那一次**——写 unit + 建 root 身份。之后内核自己就是 root，替换自己的二进制、重启/删除自己的 unit 都是它自己的文件，用户不需要第二次提权。
+
+| 动作 | 需要用户 sudo？ | 由谁做 | 判据 |
+| --- | --- | --- | --- |
+| 首次安装（写 unit / enable） | **是，仅此一次** | 用户（人工） | `/etc/systemd/system/kore.service` 存在 + `systemctl is-enabled kore` = enabled |
+| 升级内核二进制 | 否 | root 服务自己 `kored upgrade` | `kored upgrade --verify` 输出 success |
+| 回滚内核二进制 | 否 | root 服务自己 `kored upgrade --rollback` | 目标 sha256 回到 `.prev` |
+| 卸载（停 unit / 删 unit / 删二进制 / 删状态 / 删 `kore-*`） | 否 | root 服务自己 `kored uninstall --yes [--purge]` | 退出码 0 + `! test -e /usr/local/bin/kored` |
+
+#### 6.5.1 升级：先校验再替换，替换完才提交重启
+
+```bash
+# 新二进制先落到任意可读位置（**本地文件，不是 URL**）
+sha256sum kored-linux-amd64                       # 得到 <hex>
+kored upgrade --bin /path/kored-linux-amd64 --sha256 <hex>   # root 服务内执行
+
+# 只校验不落地（任何身份都能跑）
+kored upgrade --bin /path/kored-linux-amd64 --sha256 <hex> --dry-run
+
+# 回滚到上一次（用 <bin>.prev）
+kored upgrade --rollback
+
+# 重启后复核"新版本是否真的生效"
+kored upgrade --verify
+```
+
+四条实现约束（不是建议，是代码里写死的）：
+
+1. **拒绝 URL**：`--bin` 只接受本地文件；`http(s)://` / `ftp://` / `file://` 等一律报错退出 2。内核升级不做下载，下载与校验留给发行渠道。
+2. **校验先于替换**：必须给 `--sha256`（64 位十六进制，接受 `sha256:` 前缀与大小写）。不一致时**目标文件一个字节都不动**、不产生 `.prev`、不提交重启，退出码 2。
+3. **原子替换**：写同目录临时文件 → `fsync` → `rename` 覆盖（同文件系统才原子）→ `fsync` 目录。旧文件保留为 `<bin>.prev`（硬链优先：同一 inode，不产生"目标短暂消失"的窗口；硬链不可用退回复制）。
+4. **最后一步才提交重启**：`systemctl --no-block restart <unit>`。
+
+#### 6.5.2 重启时序：为什么 `systemctl restart` 会把自己杀掉，以及如何不假失败
+
+`systemctl restart kore` 的 job 第一步就是给**当前进程**（也就是内核自己）发 SIGTERM。若升级命令**同步**等这个 job：
+
+- 进程还没打印结果就被替换 → stdout 可能只有半截；
+- 退出码取决于被杀与 job 返回的竞争 → **"升级报错但实际成功"的假失败**。
+
+所以升级链固定为三段，且第三段刻意"不等结果"：
+
+```text
+旧进程：校验 sha256 → 原子替换 → 落 <state>/upgrade-result.json(state=pending)
+       → systemctl --no-block restart kore   ← 提交 job 后立即返回
+       → 打印"已替换 + 已提交重启"，退出码 0（**不等于**新版本已加载）
+systemd：执行 restart job（SIGTERM 旧进程，拉起新进程）
+新进程：serve 启动时读标记 → 自己的 sha256 == expected → 改写成 state=success
+```
+
+判据分工（**别把"提交成功"当"生效"**）：
+
+| 判据 | 说明 |
+| --- | --- |
+| 退出码 0 | 二进制已替换 + 重启已提交；旧进程无法证明新版本已生效（正常） |
+| 退出码 6 | 二进制可能已替换，但**重启没提交成功**（无 systemd / 无权限 / unit 不存在）；消息里会写清"已完成的/待完成的"，别当替换失败 |
+| 退出码 2 | 校验失败（sha256 不符 / URL / 非法参数），目标零改动 |
+| `upgrade-result.json` = success | **唯一**的"新版本已生效"证据；`kored upgrade --verify` 可随时补做 |
+| `kored version` | 新进程报出的版本号（人工复核用） |
+
+新进程的 finalize 在 `kored serve` 入口执行，**非阻塞、绝不阻断启动**：没有标记 / 读不了 / 写不了都安静跳过（最多一行 WARN）；若运行中的二进制 sha256 与标记期望不符，**保留 pending 不谎报 success**。
+
+若 `--no-restart`：只替换不重启，输出会打印手动重启命令；此时标记停在 pending，直到你重启并跑 `--verify`。
+
+#### 6.5.3 卸载：root 服务自卸载的顺序为什么是"先删文件、最后停自己"
+
+`kored uninstall` 在 **root 服务内**运行时，检测到自己就是 `kore.service` 的 MainPID（`systemctl show -p MainPID --value`），会走自卸载分支：
+
+```text
+disable kore → rm /etc/systemd/system/kore.service → daemon-reload
+→ userdel kore-*（按 /etc/passwd 前缀）
+→ 列 changes.jsonl（默认不回滚）
+→ [--purge] 执行 purge_op + 删状态目录
+→ rm <自身二进制>（Linux 下运行中的 inode 仍可执行）
+→ systemctl --no-block stop kore   ← 最后一步
+```
+
+**顺序不可颠倒**：若沿用普通卸载的 `systemctl stop` 优先，会把正在执行卸载的自己杀掉，后面删 unit / 删二进制 / `--purge` 全部做不成，用户看到"半卸载"。自卸载因此把 stop 换成 `--no-block` 并挪到最后；此时输出已全部写完，进程被 SIGTERM 属正常收尾。
+
+两种形态的区别（**别把裸跑的行为套到服务上**）：
+
+| 形态 | 身份 | 卸载行为 | 退出码 |
+| --- | --- | --- | --- |
+| **系统服务（推荐）** | 内核自己是 root | 全部动作自己做，**用户不需要 sudo**，含删 `/usr/local/bin/kored` 与状态目录 | 0 |
+| **非 root 裸跑**（安装前 / 前台试跑 / 手工 `bin/kored serve`） | 普通用户 | 宿主侧（unit / `kore-*` 用户 / 二进制）跳过，打印**部分完成**摘要 | 6 |
+
+非 root 部分完成的文案里现在明确写了这一层区别：**"以系统服务运行时不需要本步骤——内核自己就是 root，直接自卸载（无需 sudo）；当前为非 root 裸跑，请改用服务自卸载"**。也就是说 `sudo kored uninstall` 只是"裸跑/安装前"的兜底路径，不是常态路径。
+
+#### 6.5.4 门禁与验证
+
+- 单测：`go test ./cmd/kored -run 'Upgrade|Finalize'`（sha256 拒绝、原子替换 + `.prev`、非 root 拒绝、URL 拒绝、dry-run 零变更、回滚、`--verify`、新进程 finalize 幂等）。
+- 实测：`/tmp` 假安装根（`unshare -r` 取临时 root，不碰真实 `/usr/local/bin/kored` 与真实 unit）：
+  `kored upgrade --bin <new> --sha256 <hex> --target /tmp/.../bin/kored --state-dir /tmp/.../data --no-restart` → 断言新文件 sha 正确、`kored.prev` = 旧 sha、权限 755、标记 pending；随后 `--verify` → success；`--rollback` → sha 回到旧值。
+- **真机 systemd 重启路径**：`systemctl restart` 的 job 提交需要有活的 `kore.service`。在没有活跃实例的机器上只能验证失败分支（返回 6 + "重启未提交"文案）。要真验，按 §6.5.2 的三段式在装了 unit 的机器上跑一次，判据是 `upgrade-result.json` 由 pending 变 success 且 `kored version` 变为新版本。
+
 ## 7. 重置管理员口令（忘记口令 / 首启没设置）
 
 kore 是单管理员模型，没有"找回"流程：口令哈希在配置文件的 `auth.admin_password_hash`，重置 = 生成新哈希并重启。

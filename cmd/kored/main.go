@@ -32,11 +32,11 @@ func main() {
 // run 分发子命令；未知子命令按配置错误处理（退出码 2）。
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return runServe(nil, stderr)
+		return runServeFinalizingUpgrade(nil, stderr)
 	}
 	switch args[0] {
 	case "serve":
-		return runServe(args[1:], stderr)
+		return runServeFinalizingUpgrade(args[1:], stderr)
 	case "version":
 		fmt.Fprintf(stdout, "kored %s\n协议 %s\n", version, pluginapi.Protocol)
 		return exitOK
@@ -48,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUninstall(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
+	case "upgrade":
+		return runUpgrade(args[1:], stdout, stderr)
 	case "admin-password":
 		return runAdminPassword(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -60,6 +62,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// runServeFinalizingUpgrade 在 serve 之前把上一次 `kored upgrade` 的 pending 标记闭环。
+//
+// 为什么放在这里：升级是"旧进程替换二进制 → 提交重启 → 新进程启动"三段式，
+// 只有新进程能证明新版本已生效。该调用非阻塞、绝不阻断启动（标记不存在时零副作用）。
+func runServeFinalizingUpgrade(args []string, stderr io.Writer) int {
+	finalizePendingUpgrade(stderr, defaultUpgradeDeps())
+	return runServe(args, stderr)
+}
+
 // printUsage 打印子命令清单。
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "用法: kored <子命令> [参数]")
@@ -69,6 +80,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  audit     查询审计记录（--since 必填，--action 过滤，--csv 导出）")
 	fmt.Fprintln(w, "  uninstall 卸载链：清 systemd unit / kore-* 用户 / 变更账本（ADR-0023；--dry-run 看计划）")
 	fmt.Fprintln(w, "  status    打印生效配置 / 状态目录 / 实例 healthz 与 state.db 持有者 pid")
+	fmt.Fprintln(w, "  upgrade   自升级 / 回滚（--bin + --sha256 先校验再原子替换；--rollback / --verify）")
 	fmt.Fprintln(w, "  admin-password 设置管理员口令（--generate / --set [--stdin] / --hash），原子写配置且权限 0600")
 	fmt.Fprintln(w, "  help      打印本帮助")
 	fmt.Fprintln(w, "退出码: 0 正常 / 2 配置 / 3 状态目录或锁 / 4 存储或 schema / 5 监听绑定 / 6 环境不满足")

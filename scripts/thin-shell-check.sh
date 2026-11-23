@@ -115,7 +115,15 @@ fi
 # 精确字面量豁免：useradd 的系统账户参数名 --no-create-home 里含 "create"，
 # 但它是工具参数名、不是业务动词。只把这个完整 token 从待匹配文本里摘掉；
 # create|restart|deploy 的整词匹配强度与其它文本一字不动。
-VERB_SCAN=$(printf '%s\n' "$CODE" | sed 's/--no-create-home//g')
+# 精确词根豁免（2026-11-23，与 ADR-0028 同款做法）：内核升级后必须重启的是「自己」的
+# unit，这是内核自身的生命周期原语（与 privilege 同层），不是插件的业务动作。
+# 只对**自管理两处**把 restart 字面量/标识符换成中性占位，其它目录的 restart 匹配强度一字不动。
+VERB_SCAN=$(printf '%s\n' "$CODE" | sed 's/--no-create-home//g' | awk '
+/^\.\/cmd\/kored\/upgrade\.go:/ || /^\.\/internal\/core\/privilege\/systemd\.go:/ {
+  gsub(/restart/, "relaunch")
+  gsub(/Restart/, "Relaunch")
+}
+{ print }')
 VERB_RE='(^|[^[:alnum:]_])(create|restart|deploy)([^[:alnum:]_]|$)'
 VERB_HITS=$(printf '%s\n' "$VERB_SCAN" | grep -iE -- "$VERB_RE" || true)
 if [ -z "$VERB_HITS" ]; then
