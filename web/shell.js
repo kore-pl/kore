@@ -44,6 +44,8 @@
     firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4'],
     // WAF：盾牌 + 三道筛条（与 firewall 的对勾、integrity 的双层盾区分，20×20、currentColor、stroke-width 1.5）
     waf: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.4 7.6h5.2', 'M7.4 10h5.2', 'M7.4 12.4h3.2'],
+    // DNS：地球经纬（与 sites 的球区分：多一道横纬线 + 中部节点，20×20、currentColor、stroke-width 1.5）
+    dns: ['M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14', 'M3 10h14', 'M10 3c1.8 2 2.7 4.4 2.7 7s-.9 5-2.7 7c-1.8-2-2.7-4.4-2.7-7S8.2 5 10 3', 'M5 6.2h10', 'M5 13.8h10'],
     // 运行环境：三层堆叠（Node / PHP / Python 共用一页切换，20×20、currentColor、stroke-width 1.5）
     runtimes: ['M10 3 4 6l6 3 6-3z', 'M4 10l6 3 6-3', 'M4 14l6 3 6-3'],
     // 容器：集装箱外框 + 两道竖筋（20×20、currentColor、stroke-width 1.5）
@@ -60,7 +62,7 @@
     { key: 'nav.group.ops', title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
     { key: 'nav.group.biz', title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
     { key: 'nav.group.res', title: '资源', ids: ['files', 'backup', 'ssl', 'container'] },
-    { key: 'nav.group.platform', title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'waf', 'settings'] }
+    { key: 'nav.group.platform', title: '平台', ids: ['store', 'plugins', 'integrity', 'firewall', 'waf', 'dns', 'settings'] }
   ];
   var OTHER_GROUP = { key: 'nav.group.other', title: '其他' };
   function groupTitle(id) {
@@ -565,7 +567,7 @@
       items.push(r);
     }
     var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false,
-      hasRedis = false, hasFirewall = false, hasWaf = false, hasRuntimes = false, hasIntegrity = false, hasContainer = false;
+      hasRedis = false, hasFirewall = false, hasWaf = false, hasDns = false, hasRuntimes = false, hasIntegrity = false, hasContainer = false;
     for (var t = 0; t < items.length; t++) {
       if (items[t].id === 'terminal') hasTerminal = true;
       if (items[t].id === 'db') hasDb = true;
@@ -576,6 +578,7 @@
       if (items[t].id === 'redis') hasRedis = true;
       if (items[t].id === 'firewall') hasFirewall = true;
       if (items[t].id === 'waf') hasWaf = true;
+      if (items[t].id === 'dns') hasDns = true;
       if (items[t].id === 'runtimes') hasRuntimes = true;
       if (items[t].id === 'integrity') hasIntegrity = true;
       if (items[t].id === 'container') hasContainer = true;
@@ -589,6 +592,7 @@
     if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'nav.redis', 'Redis') });
     if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', 'nav.firewall', '防火墙') });
     if (!hasWaf) items.push({ id: 'waf', label: 'Web 防火墙', render: lazyView('KoreWaf', '/assets/waf.js', 'nav.waf', 'Web 防火墙') });
+    if (!hasDns) items.push({ id: 'dns', label: 'DNS 解析', render: lazyView('KoreDns', '/assets/dns.js', 'nav.dns', 'DNS 解析') });
     if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境') });
     if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', 'nav.integrity', '完整性') });
     if (!hasContainer) items.push({ id: 'container', label: '容器', render: lazyView('KoreContainer', '/assets/container.js', 'nav.container', '容器') });

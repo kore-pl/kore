@@ -20,6 +20,7 @@
     'nav.redis': 'Redis',
     'nav.firewall': 'Firewall',
     'nav.waf': 'Web Firewall',
+    'nav.dns': 'DNS',
     'nav.runtimes': 'Runtimes',
     'nav.integrity': 'Integrity',
     'nav.container': 'Containers',
