@@ -102,8 +102,12 @@ else
 fi
 
 # ---- 4) 业务动作词（整词匹配）----
+# 精确字面量豁免：useradd 的系统账户参数名 --no-create-home 里含 "create"，
+# 但它是工具参数名、不是业务动词。只把这个完整 token 从待匹配文本里摘掉；
+# create|restart|deploy 的整词匹配强度与其它文本一字不动。
+VERB_SCAN=$(printf '%s\n' "$CODE" | sed 's/--no-create-home//g')
 VERB_RE='(^|[^[:alnum:]_])(create|restart|deploy)([^[:alnum:]_]|$)'
-VERB_HITS=$(printf '%s\n' "$CODE" | grep -iE -- "$VERB_RE" || true)
+VERB_HITS=$(printf '%s\n' "$VERB_SCAN" | grep -iE -- "$VERB_RE" || true)
 if [ -z "$VERB_HITS" ]; then
   ok "业务动作词（整词匹配，注释已剥离）：0 命中（create/restart/deploy）"
 else

@@ -102,8 +102,10 @@ func (i linuxIdentity) Ensure(name string) (Account, error) {
 	}
 	var attempts []string
 	if tool := firstExisting(useraddCandidates); tool != "" {
-		// 不传 -m：useradd 默认不建 home；home 字段显式指向 /nonexistent。
-		argv := append([]string{tool, "--system", "--home-dir", "/nonexistent",
+		// 显式 --no-create-home：不能依赖「不传 -m 就不建 home」——/etc/login.defs
+		// 的 CREATE_HOME=yes 时 useradd 默认仍会创建 home，会把 --home-dir /nonexistent
+		// 真建出来；home 字段只作为 /etc/passwd 里的占位路径。
+		argv := append([]string{tool, "--system", "--no-create-home", "--home-dir", "/nonexistent",
 			"--shell", shell}, groupArgs...)
 		argv = append(argv, name)
 		if err := runAccountTool(argv); err == nil {

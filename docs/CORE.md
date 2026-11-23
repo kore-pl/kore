@@ -125,7 +125,7 @@
 
 ### 2.13 `internal/core/privilege`（提权通道，ADR-0018）
 
-- **职责**：校验 `info.json.root_actions` schema；经 `systemd-run --uid=0 --collect --wait --pipe` 的 transient unit 执行**固定 argv**；签发/核销不可回滚动作的一次性 `confirm` 令牌；构造 `root.action` 审计事件并 **fail-closed**（审计写失败 → 动作不执行，返回 `E_INTERNAL`）。
+- **职责**：校验 `info.json.root_actions` schema；经 `systemd-run --uid=0 --collect --wait -p StandardOutput=file:<tmp> -p StandardError=file:<tmp>` 的 transient unit 执行**固定 argv**；签发/核销不可回滚动作的一次性 `confirm` 令牌；构造 `root.action` 审计事件并 **fail-closed**（审计写失败 → 动作不执行，返回 `E_INTERNAL`）。**不能再加 `--pipe`**：它会把 unit 的 stdout/stderr 接管成到 systemd-run 父进程的管道，`-p StandardOutput=file:` / `-p StandardError=file:` 被 systemd 静默忽略、文件不创建，root 动作的输出永远为空（R5-1 真机实测，systemd 259：systemd-run 仍退出 0）；等待完成与退出码透传已由 `--wait` 负责。
 - **边界**：不认识 `ufw`/`nginx` 等业务语义（G-01）；不直接 import `store`（审计走 `Auditor` 单方法接口，装配层写 bbolt）；不引入常驻进程（ADR-0016）；插件永远拿不到 root。
 - **执行契约**：请求只能给 `action_id` + 追加参数（拼在声明 argv 之后，不能替换 argv[0]）；transient unit 名 `kore-root-<plugin>-<action>-<rand>`；超时 kill unit；stdout/stderr 各上限 1 MiB；`exit_code` 取 `systemd-run --wait` 的退出码。
 - **降级**：非 root → `E_NEED_ROOT`；无 systemd → `E_NO_SYSTEMD`；均带 `detail.hint`（HTTP 层提升为顶层 `hint`）。
