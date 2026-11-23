@@ -122,6 +122,24 @@
       var cell = add(grid, el('div', 'fw-stat'));
       add(cell, el('span', 'fw-stat-label', item[0])); add(cell, el('span', 'fw-stat-value', item[1]));
     });
+    // 开关不在本页：firewall 0.2.4 仅暴露 status/rules/allowPort/denyPort/deleteRule，
+    // 没有 enable/disable 方法。按状态给可操作指引，不伪造一个点了必然失败的按钮。
+    if (st.available && st.backend === 'ufw') {
+      if (!st.enabled) {
+        var off = add(box, el('div', 'fw-callout-warn'));
+        add(off, el('div', 'fw-callout-title', '防火墙当前未启用，规则不会生效'));
+        add(off, el('p', 'fw-callout-text',
+          '在服务器上执行下面的命令启用；启用前请确认 SSH 端口（默认 22/tcp）已放行，否则启用后可能断开远程连接。'));
+        add(off, el('pre', 'fw-cmd', 'sudo ufw enable'));
+        add(off, el('p', 'fw-callout-text', '本页暂不提供一键启用/停用；操作完成后点「刷新」查看最新状态。'));
+      } else {
+        var offGuide = add(box, el('details', 'fw-details'));
+        add(offGuide, el('summary', null, '如何停用防火墙'));
+        add(offGuide, el('p', 'fw-callout-text', '停用会影响全机出入站，执行前请确认 SSH 端口已放行：'));
+        add(offGuide, el('pre', 'fw-cmd', 'sudo ufw disable'));
+        add(offGuide, el('p', 'fw-callout-text', '本页暂不提供一键开关；操作完成后点「刷新」查看最新状态。'));
+      }
+    }
     if (!st.available) {
       if (st.error_code === 'E_NEED_ROOT') {
         // root 缺失是权限限制，不是登录失效：只给一条折叠指引，不铺原始英文错误。
