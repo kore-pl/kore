@@ -111,11 +111,7 @@ func (s *Server) setCSRFCookie(w http.ResponseWriter) error {
 		return err
 	}
 	secure, maxAge := sessionCookieAttrs(w)
-	http.SetCookie(w, &http.Cookie{
-		Name: csrfCookieName, Value: token, Path: "/",
-		HttpOnly: false, Secure: secure, SameSite: http.SameSiteStrictMode,
-		MaxAge: maxAge,
-	})
+	writeCSRFCookie(w, token, secure, maxAge)
 	return nil
 }
 

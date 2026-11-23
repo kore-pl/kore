@@ -299,8 +299,12 @@ type Server struct {
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
 	loginStreakMu   sync.Mutex
 	loginFailStreak int
-	mu              sync.Mutex
-	listeners       []net.Listener
+	// localCSRFMu / localCSRFTokenValue 是本机免密通道的进程级 CSRF token
+	//（幂等请求首次下发后稳定复用，避免并发下发互相覆盖 cookie 的竞态）。
+	localCSRFMu         sync.Mutex
+	localCSRFTokenValue string
+	mu                  sync.Mutex
+	listeners           []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
@@ -322,13 +326,16 @@ func New(opts Options, transport platform.Transport) *Server {
 	// 主壳静态三件套：精确路径注册，优先于 routes() 里的 "/" 404 兜底。
 	// 面板壳无敏感数据，走鉴权白名单（middleware.isPublicPath）；API 仍全量鉴权。
 	server.staticRoutes()
-	// 中间件链（外层先执行）：req_id → CSRF → auth → handler。
+	// 中间件链（外层先执行）：req_id → local CSRF 引导 → CSRF → auth → handler。
 	// CSRF 在 auth 之前：非法写请求一律先按 CSRF 失败收敛，不泄露会话状态。
 	// 仅装配鉴权时挂 CSRF/auth；M0 探活骨架（auth==nil）保持裸路由。
 	handler := http.Handler(server.mux)
 	if server.auth != nil {
 		handler = server.withAuth(handler)
 		handler = server.withCSRF(handler)
+		// 本机免密不经过登录，kore_csrf 需在幂等请求上补发（详见 csrf_local.go）；
+		// 仅本机通道，远程仍必须登录换会话后才拿到令牌。
+		handler = server.withLocalCSRF(handler)
 	}
 	server.httpServer = &http.Server{
 		Handler:           server.withRequestID(handler),
