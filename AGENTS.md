@@ -73,6 +73,8 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 检查点即提交：一处自洽且过了对应层级门禁（G1/G2/G4）就提交，不攒到任务收尾。
 - 不提交未验证改动；门禁没跑或跑挂时，明确报告阻塞原因，不"先提交再说"。
 - **插件发版（G-17 延伸）**：`info.json` + `manifest.json` 版本同步 bump，`CHANGELOG.md` 记条目，dist 两打 + 干净树复现一致；索引同步 `versions.lock.json` 与 `presets/*.json`。**同 `id@version` 只允许一个 sha，任何改变 dist sha 的改动必须 bump**（见 [docs/RELEASE.md](docs/RELEASE.md)）。
+- **提交归属**：每条提交首行带 `[agent:<name>]` 前缀（如 `[agent:kore-architect-maturity] feat(...): ...`），便于并发仓库追溯"谁提交的"；`d7b8e7b` 的教训是统一工作区身份让归因只能靠 `git show` 的 author（无法定位 agent）。
+- **禁改写历史**：并发仓库**禁止 `git commit --amend` / `git reset` / `rebase` / force-push**；回退一律用**追加 revert 提交**（`git revert --no-edit <sha>`）。改写会覆盖他人已拉取或未提交的改动。
 - **高频交付（裁决36）**：一处自洽且过了对应门禁即提交并 `git push`，不攒到任务收尾；插件仓每次改动后重建 `dist` 并核对 sha 与索引一致，打包产物及时生成用于验证。
 - **镜像推送（Gitee）**：推送时 `origin`（Gitea，权威源）**先推**，再推 `github`（GitHub 镜像）与 `gitee`（Gitee 镜像）；镜像失败只 WARN、不阻塞权威源（依据 [ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md) 决策 B）。Gitee release **只保留最新 5 个**（GitHub 全量保留），超出用 `scripts/gitee-release-prune.sh` 清理（先 `--dry-run` 再真删）。详见 [docs/GITEE-MIRROR.md](docs/GITEE-MIRROR.md)。
 
@@ -90,6 +92,9 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - verifier 必须独立于 implementer：不复用实现者结论，门禁命令按 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) 原文复跑并落验收报告。
 - 失败回派**原 owner**，不跨角色改他人文件；确需新增写域时先回到拆解阶段重画 `write_scopes`。
 - 派发必须自包含：目标、写域、验收命令、完成判据写进任务卡，缺一项不派。
+- **同仓并行纪律**：**同一插件仓 / 同一 module 内，涉及「公共接口新增方法、测试替身（fake/mock）、方法清单类断言（期望表）」的改动视为同一写域，禁止并行派发**——即使文件不同：接口加方法的涟漪会穿过所有实现与期望表（实测：`kore-plugin-container` 两人并行，`exec.go` 被另一人打包进 `b37e90b`，4 个测试替身 + 6 条断言连锁变红、`file-changed` 冲突、`AssertionError` 半路中断，最后只剩一行 `c504ded` 补绿）。
+- **预算校准（接口涟漪类）**：这类卡必须单列 **≥8 分钟**的"涟漪改造"预算；`实现 + 编译` 12 分钟，`测试涟漪 + 版本/dist` 再加 10 分钟——因此**「加方法 + 改公共接口」类任务窗口给 ≥20 分钟**，或拆成两张卡：「实现 + 编译」与「测试涟漪 + 版本/dist」。
+- **验收口径（接手他人未完成改动）**：必须核对该改动的**测试断言覆盖面**（不能只看 `go test` 绿——绿可能只是断言还没跟上），并在提交信息里写明「**吸收了他人的未提交实现**」及来源（文件 / 行 / 原 owner）。
 - 子 agent 开工前必须读本文件；子 agent 不继承父会话上下文，未注入 = 裸奔。
 - 角色全集（固定 6 个，不增不删）：lead / architect / implementer / verifier / red-team / scribe；各自使命、写域与禁止项见 [.agents/ROLES.md](.agents/ROLES.md)。
 
