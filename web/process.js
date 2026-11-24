@@ -219,6 +219,40 @@
     }
     scheduleChart(c);
   }
+  /* 坐标轴刻度数值：Y 轴 MiB 用 M 缩写、% 保留；X 轴 HH:MM。 */
+  function axisFmt(v, unit) {
+    var s = Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k'
+      : (Math.abs(v) >= 10 ? Math.round(v).toString() : v.toFixed(1));
+    var u = (unit || '').trim();
+    return s + (u ? u.charAt(0) : '');
+  }
+
+  /* 坐标轴刻度（用户反馈"图表没有下标"）：Y 轴数值+单位贴三条网格线，X 轴时间刻度在图底。
+     画在数据层（依赖 c.max / c.xs），窄屏抽稀 X 刻度防重叠；刻度落在 CHART_PAD 留白内，不压折线。 */
+  function drawAxes(c, g) {
+    var plot = Math.max(10, c.h - 2 * CHART_PAD), i, val, ty, n;
+    g.font = '10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+    g.fillStyle = 'rgba(148,163,184,.75)';
+    g.textBaseline = 'middle'; g.textAlign = 'left';
+    for (i = 0; i <= 2; i++) {
+      val = c.max * (i / 2);
+      ty = Math.round(c.h - CHART_PAD - plot * (i / 2));
+      g.fillText(axisFmt(val, c.series.unit), 2, ty);
+    }
+    n = c.xs.length;
+    if (n < 2) return;
+    g.textBaseline = 'bottom';
+    var ticks = c.w < 360 ? 2 : (c.w < 640 ? 3 : 4), frac, idx, tx, t;
+    for (i = 0; i < ticks; i++) {
+      frac = ticks === 1 ? 0 : i / (ticks - 1);
+      idx = Math.round(frac * (n - 1));
+      tx = CHART_PAD + (c.w - 2 * CHART_PAD) * frac;
+      g.textAlign = i === 0 ? 'left' : (i === ticks - 1 ? 'right' : 'center');
+      t = clockText(c.xs[idx]);
+      g.fillText(t ? t.slice(0, 5) : '—', tx, c.h - 2);
+    }
+  }
+
   /* 数据层重绘：贴网格 + 一条折线，不新建任何 DOM / canvas。 */
   function drawChart(c) {
     c.raf = 0;
@@ -227,6 +261,7 @@
     g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.canvas.width, c.canvas.height);
     if (c.grid) g.drawImage(c.grid, 0, 0);
     g.setTransform(c.dpr, 0, 0, c.dpr, 0, 0);
+    drawAxes(c, g);
     var n = c.ys.length, plot = Math.max(10, c.h - 2 * CHART_PAD), i, idx;
     if (n < 2) return;
     var target = Math.min(CHART_MAX_POINTS, Math.max(2, Math.round(c.w)));

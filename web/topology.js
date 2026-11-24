@@ -71,7 +71,8 @@
     '.topo-node-box:focus-visible{outline:none}',
     '.topo-node-name{fill:var(--kore-text-1,#e6edf3);font-size:12px;font-weight:600}',
     '.topo-node-meta{fill:var(--kore-text-3,#8b949e);font-size:10px}',
-    '.topo-tip{position:absolute;z-index:3;min-width:130px;max-width:240px;padding:8px 10px;border-radius:6px;border:1px solid var(--kore-border-2);background:var(--kore-bg-1);box-shadow:0 4px 14px rgba(0,0,0,.3);font-size:12px;line-height:1.6;color:var(--kore-text-1);pointer-events:none;font-variant-numeric:tabular-nums;white-space:normal}',
+    /* tip 挂 document.body + fixed：脱离 .topo-stage 的 overflow:auto 裁切，手机 stage 隐藏时仍可见（G-32 §13-11 tap 面板）；z-index 80 高于卡片/表格。 */
+    '.topo-tip{position:fixed;z-index:80;min-width:130px;max-width:240px;padding:8px 10px;border-radius:6px;border:1px solid var(--kore-border-2);background:var(--kore-bg-1);box-shadow:0 4px 14px rgba(0,0,0,.3);font-size:12px;line-height:1.6;color:var(--kore-text-1);pointer-events:none;font-variant-numeric:tabular-nums;white-space:normal}',
     '.topo-tip[hidden]{display:none}',
     '.topo-tip-title{font-weight:600;margin-bottom:2px}',
     '.topo-tip-row{color:var(--kore-text-2)}',
@@ -302,7 +303,7 @@
   }
 
   function showTip(node, clientX, clientY) {
-    if (!S.tip || !S.box) return;
+    if (!S.tip) return;
     S.tip.textContent = '';
     add(S.tip, el('div', 'topo-tip-title', node.name + '（' + (KIND[node.kind] || KIND.other).label + '）'));
     add(S.tip, el('div', 'topo-tip-row', '状态：' + (node.status || '未知')));
@@ -311,10 +312,19 @@
     go.type = 'button';
     on(go, function (ev) { ev.stopPropagation(); if (S.tipData) goto(S.tipData.route); });
     S.tip.hidden = false;
-    var r = S.box.getBoundingClientRect();
-    var x = Math.max(4, Math.min(clientX - r.left + 12, r.width - 250));
-    var y = Math.max(4, Math.min(clientY - r.top + 12, r.height - 120));
-    S.tip.style.left = x + 'px'; S.tip.style.top = y + 'px';
+    /* fixed 用视口坐标直接定位；右/下超界翻到指针左侧/上方，再夹进视口——不依赖 stage 坐标系，
+       手机 stage 隐藏后列表项也能复用同一面板（G-32 §13-11）。 */
+    var GAP = 14, EDGE = 8;
+    var tw = S.tip.offsetWidth || 200, th = S.tip.offsetHeight || 110;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var px = isFinite(clientX) ? clientX : vw / 2, py = isFinite(clientY) ? clientY : vh / 2;
+    var x = px + GAP, y = py + GAP;
+    if (x + tw > vw - EDGE) x = px - tw - GAP;
+    if (y + th > vh - EDGE) y = py - th - GAP;
+    x = Math.max(EDGE, Math.min(x, vw - tw - EDGE));
+    y = Math.max(EDGE, Math.min(y, vh - th - EDGE));
+    S.tip.style.left = Math.round(x) + 'px';
+    S.tip.style.top = Math.round(y) + 'px';
     S.tipData = node;
   }
   function hideTip() { if (S.tip) S.tip.hidden = true; S.tipData = null; }
@@ -391,8 +401,20 @@
       dot.style.background = (KIND[n.kind] || KIND.other).color;
       var txt = add(row, el('span', null, n.name + ' · ' + (KIND[n.kind] || KIND.other).label + ' · ' + (n.status || '未知')));
       txt.title = n.detail || '';
-      var go = add(row, el('button', 'topo-list-go', '查看'));
-      go.type = 'button'; on(go, function () { goto(n.route); });
+      /* 手机路径（≤640px 只显示列表）tap/hover 列表项也出读数面板，与桌面节点同一 showTip；
+         点击「查看详情」按钮才跳转（stopPropagation 防点按钮时误触行）。G-32 §13-11。 */
+      row.setAttribute('tabindex', '0');
+      on(row, function (ev) { showTip(n, ev.clientX, ev.clientY); }, 'click');
+      on(row, function (ev) {
+        var t = ev.changedTouches && ev.changedTouches[0];
+        var r = row.getBoundingClientRect();
+        showTip(n, t ? t.clientX : r.left + r.width / 2, t ? t.clientY : r.top + r.height / 2);
+      }, 'touchstart');
+      on(row, function (ev) { var r = row.getBoundingClientRect(); showTip(n, r.left + r.width / 2, r.top); }, 'focus');
+      on(row, function () { hideTip(); }, 'mouseleave');
+      var go = add(row, el('button', 'topo-list-go', '查看详情'));
+      go.type = 'button';
+      on(go, function (ev) { ev.stopPropagation(); goto(n.route); });
     });
   }
 
@@ -427,6 +449,8 @@
     S.gen++;
     if (S.resizeTimer) { clearTimeout(S.resizeTimer); S.resizeTimer = 0; }
     if (S.svg) { while (S.svg.firstChild) S.svg.removeChild(S.svg.firstChild); }
+    /* tip 挂 body，需显式移除，否则切走视图残留 fixed 幽灵面板。 */
+    if (S.tip && S.tip.parentNode) S.tip.parentNode.removeChild(S.tip);
     S.svg = null; S.listEl = null; S.notesEl = null; S.tip = null;
     S.box = null; S.nodes = []; S.edges = [];
     S.instCount = 0;
@@ -458,7 +482,8 @@
     S.svg = svgEl('svg', { 'class': 'topo-svg', xmlns: SVG_NS, role: 'img',
       'aria-label': '服务关系拓扑图：站点连接容器，容器连接端口，站点连接数据库' });
     stage.appendChild(S.svg);
-    S.tip = add(stage, el('div', 'topo-tip')); S.tip.hidden = true;
+    /* tip 挂 body（不是 stage）：stage 有 overflow:auto 会裁切，且手机 stage 隐藏会带走 tip。 */
+    S.tip = add(document.body, el('div', 'topo-tip')); S.tip.hidden = true;
     on(stage, function () { hideTip(); }, 'click');
 
     var list = add(container, el('div', 'topo-list'));
