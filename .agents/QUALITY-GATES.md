@@ -4,7 +4,7 @@
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race）、§7（第 20 段 G-33））
+## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race）、§1.3（第 19 段全仓 race）、§1.4（第 16 段·market 子检查）、§7（第 20 段 G-33））
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -128,6 +128,34 @@
 
 **跳过规则**：只有「无 `go.mod`」才 `[SKIP]`；缺 cgo、缺编译器一律 `[FAIL]`，不提供「本机跳过」开关——第 19 段存在的唯一意义就是不让数据竞争没人看。
 
+### 1.4 第 16 段 · market 子检查（索引 → 市场页派生一致，阻断级，2026-11-24 接入 kore 侧）
+
+**防的事故**：`kore-plugins` 侧本来就有两道判据——`validate-index.sh` 第 1c 步与 `build-market.sh --check`——但 `kore` 自己的 `make check` **从不调用它们**，第 16 段只比公钥（`scripts/pubkey-sync-check.sh`）。日常反馈的权威入口是本地 `kore` 的 `make check`（§6：CI 只在 `push main` / tag / PR 跑），于是「改了 `index/plugins.json` 没同轮重建 `market/plugins.js`」在 kore 仓跑门禁时**抓不到**：商店页把旧版本当现行版本展示，只能靠 `cd kore-plugins && make check` 或索引仓 CI 才拦得住。判据存在、执行面缺失——与 G13 的 2026-11-23 教训同型（只验参数不真跑 = 假绿）。
+
+**执行方式**（`make market-check`，`make check` 第 16 段·market 子步骤，阻断级；不联网、不调用 git、不写状态）：
+
+- 命令：`bash "$(KORE_PLUGINS_DIR)/scripts/build-market.sh" --check`；`KORE_PLUGINS_DIR ?= ../kore-plugins`（与 `scripts/presets-check.sh` / `scripts/pubkey-sync-check.sh` 的目录约定一致，CI / worktree / 测试可覆盖）。
+- 判据本体在索引仓，kore 侧不改判据、不重复实现生成器：只读、逐字节比对现有 `market/plugins.js` 与当前 `index/plugins.json` 的期望内容；不一致 `exit 1` 并列出 `market=x index=y` 版本差 + 修复命令（`bash scripts/build-market.sh`，与索引同一提交）。
+- `kore-plugins` 不存在 → `[SKIP]` exit 0（kore 仓可独立 clone，不阻断）。
+- `kore-plugins` 存在但缺 `scripts/build-market.sh` → `[FAIL]`（兄弟仓过旧 / 不是索引仓，不静默跳过）。
+- 存在且不一致 → `[FAIL]`，`make check` 阻断。
+
+**为什么是「第 16 段·market 子步骤」而不是新开第 21 段**：① 语义同源——第 16 段本就是「kore ↔ 索引仓派生一致性」（公钥单一真源），market 页是索引的派生物，同一条链；② 接入时工作树的 `Makefile` 正被并发改动做 18→20 段重编号（`1/18…18/18` 批量改号与他人的 race-full 新增段混在一起、未提交），在其上再加第 21 段要么把他人未提交改动一起提交（违反 G-12），要么提交一个段数与已落库文档（20 段）矛盾的 Makefile；③ 子步骤零重编号，段数仍为 20，输出另有独立 `[RUN ] 16 段·market` 行，可读性不降。
+
+**已知边界（写明，不粉饰）**：第 16 段的另一半（`pubkey-sync-check.sh` 公钥单一真源）在 `kore-plugins` 缺失时**仍然 FAIL**（脚本原文 `[ -f "$VALIDATE" ] || fail`，早于本次接入）。因此「整段在独立 clone 下 SKIP」当前做不到——那是既有判据，本次不放宽；`market` 子步骤自身的 SKIP 语义按约束实现并实测（下表）。若将来要让独立 clone 全绿，需要单独裁决公钥检查的缺失目录语义，不在本门禁范围内。
+
+**正反例自证（2026-11-24 实测；反例在 `/tmp` 的 mock 副本上做，未触碰共享索引仓与主实例运行态）**：
+
+| 场景 | 命令 | 结果 |
+| --- | --- | --- |
+| 正例（当前一致） | `make market-check` | `[OK] market/plugins.js 与索引逐字节一致（24 个插件）` / exit 0 |
+| 反例（mock 里把 `echo` 版本 0.1.5 改成 9.9.9） | `make market-check KORE_PLUGINS_DIR=/tmp/kp-mock-market` | `[FAIL] market/plugins.js 与 index/plugins.json 不一致` + `echo: market=9.9.9 index=0.1.5` / exit 2 |
+| 还原后 | 同上 | `[OK]` / exit 0 |
+| `kore-plugins` 缺失 | `make market-check KORE_PLUGINS_DIR=/tmp/nonexistent` | `[SKIP] 未检出 kore-plugins…` / exit 0 |
+| 目录在但不是索引仓 | `make market-check KORE_PLUGINS_DIR=/tmp/kp-empty-dir` | `[FAIL] … 缺少 scripts/build-market.sh` / exit 2 |
+
+**跳过规则**：只有「`kore-plugins` 目录不存在」才 `[SKIP]`；「目录在但脚本缺失」「market 与索引不一致」一律 `[FAIL]`，不提供「本机跳过」开关。
+
 ## 2. 三层组合
 
 | 层级 | 时机 | 必跑 | 说明 |
@@ -215,6 +243,8 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 规则：N/A 必须在 evidence 里写"门禁 + N/A + 原因"三件套；缺原因视为未验证，任务不得 complete。
 
+**兄弟仓缺失的 SKIP 规则（2026-11-24，第 16 段·market 子检查）**：`make market-check` 在 `../kore-plugins` **不存在**时记 `[SKIP]` 并 exit 0——kore 仓可独立 clone，判据只在索引仓可用时才成立；目录在但缺 `scripts/build-market.sh`、或 `market/plugins.js` 与索引不一致，一律 `[FAIL]`。**注意**：同段内的公钥检查（`scripts/pubkey-sync-check.sh`）在索引仓缺失时仍 FAIL（既有判据，未放宽），见 §1.4「已知边界」。
+
 ## 5. 门禁维护
 
 1. **新增门禁必须写明防的是哪类事故**：写清"哪类故障因为这个门禁被提前拦住"，否则不进表。
@@ -233,7 +263,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **20 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **20 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / 索引↔市场页派生一致（第 16 段·market 子检查，`make market-check`：kore-plugins 缺失 SKIP、存在但不一致 FAIL，阻断级，见 §1.4）/ race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 

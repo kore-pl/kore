@@ -399,6 +399,27 @@ store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 �
 presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production / 判据① 边界用例 go test 真跑）
 	@bash scripts/presets-check.sh
 
+# ── 索引 → 市场页派生一致性（第 16 段·market 子检查，阻断级 · 2026-11-24 接入 kore 侧）──
+# 判据本体在索引仓：kore-plugins/scripts/build-market.sh --check —— 只读、逐字节比对
+# market/plugins.js 与 index/plugins.json 的期望内容；不一致 exit 1 并列出 market↔index 版本差。
+# 为什么 kore 侧要再跑一次：日常反馈的权威入口是本地 make check。只在索引仓自己的 make check / CI
+# 上跑，「改了索引没同轮重建市场页」在 kore 仓跑门禁时抓不到，等于判据只在 CI 或手动进索引仓时生效。
+# 目录约定与 scripts/*.sh 一致：默认 ../kore-plugins，可用 KORE_PLUGINS_DIR 覆盖（CI / worktree / 测试）。
+# 缺失 kore-plugins → SKIP（kore 仓可独立 clone，不阻断）；存在但 market 与索引不一致 → FAIL（阻断）。
+KORE_PLUGINS_DIR ?= ../kore-plugins
+.PHONY: market-check
+
+market-check: ## 索引→市场页一致性（调用索引仓 build-market.sh --check；kore-plugins 缺失时 SKIP，不一致 FAIL）
+	@if [ ! -d "$(KORE_PLUGINS_DIR)" ]; then \
+	  echo "[SKIP] 未检出 kore-plugins（$(KORE_PLUGINS_DIR)）：索引→市场页一致性跳过，不阻断独立 clone（可用 KORE_PLUGINS_DIR 指向索引仓）"; \
+	  exit 0; \
+	fi; \
+	if [ ! -f "$(KORE_PLUGINS_DIR)/scripts/build-market.sh" ]; then \
+	  echo "[FAIL] $(KORE_PLUGINS_DIR) 存在但缺少 scripts/build-market.sh：不是可用的索引仓（请更新 kore-plugins）"; \
+	  exit 1; \
+	fi; \
+	bash "$(KORE_PLUGINS_DIR)/scripts/build-market.sh" --check
+
 check: ## 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源（ADR-0025）+ 交叉编译（G-16，五目标真编译，阻断级）+ race 门禁（第 18 段：boundary 面跨仓 + 第 19 段：全仓 -race，均阻断级）
 	@fail=0; \
 	echo "[RUN ] 1/20 docs-check"; \
@@ -472,6 +493,8 @@ check: ## 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单
 	echo ""; \
 	echo "[RUN ] 16/20 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \
 	if ! bash scripts/pubkey-sync-check.sh; then fail=1; fi; \
+	echo "[RUN ] 16 段·market 索引→市场页派生一致（kore-plugins 缺失时 SKIP，不阻断独立 clone；存在但不一致 FAIL 阻断）"; \
+	if ! $(MAKE) --no-print-directory market-check; then fail=1; fi; \
 	echo ""; \
 	echo "[RUN ] 17/20 交叉编译（G-16 阻断级：五目标「全仓 go build ./...」+ kored 五产物真编译，windows/amd64 + darwin/arm64 为 G-16 明文判据；判据只验证文本=漏检；go build 不含 _test.go，测试包见 make cross-vet）"; \
 	if ! $(MAKE) --no-print-directory cross-build; then fail=1; fi; \
