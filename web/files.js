@@ -268,8 +268,22 @@
     host.textContent = '';
     if (S.count) S.count.textContent = S.entries.length + ' 项';
     if (!S.entries.length) {
+      // 空态三件套：当前没有 X + 一句话说明 + 下一步按钮（AGENTS.md §7 ④ / G-33 A5）。
+      // 这里要两个并列动作（上传 / 新建文件夹），主壳 emptyBlock 只支持一个 CTA，故按同款结构手拼：
+      // 主动作「上传文件」先把工具条带回视野（手机端可能已滚出屏幕），再弹系统文件选择框；
+      // 次动作「新建文件夹」直达命名弹层——两条都是真实可用动作，不做点了才报错的假按钮。
       var empty = add(host, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '这个目录还是空的，可用上方按钮新建目录、文件或上传'));
+      add(empty, el('p', 'empty-state-title', '这个目录是空的'));
+      add(empty, el('p', 'empty-state-text', '可以上传文件或新建文件夹；也可以先用上方「新建文件」建一个空文件再编辑。'));
+      var upBtn = add(empty, el('button', 'btn btn-primary', '上传文件'));
+      upBtn.type = 'button';
+      on(upBtn, function () {
+        if (S.filesToolbar && S.filesToolbar.scrollIntoView) S.filesToolbar.scrollIntoView({ block: 'nearest' });
+        if (S.fileInput) S.fileInput.click();
+      });
+      var mkDir = add(empty, el('button', 'btn btn-ghost', '新建文件夹'));
+      mkDir.type = 'button';
+      on(mkDir, function () { newEntry(true); });
       updateSelection();
       return;
     }
@@ -630,8 +644,11 @@
     var entries = data.entries || [];
     if (S.count) S.count.textContent = entries.length + ' 项匹配';
     if (!entries.length) {
-      var empty = add(host, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '没有找到匹配项。换个关键词，或切换「按文件名 / 按内容」；内容搜索会跳过二进制与超过 1 MiB 的文件。'));
+      host.appendChild(window.KoreUI.emptyBlock({
+        title: '没有找到匹配项',
+        text: '换个关键词，或切换「按文件名 / 按内容」；内容搜索会跳过二进制与超过 1 MiB 的文件。',
+        label: '清空搜索', onClick: clearSearch
+      }));
       updateSelection();
       return;
     }
@@ -706,6 +723,16 @@
     if (!host) return;
     host.textContent = '';
     if (S.count) S.count.textContent = (S.trash.entries || []).length + ' 项';
+    // 回收站为空时不渲染一排全禁用的操作按钮——那只会让人怀疑「是不是坏了」。
+    if (!S.trash.entries.length) {
+      host.appendChild(window.KoreUI.emptyBlock({
+        title: '回收站是空的',
+        text: '在文件列表里删除项目时不会立刻销毁，会先移到这里，随时可以恢复。',
+        label: '返回文件列表', onClick: function () { goPath(''); }
+      }));
+      updateSelection();
+      return;
+    }
     var ops = add(host, el('div', 'files-actions files-trash-ops'));
     S.trashRestoreBtn = add(ops, el('button', 'btn', '恢复所选')); S.trashRestoreBtn.type = 'button';
     S.trashRestoreBtn.disabled = true;
@@ -715,12 +742,6 @@
     on(S.trashPurgeBtn, function () { purgeTrash(trashCheckedIds(), false); });
     var purgeAll = add(ops, el('button', 'btn btn-ghost files-del', '清空回收站')); purgeAll.type = 'button';
     on(purgeAll, function () { purgeTrash([], true); });
-    if (!S.trash.entries.length) {
-      var empty = add(host, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '回收站是空的。删除文件时会先移到这里，随时可以恢复。'));
-      updateSelection();
-      return;
-    }
     var table = add(host, el('table', 'files-table'));
     var htr = add(add(table, el('thead')), el('tr'));
     add(htr, el('th', 'files-check-head', ''));

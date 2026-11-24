@@ -96,7 +96,7 @@
     '.mon-mini-val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
     '.mon-all{display:inline-block;min-height:44px;line-height:44px;padding:0 4px;color:var(--kore-info)}',
     '.mon-lock{margin-left:4px;font-size:11px;color:var(--kore-text-3)}',
-    '.mon-empty-note{padding:12px 16px;color:var(--kore-text-3)}',
+    '.mon-empty-state{padding:0 16px 12px}',
     '@media (max-width:640px){.mon-chart{height:96px}.mon-mini{padding:8px 12px 2px}}',
     '.mon-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;font-size:12px;color:var(--kore-text-2);padding-top:8px}',
     '.mon-legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle;border-radius:2px}',
@@ -645,12 +645,17 @@
     var history = d.history || {};
     var ts = Array.isArray(history.timestamps) ? history.timestamps : [];
     if (ts.length < 2) {
-      /* 空态 / 1 点态：保留原本文案语义，不建 canvas、不白屏。 */
+      /* 空态 / 1 点态：保留原本文案语义，不建 canvas、不白屏；下一步 = 立刻再取一次。 */
       disposeCharts();
       var p0 = S.C.panel('历史曲线', null, 'mon-chart-body');
       var lack = 2 - ts.length;
-      add(p0.body, el('p', 'mon-empty-note',
-        '正在积累数据（还差 ' + lack + ' 个采样；默认 60s 一个点，点「刷新」后更新）'));
+      var empty = window.KoreUI.emptyBlock({
+        title: '监控数据还在收集中',
+        text: '还差 ' + lack + ' 个采样点才画得出曲线；默认每 60 秒采一个点，刚启动时通常 10 秒内就能看到第一组。',
+        label: '立即刷新', onClick: loadAll
+      });
+      empty.classList.add('mon-empty-state');
+      add(p0.body, empty);
       return p0;
     }
     if (!chartPanelEl) {
@@ -741,7 +746,18 @@
     /* 降级态没有 history：销毁图表实例，别让隐藏 canvas 计入活动实例数。 */
     disposeCharts();
     var p = C.panel('插件详情不可用', null, 'mon-temp');
-    add(p.body, el('span', 'muted', '磁盘明细、网络收发、温度与进程 Top10 由 monitor 插件提供；安装后在软件商店启用再刷新本页。'));
+    // 这是「没有监控插件」的空态：下面那半页数据不存在，给出去处而不是让用户干瞪眼。
+    var empty = window.KoreUI.emptyBlock({
+      title: '还没有安装监控插件',
+      text: '上面是内核自带的基础指标；磁盘明细、网络收发、温度与进程 Top10 由 monitor 插件提供，装好并启用后这里会自动出现。',
+      label: '去软件商店安装',
+      onClick: function () {
+        if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
+        else window.location.hash = '#/store';
+      }
+    });
+    empty.classList.add('mon-empty-state');
+    p.body.appendChild(empty);
     S.panels.appendChild(p);
     C.warnings(S.warn, []);
   }

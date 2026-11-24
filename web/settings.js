@@ -32,7 +32,7 @@
     plugins: '21 个插件仓库（20 产品 + echo 验证件）', presets: '8 个场景预设'
   };
   // 视图缓存：先按缓存出骨架再拉真值重绘；单块读取失败只降级该块。
-  var cache = { session: null, info: null, error: '' };
+  var cache = { session: null, info: null, error: '', loaded: false };
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -187,6 +187,16 @@
   function buildRuntime() {
     var info = cache.info || {};
     var sup = info.supervisor || {};
+    // 内核信息没读到（未登录 / 网络抖动）：整卡收成空态。显示一排「—」会被当成真实值，比空白更误导。
+    if (cache.loaded && !cache.info) {
+      var empty = window.KoreUI.emptyBlock({
+        title: '还没有读取到内核信息',
+        text: '运行参数与版本号来自内核的系统信息接口；未登录或网络抖动时会读不到，重试一次通常就能恢复。',
+        label: '重新读取设置', onClick: reloadSettings
+      });
+      empty.classList.add('settings-empty-state');
+      return card('运行参数', '只读 · 修改需改配置文件后重启', [], [empty], true);
+    }
     var table = el('table', 'settings-table');
     var thead = el('thead'), htr = el('tr');
     htr.appendChild(el('th', null, '资源项'));
@@ -466,6 +476,8 @@
     'padding:10px 14px;font-size:var(--kore-font-14);cursor:pointer}' +
     '.settings-tab:hover{color:var(--kore-text-1)}.settings-tab.is-active{color:var(--kore-text-1);border-bottom-color:var(--kore-info)}' +
     '.settings-page{display:block}@media (max-width:639px){.settings-tab{min-height:var(--kore-touch);flex:1 1 auto}}' +
+    // 视图级空态：主体由主壳 KoreUI.emptyBlock 渲染（panel-empty empty-state），这里只吃掉卡片里多出的内边距。
+    '.settings-empty-state{padding:0}' +
     // 退出下沉：红字按钮（danger 只给不可逆操作）+ 确认弹层（C10 三级）。
     '.settings-logout{color:var(--kore-danger);border-color:var(--kore-danger)}' +
     '.settings-logout:hover{color:var(--kore-danger);border-color:var(--kore-danger);background:var(--kore-bg-2)}' +
@@ -610,16 +622,25 @@
     }, function () { cache.info = null; });
     return Promise.all([p1, p2]);
   }
+  // reloadSettings：空态里的「重新读取设置」——重拉会话与系统信息后重绘本页（不整页刷新，保留当前 tab）。
+  function reloadSettings() {
+    load().then(function () {
+      cache.loaded = true;
+      paint(host);
+      if (host && host.scrollIntoView) host.scrollIntoView({ block: 'start' });
+    });
+  }
   function render(container) {
     if (!container || container.nodeType !== 1) return Promise.resolve(false);
     cache.error = '';
+    cache.loaded = false;
     // 全局搜索的「查看操作审计」在跳转前放这个标记，到达设置页直接落到审计 tab。
     if (window.__koreSettingsTab) {
       tab = window.__koreSettingsTab === 'audit' ? 'audit' : window.__koreSettingsTab === 'credentials' ? 'credentials' : 'config';
       window.__koreSettingsTab = '';
     }
     paint(container);
-    return load().then(function () { if (tab === 'config') paint(container); return true; });
+    return load().then(function () { cache.loaded = true; if (tab === 'config') paint(container); return true; });
   }
 
   window.KoreSettings = { render: render, endpoints: EP };

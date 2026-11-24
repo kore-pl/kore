@@ -67,6 +67,7 @@
   var PAGE_SIZE = 12;
   var S = { plugins: [], presets: [], installed: Object.create(null), status: Object.create(null),
     cat: 'all', scope: 'all', q: '', page: 1, grid: null, empty: null, stats: null, notice: null,
+    container: null, searchInput: null,
     summary: null, batchStatus: null,
     batch: { running: false, done: 0, total: 0, failed: [], message: '' },
     restart: null, restartCode: null };
@@ -211,11 +212,45 @@
       return [p.id, p.name].concat(p.scenario_tags || []).join(' ').toLowerCase().indexOf(q) !== -1;
     });
   }
-  // 空状态必须给出「下一步」，而不是一句放之四海皆准的「没有匹配」（易用性四原则④）。
-  function emptyText() {
-    if (S.scope === 'installed') return '还没有安装任何插件。切到「全部」挑一个装上，装完会出现在这里。';
-    if (S.scope === 'upgradable') return '已装插件都是最新版本，暂时没有可更新的。';
-    return '没有匹配的插件：换个关键词，或把分类/状态切回「全部」。';
+  // 空态三件套：当前没有 X + 一句话说明 + 下一步按钮（易用性四原则④ / G-33 A5）。
+  // 三种「空」的下一步完全不同：索引空 → 重新读索引；已装空 → 去全部；筛选空 → 清空筛选。
+  // 清理筛选复用页面上已有的筛选按钮（state 单一真源），改完把结果区带回视野（手机端列表可能已滚出屏幕）。
+  function clearFilters() {
+    if (S.searchInput) S.searchInput.value = '';
+    S.q = ''; S.cat = 'all'; S.scope = 'all'; S.page = 1;
+    var scopes = document.querySelectorAll('.store-scope');
+    for (var i = 0; i < scopes.length; i++) {
+      scopes[i].setAttribute('aria-pressed', scopes[i].dataset.scope === 'all' ? 'true' : 'false');
+    }
+    var cats = document.querySelectorAll('.store-cat');
+    for (var j = 0; j < cats.length; j++) {
+      cats[j].setAttribute('aria-pressed', cats[j].dataset.cat === 'all' ? 'true' : 'false');
+    }
+    renderGrid();
+    if (S.grid && S.grid.scrollIntoView) S.grid.scrollIntoView({ block: 'start' });
+  }
+  function paintEmpty(count) {
+    if (!S.empty) return;
+    S.empty.textContent = '';
+    if (count) { S.empty.hidden = true; return; }
+    S.empty.hidden = false;
+    var opts;
+    if (!S.plugins.length) {
+      opts = {
+        title: '商店索引里还没有插件',
+        text: '索引为空通常是索引文件没读到或还没同步；内核重启后旧进程可能仍持有旧公钥，重新读取一次即可恢复。',
+        label: '重新读取索引', onClick: reload
+      };
+    } else if (S.scope === 'installed') {
+      opts = { title: '还没有安装任何插件', text: '把状态切回「全部」，挑一个点「安装」；装完就会出现在这里。', label: '去全部插件里挑一个', onClick: clearFilters };
+    } else if (S.scope === 'upgradable') {
+      opts = { title: '暂时没有可更新的插件', text: '已装插件都是最新版本；有新版本时会出现在这里。', label: '查看全部插件', onClick: clearFilters };
+    } else {
+      opts = { title: '没有找到匹配的插件', text: '换个关键词，或把分类/状态切回「全部」。', label: '清空筛选', onClick: clearFilters };
+    }
+    var block = window.KoreUI.emptyBlock(opts);
+    block.classList.add('store-empty-state');
+    S.empty.appendChild(block);
   }
   function setStatus(id, kind, text, href, linkText) {
     S.status[id] = { kind: kind, text: text, href: href || '', linkText: linkText || '' };
@@ -395,8 +430,8 @@
     var pageList = list.slice(start, start + PAGE_SIZE);
     S.grid.textContent = '';
     pageList.forEach(function (p) { S.grid.appendChild(renderCard(p)); });
-    S.empty.textContent = emptyText();
-    S.empty.hidden = list.length !== 0;
+    S.empty.textContent = '';
+    paintEmpty(list.length);
     renderPager(list.length, pages);
     var up = upgradable().length;
     S.stats.textContent = (S.plugins.length
@@ -847,6 +882,7 @@
     root.appendChild(renderPresets());
     var bar = add(root, el('div', 'store-bar'));
     var search = add(bar, input('store-search', '按 id / 名称搜索插件', '搜索插件', 'search'));
+    S.searchInput = search;
     search.addEventListener('input', function () { S.q = search.value; S.page = 1; renderGrid(); });
     // 状态筛选（全部 / 已安装 / 可更新）：放在分类前面，因为它回答的是更前置的问题
     // 「我关心的是哪个范围」；复用 .store-cat 的既有样式，不新增 CSS。
@@ -882,12 +918,21 @@
     });
     S.grid = add(root, el('div', 'store-grid'));
     S.pager = add(root, el('div', 'store-pager-host'));
-    S.empty = add(root, el('p', 'store-empty', '没有匹配的插件'));
+    S.empty = add(root, el('div', 'store-empty'));
+    // .store-empty 是居中式旧样式；空态块左对齐更好读（标题/说明/按钮一条竖线），故就地覆盖。
+    S.empty.style.textAlign = 'left';
     S.empty.hidden = true;
+  }
+
+  // reload 给空态的「重新读取索引」用：整页重挂一次，拿到最新索引/已装列表。
+  function reload() {
+    if (S.container) return render(S.container);
+    return Promise.resolve(false);
   }
 
   function render(container) {
     if (!container) return Promise.reject(new Error('KoreStore.render 需要容器元素'));
+    S.container = container;
     container.textContent = '';
     var root = add(container, el('section', 'store'));
     buildShell(root);
