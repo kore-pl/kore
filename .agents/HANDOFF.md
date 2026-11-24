@@ -298,8 +298,9 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 
 **1. 第 6 轮——攒批 push 三端对齐（已闭环）**：r11-push 一批推完 origin / github / gitee 三端，
 三端 `main` 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，零失败零 WARN，未重复推 gitea(ssh)。
-**push 后本地另有 4 笔文档/配置 commit 攒批未推**（af88838 / 247044f / 05b0fcf / 42ca098，本地 HEAD=`42ca098`；
-`git branch -vv` 实测领先三端 4）——延续「多提交少推送」纪律，第 6 轮 push 已闭环结论不变。
+**push 后本地继续攒批未推**（R17 终验复核：`git rev-list --count origin/main..HEAD` = **13**，本地 HEAD=`bcaac10`、**领先 13** 笔
+（含 R15 三能力卡 + R16 布局修复 + 截图/文档），远端 origin / github / gitee `main` 仍停在 `80f6c48`）——
+延续「多提交少推送」纪律，第 6 轮 push 已闭环结论不变。（原「4 笔」为第 6 轮时点快照，R12–R16 又增 9 笔。）
 （实测：`git ls-remote origin|github|gitee refs/heads/main` 三行同 sha；详见 §0.0.6「下一轮建议①」已闭环标注。）
 
 **2. 第 5 轮——R10 最终态（运行态 + 成果）**：
@@ -310,13 +311,29 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 - **G-28 截图两批**：`9f8665c` + `e9227e6`（各 4 场景双端 + 自评）。
 - **文档收尾**：`49fd736`(ADR-0050 台账 + 审计 §3 证据) + `fd3d244`(白话化缺口表)。
 - **A1 收敛**：`321c34d`（三文件在途挂账：monitor-cards G-32 图表 / ADR-0050 / 审计文档）。
-- **运行态最终 PID `1753674`**：exe sha `9d9fe444eed83b1b714f9b75ecb5f9184550a1f6cae1cedc7a9cfcc60d26728e`、
-  version 0.1.1；r10-runverify 独立 PASS；改口令端点未登录 POST 实测 **401（非 501）**。
+- **运行态最终 PID `1944697`**：exe sha = bin sha = `5afa5b20084007cd97b494870bb14f7b8e0c2dd24d32ef19101970fade07a66c`、
+  version 0.1.1（R16 布局修复后 16:58 重建，新能力已编入运行态）；r17-finalverify 终验复核 `ps -p 1944697` 存活、
+  `readlink /proc/1944697/exe` → `bin/kored`、`sha256sum` exe==bin==上列 sha、`./bin/kored version`=0.1.1；
+  改口令端点未登录 POST 实测 **401（非 501）**。（原 PID 1753674 / sha 9d9fe444… 为 R10 时点快照。）
 
 **3. 剩余挂账（三项 human gate，非本轮可闭环）**：
 - ① Gitea / Gitee release 缺 token（`GITEA_TOKEN` / `GITEE_TOKEN` 未设，见 §0.0.3 第 5 条 + §0.0.5 第 4 条）；
 - ② 管理员登录口令未交付，登录态商店字面复核 BLOCKED（见 §0.0.6「挂账⑤」）；
 - ③ site 0.8.x 外部 ADR-0052 在途，索引保持 0.4.4 未误收（见 §0.0.3 第 2/3 条 + §0.0.6「挂账⑥」）。
+
+### 0.0.8 R17 端到端终验快照（2026-11-24，r17-finalverify）
+
+> 本节记录 r17-finalverify 两路终验（全导航静态走查 + `make check` 全门禁）结论，供接手人一眼看到「功能达标 / 交付未闭环」的分界。
+> 事实口径：运行态 PID/sha/领先数由本文件写入时 `ps` / `sha256sum` / `git rev-list` 实测复核；其余为终验原始结论，未逐项在本轮重跑。
+> §0.0.1–§0.0.7 及更早内容为历史，全部保留不动。本轮写域只有本文件。
+
+1. **全导航静态走查**：未发现空白页 / 假入口 / 占位文案。真机逐项点击因**无管理员口令未做**，如实标注为未验证（不记 PASS）。
+2. **门禁**：`make check` **21/21 段全绿、零真 FAIL**；全仓 `-race` 17 包 + 嵌套 module `pkg/pluginapi` 2 包**零 DATA RACE**；交叉编译五目标 exit 0。
+3. **体积**：前端首屏 **76182 / 307200** B（≤300 KiB 预算内）；i18n **2922 / 3072** key。
+4. **运行态**：PID **1944697** / sha **5afa5b20…**（exe==bin，16:58 重建）；能力特征全在——850 key / `backup.presets` / `process.ports` / `container.images` / 改口令 401。
+5. **资源**：VmRSS ≈ **17.8 MiB**（用户裁决延至上线前处理、**不判失败**）；CPU 0 ms、出站 0。
+6. **仓库卫生**：`git worktree list` 仅主工作树；`git status --short` 干净。
+7. **结论**：**功能 / 代码层面达标、可交付**；交付闭环仍剩 **3 项 human gate**——① push 13 笔攒批待授权；② Gitea / Gitee release token；③ 管理员口令。三项均非 agent 可自行闭环，不提前宣称已解决。
 
 ## 0. 当前交接快照（2026-11-24 10:20）
 
