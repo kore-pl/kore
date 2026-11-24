@@ -16,6 +16,16 @@
   }
   function add(parent, child) { parent.appendChild(child); return child; }
   function on(node, fn) { node.addEventListener('click', fn); return node; }
+  // 本地化（ADR-0021）：切英文后本页用户可见文案走 en-US 表；语言包未就绪/缺键时
+  // i18n.t 返回键名本身，这里以 hit !== key 拦截并回退到原中文，中文态零影响、不露裸键。
+  function tr(key, fallback) {
+    var i18n = window.KoreI18n;
+    if (i18n && typeof i18n.t === 'function') {
+      var hit = i18n.t(key);
+      if (hit && hit !== key) return hit;
+    }
+    return fallback;
+  }
   function cookie(name) {
     var parts = document.cookie ? document.cookie.split(';') : [];
     for (var i = 0; i < parts.length; i++) {
@@ -131,12 +141,12 @@
     var mask = el('div', 'kore-modal');
     mask.setAttribute('role', 'dialog'); mask.setAttribute('aria-modal', 'true');
     var box = add(mask, el('div', 'kore-modal-box'));
-    add(box, el('div', 'kore-modal-title', '删除确认'));
+    add(box, el('div', 'kore-modal-title', tr('sites.delete.title', '删除确认')));
     add(box, el('p', 'kore-modal-text', text));
     var msg = add(box, el('div', 'kore-modal-msg'));
     var ops = add(box, el('div', 'kore-modal-actions'));
-    var cancel = add(ops, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
-    var ok = add(ops, el('button', 'btn btn-primary', '确认删除')); ok.type = 'button';
+    var cancel = add(ops, el('button', 'btn btn-ghost', tr('sites.delete.cancel', '取消'))); cancel.type = 'button';
+    var ok = add(ops, el('button', 'btn btn-primary', tr('sites.delete.confirm', '确认删除'))); ok.type = 'button';
     function close() {
       document.removeEventListener('keydown', esc);
       if (mask.parentNode) mask.parentNode.removeChild(mask);
@@ -669,9 +679,9 @@
     if (!d) return;
     var box = add(S.detailHost, el('section', 'panel site-detail'));
     var head = add(box, el('div', 'panel-head'));
-    add(head, el('span', 'panel-title', '站点详情 · ' + d.domain));
-    add(head, el('span', 'panel-meta', d.enabled ? '运行中' : '已停用'));
-    var close = add(head, el('button', 'btn btn-ghost', '收起'));
+    add(head, el('span', 'panel-title', tr('sites.detail.title', '站点详情') + ' · ' + d.domain));
+    add(head, el('span', 'panel-meta', d.enabled ? tr('sites.detail.running', '运行中') : tr('sites.detail.stopped', '已停用')));
+    var close = add(head, el('button', 'btn btn-ghost', tr('sites.detail.collapse', '收起')));
     close.type = 'button';
     on(close, function () { S.detail = null; paintDetail(); });
     var table = add(box, el('table', 'rows'));
@@ -700,9 +710,9 @@
     }
     var statusPanel = add(box, el('section', 'panel site-edit-section'));
     var statusHead = add(statusPanel, el('div', 'panel-head'));
-    add(statusHead, el('span', 'panel-title', '运行状态'));
-    add(statusHead, el('span', 'panel-meta', '配置 / 校验 / 目录 / 加载'));
-    var recheck = add(statusHead, el('button', 'btn btn-ghost', '重新检查'));
+    add(statusHead, el('span', 'panel-title', tr('sites.status.title', '运行状态')));
+    add(statusHead, el('span', 'panel-meta', tr('sites.status.meta', '配置 / 校验 / 目录 / 加载')));
+    var recheck = add(statusHead, el('button', 'btn btn-ghost', tr('sites.status.recheck', '重新检查')));
     recheck.type = 'button';
     var statusHost = add(statusPanel, el('div', 'site-status-host'));
     on(recheck, function () { loadStatus(d.domain, statusHost); });
@@ -719,8 +729,8 @@
     if (S.listMeta) S.listMeta.textContent = S.sites.length ? '共 ' + S.sites.length + ' 个站点' : '';
     if (!S.sites.length) {
       var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '还没有站点：用上面的建站向导创建第一个站点，向导会自动填好根目录。'));
-      var cta = add(empty, el('button', 'btn btn-primary', '创建第一个站点'));
+      add(empty, el('p', 'empty-state-text', tr('sites.empty.hint', '还没有站点：用上面的建站向导创建第一个站点，向导会自动填好根目录。')));
+      var cta = add(empty, el('button', 'btn btn-primary', tr('sites.empty.cta', '创建第一个站点')));
       cta.type = 'button';
       on(cta, function () {
         var input = document.querySelector('[data-field="domain"]');
@@ -730,19 +740,19 @@
     }
     var table = add(S.listHost, el('table', 'sites-table'));
     var head = add(table, el('thead')), htr = add(head, el('tr'));
-    ['域名', '生效状态', '操作'].forEach(function (label) { add(htr, el('th', null, label)); });
+    [tr('sites.col.domain', '域名'), tr('sites.col.status', '生效状态'), tr('sites.col.actions', '操作')].forEach(function (label) { add(htr, el('th', null, label)); });
     var body = add(table, el('tbody'));
     S.sites.forEach(function (site) {
-      var tr = add(body, el('tr', site.enabled ? '' : 'site-off'));
-      tr.setAttribute('data-site', site.domain);
-      var domain = add(tr, el('td', 'site-domain'));
+      var trEl = add(body, el('tr', site.enabled ? '' : 'site-off'));
+      trEl.setAttribute('data-site', site.domain);
+      var domain = add(trEl, el('td', 'site-domain'));
       domain.dataset.label = '域名';
       var link = add(domain, el('button', 'site-link mono', site.domain));
       link.type = 'button';
       link.setAttribute('data-action', 'site-detail');
       link.setAttribute('data-site', site.domain);
       on(link, function () { openDetail(site.domain); });
-      var state = add(tr, el('td', 'site-state'));
+      var state = add(trEl, el('td', 'site-state'));
       state.dataset.label = '生效状态';
       if (!site.enabled) state.appendChild(chip('na', site.disabled ? '已停用' : '未启用'));
       state.appendChild(flag(site.exists, false, 'vhost 存在', 'vhost 缺失'));
@@ -752,18 +762,18 @@
         var why = add(state, el('span', 'row-note-fail site-test-brief', summarize(site.test_output)));
         why.title = site.test_output;
       }
-      var ops = add(tr, el('td', 'cell-ops'));
+      var ops = add(trEl, el('td', 'cell-ops'));
       ops.dataset.label = '操作';
-      var manage = add(ops, el('button', 'btn', '管理'));
+      var manage = add(ops, el('button', 'btn', tr('sites.action.manage', '管理')));
       manage.type = 'button'; manage.setAttribute('data-action', 'site-manage');
       on(manage, function () { openDetail(site.domain); });
       if (site.exists || site.disabled) {
-        var toggle = add(ops, el('button', 'btn btn-ghost', site.enabled ? '停用' : '启用'));
+        var toggle = add(ops, el('button', 'btn btn-ghost', site.enabled ? tr('sites.action.disable', '停用') : tr('sites.action.enable', '启用')));
         toggle.type = 'button';
         toggle.setAttribute('data-action', site.enabled ? 'site-disable' : 'site-enable');
         on(toggle, function () { toggleSite(site); });
       }
-      var check = add(ops, el('button', 'btn btn-ghost', '状态')); check.type = 'button';
+      var check = add(ops, el('button', 'btn btn-ghost', tr('sites.action.status', '状态'))); check.type = 'button';
       check.setAttribute('data-action', 'site-status');
       var live = add(state, el('div', 'site-live-status muted'));
       on(check, function () {
@@ -781,33 +791,33 @@
           live.className = 'site-live-status row-note-fail';
         });
       });
-      var del = add(ops, el('button', 'btn btn-ghost sites-del', '删除')); del.type = 'button';
+      var del = add(ops, el('button', 'btn btn-ghost sites-del', tr('sites.action.delete', '删除'))); del.type = 'button';
       del.setAttribute('data-action', 'site-delete');
       on(del, function () { removeSite(site.domain); });
     });
   }
   function load(silent) {
-    if (!silent) setStatus('正在读取站点列表…');
+    if (!silent) setStatus(tr('sites.load.loading', '正在读取站点列表…'));
     return invoke('site.list', {}).then(function (data) {
       S.sites = Array.isArray(data.sites) ? data.sites : [];
       paintList();
-      if (!silent) setStatus(S.sites.length ? '站点列表已刷新' : '还没有站点，用上方向导创建第一个站点', 'ok');
-    }, function (err) { if (!silent) setStatus('站点列表读取失败：' + errText(err), 'fail'); });
+      if (!silent) setStatus(S.sites.length ? tr('sites.load.ok', '站点列表已刷新') : tr('sites.load.none', '还没有站点，用上方向导创建第一个站点'), 'ok');
+    }, function (err) { if (!silent) setStatus(tr('sites.load.failed', '站点列表读取失败：') + errText(err), 'fail'); });
   }
   function build(root) {
     var head = add(root, el('header', 'view-head'));
-    add(head, el('h2', 'view-title', '网站管理'));
-    add(head, el('p', 'view-sub', '向导一次收齐域名、根目录、SSL 与伪静态；点域名查看完整配置并继续管理。'));
+    add(head, el('h2', 'view-title', tr('sites.title', '网站管理')));
+    add(head, el('p', 'view-sub', tr('sites.subtitle', '向导一次收齐域名、根目录、SSL 与伪静态；点域名查看完整配置并继续管理。')));
     S.resultHost = add(root, el('div', 'site-result-host'));
     S.wizardHost = add(root, el('div', 'site-wizard-host'));
     S.configHost = add(root, el('div', 'site-config-host'));
     S.configHost.hidden = true;
-    var cfgToggle = add(head, el('button', 'btn btn-ghost', '连接配置'));
+    var cfgToggle = add(head, el('button', 'btn btn-ghost', tr('sites.config.button', '连接配置')));
     cfgToggle.type = 'button';
     cfgToggle.setAttribute('data-action', 'site-config');
     on(cfgToggle, function () {
       S.configHost.hidden = !S.configHost.hidden;
-      cfgToggle.textContent = S.configHost.hidden ? '连接配置' : '收起连接配置';
+      cfgToggle.textContent = S.configHost.hidden ? tr('sites.config.button', '连接配置') : tr('sites.config.collapse', '收起连接配置');
       if (!S.configHost.hidden && !S.configHost.dataset.loaded) {
         S.configHost.dataset.loaded = '1';
         loadConfig(S.configHost);
@@ -817,9 +827,9 @@
     S.status.setAttribute('role', 'status');
     var listPanel = add(root, el('section', 'panel'));
     var listHead = add(listPanel, el('div', 'panel-head'));
-    add(listHead, el('span', 'panel-title', '站点列表'));
+    add(listHead, el('span', 'panel-title', tr('sites.list.title', '站点列表')));
     S.listMeta = add(listHead, el('span', 'panel-meta', ''));
-    var refresh = add(listHead, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
+    var refresh = add(listHead, el('button', 'btn btn-ghost', tr('sites.refresh', '刷新'))); refresh.type = 'button';
     on(refresh, load);
     S.listHost = add(listPanel, el('div', 'sites-list-host'));
     S.detailHost = add(root, el('div', 'site-detail-host'));
