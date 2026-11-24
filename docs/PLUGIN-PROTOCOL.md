@@ -169,6 +169,7 @@
 | writes_host | bool | 否 | 声明本动作会修改安装目录外的宿主状态（ADR-0023 §3.5 #3）。`true` 时 `target` 必填；执行成功后内核追加一条 `changes.jsonl`（DATA-MODEL §9.1）；**无 `purge_op` 的写宿主动作按不可逆处理**（需 `confirm` 令牌） |
 | target | string | `writes_host=true` 时必填 | ≤200 字符；影响对象（人话），如 `/etc/nginx/conf.d/kore-a.conf`、`22/tcp`；写进变更账本供用户看懂"改了什么" |
 | purge_op | object | 否 | **结构化回滚操作**（ADR-0023 §3.4）：`{kind,args}`，kind ∈ `file.remove`（args=`[path]`）/ `file.restore`（args=`[原文件,目标]`），路径必须绝对、非根、无 `..`；仅允许与 `writes_host=true` 同时出现。**协议不提供 shell 字符串回滚字段**——那等于把 RCE 面写进账本 |
+| file_write | object | 否 | **受控文件写声明**（ADR-0052 裁决 A）：`{prefix_class, mode, content_policy, max_bytes?}`，见 §3.1.3.2。与 `argv` **互斥**（写文件不执行外部命令，声明了 `file_write` 还带 `argv` 直接拒绝）；出现时必须 `writes_host=true`、`target` 必须**逐字等于**类别目录（账本要能对上真实写入路径）；`timeout_s` 可省略。类别由内核定义，插件不能自报目录/后缀 |
 
 **受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `resolvectl` `unbound-control` `dig` `fail2ban-client`（13 个）。**未使用的命令不进表**：每多一个命令就多一条被误用路径，`ipset` 因无消费者已被移除（ADR-0022）。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
 
@@ -187,9 +188,28 @@
 
 **SDK 自检（`pkg/pluginapi` v0.1.2 起）**：公开 SDK 提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（样例见 `pkg/pluginapi/rootaction_test.go`）——不要手写一份 schema，也不要用跨仓 `replace`（G-17 禁止）；清单与代码的漂移应在插件 CI 暴露，而不是等用户安装时才报错。**形状表变更（ADR-0022）需要 SDK 新版本（v0.1.3+）**：插件钉的 SDK 尚未包含某命令时，自检应显式 skip 并写明「需要 pluginapi ≥ 该版本」，不得改写成本地宽松校验。
 
-**执行口径（ADR-0049）**：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
+#### 3.1.3.2 受控文件写（`file_write`，ADR-0052）
 
-**G-01 边界**：内核只校验 schema（id/argv/timeout）与**参数形状**（族/前缀/地址/端口这些语法级约束），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。
+`root_actions[]` 的元素是两种**互斥**形状之一：exec 动作（有 `argv`）或文件写动作（有 `file_write`）。正文不能塞进 `argv`/`args`（禁换行、总长 4096，装不下多行 vhost），也不能新开端点（会绕过 confirm/审计/变更账本），因此复用**同一端点**、只加两个请求字段：
+
+| 请求字段 | 类型 | 必填 | 约束 |
+| --- | --- | --- | --- |
+| `content` | string | `file_write` 动作必填 | 正文（UTF-8），≤256 KiB（协议硬顶 `pluginapi.MaxFileWriteContentBytes`）；动作的 `max_bytes` 只能收紧、不能放大；禁 NUL 与其它控制字符（`\n` `\r` `\t` 除外）。JSON 转义最坏把 1 个控制字节放大成 6 字节（`\uXXXX`） |
+| `args[0]` | string | `file_write` 动作必填 | **单层文件名**（不含目录）：`kore-<plugin>-<slug>.conf`、≤128 字符、只允许 `[A-Za-z0-9._-]`、不得含 `..` 或路径分隔符。目录只来自类别定义，插件不能指定 |
+
+- **HTTP body 上限必须提高**：当前 `maxRootActionBody` 是 64 KiB（`internal/core/httpapi/handlers_rootaction.go:17`），装不下 256 KiB 正文；按上面的转义最坏倍数，接线时须提升到 **≥ 2 MiB**，解码后仍按 256 KiB 判。旧内核收到 `content` 会因 `DisallowUnknownFields` 直接 `E_INVALID`——这是协议**加法**，新插件必须把 `requires_kore` 收窄到含本字段的内核版本，`protocol_minor` 按 §13 协商。
+- **类别（`prefix_class`）**：当前唯一类别 `nginx.conf.d` → 目录 `/etc/nginx/conf.d/`、强制后缀 `.conf`、权限 `0644`（root:root）、内容策略 `nginx.vhost.v1`、上限 256 KiB。类别由内核 `pluginapi.FileWritePrefixClasses` 定义；`mode` 只接受字符串 `"0644"`（JSON 整数 `644` 是十进制 0o1204，权限位歧义必须焊死）。**新增类别 = 扩内核写面**，须按 ADR-0028 §7#1 改白名单并新增 ADR。
+- **内容 allowlist（`nginx.vhost.v1`，唯一实现 `pkg/pluginapi/nginxconf.go`，手写解析、零第三方依赖）**：conf.d 片段会被 **root master** 解析，ADR-0052 §2 实测 `log_format`+`access_log` 能让 root 创建 `/etc/cron.d/*`、写 `/etc/ld.so.preload`；`root /;` 可经 HTTP 读任意 worker 可读文件；而 `nginx -t` 对这些配置**全部 exit 0**（root 下"测试"本身就会打开目标文件）——**校验禁止依赖 `nginx -t`**，只能对文本纯解析。
+  - **结构**：顶层只允许 `server{}`（`http`/`stream`/`events`/顶层指令一律拒绝）；`location` 只在 `server` 内；`if` 只在 `location` 内且条件只允许 `(!-e $request_filename)`（伪静态模板所需，体内只允许 `rewrite`）；`location` 不嵌套；嵌套深度 ≤4、指令数 ≤2048。
+  - **指令 allowlist（23 条叶子 + 3 种块）**：`server` `location` `if`（块）+ `listen` `server_name` `root` `alias` `index` `auth_basic` `auth_basic_user_file` `try_files` `return` `rewrite` `proxy_pass` `proxy_set_header` `proxy_http_version` `fastcgi_pass` `fastcgi_index` `fastcgi_param` `ssl_certificate` `ssl_certificate_key` `ssl_protocols` `ssl_ciphers` `ssl_prefer_server_ciphers` `ssl_session_cache` `ssl_session_timeout`。**不在表内一律拒绝**（指令名大小写敏感，`ACCESS_LOG` 同样拒绝）。
+  - **无条件拒绝（有显式理由，`pluginapi.DeniedNginxDirectives` 是唯一清单）**：`include`（读任意 root 可读文件，解析错误会回显目标文件首 token）、`load_module`（root 进程加载任意 `.so`）、`log_format` + `access_log`（root 任意文件创建/追加 → `/etc/cron.d`、`/etc/ld.so.preload`、口令文件）、`error_log`（同上）、`perl*` / `lua_*` / `js_*`（root 进程内执行代码）、`dav_*`（worker 身份任意写盘）、`*_temp_path`（给 root 指定任意可写目录）、`map` / `upstream` / `geo`（组合成注入链、绕过上游形状校验）、`limit_*_zone` / `proxy_cache_path`（全局共享内存 / 任意缓存目录）、`ssi` / `sub_filter` / `auth_request`。
+  - **参数形状**：`root`/`alias` 必须是规范化绝对路径且落在站点根前缀内（缺省 `/var/www/`，拒绝 `/` 与 `..`）；`ssl_certificate*` 必须落在**运行时注入**的证书目录白名单内（白名单为空即拒绝，不猜安装路径）；`auth_basic_user_file` 必须在受控目录内；`fastcgi_pass` 只允许 `unix:` + 标准 FPM socket 目录（不开 TCP）；`proxy_pass` 只允许 `http(s)://host[:port][/path]`（无 userinfo、无变量），**禁止本机 kore 管理端口**（缺省 8787，可配）；`listen` 只允许裸端口 + `ssl`/`http2`，**禁止 `default_server`**（抢占默认站点 = 劫持所有未匹配域名）；`server_name` 不接受正则；`return` 只允许 3xx + 跳转目标；`rewrite` 的 replacement 必须以 `/`、`$` 或 `http(s)://` 开头，flag ∈ {`last`,`break`,`redirect`,`permanent`}。
+
+**SDK 自检**：插件读自己的 `info.json`，逐条 `pluginapi.ValidateRootAction`，再把渲染出的每个 vhost 交给 `pluginapi.ValidateFileWriteRequest(pluginID, action, fileName, content, opts)`——正例必须覆盖 PHP 块、伪静态块、SSL 块，反例必须覆盖上面的无条件拒绝集。校验器是**安全关键代码**：改动必须过 fuzz（`FuzzValidateNginxVHostFragment`）与红队绕过集；新增 allowlist 指令须走 ADR-0052 §7#2 复审。**残余风险必须披露**：allowlist 内仍有副作用——`proxy_pass` 可反代到本机服务（产品功能，含 8787 已由形状拦直连、挡不住二次代理），`root` 指向的站点根内可能有敏感文件。
+
+**执行口径（ADR-0049）**：**`file_write` 动作不走 `os/exec`**：内核按 `prefix_class` 定位目录 → `ValidateFileWriteRequest` 复核文件名与正文 → 审计 begin → 写前备份 → 原子替换 → 审计 end → `changes.jsonl`（K3 接线）；`purge_op: file.restore` 用备份回滚。其余 exec 动作仍走：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
+
+**G-01 边界**：内核只校验 schema（id/argv/timeout/file_write）与**参数形状**（族/前缀/地址/端口、文件名/内容策略这些语法级约束），不判断「这是防火墙动作 / 这是建站动作」——业务语义留在插件自己的 `id` 与 `description`；nginx 片段的指令 allowlist 实现放在 `pkg/pluginapi`（协议策略层），不进 `internal/core`（业务词表会触发薄壳门禁）。
 
 **降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT` + 可操作 `hint`；**无 systemd 不再是降级条件**（ADR-0049 后照常执行）；平台无进程组语义（当前仅 Tier B 未实现 Job Object）→ `502 E_UPSTREAM` 显式拒绝，禁止静默退化为「只杀直接子进程」。禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
 

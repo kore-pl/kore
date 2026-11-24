@@ -36,6 +36,11 @@ type RootAction struct {
 	// PurgeOp 是**结构化**回滚操作；账本不存 shell 命令字符串（ADR-0023 §3.4）。
 	// 为 nil 时动作不可回滚：只能作为 confirmation 后的不可逆动作执行。
 	PurgeOp *PurgeOp `json:"purge_op,omitempty"`
+	// FileWrite 声明本动作是**受控文件写**而不是执行外部命令（ADR-0052 裁决 A）。
+	//
+	// 与 Argv 互斥：file_write 动作不声明 argv，请求体改用 `args[0]`（文件名）+
+	// `content`（正文）。非 nil 时 WritesHost 必须为 true、Target 必须等于类别目录。
+	FileWrite *FileWrite `json:"file_write,omitempty"`
 }
 
 // PurgeOp 是结构化回滚操作：白名单 kind + 参数，由内核分派执行，永不拼 shell。
@@ -147,38 +152,26 @@ func ValidateRootAction(action RootAction) error {
 	if !rootActionIDPattern.MatchString(action.ID) {
 		return fmt.Errorf("id=%q 必须匹配 ^[a-z][a-z0-9-]*$", action.ID)
 	}
-	if len(action.Argv) == 0 {
-		return fmt.Errorf("argv 不能为空")
-	}
-	if len(action.Argv) > MaxRootArgs {
-		return fmt.Errorf("argv 最多 %d 个元素（当前 %d）", MaxRootArgs, len(action.Argv))
-	}
-	total := 0
-	for index, arg := range action.Argv {
-		if arg == "" {
-			return fmt.Errorf("argv[%d] 不能为空", index)
+	// file_write 动作与 exec 动作是**互斥的两种形状**：前者不执行外部命令（无 argv），
+	// 后者必须有 argv。混在一起会让审计/confirm 口径分叉，因此逐字段拒绝。
+	if action.FileWrite != nil {
+		if err := validateFileWriteAction(action); err != nil {
+			return err
 		}
-		if utf8.RuneCountInString(arg) > MaxRootArgRunes {
-			return fmt.Errorf("argv[%d] 超过 %d 个字符", index, MaxRootArgRunes)
+		// 写文件不跑子进程，timeout_s 无意义；允许缺省 0，填了就必须合法。
+		if action.TimeoutS != 0 && (action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS) {
+			return fmt.Errorf("timeout_s=%d 超出 %d–%d", action.TimeoutS, MinRootTimeoutS, MaxRootTimeoutS)
 		}
-		if strings.ContainsRune(arg, 0) || hasControlRune(arg) {
-			return fmt.Errorf("argv[%d] 含 NUL/控制字符", index)
+	} else {
+		if len(action.Argv) == 0 {
+			return fmt.Errorf("argv 不能为空")
 		}
-		total += utf8.RuneCountInString(arg)
-	}
-	if total > MaxRootArgvRunes {
-		return fmt.Errorf("argv 总长度超过 %d 个字符", MaxRootArgvRunes)
-	}
-	if err := validateArgv0(action.Argv[0]); err != nil {
-		return err
-	}
-	// 形状校验：声明 argv 必须整体落在受控命令形状内（子命令 + 参数形状）。
-	// 追加参数在执行期由 privilege 用 ValidateRootAppendedArgv 另行校验。
-	if err := ValidateRootArgv(action.Argv); err != nil {
-		return err
-	}
-	if action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS {
-		return fmt.Errorf("timeout_s=%d 超出 %d–%d", action.TimeoutS, MinRootTimeoutS, MaxRootTimeoutS)
+		if err := validateArgvSchema(action.Argv); err != nil {
+			return err
+		}
+		if action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS {
+			return fmt.Errorf("timeout_s=%d 超出 %d–%d", action.TimeoutS, MinRootTimeoutS, MaxRootTimeoutS)
+		}
 	}
 	if utf8.RuneCountInString(action.Description) > MaxRootActionDescriptionRunes {
 		return fmt.Errorf("description 超过 %d 个字符", MaxRootActionDescriptionRunes)
@@ -201,6 +194,35 @@ func ValidateRootAction(action RootAction) error {
 		}
 	}
 	return nil
+}
+
+// validateArgvSchema 校验 argv 的通用 schema 与受控形状（exec 动作专用）。
+func validateArgvSchema(argv []string) error {
+	if len(argv) > MaxRootArgs {
+		return fmt.Errorf("argv 最多 %d 个元素（当前 %d）", MaxRootArgs, len(argv))
+	}
+	total := 0
+	for index, arg := range argv {
+		if arg == "" {
+			return fmt.Errorf("argv[%d] 不能为空", index)
+		}
+		if utf8.RuneCountInString(arg) > MaxRootArgRunes {
+			return fmt.Errorf("argv[%d] 超过 %d 个字符", index, MaxRootArgRunes)
+		}
+		if strings.ContainsRune(arg, 0) || hasControlRune(arg) {
+			return fmt.Errorf("argv[%d] 含 NUL/控制字符", index)
+		}
+		total += utf8.RuneCountInString(arg)
+	}
+	if total > MaxRootArgvRunes {
+		return fmt.Errorf("argv 总长度超过 %d 个字符", MaxRootArgvRunes)
+	}
+	if err := validateArgv0(argv[0]); err != nil {
+		return err
+	}
+	// 形状校验：声明 argv 必须整体落在受控命令形状内（子命令 + 参数形状）。
+	// 追加参数在执行期由 privilege 用 ValidateRootAppendedArgv 另行校验。
+	return ValidateRootArgv(argv)
 }
 
 // validateArgv0 校验 argv[0]：绝对路径（无 ..、非根）或白名单命令名。
