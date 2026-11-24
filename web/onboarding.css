@@ -3,6 +3,12 @@
  *       theme.js 通过 <html data-kore-effective> 覆盖令牌后本组件自动跟随，零感知。
  *       手机（<640px）满屏抽屉、全部按钮命中区 ≥44px；桌面居中浮层。
  *       选择器全部以 .kore-onboard- 前缀开头，不与 theme.css / shortcuts.js 冲突。
+ *
+ * R16 布局修复（用户截图反馈「第 5 步被截断 / 弹窗右侧外部滚动条」）：
+ *   根因是 max-height + overflow:auto 挂在整块 .kore-onboard-panel 上，
+ *   head/清单/foot 同处一个滚动容器，底部「知道了」与第 5 步操作被视口切掉。
+ *   改为三段式：头尾固定、只有清单内部滚动（flex:1 + min-height:0 + overflow-y:auto）。
+ *   面板加宽 560→640px、压缩条目纵向间距，进一步减少需要滚动的内容。
  */
 .kore-onboard-backdrop {
   position: fixed;
@@ -20,16 +26,21 @@
   display: flex;
   flex-direction: column;
   gap: var(--kore-space-3);
-  width: 560px;
+  width: 640px;
   max-width: 100%;
   max-height: calc(100vh - var(--kore-space-6));
-  overflow: auto;
+  overflow: hidden;
   padding: var(--kore-space-6);
   background: var(--kore-bg-1);
   border: 1px solid var(--kore-border-1);
   border-radius: var(--kore-radius-container);
   box-shadow: var(--kore-shadow);
 }
+/* 头、进度、摘要、脚固定不滚——用户第一眼就能看到「以后再看」「知道了」。 */
+.kore-onboard-head,
+.kore-onboard-progress,
+.kore-onboard-summary,
+.kore-onboard-foot { flex: none; }
 
 .kore-onboard-head { display: flex; align-items: flex-start; gap: var(--kore-space-3); }
 .kore-onboard-titles { flex: 1; min-width: 0; }
@@ -57,16 +68,22 @@
 }
 .kore-onboard-summary { margin: 0; font-size: var(--kore-font-13); color: var(--kore-text-2); }
 
+/* 滚动只发生在清单内部：flex 占满头脚之间的剩余高度，min-height:0 允许收缩到内容以下。 */
 .kore-onboard-list {
   display: flex;
   flex-direction: column;
   gap: var(--kore-space-2);
   margin: 0;
-  padding: 0;
+  padding: 0 var(--kore-space-1) 0 0;
   list-style: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 .kore-onboard-item {
-  padding: var(--kore-space-3);
+  padding: var(--kore-space-2) var(--kore-space-3);
   background: var(--kore-bg-2);
   border: 1px solid var(--kore-border-1);
   border-left: 4px solid var(--kore-info);
@@ -91,8 +108,8 @@
 .kore-onboard-item.is-done .kore-onboard-num { color: var(--kore-success); }
 .kore-onboard-item-title { flex: 1; min-width: 0; color: var(--kore-text-1); font-size: var(--kore-font-14); font-weight: 600; }
 .kore-onboard-tag { flex: none; color: var(--kore-success); font-size: var(--kore-font-12); }
-.kore-onboard-desc { margin: var(--kore-space-2) 0 0; color: var(--kore-text-2); font-size: var(--kore-font-12); line-height: 1.5; overflow-wrap: anywhere; }
-.kore-onboard-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); margin-top: var(--kore-space-3); }
+.kore-onboard-desc { margin: var(--kore-space-1) 0 0; color: var(--kore-text-2); font-size: var(--kore-font-12); line-height: 1.5; overflow-wrap: anywhere; }
+.kore-onboard-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); margin-top: var(--kore-space-2); }
 .kore-onboard-go { min-height: var(--kore-touch); }
 .kore-onboard-mark {
   min-height: var(--kore-touch);
