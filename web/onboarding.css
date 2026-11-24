@@ -1,0 +1,142 @@
+/* kore 主壳「首次使用引导」样式（R6-4 / web/onboarding.css，懒加载）
+ * 约束：只引用 style.css 的 --kore-* 设计令牌，不自造颜色/圆角/字号；
+ *       theme.js 通过 <html data-kore-effective> 覆盖令牌后本组件自动跟随，零感知。
+ *       手机（<640px）满屏抽屉、全部按钮命中区 ≥44px；桌面居中浮层。
+ *       选择器全部以 .kore-onboard- 前缀开头，不与 theme.css / shortcuts.js 冲突。
+ */
+.kore-onboard-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 40);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--kore-space-4);
+  background: var(--kore-overlay);
+}
+.kore-onboard-backdrop[hidden] { display: none; }
+
+.kore-onboard-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-3);
+  width: 560px;
+  max-width: 100%;
+  max-height: calc(100vh - var(--kore-space-6));
+  overflow: auto;
+  padding: var(--kore-space-6);
+  background: var(--kore-bg-1);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-container);
+  box-shadow: var(--kore-shadow);
+}
+
+.kore-onboard-head { display: flex; align-items: flex-start; gap: var(--kore-space-3); }
+.kore-onboard-titles { flex: 1; min-width: 0; }
+.kore-onboard-title { margin: 0; font-size: var(--kore-font-20); font-weight: 600; color: var(--kore-text-1); }
+.kore-onboard-sub { margin: var(--kore-space-1) 0 0; font-size: var(--kore-font-12); color: var(--kore-text-2); line-height: 1.5; }
+.kore-onboard-skip {
+  flex: none;
+  min-height: var(--kore-touch);
+  padding: 0 var(--kore-space-3);
+  background: transparent;
+  color: var(--kore-text-2);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  font: inherit;
+  font-size: var(--kore-font-12);
+  cursor: pointer;
+}
+.kore-onboard-skip:hover { color: var(--kore-text-1); border-color: var(--kore-text-3); }
+
+.kore-onboard-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--kore-bg-2);
+  overflow: hidden;
+}
+.kore-onboard-summary { margin: 0; font-size: var(--kore-font-13); color: var(--kore-text-2); }
+
+.kore-onboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kore-onboard-item {
+  padding: var(--kore-space-3);
+  background: var(--kore-bg-2);
+  border: 1px solid var(--kore-border-1);
+  border-left: 4px solid var(--kore-info);
+  border-radius: var(--kore-radius-control);
+  min-width: 0;
+}
+.kore-onboard-item.is-done { border-left-color: var(--kore-success); }
+.kore-onboard-item-head { display: flex; align-items: center; gap: var(--kore-space-2); }
+.kore-onboard-num {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--kore-space-6);
+  height: var(--kore-space-6);
+  border-radius: var(--kore-radius-control);
+  background: var(--kore-bg-1);
+  color: var(--kore-info);
+  font-size: var(--kore-font-12);
+  font-weight: 600;
+}
+.kore-onboard-item.is-done .kore-onboard-num { color: var(--kore-success); }
+.kore-onboard-item-title { flex: 1; min-width: 0; color: var(--kore-text-1); font-size: var(--kore-font-14); font-weight: 600; }
+.kore-onboard-tag { flex: none; color: var(--kore-success); font-size: var(--kore-font-12); }
+.kore-onboard-desc { margin: var(--kore-space-2) 0 0; color: var(--kore-text-2); font-size: var(--kore-font-12); line-height: 1.5; overflow-wrap: anywhere; }
+.kore-onboard-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); margin-top: var(--kore-space-3); }
+.kore-onboard-go { min-height: var(--kore-touch); }
+.kore-onboard-mark {
+  min-height: var(--kore-touch);
+  padding: 0 var(--kore-space-3);
+  background: transparent;
+  color: var(--kore-text-2);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  font: inherit;
+  font-size: var(--kore-font-12);
+  cursor: pointer;
+}
+.kore-onboard-mark:hover { color: var(--kore-text-1); border-color: var(--kore-text-3); }
+
+.kore-onboard-empty { padding: var(--kore-space-6) var(--kore-space-3); text-align: center; color: var(--kore-text-2); }
+.kore-onboard-empty-title { display: block; margin-bottom: var(--kore-space-2); color: var(--kore-success); font-size: var(--kore-font-16); }
+.kore-onboard-again { min-height: var(--kore-touch); margin-top: var(--kore-space-3); }
+
+.kore-onboard-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--kore-space-3); padding-top: var(--kore-space-3); border-top: 1px solid var(--kore-border-2); }
+.kore-onboard-footnote { color: var(--kore-text-3); font-size: var(--kore-font-12); }
+.kore-onboard-close { min-height: var(--kore-touch); }
+
+.kore-onboard-panel button:focus-visible {
+  outline: 2px solid var(--kore-info);
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  .kore-onboard-backdrop { align-items: flex-end; padding: 0; }
+  .kore-onboard-panel {
+    width: 100%;
+    max-height: calc(100% - var(--kore-topbar-h));
+    padding: var(--kore-space-4);
+    border-radius: var(--kore-radius-container) var(--kore-radius-container) 0 0;
+  }
+  .kore-onboard-head { flex-wrap: wrap; }
+  .kore-onboard-skip { min-width: var(--kore-touch); }
+  .kore-onboard-ops .btn,
+  .kore-onboard-mark,
+  .kore-onboard-again,
+  .kore-onboard-close { flex: 1 1 auto; min-height: var(--kore-touch); font-size: var(--kore-font-14); }
+  .kore-onboard-foot { flex-direction: column; align-items: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kore-onboard-panel, .kore-onboard-backdrop { transition: none; }
+}
