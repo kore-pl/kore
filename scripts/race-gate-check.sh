@@ -37,6 +37,26 @@ else
   exit 1
 fi
 
+# 1b) 本仓接线（对本仓同样成立，否则 kore 自己的全仓 -race 会被静默移除）：
+#     kore 没有 tests/boundary → 上面 `make race` 恒 [SKIP]，本仓的竞争检查只由
+#     `race-full`（第 19 段脚本 race-full-check.sh）提供。三条接线少一条即 FAIL——
+#     有目标但 check 不调 = 本地不跑；check 调了但 CI 看不到 = 合入前不跑。
+s=0
+if ! grep -qE '^race-full:' "$ROOT/Makefile" 2>/dev/null; then
+  echo "[FAIL] kore: Makefile 缺 race-full 目标（全仓 -race）"
+  s=1
+fi
+if ! grep -qE 'bash scripts/race-full-check\.sh' "$ROOT/Makefile" 2>/dev/null; then
+  echo "[FAIL] kore: check 目标未把全仓 -race 作为独立段调用（scripts/race-full-check.sh）"
+  s=1
+fi
+if ! grep -qE '^[[:space:]]*run: make check' "$ROOT/.github/workflows/ci.yml" 2>/dev/null; then
+  echo "[FAIL] kore: ci.yml 未跑 make check（第 19 段没有 CI 执行面）"
+  s=1
+fi
+[ "$s" -ne 0 ] && exit 1
+echo "[OK] kore: 全仓 -race 接线完整（race-full 目标 / check 独立段 / ci.yml 跑 make check）"
+
 if [ "${#SIBLINGS[@]}" -eq 0 ]; then
   echo "[N/A] 无兄弟仓（CI 只 checkout kore）：跨仓接线与 -race 真跑由各插件仓 CI 兜底"
   exit 0
