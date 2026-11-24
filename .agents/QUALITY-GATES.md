@@ -171,7 +171,7 @@
 
 **为什么新开第 21 段（选项 B），而不是塞进第 19 段（A）/ 改 `make test`·`race-full`（C）**：① **A 让失败原因二义**——第 19 段的判据是「根 module 的 `./...` 全绿」，把它扩成「再 `cd` 进一个嵌套 module」，同一段同时代表两个 module 面，排障时要先猜是哪个面红；② **C 不成立**——`make test` 不在 `make check` 内（无阻断力），`race-full` 就是第 19 段判据本体，把嵌套 module 并进去等于静默改判据语义；③ **B 有独立执行面**——独立 `[RUN ] 21/21` 行、独立 `make pluginapi-race`，可单跑、可独立读输出，段号重编号是机械改动（21 处 `N/20` → `N/21`），一次性成本换长期可读性。
 
-**耗时**：`cd pkg/pluginapi && go test -race ./...` 实测 **1.28–1.64s**（2 个包；cold 1.64s / warm 1.27s）。整段 `make check` 改前实测 **163.24s**（20 段，2026-11-24 本机）→ 改后约 **165s**（+1.3s，约 **+0.8%**）。嵌套 module 无第三方依赖、无 go.sum、包级并行，故增量与包体量无关地固定在 2s 内。
+**耗时**：`cd pkg/pluginapi && go test -race ./...` 实测 **1.28–1.64s**（2 个包；cold 1.64s / warm 1.27s）。整段 `make check` **同树对照**：**163.24s**（20 段）→ **163.01s**（21 段）——墙钟差在抖动内（−0.23s），第 21 段自身 **+1.28s**（约 **+0.8%**）。隔离干净树（HEAD 含本段改动 + 兄弟仓按各自 HEAD 只读展开）上整段实测 **157.34s / 143.10s**（冷 / 热缓存），均 `21/21` 全绿 exit 0。嵌套 module 无第三方依赖、无 go.sum、包级并行，故增量与包体量无关地固定在 2s 内。
 
 **接线防漂移**：第 18 段 `scripts/race-gate-check.sh` 增加 **1c** 接线核对——`pkg/pluginapi/go.mod` 存在时，`Makefile` 必须有 `^pluginapi-race:` 目标、`check` 目标必须调用 `scripts/pluginapi-race-check.sh`，缺任一条 `[FAIL]`（有目标但 check 不调 = 本地不跑；CI 侧由既有 `run: make check` 自动带上，不重复写一份判据）。
 
