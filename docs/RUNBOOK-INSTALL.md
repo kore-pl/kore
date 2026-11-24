@@ -79,6 +79,46 @@ curl -s localhost:8787/api/v1/system/info | grep -o '"version":"[^"]*"'   # 复�
 
 判据：停服务后 CLI 安装退出码 0；`systemctl --user status kored-local` 显示 active (running) 且商店能看到新插件。
 
+### 6.1.2 root 安装器与受控写白名单（`KORE_FILE_WRITE_ALLOW_DIRS`）
+
+装完 root 服务后，`site` 插件写 vhost 走**受控文件写**（[ADR-0052](DECISIONS/0052-nginx-vhost-controlled-write.md)），其中 `ssl_certificate` / `ssl_certificate_key` / `auth_basic_user_file` 的路径必须落在**证书/口令目录白名单**内。该白名单**缺省为空 = 一律拒绝**（fail-closed，内核不猜安装布局），因此安装脚本必须把它写进 unit：
+
+```bash
+# 默认安装（unit 自动注入 Environment=KORE_FILE_WRITE_ALLOW_DIRS=<install>/data/ssl/）
+sudo scripts/install-root-once.sh --bin ./bin/kored
+
+# 先看计划（零变更；必须能在这行看到注入值）
+scripts/install-root-once.sh --dry-run --bin ./bin/kored
+#    Environment=KORE_HOME=/opt/kore
+#    Environment=KORE_FILE_WRITE_ALLOW_DIRS=/opt/kore/data/ssl/
+
+# 证书实际落在别处时显式覆盖（值原样写入，不再追加默认值）
+sudo scripts/install-root-once.sh --bin ./bin/kored   --file-write-allow-dirs=/srv/kore/certs/:/srv/kore/auth/
+# 等价：安装前导出现场变量（sudo 需 -E 或写进 root 环境）
+KORE_FILE_WRITE_ALLOW_DIRS=/srv/kore/certs/ sudo -E scripts/install-root-once.sh --bin ./bin/kored
+```
+
+| 项 | 规则 |
+| --- | --- |
+| 格式 | 路径列表，分隔符是**内核同款** `os.PathListSeparator`（Linux 为 `:`，Windows 为 `;`）；每条必须绝对、不得含 `..` 段与空白/引号/反斜杠，非法值安装器直接拒绝（不写"看着有、实际全被丢弃"的 unit） |
+| 默认值 | `<install>/data/ssl/`（ADR-0023 §3 的证书默认位置） |
+| 覆盖 | `--file-write-allow-dirs=LIST` 或环境变量 `KORE_FILE_WRITE_ALLOW_DIRS`；显式值优先，**不追加默认值**（避免把不该放行的目录带进去） |
+| 幂等 | unit 由 `render_unit()` 确定性渲染后与现文件逐字节比较，相同即跳过——重复安装不会重复加 `Environment=` 行 |
+| 手工改 unit | 会被识别为漂移、备份后覆盖（脚本头部已声明）。要长期改白名单请用上面的 flag/env，不要手改 unit |
+| 不需要注入 | `/etc/nginx/conf.d/` 由**协议类别**派生（`pluginapi.FileWritePrefixClasses` 是唯一真源），重复注入只是冗余 |
+| 缺注入的后果 | **不是少一个可选配置**：任何带证书/口令的 vhost 都会被受控写校验拒绝，装完启用 SSL 的站点全部失败。`sudo scripts/install-root-once.sh --verify` 的 S12 项专门守这条 |
+
+**其它插件配置变量要不要进 unit（逐个核实，结论：不需要）**：
+
+| 变量 | 结论 | 依据 |
+| --- | --- | --- |
+| `KORE_SSL_CERT_DIR` | **不进 unit**（但需与白名单保持一致） | `ssl` 插件自行解析：`KORE_SSL_CERT_DIR` > `<KORE_STATE_DIR>/ssl` > 可执行文件旁 `data/ssl`；不设也能工作，设了反而要同步改白名单 |
+| `KORE_LOGS_SOURCES` | 不进 unit | 插件配置优先级 `config.json` > 环境变量 > 默认值，且界面保存后立即生效（[PLUGIN-CONFIG](PLUGIN-CONFIG.md)）；写进 unit 会与界面保存的文件配置打架 |
+| `KORE_BACKUP_DIR` / `KORE_BACKUP_ALLOW_ROOTS` | 不进 unit | 同上，`backup` 插件走 `config.json` + 界面配置，改完 `restart_required=false` |
+| `KORE_STATE_DIR` / `KORE_HOME` | `KORE_HOME` **要进**（unit 已注入） | 安装根决定 portable 布局；`KORE_STATE_DIR` 未设时由 profile 派生为 `<install>/data`，不需要额外钉死 |
+
+> **已知跨仓缺口（本轮核实，未在本仓修）**：`ssl` 插件当前默认证书目录是 `<KORE_STATE_DIR>/ssl`，而内核注入插件的 `KORE_STATE_DIR` 是 `<install>/data/plugins/<id>`，即实际落点 `<install>/data/plugins/ssl/ssl`——与安装器默认注入的 `<install>/data/ssl/` **不一致**。在 `ssl` 仓把默认目录对齐到 `<install>/data/ssl/`（或运维用 `KORE_SSL_CERT_DIR` 钉到白名单内目录）之前，SSL 站点仍会被拒。判据：`ssl` status 返回的 `cert_dir` 必须落在 unit 注入的白名单前缀内。
+
 ### 6.2 卸载（卸载链，ADR-0023 阶段 B）
 
 ```bash

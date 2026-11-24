@@ -401,6 +401,22 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 
 **未放宽的边界**：审计 fail-closed 口径不变（`begin` 写不进去仍拒绝执行）；账本不能替代审计，也不因为"有账本"而跳过审计。
 
+#### 15.3.2 受控写目录白名单（`KORE_FILE_WRITE_ALLOW_DIRS`，fail-closed）
+
+受控文件写（[ADR-0052](./DECISIONS/0052-nginx-vhost-controlled-write.md)）只能写到**白名单前缀**内，两类来源分工明确：
+
+| 来源 | 谁定义 | 例子 | 能否由插件/环境改写 |
+| --- | --- | --- | --- |
+| 协议类别目录 | 内核 `pluginapi.FileWritePrefixClasses`（唯一真源） | `/etc/nginx/conf.d/` | 否——新增类别 = 扩内核写面，须改 ADR-0028 §8 并新增 ADR |
+| 安装路径目录 | **安装/运维侧运行时注入**：`Environment=KORE_FILE_WRITE_ALLOW_DIRS=<list>` | `<install>/data/ssl/` | 是——值由 unit 决定；未注入 = 空 |
+
+四条判据（都是拒绝式，不是建议）：
+
+1. **默认拒绝**：`ssl_certificate*` / `auth_basic_user_file` 的白名单缺省为空，此时一律返回"白名单为空"的拒绝。`file_write` 调用本函数**不会**放宽 `DefaultFileWriteOptions()` 的口径。缺注入的后果是**装完带证书的 vhost 全失败**（安装器因此强制注入，见 [RUNBOOK-INSTALL §6.1.2](./RUNBOOK-INSTALL.md)）。
+2. **格式**：`os.PathListSeparator` 分隔（Linux `:`）；每条必须绝对、不得含 `..` 段 / `$` / 反斜杠 / 控制字符；规范化后补尾斜杠并去重。`/` 会被丢弃（其前缀等于放行一切绝对路径 = 取消白名单）。非法条目**逐条丢弃**，全部丢弃等价于空 = 拒绝。
+3. **纯词法、不 stat/不解析软链**：注入发生在进程启动期，按目录存在性拒绝会把启动顺序变成安全条件；软链在注入后仍可替换，注入期解析只是 TOCTOU 假安全。真正的边界是"安装目录不可被非 root 改写"（`root:root` 0755/0700），落盘前还有属主复核（`root:root 0644`）与 `nginx -t` 兜底。
+4. **白名单只约束"写"，不授予读**：它不改变插件本身的权限边界，也不给插件 root；越界写入仍然是 `E_INVALID`，不会因为"目录已存在"而放行。
+
 ### 15.4 未证明项（明确列出，不得当成已通过）
 
 1. **macOS / Windows（Tier B）**：非 Linux 只有 `ErrUnsupported` 桩，插件仍与内核同用户；§6.3「macOS 独立 uid」仍是目标。

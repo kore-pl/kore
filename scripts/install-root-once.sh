@@ -11,6 +11,14 @@
 #   sudo scripts/install-root-once.sh --rollback                   # 按 changes.jsonl 回滚
 #   sudo scripts/install-root-once.sh --bin ./bin/kored --stop-user-instance
 #                                                                  # 明确允许停掉在跑的非 root 实例
+#   scripts/install-root-once.sh --self-test                       # 纯函数自测（渲染/幂等/覆盖/拒绝），零变更
+#
+# 受控写白名单（ADR-0052 K3；装完 SSL 站点能否成功的关键）:
+#   unit 必须注入 Environment=KORE_FILE_WRITE_ALLOW_DIRS=<install>/data/ssl/——受控写里
+#   ssl_certificate* / auth_basic_user_file 的白名单**默认空 = 一律拒绝**（fail-closed），
+#   未注入时所有带证书的 vhost 都会被拒。默认值 <install>/data/ssl/，可用
+#   `--file-write-allow-dirs=PATH[:PATH...]` 或环境变量 KORE_FILE_WRITE_ALLOW_DIRS 显式覆盖
+#   （显式值原样写入 unit，不再追加默认值）。列表分隔符与内核一致：os.PathListSeparator（Linux 为 :）。
 #
 # 端到端自检（可选，跑真特权动作）:
 #   sudo scripts/install-root-once.sh --verify --password-file /root/.kore-admin \
@@ -41,6 +49,11 @@ ASSUME_YES=0
 PASSWORD_FILE=""
 E2E_PLUGIN="waf"
 E2E_ACTION="nft-list"
+SELF_TEST=0
+# ALLOW_DIRS_OVERRIDE 是「用户显式指定」的受控写白名单（flag 或环境变量），空 = 用默认值。
+ALLOW_DIRS_OVERRIDE="${KORE_FILE_WRITE_ALLOW_DIRS:-}"
+# FILE_WRITE_ALLOW_DIRS 是最终写进 unit 的值，由 resolve_allow_dirs 解析。
+FILE_WRITE_ALLOW_DIRS=""
 
 PASS=0
 FAIL=0
@@ -82,6 +95,9 @@ while [ $# -gt 0 ]; do
     --e2e-plugin=*) E2E_PLUGIN="${1#--e2e-plugin=}" ;;
     --e2e-action) shift; E2E_ACTION="${1:-}" ;;
     --e2e-action=*) E2E_ACTION="${1#--e2e-action=}" ;;
+    --self-test) SELF_TEST=1 ;;
+    --file-write-allow-dirs) shift; ALLOW_DIRS_OVERRIDE="${1:-}" ;;
+    --file-write-allow-dirs=*) ALLOW_DIRS_OVERRIDE="${1#--file-write-allow-dirs=}" ;;
     -h|--help) usage; exit 0 ;;
     *) err "未知参数: $1"; usage >&2; exit 1 ;;
   esac
@@ -98,6 +114,48 @@ BIN_DST="$HOME_DIR/bin/kored"
 # 路径先收紧再进 ledger（ledger 是 JSONL，路径里出现引号/反斜杠会写坏）：
 # 只允许常规绝对路径字符；不满足就拒绝，不做转义猜测。
 path_ok() { case "$1" in /*) ;; *) return 1 ;; esac; case "$1" in *[\"\\[:space:]]*) return 1 ;; esac; return 0; }
+
+# ---------- 受控写白名单（ADR-0052；默认 fail-closed） ----------
+
+# resolve_allow_dirs 解析最终写进 unit 的白名单：用户显式值优先，否则 <install>/data/ssl/。
+#
+# 为什么默认必须注入：受控文件写（file_write）的证书/口令目录前缀白名单**缺省为空 =
+# ssl_certificate* / auth_basic_user_file 一律拒绝**（内核不猜安装布局）。不注入的后果
+# 不是"少一个可选配置"，而是**装完启用 SSL 的站点全部配置失败**——安装器必须替用户把
+# 安装目录内的证书目录写进去。`/etc/nginx/conf.d/` 不在此列：它由协议类别派生
+# （pluginapi.FileWritePrefixClasses），重复注入只是冗余，不是必需。
+resolve_allow_dirs() {
+  if [ -n "$ALLOW_DIRS_OVERRIDE" ]; then
+    FILE_WRITE_ALLOW_DIRS="$ALLOW_DIRS_OVERRIDE"
+  else
+    FILE_WRITE_ALLOW_DIRS="$HOME_DIR/data/ssl/"
+  fi
+}
+
+# validate_allow_dirs 在写 unit 前做**最小但必要**的形状校验：写进去的值必须能被内核的
+# 注入 helper 接受，否则会出现"unit 看着有注入、实际全被逐条丢弃"的静默 fail-open 假象。
+# 规则与 helper 同口径（绝对路径 / 无 .. 段 / 无空白引号反斜杠），另外拒绝空列表——
+# 显式清空等于关掉白名单，那是安全边界调整，不该由安装脚本顺手做。
+validate_allow_dirs() {
+  local list="$1" entry
+  if [ -z "$list" ]; then
+    err "KORE_FILE_WRITE_ALLOW_DIRS 不能为空（显式清空等于关闭受控写证书白名单）"
+    return 1
+  fi
+  case "$list" in
+    *[\"\\[:space:]]*) err "KORE_FILE_WRITE_ALLOW_DIRS 含空白/引号/反斜杠（unit Environment= 会被截断）: $list"; return 1 ;;
+  esac
+  # 用 here-doc + tr 切分（不用未引用的 $list 展开）：目录名里的 * ? [ 不该被 shell 当通配
+  # 展开成别的路径，否则校验看的是另一组条目。
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || { err "KORE_FILE_WRITE_ALLOW_DIRS 含空条目（连续的 : ）: $list"; return 1; }
+    case "$entry" in /*) ;; *) err "KORE_FILE_WRITE_ALLOW_DIRS 条目必须是绝对路径: $entry"; return 1 ;; esac
+    case "/$entry/" in */../*) err "KORE_FILE_WRITE_ALLOW_DIRS 条目不得含 .. 段: $entry"; return 1 ;; esac
+  done <<EOF
+$(printf '%s' "$list" | tr ':' '\n')
+EOF
+  return 0
+}
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -220,6 +278,9 @@ User=root
 # 否则插件读不到自己的版本目录 / socket。
 NoNewPrivileges=false
 Environment=KORE_HOME=$HOME_DIR
+# 受控文件写的证书/口令目录白名单（ADR-0052 fail-closed）：未注入 = ssl_certificate* 一律拒绝。
+# 值必须与 ssl 插件实际证书目录一致；改这里 = 调整 root 写面，不是普通配置项。
+Environment=KORE_FILE_WRITE_ALLOW_DIRS=$FILE_WRITE_ALLOW_DIRS
 ExecStart=$BIN_DST serve${CONFIG:+ --config $CONFIG}
 Restart=on-failure
 RestartSec=2
@@ -242,7 +303,10 @@ install_unit() {
     log "unit 已是最新（幂等跳过）: $UNIT_PATH"; rm -f "$tmp"; return 0
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "[DRY-RUN] 写 unit: $UNIT_PATH"; sed -n '1,8p' "$tmp"; rm -f "$tmp"; return 0
+    log "[DRY-RUN] 写 unit: $UNIT_PATH"
+    # 环境变量是「装完就坏」类缺陷的高发点，dry-run 必须把它们逐行打出来（而不是只打前 8 行）。
+    grep -E '^Environment=' "$tmp" | sed 's/^/         /'
+    rm -f "$tmp"; return 0
   fi
   local backup="" before=""
   if [ -f "$UNIT_PATH" ]; then
@@ -430,6 +494,16 @@ self_check() {
     warn "S10 状态目录权限非 root:0700（当前 $(stat -c '%U:%a' "$HOME_DIR/data" 2>/dev/null)）；插件数据仍按 kore-<id> 单独 chown"
   fi
 
+  # S12 unit 必须注入受控写白名单（缺失 = 所有带证书的 vhost 被 fail-closed 拒绝）
+  if [ ! -f "$UNIT_PATH" ]; then
+    fail "S12 unit 不存在，无法核对受控写白名单注入（先修 S1）"
+  elif grep -qE '^Environment=KORE_FILE_WRITE_ALLOW_DIRS=.+' "$UNIT_PATH"; then
+    pass "S12 unit 已注入 KORE_FILE_WRITE_ALLOW_DIRS（$(grep -E '^Environment=KORE_FILE_WRITE_ALLOW_DIRS=' "$UNIT_PATH" | tail -1 | cut -d= -f2-)）"
+  else
+    fail "S12 unit 未注入 KORE_FILE_WRITE_ALLOW_DIRS：受控写证书白名单为空，所有带证书的 vhost 会被拒绝
+        修：sudo $0 --bin $BIN_DST   # 重装 unit 自动补默认值；证书在别处时加 --file-write-allow-dirs=<目录>"
+  fi
+
   # S11 端到端（可选）
   if [ -n "$PASSWORD_FILE" ]; then e2e_check; else
     skip "S11 端到端特权动作未跑（未提供 --password-file）
@@ -495,9 +569,63 @@ EOF
   rm -f "$jar"
 }
 
+# ---------- 自测（纯函数，零变更；不需要 root / systemd） ----------
+#
+# 覆盖四条契约：默认注入存在且唯一、渲染幂等、显式值覆盖默认、非法值拒绝。
+# 第 2 条同时是**反例自证**的常驻形式：删掉 render_unit 里的 Environment 注入行，
+# 本自测立即 FAIL（不要在验证时手改文件；复制一份删行跑即可复现）。
+self_test() {
+  local fail=0 use=0 before="" first="" second=""
+  st_ok()   { use=$((use+1)); printf '[PASS] %s\n' "$*"; }
+  st_bad()  { use=$((use+1)); fail=$((fail+1)); printf '[FAIL] %s\n' "$*"; }
+
+  # T1 默认值 = <install>/data/ssl/（用户没显式设时的唯一正确默认）
+  ALLOW_DIRS_OVERRIDE=""
+  resolve_allow_dirs
+  [ "$FILE_WRITE_ALLOW_DIRS" = "$HOME_DIR/data/ssl/" ]     && st_ok "T1 默认白名单 = $HOME_DIR/data/ssl/"     || st_bad "T1 默认白名单错误：$FILE_WRITE_ALLOW_DIRS"
+
+  # T2 默认渲染：注入行存在且恰好 1 条（重复注入 = 幂等失效）
+  first="$(render_unit)"
+  local count; count="$(printf '%s\n' "$first" | grep -c '^Environment=KORE_FILE_WRITE_ALLOW_DIRS=')"
+  [ "$count" = "1" ]     && st_ok "T2 默认渲染含 1 条 KORE_FILE_WRITE_ALLOW_DIRS 注入"     || st_bad "T2 注入行数量=$count（期望 1；0 表示注入缺失，>1 表示重复）"
+  printf '%s\n' "$first" | grep -qF "Environment=KORE_FILE_WRITE_ALLOW_DIRS=$HOME_DIR/data/ssl/"     && st_ok "T2b 注入值 = $HOME_DIR/data/ssl/"     || st_bad "T2b 注入值不是 $HOME_DIR/data/ssl/"
+
+  # T3 幂等：同输入两次渲染字节一致（重复安装不重复加/不漂移）
+  second="$(render_unit)"
+  [ "$first" = "$second" ]     && st_ok "T3 渲染幂等（两次输出字节一致）"     || st_bad "T3 渲染不幂等（两次输出不同）"
+
+  # T4 显式覆盖优先，且默认值不再出现
+  ALLOW_DIRS_OVERRIDE="/srv/kore/certs:/srv/kore/auth"
+  resolve_allow_dirs
+  before="$(render_unit)"
+  printf '%s\n' "$before" | grep -qF 'Environment=KORE_FILE_WRITE_ALLOW_DIRS=/srv/kore/certs:/srv/kore/auth'     && st_ok "T4 显式值原样写入 unit"     || st_bad "T4 显式值未生效"
+  printf '%s\n' "$before" | grep -qF "$HOME_DIR/data/ssl/"     && st_bad "T4b 显式覆盖后仍出现默认值（会被误认为两者都注入）"     || st_ok "T4b 显式覆盖后不再追加默认值"
+
+  # T5 非法值必须拒绝（否则 unit 里是个"看着有、实际全被丢弃"的白名单）
+  local bad
+  for bad in "relative/path/" "/srv/../etc/" "" "/srv/with space/" '/srv/quo"te/'; do
+    if validate_allow_dirs "$bad" 2>/dev/null; then
+      st_bad "T5 非法值未被拒绝: [$bad]"
+    else
+      st_ok "T5 非法值被拒绝: [$bad]"
+    fi
+  done
+  validate_allow_dirs "/srv/kore/certs:/srv/kore/auth" 2>/dev/null     && st_ok "T5b 合法多目录列表通过" || st_bad "T5b 合法列表被误拒"
+
+  ALLOW_DIRS_OVERRIDE=""
+  resolve_allow_dirs
+  echo
+  echo "自测汇总：PASS $((use-fail)) / FAIL $fail"
+  [ "$fail" -eq 0 ] || echo "结论：有 FAIL——注入契约被破坏，修好再装。"
+  [ "$fail" -eq 0 ] && echo "结论：全部 PASS。"
+  [ "$fail" -eq 0 ]
+}
+
 # ---------- 主流程 ----------
 do_install() {
   preflight || exit 1
+  resolve_allow_dirs
+  validate_allow_dirs "$FILE_WRITE_ALLOW_DIRS" || exit 1
   [ "$DRY_RUN" -eq 0 ] && require_root install
   log "安装计划：home=$HOME_DIR unit=$UNIT_PATH user=root profile=portable"
   stop_user_instances || exit 1
@@ -554,6 +682,7 @@ case "1" in
   1) ;;
 esac
 
+if [ "$SELF_TEST" -eq 1 ]; then self_test; exit $?; fi
 if [ "$ROLLBACK" -eq 1 ]; then do_rollback; exit $?; fi
 if [ "$VERIFY_ONLY" -eq 1 ]; then self_check; [ "$FAIL" -eq 0 ] || exit 1; [ "$SKIP" -eq 0 ] && exit 0 || exit 7; fi
 do_install
