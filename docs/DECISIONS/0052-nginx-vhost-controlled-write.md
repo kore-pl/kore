@@ -236,3 +236,69 @@ ls -ld /etc/nginx/conf.d                                        # 本机 pt:pt�
 ```
 
 > 复现说明：以上均为「语法合法即被 nginx 接受」的配置，`nginx -t` 只在 #4 因上下文错误拒绝；#1/#2/#3/#5 全部通过语法检查。这正是 B 不能被「`-t` 会拦」说服的原因。
+
+## 8. 修订记录：`if` 指令的极窄例外（2026-11-24，实现对照）
+
+> 本节是 **append-only 修订记录**，不改 §0–§7 原文（与 [ADR-0028](./0028-controlled-file-write.md) §8 同口径）。触发原因：§3.3 第 2 条的结构约束只列了 `server` / `location` 两层，**未提 `if`**；K2 实现（`54d7757`）为满足 site 伪静态模板放开了唯一一条 `if`。按 §3.3 原文直读，下一位读者会把 site 的 thinkphp/discuz 正例判成违规——本节把该例外写进 ADR。
+
+### 8.1 为什么必须有 `if`
+
+site 的 thinkphp / discuz 模板真实产出（`kore-plugin-site` 渲染源）：
+
+```nginx
+location / {
+    if (!-e $request_filename) {
+        rewrite ^(.*)$ /index.php?s=$1 last;
+    }
+}
+```
+
+这是「单入口 + 伪静态」的标准写法：磁盘上没有对应文件时把请求重写到 `index.php`（`$1` 是 URI 捕获组）。**删掉它只能二选一**：放弃这两个模板（产品能力回退），或改用 `try_files $uri $uri/ /index.php?s=$uri&$args`（语义不等价——捕获组、query 拼接、`last` 重匹配都不同）。所以放开 `if` 是能力必需，不是顺带支持。
+
+### 8.2 允许的形状（与实现逐条对齐）
+
+唯一实现是 `pkg/pluginapi/nginxconf.go`（`nginx.vhost.v1` 内容策略），没有第二份口径：
+
+| 维度 | 允许值 | 代码位置 |
+| --- | --- | --- |
+| 层级 | **只允许直接位于 `location{}` 内**；`server{}` 内、顶层、`if` 内嵌套一律拒绝 | `nginxconf.go:433-436` |
+| 条件 | token 序列归一后**必须逐字等于** `(!-e $request_filename)`；多一个参数、换变量（`$request_uri`）、换运算符（`-f`/`=`/`~`）都拒绝 | `:437-440` |
+| 体内指令 | **只允许 `rewrite`**；`return`/`proxy_pass`/`root`/`alias`/`try_files`/`fastcgi_pass`/`auth_basic*`/`proxy_set_header` 等按上下文位掩码全部拒绝 | `:499`（`nginxInIf` 位）+ `:515`（唯一带该位的规则） |
+| `rewrite` 形状 | 与 `location` 内**同一个** `checkRewrite`，无 if 专用放宽：`<regex> <replacement> [flag]`，正则 ≤512 字符，replacement 以 `/`、`$`、`http(s)://` 开头，flag ∈ {`last`,`break`,`redirect`,`permanent`} | `:752-778` |
+| 深度 | `server`(1) > `location`(2) > `if`(3)，上限 4 | `:49-50` |
+
+**条件比较的是 token 序列，不是原始字节**：tokenizer 已剥掉引号、把连续空白折叠（`:437` 的 `strings.Join(args, " ")`），因此双空格 / tab 分隔 / 整体加引号都会通过；`if(...)` 紧贴括号会被当未知块名拒绝，`(!-e $request_filename) x` 会因多一个参数被拒。空白差异在 nginx 侧语义相同，不构成绕过（引号形态的例外见 §8.6）。
+
+### 8.3 为什么这个极窄 `if` 不引入新攻击面
+
+1. **体内指令集没有扩大**：`rewrite` 本来就能直接写在 `location` 里（`:515` 的位掩码含 `location`）。`if` 只是把**已允许的指令**放进一个文件存在性判断，没有把任何 location-only 指令搬进来。
+2. **条件不依赖攻击者可控变量**：`(!-e $request_filename)` 只问「这个 URI 在站点根下有没有对应文件」，判断输入是服务端解析后的磁盘路径，请求方无法按意愿翻转该布尔值；全程不跑正则，没有 PCRE 回溯面。
+3. **不能写文件 / 加载模块 / 记日志**：`include`、`load_module`、`log_format`、`access_log`、`error_log`、`perl*`、`lua_*`、`js_*`、`dav_*`、`*_temp_path` 在 `validateLeaf` 第一步的**无条件拒绝**就被挡下（`:404`、`:467`），走不到上下文判断——`if` 体内同样拒绝（实测报的是「无条件拒绝」，不是「不允许出现在 if 内」）。
+4. **重写语义仍在 §3.3 第 3 条的既有约束内**：`rewrite` 的 replacement 与 flag 由同一个 `checkRewrite` 把关，没有新增「把请求代理到内网」的能力（那是 `proxy_pass`，`if` 内禁用）。
+
+### 8.4 收紧的依据：不收紧会怎样
+
+`if` 在 nginx 里是公认高危构造（官方 wiki 篇名 “If is Evil”），危险来自三处，本实现的收紧逐条对应：
+
+| 不收紧的放开点 | 后果 | 本实现的限制 |
+| --- | --- | --- |
+| 任意**条件表达式**（`$http_*` / `$request_uri` / `$request_method` 参与比较或正则） | 分支由攻击者控制：可按请求头选择是否走重写；正则跑在攻击者可控串上 → worker 侧 PCRE 回溯 CPU DoS | 条件写死为 `(!-e $request_filename)` |
+| 体内**任意指令**（尤其 `proxy_pass` / `auth_basic` / `try_files`） | `if` 会生成隐式嵌套配置，location 级指令不随之内联——公认形态是**绕过同一 location 的鉴权/匹配**，等价 auth bypass | 体内只留 `rewrite`（`:515` 唯一带 `nginxInIf`） |
+| 条件里**构造变量**（`set` / `map` / `geo`） | 变量注入链：先写变量再在 `if` 里比较，可把 allowlist 内指令拼成任意行为 | `set`/`map`/`geo` 不在 allowlist；`${}` 复合变量在 tokenizer 层直接拒绝（`:253-254`、`:275`） |
+
+一句话：收紧的落点是「**唯一条件 + 唯一体内指令 + 无变量构造**」；三者任一放开，`if` 就从模板语法糖变成可编程分支执行器，而 conf.d 片段最终由 **root master** 解析。
+
+### 8.5 复核证据
+
+- 正例：`pkg/pluginapi/nginxconf_test.go` 的 `TestNginxRealSiteVHostsAccepted`（`:338`）收录 thinkphp（`:345`）与 discuz（`:346`）模板；`FuzzValidateNginxVHostFragment`（`:371`）种子含 `if` 单行写法（`:381`）。
+- 反例：`:86`（`if` 在 `server` 内 → 拒绝）、`:87`（条件换 `$request_method = POST` → 拒绝）。
+- 本次实测（临时程序逐条调 `ValidateNginxVHostFragment`，未改仓库）：`if` 在顶层 / `if` 嵌套 `if` / 条件换 `$request_uri` / 条件换 `-f` / 条件后多余参数 → 全部拒绝；体内 `return`、`proxy_pass`、`root` → 「指令 X 不允许出现在 if 内」；体内 `access_log` → 无条件拒绝；体内 `rewrite` 四个 flag 全接受、非法 flag 拒绝。
+- nginx 侧（`docker run nginx:alpine nginx -t`）：§8.1 那段标准形状 `syntax is ok`；空体 `if` 同样通过。
+- 门禁：`bash scripts/docs-check.sh` exit 0。
+
+### 8.6 未改变的与边界披露
+
+- §3.3 第 2 条其余约束不变：顶层只允许 `server{}`、`location` 只在 `server` 内、`location` 不嵌套、深度 ≤4、指令数 ≤2048。
+- `if` **不是**一般性能力：`location` 之外没有、体内除 `rewrite` 没有、条件除这一条没有。新增第二种 `if` 形状 = 扩内容安全边界，须走 §7#2 复审并在本节追加修订。
+- **空体 `if`（`if (...) { }`）通过校验**，nginx 实测也接受，按 no-op 处理，不构成风险。
+- **已知边界（可用性，非提权）**：校验器会把**引号包裹**的条件 `if "(!-e $request_filename)"` 归一为同一 token 序列并通过，但 nginx 实测**拒绝**该形态（`invalid condition "!-e $request_filename"`）——若插件这样渲染，写入后 `nginx -t` 会失败，而校验器的立意正是「保证写入片段能过 nginx 语法」。site 渲染器不产出该形态；本卡按约束不改 `nginxconf.go`，需闭环时另开卡收紧（判据：`if` 分支要求 `args` 原始 token 数为 2，不以引号起始）。
