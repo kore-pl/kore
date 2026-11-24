@@ -31,9 +31,10 @@
 // 【凭据红线（G-30）】schema 采用 allowlist 构造：config 段只枚举上列非敏感字段，
 // 整个鉴权块与会话数据不进入任何结构；导出逻辑不存在凭据类字段名，凭据绝不落地。
 //
-// 【应用边界】apply 只改进程内可回滚的插件启停态（现有 Backend.Enable/Disable）；
+// 【应用边界】apply 只改进程内可回滚的插件启停态（现有 Backend.Enable/Disable）：
+// 先只读预检全部目标，再逐项写；任一写失败按逆序补偿回滚已改项，失败也不留半应用状态。
 // 配置文件与预设的真源分别是 config.yaml 与 kore-plugins 索引，不在 HTTP 侧自动覆盖，
-// 差异作为 manual_steps 返回，避免"半应用"把运行态改到不可预期的中间态（G-29）。
+// 差异作为 manual_steps 返回，避免把运行态改到不可预期的中间态（G-29）。
 package httpapi
 
 import (
@@ -442,7 +443,13 @@ func (s *Server) handleMigratePreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.diffMigrate(r.Context(), m))
 }
 
-// handleMigrateApply 应用变更：先完整校验、再逐项改插件启停态，任一项失败立即中止并回报。
+// migratePending 是两阶段应用的预检结果：先读齐全部目标再写，避免"读到一半发现缺插件"的半应用。
+type migratePending struct {
+	Target  migratePlugin
+	Current PluginStatus
+}
+
+// handleMigrateApply 应用变更：完整校验 → 全量预检 → 逐项应用；任一项失败即回滚已改项（不半应用）。
 func (s *Server) handleMigrateApply(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMigrate(w, r, "apply") {
 		return
@@ -451,7 +458,7 @@ func (s *Server) handleMigrateApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// 门控：校验不过一律不进入写路径，杜绝半应用。
+	// 第一道门：格式/版本/校验值不过，一律不进入写路径。
 	preview, valid := validateMigrate(m, s.opts.Version)
 	if !valid {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "导入文件校验失败："+preview.Reason, "")
@@ -461,31 +468,58 @@ func (s *Server) handleMigrateApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL, "插件后端未装配，无法应用", "")
 		return
 	}
-	result := migrateApplyResult{Changes: []migrateChange{},
-		ManualSteps: []string{"请人工对齐 config.yaml 与软件商店索引中的配置/预设差异（见预览）"}}
+	// 第二道门：预检全部目标插件是否存在、当前状态是否可读。全部通过才动第一笔。
+	var pending []migratePending
 	for _, want := range m.Payload.Plugins {
 		got, exists, err := s.opts.Backend.Plugin(r.Context(), want.ID)
 		if err != nil || !exists {
-			result.Message = "插件 " + want.ID + " 本机不存在或读取失败，已中止，未继续应用后续项"
-			writeError(w, http.StatusBadRequest, pluginapi.E_NOTFOUND, result.Message, "")
+			msg := "插件 " + want.ID + " 本机不存在或读取失败；预检未通过，未做任何改动"
+			writeError(w, http.StatusBadRequest, pluginapi.E_NOTFOUND, msg, "")
 			return
 		}
 		if got.Enabled == want.Enabled && got.Desired == want.Desired {
 			continue
 		}
+		pending = append(pending, migratePending{Target: want, Current: got})
+	}
+
+	result := migrateApplyResult{Changes: []migrateChange{},
+		ManualSteps: []string{"请人工对齐 config.yaml 与软件商店索引中的配置/预设差异（见预览）"}}
+	// applied 记录已成功写入的项，失败时按逆序恢复原状态（补偿回滚，不半应用）。
+	var applied []migratePending
+	for _, p := range pending {
+		want := p.Target
+		var err error
 		if want.Enabled {
 			err = s.opts.Backend.Enable(r.Context(), want.ID)
 		} else {
 			err = s.opts.Backend.Disable(r.Context(), want.ID)
 		}
 		if err != nil {
-			result.Message = "应用插件 " + want.ID + " 的启停态失败，已中止；此前成功的项未回滚：" + err.Error()
+			rolled := 0
+			for i := len(applied) - 1; i >= 0; i-- {
+				prev := applied[i]
+				if prev.Current.Enabled {
+					err2 := s.opts.Backend.Enable(r.Context(), prev.Target.ID)
+					if err2 == nil {
+						rolled++
+					}
+				} else {
+					err2 := s.opts.Backend.Disable(r.Context(), prev.Target.ID)
+					if err2 == nil {
+						rolled++
+					}
+				}
+			}
+			result.Message = fmt.Sprintf("应用插件 %s 失败，已回滚 %d/%d 项已改插件；未保留半应用状态。原因：%v",
+				want.ID, rolled, len(applied), err)
 			writeFailure(w, err)
 			return
 		}
+		applied = append(applied, p)
 		result.Changes = append(result.Changes, migrateChange{
 			Kind: "plugin", Target: want.ID,
-			From:   fmt.Sprintf("desired=%s enabled=%t", got.Desired, got.Enabled),
+			From:   fmt.Sprintf("desired=%s enabled=%t", p.Current.Desired, p.Current.Enabled),
 			To:     fmt.Sprintf("desired=%s enabled=%t", want.Desired, want.Enabled),
 			Action: want.Desired,
 		})

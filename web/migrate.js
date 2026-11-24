@@ -268,8 +268,8 @@
     var h = add(p, el('div', 'panel-head'));
     add(h, el('span', 'panel-title', '导入确认'));
     add(h, el('span', 'panel-meta', '二次确认 · 页面内'));
-    add(p, el('p', 'mig-warn', '确认后将按上方差异应用插件启停态；配置与预设需按提示人工对齐。' +
-      '建议先导出一份当前配置作为回滚点。'));
+    add(p, el('p', 'mig-warn', '确认后将按上方差异应用插件启停态；失败会中止并回滚已改项，不留半应用状态。' +
+      '配置与预设需按提示人工对齐，建议先导出一份当前配置作为回滚点。'));
     var ops = add(p, el('div', 'mig-ops'));
     button(ops, '取消', 'btn-ghost', function () { S.confirm = false; paintConfirm(); });
     button(ops, '确认导入', 'btn-primary mig-btn', doApply);
@@ -280,7 +280,7 @@
     try { manifest = JSON.parse(S.fileText).manifest; }
     catch (e) { setMsg('文件内容解析失败，请重新选择文件', 'fail'); return; }
     S.busy = true; S.confirm = false; paintConfirm();
-    setMsg('正在应用…失败会中止并保留已成功项，不会伪装成功');
+    setMsg('正在应用…失败会中止并回滚已改项，不会留下半应用状态');
     request(APPLY_URL, 'POST', { manifest: manifest }).then(function (r) {
       if (S.destroyed) return;
       S.result = r; paintResult();
