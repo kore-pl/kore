@@ -1,0 +1,92 @@
+/* web/theme.css — kore 主壳「深浅色主题」组件样式（R6-5）
+ * ---------------------------------------------------------------------------
+ * 定位：不进首屏的懒加载样式。首屏六件套由 scripts/frontend-check.sh 守护，
+ *       本文件不在其 FILES 列表、也不在 web/embed.go 清单；接线任务负责按需注入。
+ * 依赖：web/style.css 的 :root 令牌（深色，唯一真源；本文件只读，不改它）。
+ *
+ * 生效方式：theme.js 在 <html> 上写两个属性——
+ *   data-kore-theme="system|light|dark"  用户选择（供设置 UI 显示当前选项）
+ *   data-kore-effective="light|dark"     实际生效（本文件据此覆盖令牌）
+ * 只有 data-kore-effective 存在时才覆盖；未加载 JS 时自动保持默认深色，安全降级。
+ *
+ * 挂载 API：见 web/theme.js 文件头（window.KoreTheme）。
+ * 横向对齐（R6-4 onboarding / R6-6 shortcuts，2026-11-24 已 send_message）：
+ *   - onboarding 若加「外观」引导步骤，调 KoreTheme.set(mode) / get()，
+ *     不自行读写 localStorage['kore.theme']，避免双写漂移。
+ *   - shortcuts 绑定切换快捷键时调 KoreTheme.toggle()；懒加载顺序不确定时
+ *     先判 window.KoreTheme 是否存在，不假设本组件先加载。
+ *
+ * 约束：hex 只出现在令牌覆盖块（与 style.css:2 的口径一致）；间距/字号/层叠令牌
+ *       一律不动；触摸目标 ≥44px（裁决41）；中文文案；零框架。
+ * --------------------------------------------------------------------------- */
+
+/* 浅色令牌：与 style.css:6-23 深色 :root 一一对应。
+   对比度（WCAG 2.1，on --kore-bg-0 #FFFFFF / --kore-bg-1 #F6F8FA）：
+   text-1 ≈ 15.9:1 / text-2 ≈ 5.9:1 / text-3 ≈ 4.9:1；
+   success ≈ 5.1:1 / warning ≈ 4.6:1 / danger ≈ 4.8:1 / info ≈ 5.5:1。 */
+html[data-kore-effective='light'] {
+  color-scheme: light;
+
+  --kore-bg-0: #FFFFFF;
+  --kore-bg-1: #F6F8FA;
+  --kore-bg-2: #EAEEF2;
+
+  --kore-text-1: #1F2328;
+  --kore-text-2: #59636E;
+  --kore-text-3: #656D76;
+
+  --kore-success: #1A7F37;
+  --kore-warning: #9A6700;
+  --kore-warning-bg: #FFF8C5;
+  --kore-danger: #CF222E;
+  --kore-info: #0969DA;
+  --kore-primary: #0969DA;
+
+  --kore-border-1: #D1D9E0;
+  --kore-border-2: #E4E8ED;
+  --kore-shadow: 0 4px 12px rgba(27, 31, 36, .12);
+  --kore-overlay: rgba(27, 31, 36, .38);
+
+  --kore-term-magenta: #8250DF;
+  --kore-term-cyan: #0E7490;
+}
+
+/* 深色：沿用 style.css :root 原值，这里只钉住原生控件（滚动条/表单）的配色提示。 */
+html[data-kore-effective='dark'] {
+  color-scheme: dark;
+  --kore-primary: #58A6FF;
+}
+
+/* 未加载 JS / 属性缺失兜底：原生控件按深色渲染，与 :root 深色令牌一致。 */
+html:not([data-kore-effective]) {
+  color-scheme: dark;
+}
+
+/* ---- 可选切换控件：由 KoreTheme.createToggle() 生成，接线任务挂到顶栏即可 ---- */
+.kore-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--kore-touch, 44px);
+  min-width: var(--kore-touch, 44px);
+  padding: 0 var(--kore-space-2, 8px);
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control, 4px);
+  background: var(--kore-bg-2);
+  color: var(--kore-text-2);
+  font: inherit;
+  font-size: var(--kore-font-12, 12px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kore-theme-toggle:hover { color: var(--kore-text-1); border-color: var(--kore-text-3); }
+.kore-theme-toggle:focus-visible { outline: 2px solid var(--kore-info); outline-offset: 2px; }
+
+/* 手机（≤640px）：命中区沿用 44px 下限，只放宽内边距/字号，避免文字挤压。 */
+@media (max-width: 640px) {
+  .kore-theme-toggle {
+    padding: 0 var(--kore-space-3, 12px);
+    font-size: var(--kore-font-13, 13px);
+  }
+}
