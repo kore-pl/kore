@@ -9,15 +9,21 @@
 ### 0.0 本轮 R6+R7 交付快照（2026-11-24 12:45）
 
 > 本节记录 R6（12 路）+ R7（4 路 + 1 独立 verifier）两批并行交付的收口状态，供只读本文件的人接手。
-> 事实口径：commit / sha / 版本全部照任务卡抄录，**所有 commit 本地已提交、未 push**；tag / release 未建。
-> 下方 §0（10:20 快照）及更早内容为历史证据，保留不动。写域只有本文件。
+> 事实口径：commit / sha / 版本全部照任务卡抄录。~~所有 commit 本地已提交、未 push；tag / release 未建。~~
+> **2026-11-24 更新：用户已授权，统一发布已完成——7 仓代码 + 5 个 annotated tag 已 push origin / github / gitee 三端，
+> GitHub release 5/5 已建、断链 5/5 修复，独立 verifier `r7-relverify` PASS，详见 §0.0.5。
+> 仅 Gitea(origin) / Gitee release 因 token 缺失未建（§0.0.3 第 5 条）。**
+> 上述"未 push / 未建"为 12:45 快照当时的状态，删划线保留作历史，不再代表当前事实。
+> 下方 §0（10:20 快照）及更早内容为历史证据，保留不动。本轮写域只有本文件。
 
 #### 0.0.1 本批总览
 
 - **规模**：R6 12 路 + R7 4 路 + 1 独立 verifier（`r7-shots-verify`）全部收口。
 - **目标**：把"简陋"往成熟产品推进，三条主线——**并发竞态修复**（旁路锁 / 唯一临时名 / O_EXCL / errno 人话）、
   **三个用户可见 UI 组件**（onboarding / theme / shortcuts + 主壳接线 + G-28 双端截图）、**发版链重签**（dns 发版 + 第 52 把索引重签）。
-- **收口边界**：代码与本地提交已完成；**远端 push / tag / release 全部挂账待用户授权**（见 0.0.3）。
+- **收口边界**：代码与本地提交已完成；~~远端 push / tag / release 全部挂账待用户授权（见 0.0.3）。~~
+  **2026-11-24 已授权并完成统一发布：push / tag 零失败、GitHub release 5/5 已建 + 断链 5/5 修复（见 §0.0.5）；
+  仅 Gitea / Gitee release 因缺 token 挂账（见 0.0.3 第 5 条）。**
 
 #### 0.0.2 成果清单（按类别，每条带 commit）
 
@@ -58,14 +64,19 @@
 - **dns 发版** `e2324e9`：v0.5.2 / sha `fce690…baa` / size `2973707`。
 - **第 52 把索引重签** `a91dd01`：5 仓入索引——app-deploy 0.3.3、file 0.3.5、logs 0.5.4、backup 0.5.1、dns 0.5.2；
   `validate-index` 正例 exit 0 + 篡改反例 exit 1；公钥 `3e461a07` 无需轮换。
-- **所有 commit 均本地未 push。**
+- ~~**所有 commit 均本地未 push。**~~（12:45 快照状态）
+  **2026-11-24 统一发布已完成：7 仓代码 + 5 个 annotated tag 已 push origin / github / gitee 三端，
+  peeled sha 逐端一致（详见 §0.0.5）。**
 
 #### 0.0.3 挂账（未闭环，按证据，供下一轮）
 
-1. **发布授权（最优先）**：本批 6+ 插件仓 + 索引仓全部本地 commit、未 push、tag/release 未建；
+1. ~~**发布授权（最优先）**：本批 6+ 插件仓 + 索引仓全部本地 commit、未 push、tag/release 未建；
    索引 `download_url` 在 release 落地前用户点下载会 404。push/tag/release 是远端不可逆操作，
    按用户常设纪律需**用户明确授权**。dns tag `v0.5.2` **必须显式钉 `e2324e9`（不钉 HEAD）**。
-   本轮 lead 已向用户抛出该决策，**待用户回复**。
+   本轮 lead 已向用户抛出该决策，**待用户回复**。~~
+   **→ 已闭环（2026-11-24）**：用户已明确授权，统一发布全部落地——push + tag 三端零失败零 WARN、
+   GitHub release 5/5 已建 + 断链 5/5 修复、独立 verifier `r7-relverify` PASS。
+   事实与证据见 **§0.0.5 统一发布执行结果（2026-11-24）**（dns tag 已显式钉 `e2324e9^{}`，非 HEAD）。
 2. **三处索引 DRIFT（`r7-resign` 发现，本批不改）**：
    - `site` repo=0.7.0 vs 索引=0.4.4：外部 ADR-0052 vhost-write 在途、带半成品；工作区 `go test` 挂 3 条
      `rootactions_test.go`（argv / writes_host）；暂存区重排 + `.tmp-k4/` 残留；**HEAD 内容完整正确**。
@@ -76,16 +87,68 @@
 4. **提交事故留痕**：`434bb47` + `fc05b18` 两次 add→commit 两步卷入 filewrite 三文件暂存态，
    `12cc45a` 临时索引补回（`434bb47`/`fc05b18` 仍是 HEAD 祖先、**历史未改写**）；
    根因是共享工作区两步 commit 竞态。纪律：一律 **pathspec 一步到位**或 **GIT_INDEX_FILE 临时索引**。
+5. **Gitea(origin) / Gitee release 未建（human gate，需用户提供凭据；已从 P0 降为中优先级）**：
+   2026-11-24 用户已授权发布、两端代码 + tag 均已 push，**但 release 未建**——
+   token env（`GITEA_TOKEN` / `GITEE_TOKEN` 等）全部 UNSET、`gh` 仅登录 github.com、
+   无 `gitea` / `gitee` CLI、`gitee-release-prune.sh --dry-run` 报 `GITEE_TOKEN` 未设置 EXIT=1。
+   **未硬造 token、未读凭据明文**（G-30）。待用户提供 `GITEA_TOKEN` / `GITEE_TOKEN` 后：
+   ①补建两端 release 挂 dist 资产；②跑 Gitee prune `--dry-run`（**只留最新 5**，
+   GitHub 无对应 release 的版本永不删，例外逐条登记在脚本 `PRUNE_EXCEPTIONS`）。
+   证据与细节见 §0.0.5 第 4 条。
 
 #### 0.0.4 下一轮建议（≤5 条，按优先级，每条含可执行动作 + 验收）
 
 | # | 优先级 | 可执行动作 | 验收 |
 | --- | --- | --- | --- |
-| ① | P0 | 用户授权后统一 push/tag/release，dns tag `v0.5.2` 显式钉 `e2324e9` | 三端 tag/release 齐备；`git rev-parse v0.5.2^{}` 等于 `e2324e9`；索引 `download_url` 实测可下载 |
+| ~~①~~ | ~~P0~~ **已闭环** | ~~用户授权后统一 push/tag/release，dns tag `v0.5.2` 显式钉 `e2324e9`~~ → **已完成（2026-11-24）**，详见 §0.0.5 | 三端 push/tag 齐备、GitHub release 5/5、断链 5/5 修复，独立 verifier `r7-relverify` PASS；Gitea / Gitee release 待凭据（0.0.3 第 5 条） |
 | ② | P1 | 处理 site 0.7.0 / db-mysql 0.5.2 / ssl 0.7.1 三处 DRIFT，先确认外部 agent 收敛 | 三仓 repo 版本与索引一致，或登记为新的在途 DRIFT 并注明外部 ADR |
 | ③ | P1 | site 回滚修复发版（待 ADR-0052 写域释放） | 写域释放后 bump + dist + 入索引，dist sha 与索引一致 |
 | ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 明确提交 / 删除 / 加忽略，结论落 `.agents/LOG/DECISIONS.md` 或对应 ADR |
 | ⑤ | P2 | 主实例 8787 重启到含接线的新构建后补生产态抽查（G-29） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 正确、商店版本 == 索引版本、三组件生产态可见（当前主实例仍是 10:26 旧二进制） |
+
+#### 0.0.5 统一发布执行结果（2026-11-24）
+
+> 用户已明确授权统一发布（2026-11-24）。本节照各执行 owner 交付报告 + 独立 verifier PASS 抄录，均已回读验收。
+> 事实口径：commit / tag / sha / HTTP 状态全部来自 r7-push / r7-release / r7-relverify 交付报告，不臆造。
+
+**1. 发布授权已完成**：用户 2026-11-24 明确授权统一发布；§0.0.3 第 1 条 P0 挂账闭环。
+
+**2. push + tag 全部完成、零失败零 WARN（r7-push）**：
+
+| 仓 | 代码 push（origin/github/gitee 三端） | tag |
+| --- | --- | --- |
+| kore 主仓 | 已 push 三端 | 本批无版本 bump、未打 tag，只 push 代码 |
+| kore-plugins 索引仓 | 已 push 三端 | 本批无版本 bump、未打 tag，只 push 代码 |
+| kore-plugin-app-deploy | 已 push 三端 | `v0.3.3` → peeled `303fe3af` |
+| kore-plugin-file | 已 push 三端 | `v0.3.5` → peeled `326e803b` |
+| kore-plugin-logs | 已 push 三端 | `v0.5.4` → peeled `221e064c` |
+| kore-plugin-backup | 已 push 三端 | `v0.5.1` → peeled `c31fd324` |
+| kore-plugin-dns | 已 push 三端 | `v0.5.2` → peeled `e2324e9c`（**显式钉 `e2324e9`，非 HEAD**） |
+
+- 7 仓代码 + 5 个 annotated tag 已 push origin / github / gitee 三端，**零失败零 WARN**；
+  peeled sha 逐端一致（上表）。主仓与索引仓本批无版本 bump、未打 tag，只 push 代码。
+
+**3. GitHub release 5/5 已建 + 断链 5/5 修复（r7-release；独立 verifier `r7-relverify` PASS）**：
+
+| 插件仓 | 版本 | 索引 `download_url` 校验 |
+| --- | --- | --- |
+| app-deploy | v0.3.3 | curl HTTP=200 · sha256 `3253c1a7…` 逐字匹配 |
+| file | v0.3.5 | curl HTTP=200 · sha256 `db8388f0…` 逐字匹配 |
+| logs | v0.5.4 | curl HTTP=200 · sha256 `34301a77…` 逐字匹配 |
+| backup | v0.5.1 | curl HTTP=200 · sha256 `bc202ac6…` 逐字匹配 |
+| dns | v0.5.2 | curl HTTP=200 · sha256 `fce69085…` 逐字匹配 |
+
+- 5 个插件仓 GitHub release 挂 dist 资产；索引 `download_url` 逐个 curl HTTP=200 + sha256 逐字匹配，
+  **断链 5/5 修复**，商店下载已可用（原 §0.0.3 "download_url 会 404" 已消除）。
+
+**4. Gitea(origin) / Gitee release 未建（human gate，仍挂账，见 §0.0.3 第 5 条）**：
+token env（`GITEA_TOKEN` / `GITEE_TOKEN` 等）全 UNSET、`gh` 仅登录 github.com、
+无 `gitea` / `gitee` CLI、`gitee-release-prune.sh --dry-run` 报 `GITEE_TOKEN` 未设置 EXIT=1。
+未硬造 token、未读凭据明文。待用户提供 `GITEA_TOKEN` / `GITEE_TOKEN` 后补建两端 release + 跑 Gitee
+prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删，例外在脚本 `PRUNE_EXCEPTIONS`）。
+
+**5. 发布窗口纪律已守**：kore 主仓 2M+2?? 在途文件、5 插件仓 `?? RELEASE-EVIDENCE.md`
+全程未 add / 未 commit / 未碰；**零文件改动**（写域仅本文件，push/release 未夹带任何在途或证据文件）。
 
 ## 0. 当前交接快照（2026-11-24 10:20）
 
