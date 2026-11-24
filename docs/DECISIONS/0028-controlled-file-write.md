@@ -188,3 +188,20 @@
 - 接线 `cmd/kored` root-action 执行路径（与管理员鉴权、审计同一事务），并同批补齐 §4 的属主校验、按路径锁、capability 声明；
 - 真实写盘 e2e（需 root 或白名单目录可写的环境）：写 `/etc/ssh/sshd_config.d/kore-<plugin>-test.conf` → `ls -l` 核 `0644` → 备份存在 → 重写幂等 → 删除后备份仍在；
 - 与 ADR-0023 §3.5 豁免 #3 的 `changes.jsonl` 清单接通（§4 第 4 行）。
+
+## 8. 修订记录：nginx vhost 纳入受控写（2026-11-24，ADR-0052 裁决）
+
+> 本节是 **append-only 修订记录**，不改 §1–§7 原文（与「实施记录」同一口径：原文保留，修订单列）。
+
+§7 复审条件 #1 已被触发：site 需要写 `/etc/nginx/conf.d/*.conf`。裁决（含 B「目录授权」被否的证据）见 [ADR-0052](./0052-nginx-vhost-controlled-write.md)；本节只登记对原文的收窄/扩展，**不代表已实现**——`filewrite` 当前仍零调用方。
+
+| 原文 | 修订后（仅对 `/etc/nginx/conf.d/` 前缀生效） | 依据 |
+| --- | --- | --- |
+| §3「`/etc/nginx/conf.d/` **暂不列入**」 | **列入**，但文件名必须 `kore-<plugin>-*.conf`、mode 仅 `0644`、属主 `root:root` | ADR-0052 §3.2 / §4.1 |
+| §2「内容不做语义校验——内核不认识 sshd/nginx 语法（G-01）」 | 对该前缀**不适用**：写盘前必须过**指令级 allowlist**（语法级，拒绝未知指令；不判业务语义） | ADR-0052 §3.3 |
+| §5 拒绝的输入清单 | 追加：含 allowlist 外指令（`include`/`load_module`/`log_format`/`access_log`/`error_log`/`dav_*`/`*_temp_path` 等）、参数越出允许路径或上游形状、文件名不带 `kore-<plugin>-` 前缀 | ADR-0052 §3.3 |
+| §6 推荐「内容不做语义校验」 | 同上：nginx 前缀例外；校验器实现放 `pkg/pluginapi`（与 `RootCommandPolicies` 同层），`internal/core/filewrite` 只做通用调用 | ADR-0052 §3.3（G-01 论证） |
+
+**不改变的**：一期四条边界（属主校验、文件名前缀、路径锁、root-action 接线）仍按「实施记录 §4」在二期同批补齐；本修订不放宽其他三个前缀；审计仍只存哈希不存全文；回滚仍走备份 + `purge_op: file.restore`。
+
+**接线与协议**：`file_write` 动作声明、请求体 `content` 字段、SDK tag 与 `requires_kore` 收窄见 ADR-0052 §5 卡 2 / 卡 3。
