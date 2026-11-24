@@ -27,7 +27,14 @@
 #      **污染验收核对口径**：round5 就报过 `SHA_DIFF firewall 0.2.3`。
 #      为什么比对全部版本而不是只比当前版本：0.2.3 的野产物在版本 bump 到 0.2.6
 #      之后仍留在 dist/，只比当前版本会漏掉它——这正是漏洞本体。
-#      索引未记录该版本（如 pre-lock 的 0.1.0）/ dist 该版本不存在 → 静默跳过。
+#      索引未记录该版本（如 pre-lock 的 0.1.0）→ 不是本判据，计入「索引未收录跳过」。
+#      **缺件必须可见（2026-11-24 修）**：索引记录的当前版本本地无 dist 时，逐个
+#      `[SKIP] <id> <ver>: 本地无 dist，未比对`，并在末尾汇总行分账
+#      `DIST 检查: <N> 一致 [/ <D> 漂移(WARN)] / <M> 缺件跳过 [/ <K> 索引未收录跳过]`。
+#      为什么不再静默跳过：`0 warn` 原先有两种不可区分的含义——「全部一致」与
+#      「全部没检查」（dist/ 不入库，新检出必然全缺）。门禁的绿必须证明检查过。
+#      为什么缺件不 FAIL：dist/ 是构建产物、不入库，缺件是常态；本条只负责让
+#      「没检查」可见，硬判据仍是「已发布物与索引自洽」（归 validate-index.sh）。
 #   7) README 全文 dist/<id>-<ver>.tar.gz 版本 ↔ info.json.version（WARN 级，只读）
 #      2026-11-24 起从「只比发布产物行」扩到「README 全文所有 rev 引用」：
 #      代码块示例（`tar -tzf dist/app-deploy-0.3.1.tar.gz`）、`make dist` 说明行、
@@ -134,6 +141,12 @@ README_VER_RE = re.compile(
 n_pass = 0
 n_fail = 0
 n_warn = 0
+# 第 6 条 dist sha 比对的「检查过 / 没检查」分账（见文件头第 6 条）：
+#   一致 + 漂移 + 缺件跳过 + 索引未收录跳过 = 可核对的检查面
+dist_ok = 0          # 比对过且相等
+dist_drift = 0       # 比对过但不等（已进 warnings，WARN）
+dist_missing = 0     # 索引记录的当前版本本地无 dist（缺件可见、不阻断）
+dist_unrecorded = 0  # 本地有 dist 但索引未记录该版本（不是判据）
 
 # 索引侧只读数据源（不联网、不改索引）：
 #   INDEX_PLUGINS = plugins.json 的 id → 当前版本条目（信任根）
@@ -291,11 +304,19 @@ for raw in sys.argv[1:]:
     elif name.startswith(PREFIX):
         pid_for_dist = name[len(PREFIX):]
     dist_dir = os.path.join(repo, "dist")
-    if HAS_INDEX and pid_for_dist and os.path.isdir(dist_dir):
+    # 守卫只按「索引可达 + 有本仓 id」判：**不再以 dist/ 存在为前提**——
+    # 以 dist_dir 存在为前提时，整个目录缺失会连分支都进不来，缺件继续静默（漏洞本体）。
+    if HAS_INDEX and pid_for_dist:
         dist_prefix = pid_for_dist + "-"
-        for fn in sorted(os.listdir(dist_dir)):
-            if not fn.startswith(dist_prefix) or not fn.endswith(".tar.gz"):
-                continue
+        dist_files = []           # 本地实际存在的 dist 文件名
+        dist_versions = set()     # 其中能解析出的版本号
+        if os.path.isdir(dist_dir):
+            for fn in sorted(os.listdir(dist_dir)):
+                if not fn.startswith(dist_prefix) or not fn.endswith(".tar.gz"):
+                    continue
+                dist_files.append(fn)
+                dist_versions.add(fn[len(dist_prefix):-len(".tar.gz")])
+        for fn in dist_files:
             ver = fn[len(dist_prefix):-len(".tar.gz")]
             expected = None
             # 当前版本以 plugins.json（信任根）为准，其余历史版本查账本
@@ -316,7 +337,9 @@ for raw in sys.argv[1:]:
                         expected = entry["sha256"].strip().lower()
                         break
             if not expected:
-                # 索引未记录该版本（pre-lock 历史版本）→ 不是本检查判据，静默跳过
+                # 索引未记录该版本（pre-lock 历史版本）→ 不是本检查判据；
+                # 但不许静默吞掉：计入汇总的「未收录跳过」计数，总数可核对。
+                dist_unrecorded += 1
                 continue
             try:
                 with open(os.path.join(dist_dir, fn), "rb") as fh:
@@ -325,9 +348,19 @@ for raw in sys.argv[1:]:
                 warnings.append(f"dist/{fn} 读取失败，无法比对 sha: {exc}")
                 continue
             if got != expected:
+                dist_drift += 1
                 warnings.append(
                     f"DIST_SHA_DIFF {pid_for_dist} {ver} index={expected} dist={got}"
                 )
+            else:
+                dist_ok += 1
+        # 「应有却没有」分支：索引记录的当前版本本地无 dist → 显式可见，不阻断。
+        # 缺件是常态（dist/ 不入库），所以只 [SKIP] 计数，不 WARN / 不 FAIL。
+        cur_entry = INDEX_PLUGINS.get(pid_for_dist)
+        cur_ver = cur_entry.get("version") if isinstance(cur_entry, dict) else None
+        if isinstance(cur_ver, str) and cur_ver and cur_ver not in dist_versions:
+            dist_missing += 1
+            print(f"[SKIP] {pid_for_dist} {cur_ver}: 本地无 dist，未比对")
 
     # 7) README 全文 dist/<id>-<ver>.tar.gz 版本 ↔ info.json.version
     #    （WARN 级，只读；见文件头第 7 条）
@@ -379,6 +412,16 @@ if not HAS_INDEX:
     print("[SKIP] 索引账本不可达（INDEX_FILE / LOCK_FILE），本地 dist sha 比对跳过")
 for item in index_errors:
     print(f"[WARN] 索引账本读取失败，dist sha 比对可能不完整: {item}")
+# dist 比对分账汇总：「0 warn」不再能同时表示「全部一致」与「全部没检查」。
+# 一致 / 漂移 / 缺件跳过三者并列，跳过的具体 id 与版本另有 [SKIP] 行可查。
+if HAS_INDEX:
+    dist_summary = f"DIST 检查(按 dist 文件计): {dist_ok} 一致"
+    if dist_drift:
+        dist_summary += f" / {dist_drift} 漂移(WARN)"
+    dist_summary += f" / {dist_missing} 缺件跳过"
+    if dist_unrecorded:
+        dist_summary += f" / {dist_unrecorded} 索引未收录跳过"
+    print(dist_summary)
 print("检查范围: 三件套 + info.json 必填 14 字段(协议 §3.1 ∪ G-17 ∪ G-20) + "
       "描述类字段四选一(WARN) + id/目录一致(G-27) + info/manifest 版本一致 + "
       "go.mod replace 跨仓拦截 + 本地 dist sha ↔ 索引记录 sha(WARN, DIST_SHA_DIFF) + "
