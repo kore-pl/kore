@@ -77,3 +77,6 @@ keys/index-signing*
 .agents/verify/.tmp-*/
 .agents/verify/*-tmp/
 .agents/verify/*tmp/
+
+# 发版复核证据：本地保留、不入库（保持 HEAD==tag）
+RELEASE-EVIDENCE.md
