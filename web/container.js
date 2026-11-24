@@ -1,7 +1,7 @@
 /* kore 主壳 · 容器管理（web/container.js）——零框架 / 零 CDN / 无外链。
    调用形态：POST /api/v1/invoke/container/container.<action>；方法段写完整限定名。
    数据：container.list（含 protected 标记）/ logs（tail 200 + since）/ stats / inspect（关键字段，
-   含重启策略/健康）/ start / stop / restart（stop/restart 需 confirm=true）。分页 20 行 + 加载更多；
+   含重启策略/健康）/ health（单容器运行与健康状态）/ start / stop / restart（stop/restart 需 confirm=true）。分页 20 行 + 加载更多；
    行操作开日志/详情抽屉（日志等宽字体）；停止/重启手输容器名确认；保护名单行锁标 + 禁用操作。
    镜像管理页签：container.images（列表三态）/ pull（手输镜像名 confirm）/ rmi（手输镜像名 +
    可选 force）/ update（容器行资源限额：memory_bytes 或 cpus + 手输容器名 confirm）——
@@ -221,7 +221,7 @@
     var ops = add(tr, el('td', 'ctr-ops')); ops.setAttribute('data-label', '操作');
     if (c.protected) ops.title = '核心服务容器，不允许在此操作';
     // [标签, 动作, 禁用条件]：保护名单行全部禁用；非运行中禁停止/重启，运行中禁启动。
-    [['日志', openLogs, false], ['详情', openDetail, false], ['启动', doStart, c.state === 'running'],
+    [['日志', openLogs, false], ['详情', openDetail, false], ['健康检查', openHealth, false], ['启动', doStart, c.state === 'running'],
       ['停止', askStop, c.state !== 'running'], ['重启', askRestart, c.state !== 'running'],
       ['限额', function () { askImgConfirm('update', c.id, c); }, false]].forEach(function (op) {
         var b = smallBtn(op[0], function () { op[1](c); }); if (c.protected || op[2]) b.disabled = true; ops.appendChild(b);
@@ -437,7 +437,7 @@
   function closeDrawer() { S.drawer = null; S.drawerId = ''; S.drawerData = null; S.drawerError = ''; S.drawerFail = null; setDrawer(false); }
   function openDrawer(mode, c, loader) {
     S.drawer = mode; S.drawerId = c.id; S.drawerData = null; S.drawerError = ''; S.drawerFail = null; S.since = '';
-    S.drawerTitle.textContent = (mode === 'logs' ? '日志 · ' : '详情 · ') + (c.name || c.id);
+    S.drawerTitle.textContent = (mode === 'logs' ? '日志 · ' : mode === 'health' ? '健康检查 · ' : '详情 · ') + (c.name || c.id);
     setDrawer(true); paintDrawer(); loader();
   }
   function openLogs(c) { openDrawer('logs', c, fetchLogs); }
@@ -446,6 +446,14 @@
       invoke('container.inspect', { id: c.id }).then(function (d) { if (!S.destroyed && S.drawerId === c.id && S.drawer === 'detail') { S.drawerData = d; paintDrawer(); } },
         function (err) { if (!S.destroyed && S.drawerId === c.id) { S.drawerError = err.message; S.drawerFail = err; paintDrawer(); } });
     });
+  }
+  // 健康检查：container.health 只读投影 inspect 的 state/health，不额外起子进程。
+  // 与日志/详情共用抽屉与三态（读取中 / 失败人话+怎么办 / 结果），不新增独立弹层。
+  function openHealth(c) { openDrawer('health', c, fetchHealth); }
+  function fetchHealth() {
+    var id = S.drawerId;
+    invoke('container.health', { id: id }).then(function (d) { if (!S.destroyed && S.drawerId === id && S.drawer === 'health') { S.drawerData = d; paintDrawer(); } },
+      function (err) { if (!S.destroyed && S.drawerId === id) { S.drawerError = err.message; S.drawerFail = err; paintDrawer(); } });
   }
   function fetchLogs() {
     var id = S.drawerId, params = { id: id, tail: 200 };
@@ -470,6 +478,17 @@
       if (!d.lines || !d.lines.length) add(host, el('p', 'muted', '该容器最近没有日志输出。'));
       else add(host, el('pre', 'ctr-log', d.lines.join('\n')));
       if (d.truncated) add(host, el('p', 'muted', '（输出超过 2 MiB 预算，已截断显示尾部）'));
+      return;
+    }
+    if (S.drawer === 'health') {
+      var h = S.drawerData, hdl = add(host, el('dl', 'ctr-detail'));
+      add(hdl, el('dt', null, '运行状态')); var hState = add(hdl, el('dd')); hState.appendChild(stateChip(h.status));
+      add(hdl, el('dt', null, '健康状态')); var hHealth = add(hdl, el('dd'));
+      var hLabel = h.health === 'healthy' ? '健康' : h.health === 'unhealthy' ? '不健康' : h.health === 'starting' ? '启动中' : (h.health ? String(h.health) : '未配置健康检查');
+      hHealth.appendChild(el('span', 'chip chip-' + (h.health === 'healthy' ? 'ok' : h.health === 'unhealthy' ? 'fail' : 'warn'), hLabel));
+      [['是否运行中', h.running ? '是' : '否'], ['重启次数', String(h.restart_count === undefined ? '—' : h.restart_count)],
+        ['启动时间', h.started_at || '—']].forEach(function (row) { add(hdl, el('dt', null, row[0])); add(hdl, el('dd', 'mono', row[1])); });
+      add(host, smallBtn('重新检查', function () { S.drawerData = null; S.drawerError = ''; paintDrawer(); fetchHealth(); }));
       return;
     }
     var v = S.drawerData, res = v.resources || {}, dl = add(host, el('dl', 'ctr-detail'));
