@@ -79,13 +79,17 @@
    **→ 已闭环（2026-11-24）**：用户已明确授权，统一发布全部落地——push + tag 三端零失败零 WARN、
    GitHub release 5/5 已建 + 断链 5/5 修复、独立 verifier `r7-relverify` PASS。
    事实与证据见 **§0.0.5 统一发布执行结果（2026-11-24）**（dns tag 已显式钉 `e2324e9^{}`，非 HEAD）。
-2. **三处索引 DRIFT（`r7-resign` 发现，本批不改）**：
-   - `site` repo=0.7.0 vs 索引=0.4.4：外部 ADR-0052 vhost-write 在途、带半成品；工作区 `go test` 挂 3 条
-     `rootactions_test.go`（argv / writes_host）；暂存区重排 + `.tmp-k4/` 残留；**HEAD 内容完整正确**。
-   - `db-mysql` repo=0.5.2 vs 索引=0.4.1。
-   - `ssl` repo=0.7.1 vs 索引=0.6.0。
-3. **发版缺口**：site 回滚修复未 bump/dist（`info.json` 属外部 ADR-0052 写域，r6-site 一个字节未碰）；
-   `RELEASE-EVIDENCE.md` 多仓历史遗留未跟踪文件（非本轮产物、未提交，去留待裁决）。
+2. **索引 DRIFT（r14-docaudit 复核收口）——仅剩 site 一处**：
+   - ~~`db-mysql` repo=0.5.2 vs 索引=0.4.1 / `ssl` repo=0.7.1 vs 索引=0.6.0~~
+     → **DRIFT 已消**：索引仓 `37a0f6d`（第 53 把重签，`[agent:r8-resign]`）已收录 db-mysql 0.5.2 +
+     ssl 0.7.1，两仓 repo 与索引一致。
+   - `site` repo=0.8.1 vs 索引=0.4.4：外部 ADR-0052 vhost-write 在途、带半成品，索引仓刻意保持 0.4.4 未误收；
+     工作区仍 `MM apply.go`（argv / writes_host 未收敛）。**唯一剩余 DRIFT，待 ADR-0052 收敛后单独成批入索引。**
+3. **发版缺口**：site 回滚修复未 bump/dist（`info.json` 属外部 ADR-0052 写域，r6-site 一个字节未碰）。
+   【历史快照，保留】~~多仓历史遗留未跟踪发版证据文件（非本轮产物、未提交，去留未定）。~~
+   → **已闭环（2026-11-24，裁决 B，r13-reevidence）**：`RELEASE-EVIDENCE.md` 归属——多仓 `.gitignore` 追加
+   忽略规则（主仓 `05b0fcf`），本地证据文件**保留不删、不入库**；三选项否决依据落 `.agents/LOG/DECISIONS.md:152`
+   （`42ca098`），共 **23 仓落地**。
 4. **提交事故留痕**：`434bb47` + `fc05b18` 两次 add→commit 两步卷入 filewrite 三文件暂存态，
    `12cc45a` 临时索引补回（`434bb47`/`fc05b18` 仍是 HEAD 祖先、**历史未改写**）；
    根因是共享工作区两步 commit 竞态。纪律：一律 **pathspec 一步到位**或 **GIT_INDEX_FILE 临时索引**。
@@ -132,22 +136,23 @@
     本条只覆盖其「不在本轮范围」的处置定性（决策演进留痕，原文不删改）。
     **决策已补录 `DECISIONS.md:148`（commit `25462fe`，`[agent:r9-decision]`）——G-23 留痕闭环。**
 
- 10. **他人在途产物（r9-docssync 发现，§0.0 此前未提）——待收敛，不代填完成**：
-     - `M web/monitor-cards.js`（+271/−24，G-32 图表构件）——他人在途；注：r9-restart 重建时该文件随
-       `make build` 被编入新 dist，属构建必然行为、良性净增益，**不等于该在途改动已由本轮 owner 收敛**。
-     - `?? .agents/verify/db-runtime-architecture-audit.md`（他人在途验收报告，未提交）。
-     - `?? docs/DECISIONS/0050-db-and-runtime-aggregation.md`（ADR-0050 accepted，他人在途，未提交）。
-     以上三项均为**他人在途产物，注「待收敛」**；本轮 scribe 写域只含 HANDOFF.md，不代填完成、不改这些文件。
+ 10. **在途三文件（r9-docssync 发现）——已收敛闭环（commit `321c34d`，r14-docaudit 复核）**：
+     - `web/monitor-cards.js`（G-32 图表构件）——已 tracked 入库。
+     - `.agents/verify/db-runtime-architecture-audit.md`（验收报告）——已 tracked 入库。
+     - `docs/DECISIONS/0050-db-and-runtime-aggregation.md`（ADR-0050 accepted）——已 tracked 入库。
+     三文件已由 `321c34d`（`[agent:r10-a1close]`）收敛提交；实测 `git ls-files` 三者齐备、
+     `git status --short` 三者干净（详见 §0.0.7「A1 收敛」）。
+     【历史快照，保留】~~当时三项均为未提交产物，注「待定」；本轮 scribe 写域只含 HANDOFF.md，不代填完成。~~
 
 #### 0.0.4 下一轮建议（≤5 条，按优先级，每条含可执行动作 + 验收）
 
 | # | 优先级 | 可执行动作 | 验收 |
 | --- | --- | --- | --- |
 | ~~①~~ | ~~P0~~ **已闭环** | ~~用户授权后统一 push/tag/release，dns tag `v0.5.2` 显式钉 `e2324e9`~~ → **已完成（2026-11-24）**，详见 §0.0.5 | 三端 push/tag 齐备、GitHub release 5/5、断链 5/5 修复，独立 verifier `r7-relverify` PASS；Gitea / Gitee release 待凭据（0.0.3 第 5 条） |
-| ② | P1 | 处理 site 0.7.0 / db-mysql 0.5.2 / ssl 0.7.1 三处 DRIFT，先确认外部 agent 收敛 | 三仓 repo 版本与索引一致，或登记为新的在途 DRIFT 并注明外部 ADR |
-| ③ | P1 | site 回滚修复发版（待 ADR-0052 写域释放） | 写域释放后 bump + dist + 入索引，dist sha 与索引一致 |
-| ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 明确提交 / 删除 / 加忽略，结论落 `.agents/LOG/DECISIONS.md` 或对应 ADR |
-| ⑤ | P2 | 主实例 8787 重启到含接线的新构建后补生产态抽查（G-29） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 正确、商店版本 == 索引版本、三组件生产态可见（当前主实例仍是 10:26 旧二进制） |
+| ② | ~~P1~~ **部分闭环** | ~~三处 DRIFT~~ → db-mysql / ssl 已由索引仓 `37a0f6d`（第 53 把重签）收录、DRIFT 已消；仅剩 site 0.8.1 一处（外部 ADR-0052 在途） | 两仓 repo 与索引一致（已验证）；site 索引保持 0.4.4 未误收，待 ADR-0052 收敛后单独成批 |
+| ③ | P1 | site 回滚修复发版（待 ADR-0052 写域释放，工作区仍 `MM apply.go`） | 写域释放后 bump + dist + 入索引，dist sha 与索引一致 |
+| ④ | ~~P2~~ **已闭环（42ca098）** | `RELEASE-EVIDENCE.md` 归属裁决 → 裁决 B（加 `.gitignore` 忽略、本地证据保留不入库），主仓 `05b0fcf` + 台账 `42ca098`，23 仓落地 | 已验证：`.gitignore` 含忽略规则、DECISIONS.md:152 载三选项否决依据 |
+| ⑤ | P2 | 主实例 8787 生产态抽查（G-29）：主实例已 R10 重建（PID `1753674` / exe sha `9d9fe444…`，见 §0.0.7）；登录态复核仍 BLOCKED（无管理员口令） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 正确、商店版本 == 索引版本、三组件生产态可见；登录态项待口令交付 |
 
 #### 0.0.5 统一发布执行结果（2026-11-24）
 
@@ -279,10 +284,10 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 
 | # | 优先级 | 可执行动作 | 验收 |
 | --- | --- | --- | --- |
-| ① | ~~P1~~ **已闭环（第6轮 2026-11-24）** | r11-push 一批推完 origin/github/gitee 三端，三端 main 全对齐 `80f6c48` | 三端 `git ls-remote` 实测 main 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，本地 HEAD 同 sha，零失败零 WARN，未重复推 gitea(ssh) |
+| ① | ~~P1~~ **已闭环（第6轮 2026-11-24）** | r11-push 一批推完 origin/github/gitee 三端，三端 main 全对齐 `80f6c48` | 三端 `git ls-remote` 实测 main 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`；本地 HEAD 已前进至 `42ca098`、`git branch -vv` 显示领先三端 4 笔（af88838/247044f/05b0fcf/42ca098，攒批未 push）；第 6 轮 push 已闭环结论不变 |
 | ② | ~~P1~~ **已闭环（同上两笔 commit）** | G-28 截图收口验收：`873409c` / `204be96` 两批已交付并回读 PASS | 16 张双端截图 + 自评三问齐备，`file`/`identify` 校验宽高、md5 全异——全部命中 |
 | ③ | P2 | site 外部 ADR-0052 收敛后单独成批入索引 | 索引 site 版本与仓库一致，重签 + 公钥不变 |
-| ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 结论落 DECISIONS / ADR（§0.0.3 第 3 条） |
+| ④ | ~~P2~~ **已闭环（42ca098）** | `RELEASE-EVIDENCE.md` 归属裁决 → 裁决 B（加忽略、保留不入库），主仓 `05b0fcf` + 台账 `42ca098`，23 仓落地（见 §0.0.3 第 3 条） |
 | ⑤ | ~~P3~~ **已闭环（第5轮最终态）** | R10 最终重建重启（r10-runverify 独立 PASS）：现运行 **PID `1753674`** / exe sha `9d9fe444eed83b1b714f9b75ecb5f9184550a1f6cae1cedc7a9cfcc60d26728e` / version 0.1.1；本批 11 卡成果（图表 / 白话 / 断点续传 / 改口令 / 本地化 850key）全部生效；改口令端点未登录 POST 实测 401（非 501） | `ps` 实测 PID 1753674 存活、`readlink /proc/1753674/exe` → `bin/kored`、`sha256sum` == 上列 sha；r10-runverify 独立 PASS |
 
 ### 0.0.7 第 6/7 轮交付快照（2026-11-24）
@@ -292,7 +297,9 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 > §0.0.1–§0.0.6 及更早内容为历史，全部保留不动。本轮写域只有本文件。
 
 **1. 第 6 轮——攒批 push 三端对齐（已闭环）**：r11-push 一批推完 origin / github / gitee 三端，
-三端 `main` 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，本地 HEAD 同 sha，零失败零 WARN，未重复推 gitea(ssh)。
+三端 `main` 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，零失败零 WARN，未重复推 gitea(ssh)。
+**push 后本地另有 4 笔文档/配置 commit 攒批未推**（af88838 / 247044f / 05b0fcf / 42ca098，本地 HEAD=`42ca098`；
+`git branch -vv` 实测领先三端 4）——延续「多提交少推送」纪律，第 6 轮 push 已闭环结论不变。
 （实测：`git ls-remote origin|github|gitee refs/heads/main` 三行同 sha；详见 §0.0.6「下一轮建议①」已闭环标注。）
 
 **2. 第 5 轮——R10 最终态（运行态 + 成果）**：
