@@ -117,7 +117,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + 索引↔市场页派生一致（第 16 段·market 子检查：`make market-check` → 索引仓 `build-market.sh --check`；kore-plugins 缺失 SKIP / 存在但不一致 FAIL，阻断级）**race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 加全仓 -race 后约 162s（+52s；第 20 段 usability WARN 级另计） |
+| `make check` | 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + 索引↔市场页派生一致（第 16 段·market 子检查：`make market-check` → 索引仓 `build-market.sh --check`；kore-plugins 缺失 SKIP / 存在但不一致 FAIL，阻断级）+ **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 加全仓 -race 后约 162s（+52s；第 20 段 usability WARN 级另计） |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
