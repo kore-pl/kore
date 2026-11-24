@@ -12,6 +12,19 @@
 #   --config PATH          显式 --config（默认 <install-root>/config/config.yaml，存在才写进 ExecStart）
 #   --name NAME            unit 名（默认 kore）
 #   --force                跳过"用户级实例仍在运行"的阻断（不会替你停它，需另按提示操作）
+#   --file-write-allow-dirs LIST
+#                          受控写证书/口令目录白名单（写进 unit 的
+#                          Environment=KORE_FILE_WRITE_ALLOW_DIRS；LIST 用 : 分隔绝对路径）。
+#                          默认 <install-root>/data/ssl/；也可用环境变量
+#                          KORE_FILE_WRITE_ALLOW_DIRS 设（命令行优先）。显式值原样写入，
+#                          不再追加默认值；非法值（相对路径 / .. 段 / 空白引号反斜杠 /
+#                          空条目 / 空列表）直接拒绝，exit 1。
+#
+# 受控写白名单（ADR-0052 K3；装完 SSL 站点能否成功的关键）:
+#   受控文件写里 ssl_certificate* / auth_basic_user_file 的目录前缀白名单**默认空 =
+#   一律拒绝**（fail-closed）。不注入这一行，装出来的系统服务会让所有带证书的 vhost
+#   配置失败——不是"少一个可选配置"，是"装完 SSL 全失败"。值必须与 ssl 插件实际
+#   证书目录一致；改它 = 调整 root 写面，不是普通配置项。
 #
 # 退出码: 0 成功/已最新 / 1 参数或环境错误 / 3 需要 root / 4 检测到用户级实例在跑
 #
@@ -40,6 +53,15 @@ INSTALL_ROOT=""
 CONFIG=""
 FORCE=0
 MODE="install"
+# ALLOW_DIRS_OVERRIDE 是「用户显式指定」的白名单（flag 或环境变量），空 = 用默认值。
+ALLOW_DIRS_OVERRIDE="${KORE_FILE_WRITE_ALLOW_DIRS:-}"
+# FILE_WRITE_ALLOW_DIRS 是最终写进 unit 的值，由 resolve_allow_dirs 解析。
+FILE_WRITE_ALLOW_DIRS=""
+
+# header_usage 打印脚本头部的注释块（到第一处非注释行为止）。不用固定行号 range：
+# 头部每加一行说明就会与 `sed -n '2,26p'` 漂移，help 输出比脚本内容旧是文档事故。
+# 必须定义在参数循环之前——`-h` 在循环里就要用到它。
+header_usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,7 +76,9 @@ while [ $# -gt 0 ]; do
     --config=*) CONFIG="${1#--config=}" ;;
     --name)    shift; UNIT_NAME="${1:-}" ;;
     --name=*)  UNIT_NAME="${1#--name=}" ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    --file-write-allow-dirs) shift; ALLOW_DIRS_OVERRIDE="${1:-}" ;;
+    --file-write-allow-dirs=*) ALLOW_DIRS_OVERRIDE="${1#--file-write-allow-dirs=}" ;;
+    -h|--help) header_usage; exit 0 ;;
     *) echo "[FAIL] 未知参数: $1" >&2; exit 1 ;;
   esac
   shift
@@ -85,6 +109,47 @@ resolve_paths() {
   fi
 }
 
+# ---------- 受控写白名单（ADR-0052；默认 fail-closed） ----------
+#
+# resolve_allow_dirs / validate_allow_dirs 与 scripts/install-root-once.sh 的同名函数
+# **口径逐字一致**（那里是单真源，改语义必须两边同时改；提取成公共库需要新增
+# scripts/lib/*.sh，超出本脚本的写域，已在交付回报里记为后续收敛项）。
+# 差异只有默认值来源：这里的安装根来自 --install-root / --bin 推导，那里是 --install-root。
+
+# resolve_allow_dirs 解析最终写进 unit 的白名单：用户显式值优先，否则 <install>/data/ssl/。
+resolve_allow_dirs() {
+  if [ -n "$ALLOW_DIRS_OVERRIDE" ]; then
+    FILE_WRITE_ALLOW_DIRS="$ALLOW_DIRS_OVERRIDE"
+  else
+    FILE_WRITE_ALLOW_DIRS="$INSTALL_ROOT/data/ssl/"
+  fi
+}
+
+# validate_allow_dirs 在写 unit 前做**最小但必要**的形状校验：写进去的值必须能被内核的
+# 注入 helper 接受，否则会出现"unit 看着有注入、实际全被逐条丢弃"的静默 fail-open 假象。
+# 规则与 helper 同口径（绝对路径 / 无 .. 段 / 无空白引号反斜杠），另外拒绝空列表——
+# 显式清空等于关掉白名单，那是安全边界调整，不该由安装脚本顺手做。
+validate_allow_dirs() {
+  local list="$1" entry
+  if [ -z "$list" ]; then
+    echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 不能为空（显式清空等于关闭受控写证书白名单）" >&2
+    return 1
+  fi
+  case "$list" in
+    *[\"\\[:space:]]*) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 含空白/引号/反斜杠（unit Environment= 会被截断）: $list" >&2; return 1 ;;
+  esac
+  # 用 here-doc + tr 切分（不用未引用的 $list 展开）：目录名里的 * ? [ 不该被 shell 当通配
+  # 展开成别的路径，否则校验看的是另一组条目。
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || { echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 含空条目（连续的 : ）: $list" >&2; return 1; }
+    case "$entry" in /*) ;; *) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 条目必须是绝对路径: $entry" >&2; return 1 ;; esac
+    case "/$entry/" in */../*) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 条目不得含 .. 段: $entry" >&2; return 1 ;; esac
+  done <<EOF
+$(printf '%s' "$list" | tr ':' '\n')
+EOF
+  return 0
+}
+
 render_unit() {
   cat <<UNIT
 # $UNIT_PATH — 由 scripts/install-system-service.sh 生成（ADR-0042 方案 B）
@@ -103,6 +168,9 @@ User=root
 # 内核需要 root；插件仍由 supervisor 降到 kore-<id>（G-04 / ADR-0018 不变）。
 NoNewPrivileges=false
 Environment=KORE_HOME=$INSTALL_ROOT
+# 受控文件写的证书/口令目录白名单（ADR-0052 fail-closed）：未注入 = ssl_certificate* 一律拒绝。
+# 值必须与 ssl 插件实际证书目录一致；改这里 = 调整 root 写面，不是普通配置项。
+Environment=KORE_FILE_WRITE_ALLOW_DIRS=$FILE_WRITE_ALLOW_DIRS
 ExecStart=$BIN serve${CONFIG:+ --config $CONFIG}
 Restart=on-failure
 RestartSec=2
@@ -119,6 +187,10 @@ UNIT
 }
 
 resolve_paths
+# 白名单先解析并校验，再谈写 unit / dry-run 打印：非法值必须在这里就 exit 1，
+# 不允许"渲染出一个看着有注入、内核实际全丢弃"的 unit。
+resolve_allow_dirs
+validate_allow_dirs "$FILE_WRITE_ALLOW_DIRS" || exit 1
 if [ ! -x "$BIN" ]; then
   echo "[FAIL] kored 不可执行: $BIN（先 make build 或用 --bin 指定）" >&2
   exit 1
@@ -139,6 +211,7 @@ case "$MODE" in
     echo "  unit 文件 : $UNIT_PATH（ADR-0023 §3.5 豁免 #1）"
     echo "  ExecStart : $BIN serve${CONFIG:+ --config $CONFIG}"
     echo "  KORE_HOME : $INSTALL_ROOT"
+    echo "  受控写白名单: $FILE_WRITE_ALLOW_DIRS（ADR-0052 fail-closed；默认 <install-root>/data/ssl/）"
     echo "  运行身份  : root（uid=0；特权动作不经 polkit 授权）"
     echo "  状态/日志 : 全部在 $INSTALL_ROOT 内（不新增零侵入豁免）"
     if user_unit_active; then
