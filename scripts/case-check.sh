@@ -141,8 +141,27 @@ fi
 
 # ---------------------------------------------------------------- 5/5 文档 GitHub URL owner
 section "5/5 文档 GitHub URL owner 段（*.md 内 github.com/<owner> 全小写）"
-# 字符类含 `/`：先抓完整 URL 路径，再取第一段当 owner（只抓 owner 会把所有仓库合并成一条）。
-URLS="$(find . -type f -name '*.md' -not -path './.git/*' -not -path './docs/DECISIONS/*' -not -path './.agents/LOG/*' -print0 2>/dev/null | xargs -0 -r grep -hoI 'github\.com/[A-Za-z0-9._/-]*' 2>/dev/null | sort -u || true)"
+# 扫描范围 = 本仓受版本控制的 *.md（git ls-files），不是 `find .`。理由（2026-11-24 实测）：
+# `find .` 会扫进 gitignored 的第三方产物——`web/node_modules/tslib/README.md` 里有 4 条
+# `github.com/Microsoft/TypeScript/...`，那是上游包的 README，不随本仓发布、改它下次 npm
+# install 就还原，且干净 clone 上根本不存在 → 用 find 会让门禁结果依赖「本机装没装前端依赖」，
+# 同一个 commit 在 CI 与开发机可能一绿一黄（非确定性门禁）。判据本身不放宽：本仓自己写的
+# 每一份受控 *.md 仍逐条校验，URL owner 大小写不符合照样 WARN。
+# 排除项与 docs-check 口径一致：冻结证据 `.agents/verify/`（按证据规范，不改写历史原文；
+# 其中引用了本期 WARN 原文）、历史指称 `docs/DECISIONS/` 与 `.agents/LOG/`（ADR / 台账里
+# 记录的是彼时的组织名，改写历史即失真）。
+URLS="$(
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    git ls-files -z -- '*.md' 2>/dev/null |
+      grep -zvE '^(docs/DECISIONS/|\.agents/LOG/|\.agents/verify/)' |
+      xargs -0 -r grep -hoI 'github\.com/[A-Za-z0-9._/-]*' 2>/dev/null
+  else
+    # 非 git 环境（打包源码 / git archive 解压目录）退回文件系统扫描，但同样排除第三方产物与冻结证据。
+    find . -type f -name '*.md' -not -path './.git/*' -not -path '*/node_modules/*' \
+      -not -path './docs/DECISIONS/*' -not -path './.agents/LOG/*' -not -path './.agents/verify/*' \
+      -print0 2>/dev/null | xargs -0 -r grep -hoI 'github\.com/[A-Za-z0-9._/-]*' 2>/dev/null
+  fi | sort -u || true
+)"
 if [ -z "$URLS" ]; then
   warn "未发现任何 github.com URL（文档可能缺仓库链接，需人工判；WARN 级不阻断）"
 else
@@ -157,7 +176,7 @@ else
     fi
   done <<< "$URLS"
   if [ -z "$BAD_URLS" ]; then
-    pass "全部 ${URL_N} 个 github.com URL 的 owner 段全小写（已豁免 docs/DECISIONS/ 与 .agents/LOG/ 的历史 URL 指称）"
+    pass "全部 ${URL_N} 个 github.com URL 的 owner 段全小写（范围=受控 *.md；已排除 node_modules 第三方产物、冻结证据 .agents/verify/、历史指称 docs/DECISIONS/ 与 .agents/LOG/）"
   else
     BAD_N="$(printf '%s' "$BAD_URLS" | grep -c . || true)"
     warn "发现 ${BAD_N} 个 URL 的 owner 段含大写（WARN 级；clone 命令会误导对方）"

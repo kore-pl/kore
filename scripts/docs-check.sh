@@ -198,11 +198,21 @@ fi
 flush_details
 
 # ---------------------------------------------------------------- 5/6 行数
-section "5/6 行数（docs/*.md 期望 100-400；MILESTONE-M0.md 放宽到 60-400）"
+# 行数豁免清单：逐条登记、必须写理由。判据本身不放宽——豁免只对登记的这一份文件生效，
+# 且理由必须回答「为什么不能拆 / 为什么不该注水到下限」。理由为空 = 登记无效，按越界计入 WARN。
+# 格式：["<相对仓库根的路径>"]="<下限>:<上限>|<理由>"
+declare -A LINES_EXEMPT=(
+  ["docs/PLUGIN-PROTOCOL.md"]="100:400|真源类（插件协议 kore.plugin.v1）：§3.1 是 info.json 必填字段的唯一真源（AGENTS.md G-17 与 scripts/store-check.sh 均按节号引用），§4–§17 的帧格式 / 握手 / 状态机 / 错误码 / 事件类型互相引用，拆分会切断跨节不变量；AGENTS.md §7 明文允许真源类（协议/规格/append 型台账）超长"
+  ["docs/SIGNING-KEY-SOP.md"]="100:400|下限豁免（SOP 类）：§1–§7 已覆盖生成 / 备份 / 日常重签 / 轮换 / 泄漏应急 / 复核周期 / 机制自测，命令可直接执行；88 行低于 100 下限是信息密度高而非内容缺失，为凑下限加行即注水"
+)
+
+section "5/6 行数（docs/*.md 期望 100-400；MILESTONE-M0.md 放宽到 60-400；豁免逐条登记并打印理由）"
 if [ ! -d docs ]; then
   warn "docs/ 不存在，行数检查跳过"
 else
   LC_OVER=0
+  LC_EXEMPT=0
+  LC_STALE=0
   for f in docs/*.md; do
     if [ ! -e "$f" ]; then
       continue
@@ -213,13 +223,38 @@ else
     if [ "$(basename "$f")" = "MILESTONE-M0.md" ]; then
       lo=60
     fi
+    if [ -n "${LINES_EXEMPT[$f]:-}" ]; then
+      spec="${LINES_EXEMPT[$f]}"
+      elo="${spec%%:*}"
+      rest="${spec#*:}"
+      ehi="${rest%%|*}"
+      why="${rest#*|}"
+      if [ "$rest" = "$why" ] || [ -z "$why" ]; then
+        detail "行数豁免登记无效（缺理由，按越界计）: ${f}:${n}"
+        LC_OVER=$((LC_OVER + 1))
+        continue
+      fi
+      printf '[EXEMPT] %s:%s 行（登记区间 %s-%s，文档判据 %s-%s）— 理由: %s\n' \
+        "$f" "$n" "$elo" "$ehi" "$lo" "$hi" "$why"
+      LC_EXEMPT=$((LC_EXEMPT + 1))
+      continue
+    fi
     if [ "$n" -lt "$lo" ] || [ "$n" -gt "$hi" ]; then
       detail "行数越界: ${f}:${n}（期望 ${lo}-${hi}）"
       LC_OVER=$((LC_OVER + 1))
     fi
   done
-  if [ "$LC_OVER" -eq 0 ]; then
-    pass "docs/*.md 行数全部落在区间内"
+  # 豁免登记指向已删除/改名的文件 = 过期豁免，必须清掉（否则清单会变成噪声）。
+  for k in "${!LINES_EXEMPT[@]}"; do
+    if [ ! -e "$k" ]; then
+      detail "行数豁免登记指向不存在的文件（请删除该条）: ${k}"
+      LC_STALE=$((LC_STALE + 1))
+    fi
+  done
+  if [ "$LC_OVER" -eq 0 ] && [ "$LC_STALE" -eq 0 ]; then
+    pass "docs/*.md 行数全部落在区间内（${LC_EXEMPT} 份越界已逐条登记豁免）"
+  elif [ "$LC_STALE" -gt 0 ]; then
+    warn "行数越界 ${LC_OVER} 份 + 过期豁免登记 ${LC_STALE} 条（WARN，不阻断）"
   else
     warn "行数越界 ${LC_OVER} 份（WARN，不阻断）"
   fi

@@ -15,6 +15,7 @@
 | 加固 SSH（审计 / 封禁 / fail2ban） | [../QUICKSTART.md](../QUICKSTART.md) 跑通后装 `kore-plugin-ssh-guard`（见该插件仓 `README.md`） |
 | 备份与恢复、升级 kore 自身 | [OPERATIONS.md](./OPERATIONS.md) |
 | 发布侧动作（重签索引 / 插件升级 / 回滚） | [RUNBOOK.md](./RUNBOOK.md) |
+| 安装 / 卸载 / 升级 / 忘管理员口令 | [RUNBOOK-INSTALL.md](./RUNBOOK-INSTALL.md) |
 | 排查「为什么点不动 / 提示说不清」 | [USABILITY.md](./USABILITY.md) |
 | 写一个自己的插件（30 分钟跑通 hello） | [PLUGIN-SDK.md](./PLUGIN-SDK.md)、[PLUGIN-PROTOCOL.md](./PLUGIN-PROTOCOL.md) |
 | 理解为什么这么设计 | [DECISIONS/](./DECISIONS/)（ADR 0001–0027 全量） |
@@ -83,7 +84,8 @@
 | --- | --- |
 | [../QUICKSTART.md](../QUICKSTART.md) | 首次安装：构建、最小配置、启动、浏览器访问与登录 |
 | [OPERATIONS.md](./OPERATIONS.md) | 升级 kore 自身、备份与恢复状态（含回滚步骤） |
-| [RUNBOOK.md](./RUNBOOK.md) | 发布侧动作：索引重签、插件升级、新增插件、回滚 |
+| [RUNBOOK.md](./RUNBOOK.md) | 发布侧动作：索引重签、插件升级、新增插件、回滚、root 提权通道 |
+| [RUNBOOK-INSTALL.md](./RUNBOOK-INSTALL.md) | 部署侧动作：安装 / 卸载（零侵入 profile）、升级与门禁、重置管理员口令、配置路径排查 |
 | [USABILITY.md](./USABILITY.md) | 易用性四原则、术语对照与当前违反清单 |
 
 ## 2. 阅读顺序
