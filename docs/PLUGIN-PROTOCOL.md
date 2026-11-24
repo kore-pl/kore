@@ -246,6 +246,8 @@
 
 删除是**第三种**动作形状（exec / file_write 之外的 file_delete），与 `file_write` 对称：只声明类别，不声明目录、不声明文件名，请求只给 `args[0]`。
 
+**SDK 版本要求**：`FileDelete` / `ValidateFileDelete` / `ValidateFileDeleteTarget` / `FileDeletePath` / `ValidateFileDeleteRequest` 自 `pkg/pluginapi/v0.3.0` 起导出（annotated tag `pkg/pluginapi/v0.3.0`）。插件钉的 SDK < v0.3.0 时 `info.json` 里的 `file_delete` 字段在编译期不存在——升级 SDK，不要在插件侧手写一份宽松 schema（那会让声明与内核校验各说各话）。
+
 | 请求字段 | 类型 | 必填 | 约束 |
 | --- | --- | --- | --- |
 | `args[0]` | string | `file_delete` 动作必填 | **单层文件名**，与 `file_write` 同一套规则（`kore-<plugin>-<slug>.conf`、≤128 字符、只允许 `[A-Za-z0-9._-]`、不得含 `..`/路径分隔符/后缀伪装）——**谁能写这个文件就必须谁能删它**，否则 A 插件能删 B 插件的片段 |

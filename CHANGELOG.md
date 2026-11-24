@@ -12,6 +12,7 @@
 ### Added
 
 - **公开 SDK `pkg/pluginapi/v0.2.0`**（annotated tag，2026-11-24）：`file_write` 受控写协议（ADR-0052 K2/K3）——`FileWrite` 声明、`ValidateFileWrite`、`FileWritePrefixClasses`（当前唯一类别 `nginx.conf.d`）、`MaxFileWriteContentBytes`（256 KiB 硬顶）、nginx 片段指令 allowlist（`ValidateNginxVHost`）、`FileWriteOptionsWithDirs`（证书/口令目录注入）；root_action 变更账本字段 `writes_host` / `target` / `purge_op` 与结构化回滚白名单（ADR-0023 §3.4）。**纯加法**：新字段一律 `omitempty`，exec 动作的声明与请求形状不变，旧插件在新内核上行为不变；用 `file_write` 的插件依赖新内核 → 由 `requires_kore >=0.1.1` 表达，不是破坏性协议改动（协议仍是 `kore.plugin.v1`，不需要主版本递增）。
+- **公开 SDK `pkg/pluginapi/v0.3.0`**（annotated tag，2026-11-24）：受控删除协议层（ADR-0053）——`FileDelete{prefix_class}` 声明、`ValidateFileDelete` / `ValidateFileDeleteTarget` / `FileDeletePath` / `ValidateFileDeleteRequest`，以及 `RootAction.FileDelete`（`json:"file_delete,omitempty"`，与 `file_write` 互斥、不得与 `argv` 并存）。**纯加法**：既有 `file_write` / exec 动作的声明与请求形状不变，`file_delete` 缺省时行为与 v0.2.0 完全一致，协议仍是 `kore.plugin.v1`——按 RELEASE.md §1「feat → minor +1」从 0.2.0 升 0.3.0，不是 breaking、不动主版本。用 `file_delete` 的插件依赖含该原语的内核，`requires_kore` 下界须覆盖首个含受控删除的内核版本（`make version-check` 当前只断言 `file_write`，file_delete 断言随 plugin-site 迁移卡同轮补）。
 - **文档基线（M0）**：VISION / ARCHITECTURE / CORE / PLUGIN-PROTOCOL / RESOURCE-MODEL / DATA-MODEL / FRONTEND / SECURITY / ROADMAP / PLAN / GLOSSARY，以及 ADR 决策记录体系。
 - **公开 SDK**：`pkg/pluginapi` 作为独立嵌套 module（根 `go.mod` 用 `replace => ./` 指向），插件只依赖该包。
 - **内核六模块（M1）**：`config` / `store` / `auth` / `httpapi` / `registry` / `supervisor` 落地；`bus` / `installer` / `market` 由后续里程碑补齐。
