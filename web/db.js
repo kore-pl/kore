@@ -2,12 +2,12 @@
    调用形态：POST /api/v1/invoke/<plugin-id>/<plugin-id>.<action>。
    window.KoreDb.render(container) 支持两类实例，按页头的 MySQL / PostgreSQL 切换分派：
      MySQL      → db-mysql.instances / .databases / .query / .status（另有 db-l2 写操作）
-     PostgreSQL → db-postgres.instances / .databases / .query / .status（只读，无 L2）
+     PostgreSQL → db-postgres.instances / .databases / .query / .status + L2 写操作（建库 / 用户与授权）
    协议（PLUGIN-PROTOCOL §7.2.1）：方法段必须带域前缀，裸动词（如 instances）直接
    E_NOTFOUND「未知方法」——本文件所有方法名都经 methodFor() 拼出完整限定名，不做裸名回退。
    空态：PG 的 instances 在 count=0 / 全部不可达时返回 hint，本页原样展示为「怎么办」引导。
-   写操作由插件只读白名单拒绝，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。
-   L2 管理（建库/删库/建用户/授权/导入导出）在 web/db-l2.js，首次执行写操作或展开
+   只读 SQL 由插件白名单拒绝写语句，本页原样展示 E_INVALID 全文，不在浏览器重做 SQL 解析。
+   L2 管理（建库/删库/建用户/授权/改密；MySQL 另有导入导出）在 web/db-l2.js，首次执行写操作或展开
    「用户与授权」时才注入（/assets/db-l2.js）；删库/删用户必须手输名称后才解锁提交。
    易用性（USABILITY 原则 2）：打开页面先问 discover.discover.services，探测到本机
    MySQL/MariaDB 时给「自动检测横幅 + 一键连接」；host/port/user 由检测结果预填并标
@@ -136,6 +136,7 @@
     return n;
   }
   var SYSTEM_DBS = ['mysql', 'information_schema', 'performance_schema', 'sys'];
+  var PG_SYSTEM_DBS = ['postgres', 'template0', 'template1'];
   // ensureL2 只在首次执行写操作或展开用户区时注入 db-l2.js；失败清缓存，允许下次重试。
   function ensureL2() {
     if (window.KoreDbL2) return Promise.resolve(window.KoreDbL2);
@@ -154,7 +155,7 @@
   }
   function l2Ctx() {
     return {
-      instance: S.selected, el: el, add: add, dbs: S.dbs.slice(),
+      instance: S.selected, isPg: isPg(), dbType: S.dbType, el: el, add: add, dbs: S.dbs.slice(),
       selectedDb: S.selectedDb || (S.dbs.length ? S.dbs[0] : ''),
       invoke: invoke,
       errText: function (err) { return err && err.message ? err.message : String(err); },
@@ -541,12 +542,15 @@
       add(main, el('span', 'db-db-op', tr('db.db.showTables', 'SHOW TABLES')));
       on(main, function () { useDb(name); });
       var ops = add(row, el('div', 'db-row-ops'));
-      add(ops, l2Btn(tr('db.action.export', '导出'), function () {
-        withL2(function (mod, ctx) { mod.openExport(ctx, name); });
-      }));
-      // 系统库行不给删除入口：后端对 mysql / information_schema / performance_schema / sys
-      // 在任何 confirm 下都返回 E_UNAUTHORIZED，前端先按名单隐藏，避免留一条必然失败的路径。
-      if (SYSTEM_DBS.indexOf(name) < 0) {
+      if (!isPg()) { // export 是 db-mysql 专属：PG info.json 无该方法，不给必然失败的入口
+        add(ops, l2Btn(tr('db.action.export', '导出'), function () {
+          withL2(function (mod, ctx) { mod.openExport(ctx, name); });
+        }));
+      }
+      // 系统库行不给删除入口：后端对各自的系统库在任何 confirm 下都返回 E_UNAUTHORIZED，
+      // 前端先按域名单隐藏，避免留一条必然失败的路径（PG: postgres/template0/template1）。
+      var systemDbs = isPg() ? PG_SYSTEM_DBS : SYSTEM_DBS;
+      if (systemDbs.indexOf(name) < 0) {
         add(ops, l2Btn(tr('db.action.drop', '删除'), function () {
           withL2(function (mod, ctx) { mod.confirmDropDb(ctx, name); });
         }));
@@ -776,10 +780,11 @@
     S.dbCount = add(dbHead, el('span', 'panel-meta', ''));
     // 工具栏单独成行：库面板在桌面端只有 260px，塞进 panel-head 会把标题挤成竖排。
     var headOps = add(dbPanel, el('div', 'db-toolbar'));
+    // 新建数据库两域都可用（db-l2.js 的 createDatabase 已按域拼方法名）；导入是 db-mysql 专属。
+    headOps.appendChild(l2Btn(tr('db.action.createDb', '新建数据库'), function () {
+      withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
+    }));
     if (!isPg()) {
-      headOps.appendChild(l2Btn(tr('db.action.createDb', '新建数据库'), function () {
-        withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
-      }));
       headOps.appendChild(l2Btn(tr('db.action.import', '导入'), function () {
         withL2(function (mod, ctx) { mod.openImport(ctx); });
       }));
@@ -794,7 +799,7 @@
       : '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
     if (isPg()) {
       add(dbPanel, el('p', 'db-pg-note',
-        'PostgreSQL 前端本版只读：连接探测、库列表与只读 SQL；建库 / 建用户 / 导入导出不在本版本范围。'));
+        '写操作已开放（建库 / 用户与授权）；SQL 控制台仍只读，导入导出为 MySQL 专属。'));
     }
     sysToggle.addEventListener('change', function () {
       S.includeSystem = sysBox.checked;
@@ -845,21 +850,20 @@
       });
       paintSlowlog();
     }
-    // 用户管理放在折叠区：账号列表要额外查 mysql.user，不展开就不发这次查询。PG 无 L2，不渲染。
-    if (!isPg()) {
-      var users = add(host, el('details', 'panel db-l2-panel'));
-      var sum = add(users, el('summary', 'db-l2-summary'));
-      add(sum, el('span', 'panel-title', tr('db.panel.users', '用户与授权')));
-      add(sum, el('span', 'panel-meta', tr('db.panel.usersMeta', '创建账号 · 授权 · 删除')));
-      S.l2UsersHost = add(users, el('div', 'db-l2-users'));
-      users.addEventListener('toggle', function () {
-        if (!users.open || !S.l2UsersHost) return;
-        withL2(function (mod, ctx) {
-          if (S.l2UsersHandle) S.l2UsersHandle.destroy();
-          S.l2UsersHandle = mod.mountUsers(ctx, S.l2UsersHost);
-        });
+    // 用户管理放在折叠区：账号列表要额外查账号表，不展开就不发这次查询。
+    // MySQL 查 mysql.user，PG 查 pg_roles；建用户 / 授权 / 改密 / 删除两域都已接好。
+    var users = add(host, el('details', 'panel db-l2-panel'));
+    var sum = add(users, el('summary', 'db-l2-summary'));
+    add(sum, el('span', 'panel-title', tr('db.panel.users', '用户与授权')));
+    add(sum, el('span', 'panel-meta', tr('db.panel.usersMeta', '创建账号 · 授权 · 删除')));
+    S.l2UsersHost = add(users, el('div', 'db-l2-users'));
+    users.addEventListener('toggle', function () {
+      if (!users.open || !S.l2UsersHost) return;
+      withL2(function (mod, ctx) {
+        if (S.l2UsersHandle) S.l2UsersHandle.destroy();
+        S.l2UsersHandle = mod.mountUsers(ctx, S.l2UsersHost);
       });
-    }
+    });
   }
   function selectInstance(name) {
     if (!name || S.selected === name) return;
