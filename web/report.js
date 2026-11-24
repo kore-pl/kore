@@ -608,7 +608,7 @@
       var table = add(box, el('table'));
       var thead = add(table, el('thead')), tr = add(thead, el('tr'));
       headers.forEach(function (h) { add(tr, el('th', null, h)); });
-      var tbody = add(table, 'tbody');
+      var tbody = add(table, el('tbody'));
       htmlRows.forEach(function (cells) {
         var r = add(tbody, el('tr'));
         cells.forEach(function (c) { add(r, el('td', null, c === null || c === undefined || c === '' ? '—' : c)); });
@@ -729,7 +729,7 @@
     if (S.data) {
       add(ph, el('span', 'rp-msg', S.data.meta.generatedLocal + ' · ' + S.data.meta.rangeLabel));
     }
-    var body = add(preview, 'rp-preview-body');
+    var body = add(preview, el('div', 'rp-preview-body'));
     if (!S.data) {
       add(body, el('div', 'rp-empty', '选择时间范围与数据项，点「生成报告」后在这里预览，再下载 Markdown 或可打印 HTML。'));
     } else {
@@ -799,6 +799,7 @@
     _test: { summarizeHistory: summarizeHistory, summarizeAlerts: summarizeAlerts,
       summarizePlugins: summarizePlugins, summarizeBackups: summarizeBackups,
       summarizeAudit: summarizeAudit, buildMarkdown: buildMarkdown, buildHtml: buildHtml,
+      sectionBlock: sectionBlock, previewRows: previewRows, paint: paint,
       RANGES: RANGES, SOURCES: SOURCES, EP: EP }
   };
 })();
