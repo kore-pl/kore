@@ -19,7 +19,7 @@
   var FALLBACK_NOTE = '当前使用内核基础指标，安装 monitor 插件可获得磁盘/网络/温度详情';
   /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。 */
   var THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
-  /* 三条曲线：CPU / 内存 / 负载（负载不是百分比，按核数换算参照线）。
+  /* 四条曲线：CPU / 内存 / 负载 / 磁盘（负载不是百分比，按核数换算参照线）。
      ink 是主题色变量名（布局时只读一次 computedStyle），thr 指明参照线来源。 */
   var SERIES = [
     { key: 'cpu_percent', label: 'CPU', unit: '%', swatch: 'mon-swatch-cpu', ink: '--kore-info',
@@ -27,7 +27,10 @@
     { key: 'memory_percent', label: '内存', unit: '%', swatch: 'mon-swatch-mem', ink: '--kore-success',
       pct: true, thr: 'memory_percent' },
     { key: 'load1', label: '负载', unit: '', swatch: 'mon-swatch-load', ink: '--kore-text-3',
-      pct: false, thr: 'cores' }
+      pct: false, thr: 'cores' },
+    /* 后端 history 一直返回 disk_percent，早先没画；磁盘占用是时序量，补成第 4 条曲线。 */
+    { key: 'disk_percent', label: '磁盘', unit: '%', swatch: 'mon-swatch-disk', ink: '--kore-warning',
+      pct: true, thr: 'disk_percent' }
   ];
   /* 单序列点数硬上限；超出尾部截断（保留最近 MAX_POINTS 点），后端预聚合待办。 */
   var MAX_POINTS = 1000;
@@ -100,6 +103,7 @@
     '.mon-swatch-cpu{background:var(--kore-info)}',
     '.mon-swatch-mem{background:var(--kore-success)}',
     '.mon-swatch-load{background:var(--kore-text-3)}',
+    '.mon-swatch-disk{background:var(--kore-warning)}',
     '.mon-legend-note{color:var(--kore-text-3)}',
     '.mon-alert-body{padding:8px 16px 12px;display:flex;flex-direction:column;gap:8px}',
     '.mon-alert{padding:10px 12px;border-left:3px solid var(--kore-warning);background:var(--kore-bg-0);border-radius:4px}',
@@ -258,7 +262,7 @@
     });
   }
 
-  /* ---------- 自研 Canvas 时序曲线（零图表库 / 零动画 / 零 hover / 零 tooltip） ----------
+  /* ---------- 自研 Canvas 时序曲线（零图表库 / 零动画 / 有 hover+tap 读数面板） ----------
      数据契约：monitor.system.history 是**列式数组**——history.timestamps（ms，单调递增）
      与 history.cpu_percent / history.memory_percent / history.load1 等长；
      cpu/memory 为 0–100 的百分比，load1 是核归一负载（>100 也合法，纵轴按核数放大）。
