@@ -314,17 +314,90 @@
     return wrap;
   }
 
+  // ── 顶栏状态指示器（R24）：图标 + 四态色 + tip，替代旧「绿点 + 文字」 ──
+  // 语义图标 20×20 currentColor，与 shell.js ICONS 同一套视觉语言，不引图标库、不发请求。
+  var STATUS_ICON = {
+    health: ['M3 11h3l2-4 3 7 2.2-4.5 1.3 1.5H17'], // 心电脉冲折线（健康检查）
+    info: ['M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14', 'M10 9v5', 'M10 6.4h.01'] // 圆圈 i（系统信息）
+  };
+  // 四态 → 颜色令牌：正常绿 / 警告黄 / 异常红 / 未知灰。颜色从状态数据取，绝不写死全绿。
+  var STATUS_TONE = { ok: 'var(--kore-success)', warn: 'var(--kore-warning)', fail: 'var(--kore-danger)', unknown: 'var(--kore-text-3)' };
+
+  // tip 浮层：position:fixed 挂 body、z-index 90（高于抽屉/遮罩）、pointer-events:none，
+  // 视口 clamp 防溢出。与 r24-charttip 的 .kore-ui-tip 范式统一，避免两套实现打架。
+  var uiTip = null;
+  function hideUiTip() { if (uiTip) uiTip.style.display = 'none'; }
+  function showUiTip(anchor, text) {
+    if (!uiTip) {
+      uiTip = el('div', 'kore-ui-tip');
+      uiTip.setAttribute('role', 'tooltip');
+      document.body.appendChild(uiTip);
+    }
+    uiTip.textContent = text;
+    uiTip.style.display = 'block';
+    var a = anchor.getBoundingClientRect();
+    var t = uiTip.getBoundingClientRect();
+    var left = a.left + a.width / 2 - t.width / 2;
+    var top = a.bottom + 8;
+    left = Math.max(8, Math.min(left, window.innerWidth - t.width - 8));
+    if (top + t.height > window.innerHeight - 8) top = a.top - t.height - 8;
+    uiTip.style.left = left + 'px';
+    uiTip.style.top = top + 'px';
+  }
+  if (document.addEventListener) document.addEventListener('click', hideUiTip);
+
+  // 顶栏单个状态图标：颜色 = 状态映射，右下角小圆点作第二编码通道，aria-label 保留文本通道。
+  function statusIcon(kind, st, tipText) {
+    var tone = STATUS_TONE[st.cls] || STATUS_TONE.unknown;
+    var btn = el('span', 'status-ico status-ico-' + (st.cls || 'unknown'));
+    btn.setAttribute('tabindex', '0');
+    btn.setAttribute('role', 'img');
+    btn.setAttribute('aria-label', tipText);
+    btn.style.color = tone;
+    btn.appendChild(iconSvg(STATUS_ICON[kind]));
+    var pip = el('span', 'status-ico-pip');
+    pip.style.background = tone;
+    btn.appendChild(pip);
+    var show = function () { showUiTip(btn, tipText); };
+    // 触摸 tap 会合成 mouseenter→mouseleave；短时间内忽略 mouseleave，
+    // 保证手机上 tip 点出后保持可见（FRONTEND §13 判据 11）。
+    var touchLock = 0;
+    btn.addEventListener('mouseenter', show);
+    btn.addEventListener('mouseleave', function () { if (Date.now() - touchLock > 900) hideUiTip(); });
+    btn.addEventListener('focus', show);
+    btn.addEventListener('blur', function () { if (Date.now() - touchLock > 900) hideUiTip(); });
+    btn.addEventListener('click', function (e) { e.stopPropagation(); show(); }); // 手机 tap + 桌面点击都可显示
+    btn.addEventListener('pointerdown', function (e) { if (e.pointerType === 'touch') { touchLock = Date.now(); show(); } });
+    return btn;
+  }
+
+  // tip 文案：状态名 + 关键数值，人话，零内部术语（G-33 A4）。
+  function healthTip(st) {
+    if (st.cls === 'ok') return '健康检查：正常 · 服务响应正常';
+    if (st.cls === 'fail') return '健康检查：' + st.text + ' · 服务未响应，请稍后重试';
+    return '健康检查：' + st.text + ' · 正在检测或暂未取得结果';
+  }
+  function infoTip(st) {
+    var data = state.info || {};
+    var ver = data.version ? 'kored ' + data.version : '';
+    var cnt = state.plugins && state.plugins.length ? state.plugins.length + ' 个插件' : '';
+    var detail = [ver, cnt].filter(Boolean).join(' · ');
+    if (st.cls === 'ok') return '系统信息：正常' + (detail ? ' · ' + detail : ' · 信息已读取');
+    return '系统信息：' + st.text + (detail ? ' · ' + detail : ' · 暂未取得完整信息');
+  }
+
   function healthState() {
     var h = state.health;
-    if (!h) return { cls: 'warn', text: '检测中' };
+    if (!h) return { cls: 'unknown', text: '检测中' };
     if (!h.reached) return { cls: 'fail', text: '不可达' };
     if (!h.res.ok) return { cls: 'fail', text: '异常' };
     return { cls: 'ok', text: '正常' };
   }
 
   function infoState() {
-    if (!state.authed) return { cls: 'warn', text: '未登录' };
-    if (!state.info) return { cls: 'warn', text: '检测中' };
+    if (!state.authed) return { cls: 'unknown', text: '未登录' };
+    if (!state.info) return { cls: 'unknown', text: '检测中' };
+    if (Array.isArray(state.info.warnings) && state.info.warnings.length) return { cls: 'warn', text: '部分受限' };
     return { cls: 'ok', text: '正常' };
   }
 
@@ -532,10 +605,10 @@
     }
 
     var conn = el('div', 'conn');
-    conn.appendChild(statusTag(healthState()));
-    conn.appendChild(el('span', 'conn-label', '健康检查'));
-    conn.appendChild(statusTag(infoState()));
-    conn.appendChild(el('span', 'conn-label', '系统信息'));
+    var hs = healthState();
+    var is = infoState();
+    conn.appendChild(statusIcon('health', hs, healthTip(hs)));
+    conn.appendChild(statusIcon('info', is, infoTip(is)));
 
     if (state.authed) {
       // 设置入口（一级 · 可逆）：顶栏 → 设置 → 账户与安全 → 退出，2 次点击仍可达退出。
@@ -1639,6 +1712,20 @@
         '.topbar-settings:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
         '.topbar-settings:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}' +
         '@media (max-width:639px){.topbar-settings{min-width:var(--kore-touch);min-height:var(--kore-touch)}}',
+      // 顶栏状态指示器（R24）：图标 + 四态色 + tip；颜色由 statusIcon 内联 style.color 按状态映射。
+      '.status-ico{position:relative;display:inline-flex;align-items:center;justify-content:center;' +
+        'width:32px;height:32px;flex:0 0 auto;cursor:help;border-radius:var(--kore-radius-control)}' +
+        '.status-ico svg{width:18px;height:18px;pointer-events:none}' +
+        '.status-ico-pip{position:absolute;right:3px;bottom:3px;width:6px;height:6px;border-radius:50%;' +
+        'box-shadow:0 0 0 2px var(--kore-bg-1)}' +
+        '.status-ico:hover{background:var(--kore-bg-2)}' +
+        '.status-ico:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}' +
+        '.kore-ui-tip{position:fixed;z-index:90;pointer-events:none;display:none;max-width:280px;' +
+        'padding:6px 10px;border-radius:var(--kore-radius-control);border:1px solid var(--kore-border-1);' +
+        'background:var(--kore-bg-2);color:var(--kore-text-1);box-shadow:var(--kore-shadow);' +
+        'font-size:var(--kore-font-12);line-height:1.5;white-space:nowrap}' +
+        '@media (max-width:639px){.status-ico{min-width:var(--kore-touch);min-height:var(--kore-touch)}' +
+        '.kore-ui-tip{white-space:normal;max-width:calc(100vw - 16px)}}',
       '.ov-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-3);' +
         'margin-bottom:var(--kore-space-4)}',
       '.ov-note{margin:0 0 var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-3);' +
