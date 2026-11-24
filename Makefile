@@ -482,6 +482,13 @@ check: ## 聚合门禁（19 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[RUN ] 19/19 全仓 -race（阻断级：GOWORK=off CGO_ENABLED=1 go test -race -count=1 ./... 固定面必绿；kore 本仓无 tests/boundary → 第 18 段对本仓恒 SKIP，本段补位；实测约 52s，cmd/kored 主导）"; \
 	if ! bash scripts/race-full-check.sh; then fail=1; fi; \
 	echo ""; \
+	echo "[RUN ] 20/20 usability-check（G-33 产品可用性：A1 写操作零参数 in-process 真跑 + A2 presets + A3 invalid 文案 + A4 内部术语 + A5 空状态/跳转 + A6 一级菜单 ≤10 + A7 主流程 ≤3 点击；WARN 级：存量待裁决清单见 scripts/usability-pending.txt）"; \
+	usability_out=$$(bash scripts/usability-check.sh 2>&1 || true); printf '%s\n' "$$usability_out"; \
+	usability_fail=$$(printf '%s\n' "$$usability_out" | grep -c '^\[FAIL\]' || true); usability_fail=$${usability_fail:-0}; \
+	if [ "$$usability_fail" -gt 0 ]; then \
+	  echo "[WARN] usability-check 有 $$usability_fail 处新违规（WARN 级不阻断：判据未放宽，单跑 bash scripts/usability-check.sh 为 exit 1；转阻断条件见 .agents/QUALITY-GATES.md §G-33）"; \
+	fi; \
+	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"
 

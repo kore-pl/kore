@@ -1,0 +1,83 @@
+# G-33 产品可用性门禁的存量待裁决清单（不是放行名单）
+#
+# 判据真源：scripts/usability-check.sh 顶部 + .agents/QUALITY-GATES.md §G-33
+# 分层：在这里 → [WARN] 不阻断 make check；不在清单里（新增违规） → [FAIL]。
+# 格式：
+#   `A1 ssl`      该目标全部违规豁免（单条判据用）
+#   `A3 file 97`  只豁免按序前 N 条；第 N+1 条起仍 FAIL（防"登记一次永久免疫"）
+# 一处修好就删/下调对应行；条目消失或条数下降会被门禁 WARN 提示——移出清单即转硬判据。
+#
+# 2026-11-24 首次基线（4400601 判据落地时实测）：
+#   A1 23/24（仅 backup 有 TestCreateZeroParamsUsesDefaultPreset；门禁真跑 PASS）
+#   A2 24/24（24 个 info.json 全无 presets 字段——审计预估「若干」实为全量，已在 QUALITY-GATES 更正）
+#   A3 474 条（多为 parse/校验错误只写现象、没写"怎么办"）
+#   A4 4 处（alerts.js 2 / app.js 1 / db-l2.js 1；db.js / redis.js 已被在途卡片修掉，条目删除即是转硬）
+#   A5 / A6 / A7 未登记：一级菜单注册表正在 hub 重构中（SHELL_ROUTES 已移走），
+#     门禁以 A6 `web/?#registry` 显式 FAIL 提示——重构落地后按新注册表重新基线，
+#     不允许用清单掩盖「找不到注册表」。
+# 修插件/视图是其他卡；本清单只保证「现在挡住新增，存量不一次性打红」。
+
+A1 app-deploy
+A1 container
+A1 cron
+A1 db-mysql
+A1 db-postgres
+A1 discover
+A1 dns
+A1 echo
+A1 file
+A1 firewall
+A1 integrity
+A1 logs
+A1 monitor
+A1 process
+A1 redis
+A1 runtime-node
+A1 runtime-php
+A1 runtime-python
+A1 site
+A1 ssh-guard
+A1 ssl
+A1 terminal
+A1 waf
+A2 app-deploy
+A2 backup
+A2 container
+A2 cron
+A2 db-mysql
+A2 db-postgres
+A2 discover
+A2 dns
+A2 echo
+A2 file
+A2 firewall
+A2 integrity
+A2 logs
+A2 monitor
+A2 process
+A2 redis
+A2 runtime-node
+A2 runtime-php
+A2 runtime-python
+A2 site
+A2 ssh-guard
+A2 ssl
+A2 terminal
+A2 waf
+A3 app-deploy 19
+A3 backup 82
+A3 container 7
+A3 db-mysql 56
+A3 db-postgres 37
+A3 discover 2
+A3 file 97
+A3 firewall 11
+A3 integrity 28
+A3 process 12
+A3 redis 40
+A3 runtime-node 14
+A3 runtime-php 15
+A3 runtime-python 31
+A3 waf 23
+A4 web/alerts.js 2
+A4 web/app.js 1

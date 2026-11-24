@@ -24,7 +24,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 组件图、进程模型、插件状态机、故障域。
 3. 本领域文档：内核 [docs/CORE.md](docs/CORE.md)｜协议 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md)｜资源 [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md)｜数据 [docs/DATA-MODEL.md](docs/DATA-MODEL.md)｜前端 [docs/FRONTEND.md](docs/FRONTEND.md)｜安全 [docs/SECURITY.md](docs/SECURITY.md)｜决策 [docs/DECISIONS/](docs/DECISIONS/)。
 4. [.agents/WORKFLOW.md](.agents/WORKFLOW.md) — Kore Loop 七阶段门禁、讨论协议、任务板状态机、上下文交接。
-5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30/G-31/G-32 门禁命令、执行者、分层与证据格式。
+5. [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33 门禁命令、执行者、分层与证据格式。
 6. **贡献与治理**：[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — 开源化政策（MIT）、PR / Issue 流程与评审要求。
 7. **安全披露**：[SECURITY.md](SECURITY.md)（根，披露政策）vs [docs/SECURITY.md](docs/SECURITY.md)（设计）——**两者不要混**。
 
@@ -66,6 +66,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | G-30 | 明文凭据：`docs/` 与 `.agents/verify/` 不得出现明文口令（`MYSQL_ROOT_PASSWORD=` / `MYSQL_PWD=` / `REDIS_PASSWORD=` / `REDISCLI_AUTH=` / `KORE_MYSQL_PASSWORD=` / `ADMIN_PASSWORD=`，以及 JSON 的 `"password"` / `"secret"` / `"token"`）；占位只允许 `***` / `[REDACTED]` / `$VAR` / `<placeholder>` / `********` / `...` | 明文凭据入库（2026-11-23 `round3-live.md` 把 MySQL root 口令写进验收报告并推送公开仓库） | `make secret-check`（第 11 段，阻断级）；命中后把值换成 `***`，禁止删证据 |
 | G-31 | **零侵入**：安装目录外只允许 [ADR-0023](docs/DECISIONS/0023-zero-intrusion.md) §3.5 豁免清单的 4 项——systemd unit（`/etc/systemd/system/kore.service` + enable 软链）、插件系统用户 `kore-<id>`、**用户批准的宿主变更**（须有 `<install>/data/changes.jsonl` 清单可回滚）、显式 `make install` 的二进制；**新增任何安装目录外写入必须先改 ADR-0023**，新增路径/用户/unit 一律退回 | 改动退回 | 评审对照 ADR-0023 §3.5；`make zero-intrusion-check`（`make check` 11/17 段，判据见 ADR §3.6） |
 | G-32 | **图表规范**：图表实现（**首选 ECharts5，非唯一 / 非硬指标**）须满足 [FRONTEND](docs/FRONTEND.md) §13 十一条判据（懒加载、实例 ≤12、dispose、100ms 防抖、单图 ≤1000 点、时序 Canvas+采样、静态占比图优先 SVG、**每个数据点 hover/tap 可读且带单位**）；判据是实现无关的工程指标，不判「是否用 ECharts」；换实现见 [ADR-0027](docs/DECISIONS/0027-echarts-chart-standard.md) | 违规图表不得合入 | 评审对照 §13 十一条判据 + `make frontend` 首屏 gzip 不变 + 产物无 `*.map` |
+| G-33 | **产品可用性**：7 条自动判据（A1 写操作零参数 in-process 真跑 / A2 `info.json.presets` / A3 `invalid` 文案 ≥8 字含「请/应/需/例/如」/ A4 用户字符串零内部术语 / A5 视图空状态+跳转 / A6 一级菜单 ≤10 且 store/plugins 不并存 / A7 主流程 ≤3 点击）+ 4 条人工 WARN | 新增违规 FAIL（`make check` 第 20 段暂 WARN 级，判据未放宽） | `bash scripts/usability-check.sh`（`--self-test` 正反例自证；存量清单 `scripts/usability-pending.txt`） |
 
 ## 3. 提交规范
 
@@ -116,7 +117,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（19 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 19 段约 162s（+52s） |
+| `make check` | 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 19 段约 162s（+52s） |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
@@ -134,13 +135,13 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
-> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（19 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
+> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（20 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
 
 ## 6. 细则索引
 
 - [.agents/README.md](.agents/README.md)（体系与反模式）、[.agents/ROLES.md](.agents/ROLES.md)（6 张角色卡 / 冲突仲裁 / 不可兼任）、[.agents/WORKFLOW.md](.agents/WORKFLOW.md)（Kore Loop 七阶段 / 讨论协议 / 状态机）。
 - [.agents/BOARD.md](.agents/BOARD.md) — 任务板字段、状态转移、WIP、变更集登记区、M0 七条轨道快照。
-- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30/G-31/G-32 门禁命令、三层组合、证据格式、M0 跳过规则。
+- [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) — G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33 门禁命令、三层组合、证据格式、M0 跳过规则。
 - [.agents/HANDOFF.md](.agents/HANDOFF.md) — 交接规范：四问 → 文件映射、交接卡片六格模板、完成判定与证据硬约束（会话结论不落文件即视为不存在）。
 - [.agents/JOURNAL.md](.agents/JOURNAL.md)（复盘模板 / 里程碑记录 / 反模式）与 [.agents/LOG/](.agents/LOG/)（裁决 / 派发 / 会话台账）——依次回答"教训 / 状态 / 判断"。
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md)、[.github/](.github/) — 贡献流程 / 行为准则 / MIT 开源政策 / CI 与模板；[SECURITY.md](SECURITY.md)（根，披露政策）与 [docs/SECURITY.md](docs/SECURITY.md)（安全设计）**两者不要混**。

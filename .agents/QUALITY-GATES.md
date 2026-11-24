@@ -4,7 +4,7 @@
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race））
+## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race）、§7（第 20 段 G-33））
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -31,6 +31,7 @@
 | G-29 | 运行态写边界 | 触发：任务涉及 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` / `bin/kored` 或任何被运行中 `kored` 持有的文件（`git status` 看不出，untracked）。取证：① `curl -s localhost:8787/api/v1/system/info \| jq .paths.index_dir` 必须**逐字等于**配置里的 `kore-plugins/index`（不得指向 `.kore-local-state/` 下任何索引快照）② 商店 `/api/v1/store/plugins` 返回的插件版本必须等于 `kore-plugins/index/plugins.json` 里的版本 ③ 验收报告必须显式声明"本轮是否改动过主实例的运行态配置"，改过则附回切 + 重启 + 复核三行证据 ④ 测试要"不同索引 / 配置 / 状态"时附隔离实例命令（独立 `--config` + state/run/log 落 `/tmp`）⑤ 运行态资产必须进 `.gitignore`——`.kore-local*` 覆盖 yaml/state/run/log/index 全系列，`git check-ignore` 对 `.kore-local.yaml` / `.kore-local-state/` / `.kore-local-run/` 必须全部命中（否则一次 `git add .` 就把 123 MiB 的 state.db 带进提交） | ①② 必须相等（`paths.index_dir` == `kore-plugins/index`、商店版本 == 索引版本）；③ 声明齐全且与事实一致；④ 有隔离实例证据或写明"未触碰主实例"。防的事故：2026-11-23 为测试把 `index_dir` 指向 `signed-index` 快照（04:53:06），恰逢另一轮重签完成（04:53:40），04:59:59 回切前 8787 商店把 discover 0.2.0 显示成 0.1.0——配置回写了、主实例读到的仍是旧数据 | 任一不符即判未完成：回切 + 重启 + 复核后再验一次；未回切或只改配置文件不验 `/api/v1/system/info` 的，任务记 BLOCKED，不记 PASS；workaround 无过期条件（"当 X 发生时失效"）的，记 WARN 并要求补写 | implementer 取证 + verifier 独立复跑 | 检查点（运行态变更） |
 | G-30 | 明文凭据入库 | 触发：任何写 `docs/` 或 `.agents/verify/` 的提交 / 验收报告；取证：`make secret-check`，扫描 `MYSQL_ROOT_PASSWORD=` / `MYSQL_PWD=` / `REDIS_PASSWORD=` / `REDISCLI_AUTH=` / `KORE_MYSQL_PASSWORD=` / `KORE_REDIS_PASSWORD=` / `ADMIN_PASSWORD=` 以及 JSON 的 `"password"` / `"secret"` / `"token"` 键 | 非占位值零命中；占位只允许 `***` / `[REDACTED]` / `$VAR` / `<placeholder>` / `********` / `...` / `…`。防的事故：2026-11-23 `.agents/verify/round3-live.md` 把 `common-mysql` 的 root 明文口令写进验收报告并推送公开仓库（`3fa40f2`） | 命中即阻断：把凭据字面量替换为 `***` 后重跑；**禁止**为了让门禁变绿删证据或改判定结论——本门禁扫 `.agents/verify/` 是 §5.6 豁免规则的唯一例外，只许替换凭据字面量 | implementer 自跑 + verifier 复跑 | 检查点 |
 | G-32 | 图表规范（十一条判据） | 评审对照 [docs/FRONTEND.md](../docs/FRONTEND.md) §13 十一条判据；机械可回读项：有数据点的时序 / 柱状图 `grep -rn "tooltip: *{ *show: *false" web/` **零命中**；`make frontend` 首屏 gzip 与改前逐字节一致；`find web/dist -name '*.map'` 为空；**真浏览器复核**（桌面 hover + 手机 390×844 tap 各必须出读数面板，<20 点可见逐点标注） | ① 首屏 `FILES` 不含图表产物、首屏 gzip 不因图表增长；② 图表实例 ≤12 且第 13 个**硬拒绝**（非静默降级）；③ 切走视图 dispose 后实例计数 `=== 0`；④ 单图 ≤1000 点（超出采样）；⑤ 时序用 Canvas / 等效位图 + 采样、静态占比优先 SVG；⑥ 全局 resize 单点 100ms 防抖；⑦ 懒加载、不进首屏；⑧ 不需要的坐标轴 / 装饰性 tooltip / 高亮 / 标记点显式关闭；⑨ 精简配置与可读性不冲突——**读数面板不在精简范围内**；⑩ 短窗口多轮验收（3 轮 × 60s，实例数与 heap 不单调增长）；⑪ **每个数据点可读**：hover 与 tap 都出面板、显示准确数值 + 单位（`12.3 MiB` 不是 `12.3`），面板 `pointer-events:none`，数据点 <20 可直接标注，图注 / `aria-label` 保留区间与最近值 | 缺读数面板、只给取整值、或把 `tooltip` 一刀切关掉 → 返工；拿「库默认支持 tooltip」替代实测 → 同判不通过；首屏 gzip 增长 → 按 G-03 阻断级失败 | implementer 自测 + verifier 按 §13-11 真浏览器复跑 | 检查点（UI 交付） |
+| G-33 | 产品可用性（7 自动 + 4 人工） | `bash scripts/usability-check.sh`（`make check` **第 20 段，WARN 级**；`--self-test` 为正反例自证）：A1 插件仓 `Test.*ZeroParam` in-process 用例并 `go test -run ZeroParam` 真跑；A2 `info.json.presets`；A3 `invalid("...")` 文案；A4 `web/*.js` 用户字符串术语；A5 视图空状态+跳转；A6 `web/app.js` 一级菜单；A7 `web/usability.yaml` 主流程 | 正例 `backup` PASS；四反例（去 presets / message 改纯码 / UI 加「实例」/ 导航 11 项）必须 FAIL；无新增 FAIL | 新增违规修插件/视图，或登记 `scripts/usability-pending.txt` 并写裁决期限；存量条目修好即删（移出清单 = 转硬判据）；`make check` 段内 FAIL 只 WARN 不阻断，脚本单跑 exit 1 | implementer 自跑 + verifier 复跑 | 检查点（UI/插件交付） |
 
 > **F-2 边界（第 17 段 / G13 兼容性，即 G-16 交叉编译门禁的覆盖范围，勿误读）**：`make check` 第 17 段（`make cross-build` 复用 `make cross`）的编译口径自 2026-11-24 起是**全仓**——五个目标下每个**非测试**包都要编译过（`go build ./...`），同时仍产出 `./cmd/kored` 五目标二进制。旧口径只编译 `./cmd/kored` 依赖闭包，只被测试 / 工具 / 未来入口引用、不在该闭包内的包会被漏掉（反例实测见下）。因此「17 段绿」=「全仓非测试包可跨平台 + 主程序可构建」。
 >
@@ -232,7 +233,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **19 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **20 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -250,7 +251,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 19 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 20 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
@@ -259,3 +260,48 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 24 个插件仓 + `kore-plugins` 索引仓**都配 CI**，触发条件与 kore 一致（`push main` + tag `v*` + PR + `workflow_dispatch`）。理由：没有 CI，贡献者无法在 PR 上得到"能否拉取/能否构建"的反馈。发布前门禁仍由发版流程保证：`gofmt -l` + `go vet` + `go test` + `make dist` 两次 sha 一致 + 干净树复现（见 [docs/RELEASE.md](../docs/RELEASE.md)）。
 
 九件套（含 `.github/workflows/ci.yml`）由 `scripts/plugin-oss-sync.sh` 按 `scripts/plugin-templates/` 渲染；`make check` 第 **13 段**（`scripts/plugin-oss-check.sh`）逐仓校验九件套存在、README oss 标记块、ci.yml 为少触发。
+
+## 7. G-33 产品可用性门禁（第 20 段，WARN 级）
+
+> 判据来源：`4400601` 的 24 插件 × 全站页面可用性审计。动机不是「再加一条门禁」，而是
+> **24 个插件全部 `depth_level=production`，用户却连续 13 次反馈产品简陋**——原判据只查边界用例
+> 与故障注入，从不查「零参数能不能用」。G-33 补的是这条断链：**产品可用性也必须是被判据挡住的东西**。
+
+### 7.1 七条自动判据（`scripts/usability-check.sh`）
+
+| 编号 | 判据 | 实现（判据不放宽） |
+| --- | --- | --- |
+| A1 | 写操作零参数不得返回 `E_INVALID`（允许 `E_NEED_ROOT` / `E_UNAVAILABLE` / `E_CONFIRM_REQUIRED`） | 插件仓必须存在 `func Test*ZeroParam` 的 **in-process** 用例（`package main` 的 `dispatch()` 或 `internal/*` 的 `Call()`，fakeExec 级替身，不碰真系统）；门禁 `GOWORK=off go test -run ZeroParam -count=1 ./...` **真跑**，PASS 才算过。只登记不跑 = 不满足 |
+| A2 | `info.json` 必填 `presets`；create 类（`methods` 含 `*.create` / `*.add`）≥1 个预设 | `json` 解析 + `presets` 必须为数组；create 类空数组即违规 |
+| A3 | `invalid("...")` 的 message ≥8 字且含「请/应/需/例/如」 | 源码正则取字面量，逐条校验；变量入参无法静态核对，计入 `unverified`（人工 WARN 面） |
+| A4 | 用户可见字符串零内部术语（实例 / 生命周期 / capability / revision） | 扫 `web/*.js` 与插件 `web/*.js|*.html` 的字符串字面量；HTML 按可见文本行（整行注释不计） |
+| A5 | 每个视图必须有空状态 + 跳转 | 视图集合 = `SHELL_ROUTES` / `HUB_DEFS` 引用到的懒加载模块 + 内联视图；文件须含 `empty-state` 且含 `button(` / `navigate(` / `scrollIntoView` |
+| A6 | 一级菜单 ≤10 且 `store` / `plugins` 不得并存 | 解析 `web/*.js` 的一级路由注册表（`SHELL_ROUTES` / `HUB_DEFS` / `HUB_ROUTES` / `FIRST_LEVEL_ROUTES`，不绑死文件名）；找不到注册表 → 显式 FAIL（不许静默跳过） |
+| A7 | 主流程 ≤3 点击 | `web/usability.yaml` 的 `views.<id>.main_flow` 标注，步数 1–3；缺标注即违规 |
+
+### 7.2 四条人工判据（WARN，不自动判）
+
+1. 抽 3 个错误码看「怎么办」——文案是否给出下一步，而不只是错误码/堆栈。
+2. 小白 60 秒完成——按 `usability.yaml` 标注的路径实测。
+3. 空状态按钮可达——按钮不仅要存在，还要点得动、落到正确视图。
+4. 对标宝塔差距记入 [docs/PLUGIN-MATURITY.md](../docs/PLUGIN-MATURITY.md) §3.5（每条差距带证据与优先级）。
+
+### 7.3 分层上线（不一次打红）
+
+- 存量违规登记在 [scripts/usability-pending.txt](../scripts/usability-pending.txt) → `[WARN]`；
+- **未登记的新违规 → `[FAIL]`**（脚本 exit 1）；`<规则> <目标> <N>` 只豁免前 N 条，第 N+1 条起仍 FAIL；
+- 条目修好即删、条数下降即下调 N；残留条目会被 `[WARN]` 提示——**移出清单 = 转硬判据**；
+- `make check` 第 20 段取 WARN 级（与 store-check 同口径）：打印 FAIL 计数但不阻断，判据本身未放宽；
+  转阻断只需把 Makefile 的 `bash scripts/usability-check.sh` 改成 `if ! bash ...; then fail=1; fi`。
+
+### 7.4 A1 可行性结论（为什么是「每仓 20 行 in-process 测试」而不是内核侧统一跑）
+
+- `pkg/pluginapi/pluginapitest` **只做静态清单自检**（`CheckInfoJSON` / `ValidateInfoFile`：root_actions / method_capabilities / capabilities 的声明一致性），**不启动插件、不执行方法**，不能用来测 A1。
+- 可行路径已实测：插件在 `package main` 内以 `dispatch(request, cfg, logger)` 分发，`*_test.go` 可直接构造 `pluginapi.Request` 调它；`kore-plugin-backup` 的 `internal/backupop/preset_test.go:TestCreateZeroParamsUsesDefaultPreset` 就是范例（门禁 `go test -run ZeroParam` 实测 PASS）。
+- 因此 A1 的判据落在**插件仓**：每仓 20 行 `TestZeroParam`（`NewRuntime(..., fakeExec)` 级替身），门禁只负责发现 + 真跑 + 分层。修插件仓是独立卡，本门禁先把「没有这条测试」变成可见违约。
+
+### 7.5 自证
+
+`bash scripts/usability-check.sh --self-test` 内置 5 个 fixture：正例 PASS；反例① 去 `presets` → A2 FAIL；
+反例② message 改纯错误码 → A3 FAIL；反例③ UI 加「实例」→ A4 FAIL；反例④ 导航 11 项 → A6 FAIL。
+新加判据必须同时补 fixture，否则视为判据不可信。
