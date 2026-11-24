@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   var API = '/api/v1/invoke/dns/', TIMEOUT_MS = 12000;
-  var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
+  var RUNBOOK_PRIV = 'docs/RUNBOOK.md';
   // 类型预设：覆盖日常 90% 的查询，不让人记类型表。
   var TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'];
   var TYPE_HINT = {
@@ -51,12 +51,12 @@
         if (timer !== null) clearTimeout(timer);
         var data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; } }
         if (res.ok) return data;
-        var err = new Error(data.message || ('请求失败（HTTP ' + res.status + '）'));
+        var err = new Error(data.message || ('请求失败（HTTP ' + res.status + '），请刷新页面后重试；如果反复失败，检查网络连接后重新登录'));
         err.code = data.code || ''; err.detail = data.detail || ''; err.hint = data.hint || ''; err.status = res.status; throw err;
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
-      if (err && err.name === 'AbortError') throw new Error('请求超时（' + (TIMEOUT_MS / 1000) + ' 秒）');
+      if (err && err.name === 'AbortError') throw new Error('请求超时（' + (TIMEOUT_MS / 1000) + ' 秒），请检查网络后点「刷新」重试');
       throw err;
     });
   }
@@ -83,7 +83,7 @@
     if (!err) return verb + '失败';
     var f = errorView(err);
     if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
-    return verb + '失败：' + (err.message || '原因未知') + (err.hint ? '（' + err.hint + '）' : '');
+    return verb + '失败：' + (err.message || '原因未知') + (err.hint ? '，' + err.hint : '') + '。请点「刷新」重试，反复失败时打开「DNS 设置」检查配置';
   }
   // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
   function failureBlock(err, cmd) {
@@ -92,7 +92,7 @@
     add(box, el('div', 'dns-callout-title', f.mapped ? f.title : '操作失败'));
     add(box, el('p', 'dns-callout-text', f.mapped
       ? f.action
-      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '')));
+      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '，' + err.hint : '') + '。请点「刷新」重试，反复失败时打开「DNS 设置」检查配置'));
     if (cmd) add(box, el('pre', 'dns-cmd', cmd));
     var raw = (err && err.message) ? String(err.message) : '';
     if (raw) {
@@ -138,7 +138,7 @@
     cmdBlock(box, cmds || []);
     if (hint) {
       var d = add(box, el('details', 'dns-details'));
-      add(d, el('summary', null, '查看后端原始提示'));
+      add(d, el('summary', null, '查看原始提示（排障用）'));
       add(d, el('p', 'dns-callout-text', hint));
     }
     return box;
@@ -196,7 +196,7 @@
     });
     if (!ok) {
       S.statusHost.appendChild(guideFor('本机没有可用的 DNS 服务（不影响你查询外部域名）',
-        ['kore 不内置 DNS 服务：装了本插件也只是「读现有服务 + 真实查询」。要托管区域或本机解析，' +
+        ['Kore 面板不内置 DNS 服务：装了本插件也只是「读现有服务 + 真实查询」。要托管区域或本机解析，' +
         '装上下面任一服务后刷新本页；只想查域名的话，上面「即时查询」现在就能用。'],
         ['sudo apt install bind9      # Debian / Ubuntu', 'sudo dnf install bind      # RHEL / Fedora / CentOS'],
         st.hint || ''));
@@ -327,7 +327,7 @@
       return;
     }
     S.recordsMeta.textContent = S.activeZone + (S.recordsMeta0 ? ' · ' + S.recordsMeta0 : '');
-    if (S.recordsError) { S.recordsHost.appendChild(notice('记录读取失败：' + S.recordsError, 'fail')); return; }
+    if (S.recordsError) { S.recordsHost.appendChild(notice('记录读取失败：' + S.recordsError + '。请点「刷新」重试，或打开「DNS 设置」检查区域文件路径', 'fail')); return; }
     if (!S.recordsLoaded) { add(S.recordsHost, el('div', 'dns-loading', '正在读取 ' + S.activeZone + ' 的记录…')); return; }
     if (!S.records.length) {
       S.recordsHost.appendChild(emptyBlock('这个区域里没有读到记录。区域文件可能只有 SOA/NS，或路径配置不对。', '打开 DNS 设置', openConfig));
