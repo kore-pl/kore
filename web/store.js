@@ -348,6 +348,17 @@
     status.setAttribute('role', 'status');
     var ops = add(card, el('div', 'store-ops'));
     if (ins) {
+      // 设置：复用统一配置面板（PLUGIN-CONFIG §9 / shell.openConfig），不为每个插件重复写页面。
+      // host 用 S.container（视图根容器）而非卡片内元素：面板按 insertBefore(children[1]) 定位，
+      // 挂到根容器才不会把设置面板插进卡片网格里打乱布局。
+      var setting = add(ops, el('button', 'btn btn-ghost store-btn-setting', '设置'));
+      setting.type = 'button';
+      setting.title = '打开「' + (p.name || p.id) + '」的设置，改完立即生效';
+      on(setting, function () {
+        if (window.KoreShell && typeof window.KoreShell.openConfig === 'function') {
+          window.KoreShell.openConfig(S.container, p.id, { title: (p.name || p.id) + ' 设置' });
+        }
+      });
       // 卸载：DELETE /api/v1/plugins/{id}。老内核已探测到不支持时按钮直接禁用。
       var uni = add(ops, dangerBtn(T('store.uninstall.btn', '卸载'), 'store-btn-uninstall'));
       if (S.uninstallOff) {
