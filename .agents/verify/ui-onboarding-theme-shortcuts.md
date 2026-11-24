@@ -66,14 +66,16 @@ shortcuts-mobile-01-help.png:         PNG image data, 390 x 844, 8-bit/color RGB
 ```text
 $ md5sum <8 张>
 632c1a49dd105b611cc16a6c9a8dcf5e  onboarding-desktop-01-first-visit.png
-e431335b9d8e3982f7df17b9924c2754  theme-light-desktop-01.png
-763d482a9c4a365928207d033b53147e  theme-dark-desktop-01.png
+2ac320e53493a37862a0ec30336f62c0  theme-light-desktop-01.png
+e62909b3bbca8361a48395b4f8834b05  theme-dark-desktop-01.png
 c31c048427738d39196c7bea6f1945bc  shortcuts-desktop-01-help.png
 ed36f80183f7d2874bf852ad5622e43b  onboarding-mobile-01-first-visit.png
 5252bebb88829243e3350fc7ad52a317  theme-light-mobile-01.png
 1f665481ccbe0cda6ae2d5981d2cc522  theme-dark-mobile-01.png
 3085d15a48ab7a4df7210bd54d767168  shortcuts-mobile-01-help.png
 ```
+
+（2026-11-24 校准：主题两张截图在报告初稿后重拍，本清单已同步为当前文件实测 md5；独立 verifier r7-shots-verify 复核 8 张两两互异、尺寸合规）
 
 读图复核：引导面板 5 步清单（「欢迎使用 Kore / 还剩 5 项」）PC 与手机均完整渲染；浅色=白底深字、深色=深底浅字，顶栏 select 显示值与视觉一致；快捷键浮层列出 Mod+/ 等键位、底部「重新查看新手引导」「知道了」按钮。每张都含真实页面元素（侧栏导航 / 概览卡片 / 手机底部 tab bar），非设计稿、非接口返回、非同图缩放。
 
