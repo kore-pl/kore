@@ -116,10 +116,11 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 | 可用：真跑 |
+| `make check` | 聚合门禁（18 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + **race 门禁（第 18 段，阻断级：-race 只跑 `tests/boundary/`，跨仓接线核对 + 有边界用例的仓 `make race` 真跑）** | 可用：真跑 |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
+| `make race` | 并发边界用例 `-race`：只跑 `./tests/boundary/...`（无该目录时 SKIP，新增用例后自动生效）；插件仓同源目标由 `scripts/race-gate-sync.sh` 模板渲染（禁手改 24 份） | 可用：本仓当前无 boundary → SKIP；15 仓 `-race` 真跑全绿（44s） |
 | `make vet` / `make test` | `go vet ./...` / `go test -timeout 200s ./...` | 可用：真跑（`go.mod` + `cmd/` + `internal/` 已就绪，SKIP 条件不再成立；`make vet` 已验证 `[OK]`，exit 0） |
 | `make mem` | 采样 RSS + `smaps_rollup`/`status` 拆分，按新证据口径出中位数（G6 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时出实数 |
 | `make frontend` | 构建 `web/dist` 并用 gzip 核对首屏体积 | SKIP：无 `web/package.json`，M2 起生效 |
@@ -132,7 +133,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
-> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（17 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
+> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（18 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
 
 ## 6. 细则索引
 
