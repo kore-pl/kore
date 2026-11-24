@@ -851,6 +851,27 @@
     koreToast._timer = setTimeout(function () { t.hidden = true; }, 2200);
   }
   // 打开引导：onboarding 可能尚未就绪（帮助面板里的回调可先于其加载完成触发），按需懒加载。
+  // 安装一次性引导的权威状态在服务端（/-/onboarding，公开只读），不在 localStorage。
+  // 首屏探测一次：清缓存 / 换浏览器 / 重登都改不到服务端标记，因此不会重复自动弹。
+  // 读取失败一律按"不自动弹"处理，绝不因网络抖动误触发；手动 open() 入口不受影响。
+  function fetchInstallState() {
+    return new Promise(function (resolve) {
+      var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 4000) : null;
+      var init = { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } };
+      if (ctrl) init.signal = ctrl.signal;
+      fetch('/-/onboarding', init).then(function (res) {
+        return res.ok ? res.json() : null;
+      }).then(function (body) {
+        if (timer !== null) clearTimeout(timer);
+        resolve(body && body.data ? body.data : null);
+      }, function () {
+        if (timer !== null) clearTimeout(timer);
+        resolve(null);
+      });
+    });
+  }
+
   function openOnboarding(reset) {
     ensureLazy('/assets/onboarding.js', 'KoreOnboarding', function (m) { return m && typeof m.mount === 'function'; })
       .then(function (ob) {
@@ -951,7 +972,11 @@
         });
       }, noop)
       .then(function () { return ensureLazy('/assets/onboarding.js', 'KoreOnboarding', function (m) { return m && typeof m.mount === 'function'; }); }, noop)
-      .then(function (ob) { if (ob && typeof ob.mount === 'function') ob.mount({ autoOpen: true }); }, noop)
+      .then(function (ob) {
+        return fetchInstallState().then(function (st) {
+          if (ob && typeof ob.mount === 'function') ob.mount({ autoOpen: true, installState: st });
+        });
+      }, noop)
       .then(function () { buildExperienceEntries(); placeExperienceEntries(); }, noop);
   }
 

@@ -6,8 +6,11 @@
  * ===== 挂载 API（window.KoreOnboarding）=====
  *   mount(options)   初始化（幂等）。options:
  *                      scope       : Element —— 面板挂载父节点，默认 document.body
- *                      autoOpen    : boolean —— 首次访问（本机无引导记录）是否自动弹出，默认 true；
- *                                     老用户或已跳过/已完成时恒不自动弹
+ *                      autoOpen    : boolean —— 是否允许"按服务端安装一次性标记"自动弹出，默认 true；
+ *                                     是否真的自动弹只听服务端 GET /-/onboarding 的 should_auto_open，
+ *                                     本机 localStorage 只记用户动作（跳过/完成进度），不决定自动弹。
+ *                      installState: {should_auto_open:boolean, ...} —— 可选，调用方已取到服务端状态时直接传入，
+ *                                     省去组件内再次请求（shell.js 首屏已探测时用）。
  *                   返回同一 API 对象，便于串联调用。
  *   open()           打开/聚焦引导（无参数），首次打开才建 DOM 并按需注入 onboarding.css
  *   close()          收起引导；用户点「以后再看」时记下跳过状态
@@ -19,9 +22,9 @@
  *   getState()       -> { done:{[id]:true}, completed, dismissed, remaining, total, open }
  *   STEPS            只读步骤数组（id / title / desc / actionLabel / kind / route）
  *
- * ===== 接线方式（由后续独立任务完成，本卡不改他人文件）=====
+ * ===== 接线方式（shell.js 首屏渲染后懒加载调用）=====
  *   <script src="/assets/onboarding.js"></script>
- *   window.KoreOnboarding.mount();                         // 首访自动弹，之后不打扰
+ *   window.KoreOnboarding.mount();                         // 仅服务端 should_auto_open 为真时自动弹一次
  *   顶栏/设置页「重新查看新手引导」按钮：
  *     onclick = function () { window.KoreOnboarding.open(); }
  *   快捷键帮助面板入口（R6-6 的 mount 选项，已双向确认）：
@@ -46,8 +49,8 @@
  *   完成态给「再逛一遍」按钮、错误与空态都给人话文案，内部术语零出现。
  *   FRONTEND §3.1：断点交给 CSS media query，JS 不做视口分支；命中区 ≥44px。
  *   FRONTEND §10：role=dialog + aria-modal + Tab 焦点陷阱 + Esc 关闭后焦点归位。
- *   进度存 localStorage['kore.onboarding.v1']，可跳过、可重开；隐私模式禁用存储时
- *   本次会话内仍可用，只是刷新后不保留。
+ *   进度存 localStorage['kore.onboarding.v1']，只记用户动作（跳过 / 完成 / 每项进度），
+ *   清缓存 / 换浏览器 / 重登都不改变"本次安装是否自动弹"——那由服务端安装标记权威决定。
  * ---------------------------------------------------------------------------
  */
 (function () {
@@ -73,8 +76,9 @@
       actionLabel: '去建一个站点', kind: 'route', route: 'sites' }
   ];
 
-  var options = { scope: null, autoOpen: true };
+  var options = { scope: null, autoOpen: true, installState: null };
   var state = { done: {}, completed: false, dismissed: false, seen: false };
+  var autoOpened = false;
   var mounted = false;
   var openFlag = false;
   var root = null;
@@ -127,6 +131,43 @@
       }));
     } catch (err) { /* 存不进去只影响刷新后的记忆，不影响本次使用 */ }
     state.seen = true;
+  }
+
+  // 服务端安装一次性标记的只读视图（权威）。GET 走公开端点，登录前即可读；
+  // 失败 / 超时一律按"不自动弹"处理——绝不能因网络抖动误触发引导。
+  function fetchInstallState() {
+    return new Promise(function (resolve) {
+      var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 4000) : null;
+      var init = { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } };
+      if (ctrl) init.signal = ctrl.signal;
+      fetch('/-/onboarding', init).then(function (res) {
+        return res.ok ? res.json() : null;
+      }).then(function (body) {
+        if (timer !== null) clearTimeout(timer);
+        resolve(body && body.data ? body.data : null);
+      }, function () {
+        if (timer !== null) clearTimeout(timer);
+        resolve(null);
+      });
+    });
+  }
+
+  // 用户完成 / 跳过后写服务端标记：幂等、需会话。写失败只影响下次是否自动弹，
+  // 不能因此打断当前界面；本机仍记一份动作状态供进度展示（见 close / mark）。
+  function reportDone() {
+    try {
+      var csrf = '';
+      var parts = document.cookie ? document.cookie.split(';') : [];
+      for (var i = 0; i < parts.length; i++) {
+        var kv = parts[i].trim();
+        if (kv.indexOf('kore_csrf=') === 0) { csrf = decodeURIComponent(kv.slice('kore_csrf='.length)); break; }
+      }
+      fetch('/api/v1/onboarding/done', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Kore-CSRF': csrf }
+      }).catch(function () { /* 服务端不可达：本机动作照常生效，不阻塞界面 */ });
+    } catch (err) { /* 隐私模式 / 无 fetch：不阻塞界面 */ }
   }
 
   function isValidId(id) {
@@ -341,6 +382,9 @@
   function close(opts) {
     if (!openFlag) return api;
     if (opts && opts.skip) { state.dismissed = true; writeState(); }
+    // 用户看过引导（跳过 / 知道了 / Esc / 点遮罩）即写服务端一次性标记：
+    // 之后强刷 / 清 localStorage / 换浏览器 / 重登都不再自动弹（权威在服务端）。
+    reportDone();
     root.hidden = true;
     openFlag = false;
     emit('kore:onboarding-close', false);
@@ -372,11 +416,26 @@
     if (opts && typeof opts === 'object') {
       options = {
         scope: opts.scope && opts.scope.appendChild ? opts.scope : null,
-        autoOpen: opts.autoOpen === false ? false : true
+        autoOpen: opts.autoOpen === false ? false : true,
+        installState: opts.installState || null
       };
     }
     state = readState();
-    if (options.autoOpen && !state.dismissed && !state.completed && remaining() > 0) open();
+    // 自动弹出只认服务端安装标记（should_auto_open），本机 localStorage 不参与判定：
+    // 清缓存 / 换浏览器 / 重登改不到服务端状态，因此不会重复弹；手动 open() 不受影响。
+    if (options.autoOpen && !autoOpened) {
+      var decide = function (st) {
+        if (st && st.should_auto_open) {
+          autoOpened = true;
+          open();
+          // 安装那一次已经弹出：立即写服务端标记，哪怕用户不点任何按钮就强刷也不再弹。
+          // 服务端写是幂等的；close() 里的重复写无害。
+          reportDone();
+        }
+      };
+      if (options.installState) decide(options.installState);
+      else fetchInstallState().then(decide);
+    }
     return api;
   }
 

@@ -66,6 +66,9 @@ type errorBody struct {
 // HTTP 路径不是插件代码，这里规避误报（不改变实际路由取值）。
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /-/healthz", s.handleHealthz)
+	// 安装一次性引导标记：公开只读（登录前可读）；完成记录需会话（在 /api/v1 下）。
+	s.mux.HandleFunc("GET /-/onboarding", s.handleInstallState)
+	s.mux.HandleFunc("POST /api/v1/onboarding/done", s.handleOnboardingDone)
 	s.mux.HandleFunc("GET /api/v1/system/info", s.handleSystemInfo)
 	s.mux.HandleFunc("GET /api/v1/system/metrics", s.handleSystemMetrics)
 	// 磁盘分析（R23）：只读目录占用扫描；category 枚举映射配置白名单目录，前端不传路径。

@@ -17,6 +17,7 @@ import (
 	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/core/metrics"
+	"github.com/pengtang1024/kore/internal/core/store"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -92,6 +93,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Scheduler:         svc.sched,
 		Credentials:       svc.credential,
 		Alerts:            alertSink(svc.db),
+		InstallState:      installStateProvider(svc.db),
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)
@@ -278,6 +280,32 @@ func (m marketInstaller) newInstaller(expectedSHA string, force bool) (*installe
 		Store:          m.svc.db,
 		Progress:       progress,
 	})
+}
+
+// installStateAdapter 把 store.Store 的安装一次性标记映射成 httpapi 依赖的只读接口。
+// 装配层职责：httpapi 不 import store（G-01），store 只暴露显式标量（G-24）。
+type installStateAdapter struct{ db *store.Store }
+
+func (a installStateAdapter) GetInstallState() (httpapi.InstallState, error) {
+	st, err := a.db.GetInstallState()
+	if err != nil {
+		return httpapi.InstallState{}, err
+	}
+	return httpapi.InstallState{
+		InstallGeneration: st.InstallGeneration,
+		OnboardingDone:    st.OnboardingDone,
+		ShouldAutoOpen:    st.ShouldAutoOpen,
+	}, nil
+}
+
+func (a installStateAdapter) MarkOnboardingDone() error { return a.db.MarkOnboardingDone() }
+
+// installStateProvider 在状态库未装配时返回 nil：httpapi 的稳定默认"不自动弹"（不假装成功）。
+func installStateProvider(db *store.Store) httpapi.InstallStateProvider {
+	if db == nil {
+		return nil
+	}
+	return installStateAdapter{db: db}
 }
 
 // closeStore 关闭状态库；关闭失败只 WARN，不影响退出码。

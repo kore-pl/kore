@@ -78,6 +78,11 @@ func Open(stateDir string, logger *slog.Logger) (*Store, error) {
 	}
 	_, statErr := os.Stat(stateDir)
 	created := errors.Is(statErr, os.ErrNotExist)
+	// freshDB 判断"这是不是全新安装"：引导只在全新库自动弹一次；老库升级
+	// （state.db 已存在、没有安装标记）视为安装那一次已过去，不补弹（G-06 兼容）。
+	dbPath := filepath.Join(stateDir, DBName)
+	_, dbStatErr := os.Stat(dbPath)
+	freshDB := errors.Is(dbStatErr, os.ErrNotExist)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("%w: 创建 %s: %v", ErrStateDir, stateDir, err)
 	}
@@ -86,7 +91,7 @@ func Open(stateDir string, logger *slog.Logger) (*Store, error) {
 			return nil, fmt.Errorf("%w: 设置 %s 权限: %v", ErrStateDir, stateDir, err)
 		}
 	}
-	path := filepath.Join(stateDir, DBName)
+	path := dbPath
 	// 锁用 bbolt 内置 flock（内部即 LOCK_EX|LOCK_NB + Timeout 重试），不在 internal/core 直接调
 	// syscall 的 Flock（G-16 要求平台 API 收口在 internal/platform）；拿不到锁返回 ErrTimeout。
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: lockTimeout})
@@ -101,6 +106,11 @@ func Open(stateDir string, logger *slog.Logger) (*Store, error) {
 	if err := s.prepare(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	// 安装一次性标记：随建库写一次，之后所有 Open 都幂等不动它。
+	if err := s.EnsureInstallMarker(freshDB); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: 写安装标记失败: %v", ErrCorrupt, err)
 	}
 	if err := writePID(stateDir); err != nil {
 		_ = db.Close()

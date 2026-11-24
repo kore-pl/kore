@@ -136,6 +136,10 @@ type Options struct {
 	// PluginPeer 返回插件当前进程的低权 uid 与 pid（supervisor.PluginPeer 注入），
 	// 供通道 SO_PEERCRED 双校验；nil 表示通道装配不完整（Start 拒绝启用通道）。
 	PluginPeer func(pluginID string) (uid, pid int, ok bool)
+	// InstallState 提供"安装一次性"引导标记：公开只读端点 login 前可读，
+	// 完成记录端点需会话。由 cmd/kored 用 store.Store 适配器注入；本包不 import store。
+	// nil 时公开端点返回稳定"不自动弹"默认，写端点回 501（不假装成功）。
+	InstallState InstallStateProvider
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。

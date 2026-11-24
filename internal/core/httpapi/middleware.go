@@ -103,7 +103,7 @@ func isRootActionPath(path string) bool {
 // 鉴权逻辑不下放；插件资产（/plugin-assets/*）不在白名单内。视图模块自身的数据
 // 请求走 /api/v1/*，未登录仍 401——放行只覆盖静态文件本体。
 func isPublicPath(path string) bool {
-	return path == "/-/healthz" || path == "/api/v1/auth/login" ||
+	return path == "/-/healthz" || path == "/-/onboarding" || path == "/api/v1/auth/login" ||
 		path == "/" || strings.HasPrefix(path, staticURLPrefix)
 }
 
