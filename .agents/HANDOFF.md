@@ -335,6 +335,55 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 6. **仓库卫生**：`git worktree list` 仅主工作树；`git status --short` 干净。
 7. **结论**：**功能 / 代码层面达标、可交付**；交付闭环仍剩 **3 项 human gate**——① push 13 笔攒批待授权；② Gitea / Gitee release token；③ 管理员口令。三项均非 agent 可自行闭环，不提前宣称已解决。
 
+### 0.0.9 第 11 轮交付快照（2026-11-24 17:58，R18 审计 + R19 十卡 + 运行态重建 + G-28 双端截图）
+
+> 本节记录第 11 轮四件事的最终态：R18 全仓能力普查、R19 十张能力卡的本地提交、主实例运行态重建、G-28 双端截图两批次，供接手人一眼看到「已落地 / 仍挂账」的分界。
+> 事实口径：**commit sha 用 `git show --no-patch`、运行态 PID 用 `ps`、exe sha 用 `sha256sum`、领先数用 `git rev-list --left-right --count`、远端 HEAD 用 `git ls-remote` 实测复核**（2026-11-24 17:58）；R18 审计计数与截图 `file` / md5 结论为各轮原始证据，本轮文档同步未重跑，来源见文内。
+> §0.0.1–§0.0.8 及更早内容为历史，全部保留不动。本轮写域只有本文件。
+
+**1. R18 全仓能力普查（后端有方法、前端零调用）**
+
+- 6 路并行审计覆盖剩余 **19 个插件仓**（前轮已审仓不重复），方法论统一：动态拼接还原调用链 + backend dispatch 真有方法才算缺口 + L3/占位不建卡。
+- 找出 **20+「后端有方法、前端零调用」真缺口**；**反向缺口（前端有入口、后端无方法）全 0**。
+- 这批普查是 R19 十卡的选题来源；逐仓计数属审计原始结论，本轮未静态复核。
+
+**2. R19 十张能力卡（全部本地 commit、未 push）**
+
+- 判断型 2 张：
+  - **dns 写路径 = 不改**——ADR-0051 已否决 reload、TSIG/root 前置未成熟，属有意取舍，不建卡。
+  - **ssl 内置 ACME = 补齐**——ADR-0020 与实现漂移，commit `3107f36`（前端接入 status / issue / auto 默认路线）。
+- 修复型 8 张：
+  - PG 6 写方法：`db-l2.js` `0758d0e`（建库/删库/用户/授权/改密 6 方法）+ 保留字修复 `84c24f1`（角色列表别名 `user` → `role_name`）+ 入口放行 `db.js` `43c3d88`（新建数据库/用户与授权）。
+  - 防火墙一键开关 + SSH 锁自己 fail-closed：`e19acbe`。
+  - Python venv / pip 四方法：`8a7fc1c`（venv.create/list + pip.install/list）。
+  - 日志清理 / 保留策略 / 占用统计：`c10edfb`。
+  - 从模板部署：`appdeploy.js` `80a7221`（补齐部署与移除入口）。
+  - 站点 PHP-FPM 三方法：`1abf853`（补全伪静态断链）。
+- 以上 11 个 sha（含判断型 1 个）本轮逐一 `git show --no-patch` 核实存在、subject 与用途一致。
+
+**3. 运行态（主实例重建，G-29 共享资产不改配置）**
+
+- 重建重启后 PID **2128919**（`ps -p 2128919` 实测在跑，`kored serve --config .kore-local.yaml`）；exe sha **2700d8656695566965fea843889e4e86bc7b54915d11696aa2bdb14a5c26cbd5**（`sha256sum bin/kored` 实测，exe == bin）。旧 PID **1944697** / sha **5afa5b20…** 已退（§0.0.8 终态，本轮 `ps` 确认不再运行）。
+- 本批 8 项特征运行态全命中、前轮不回退：**850 key / 改口令 401 / help-trigger 6**；改口令端点 **401 非 501**（鉴权生效、非占位）。特征结论由 lead 终验回读，本轮文档同步未重跑真机点击。
+- 远端三端 `main` 实测同 sha `80f6c48`（origin / github / gitee）；本地 `git rev-list --left-right --count origin/main...HEAD` = **0 25**（本地领先 25 笔，均本地提交、未 push）。`git worktree list` 仅主工作树。
+
+**4. G-28 双端截图（两批次共 16 张真实浏览器截图）**
+
+- 批次1 commit `9f22475`：`pg-write` / `firewall-switch` / `python-venv` / `log-clean` 四场景 × 双端 8 张；批次2 commit `e8bd36d`：`ssl-acme` / `app-template` / `site-php` / `plugins-health` 四场景 × 双端 8 张。
+- `file` 实测尺寸合规（PC 1440×900 / 手机 390×844）、`md5sum` 各批 8 张全异（distinct=8）、降级态如实标注（防火墙非 root 只读降级、SSL 无域名「账户未注册」、日志无源空态）。证据报告：`.agents/verify/r19-ui-shots-batch1.md` / `r19-ui-shots-batch2.md`。
+- 批次2 曾遇 store install / enable 返回 **CSRF 401**，读源码补 `X-Kore-CSRF` 头（值取自 `kore_csrf` cookie）自愈，未隐瞒、未伪造成功态。
+- 批次1 耗时约 **13 分钟**（为拍真实已连接态真起 PostgreSQL 16 容器做 recon），全量交付未打折。全程走 `git archive` + 独立构建 + 隔离实例（配置/state/run/log 落 `/tmp`），**主实例 8787 零改动**（G-29），G-30 `secret-check` 0 FAIL。
+
+**5. 下一轮挂账（按优先级，非 agent 可自行闭环，不提前宣称已解决）**
+
+| # | 事项 | 状态 / 依据 |
+| --- | --- | --- |
+| ① | 攒批 push | 本地领先 **25** 笔（实测），远端三端仍停 `80f6c48`；按「多提交少推送」攒一批推，需授权 |
+| ② | Gitea / Gitee release token | `GITEA_TOKEN` / `GITEE_TOKEN` 未设，human gate（§0.0.3 第 5 条 + §0.0.5 第 4 条） |
+| ③ | 管理员登录口令 | 未交付，登录态真机复核 BLOCKED（§0.0.6 挂账⑤） |
+| ④ | site 0.8.1 外部 ADR-0052 在途 | 索引保持 0.4.4 未误收（§0.0.3 第 2/3 条） |
+| ⑤ | 内存 17.8 MiB | 用户裁决延至上线前优化，**不判失败**（§0.0.8 第 5 条） |
+
 ## 0. 当前交接快照（2026-11-24 10:20）
 
 > 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
