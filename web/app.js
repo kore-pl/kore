@@ -619,6 +619,16 @@
     return td;
   }
 
+  // 插件枚举值白话化（USABILITY §4 / G-33 A4）：内部英文值不直出，未知值保留原值 + 提示，绝不空白。
+  var DEPTH_LABELS = { production: '生产级', basic: '基础级' };
+  var LIFECYCLE_LABELS = { resident: '常驻', lazy: '按需启动', oneshot: '一次性' };
+  function depthLabel(v) {
+    return DEPTH_LABELS[v] || ((v ? String(v) : '') + '（未知深度）');
+  }
+  function lifecycleLabel(v) {
+    return LIFECYCLE_LABELS[v] || ((v ? String(v) : '') + '（未知运行方式）');
+  }
+
   function pingState(id) {
     if (!state.ping[id]) state.ping[id] = { supported: true, result: '', error: '' };
     return state.ping[id];
@@ -691,8 +701,8 @@
     tr.appendChild(cell('插件', idCell));
     tr.appendChild(cell('版本', plugin.version));
     tr.appendChild(cell('最新版本', latestCell(plugin, upState)));
-    tr.appendChild(cell('深度', plugin.depth_level));
-    tr.appendChild(cell('运行方式', plugin.lifecycle));
+    tr.appendChild(cell('深度', depthLabel(plugin.depth_level)));
+    tr.appendChild(cell('运行方式', lifecycleLabel(plugin.lifecycle)));
     tr.appendChild(cell('状态', statusTag(pluginStateTag(plugin))));
 
     var ops = el('td', 'cell-ops');

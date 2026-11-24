@@ -299,6 +299,13 @@
     return box;
   }
 
+  // 深度枚举值白话化（USABILITY §4 / G-33 A4）：英文值只作 CSS class，文案给中文；未知值原值 + 提示不空白。
+  var DEPTH_LABELS = { production: '生产级', basic: '基础级' };
+  function depthInfo(v) {
+    if (DEPTH_LABELS[v]) return { cls: v, text: DEPTH_LABELS[v] };
+    return { cls: 'basic', text: (v ? String(v) : '') + '（未知深度）' };
+  }
+
   function renderCard(p) {
     var ins = S.installed[p.id];
     var card = el('article', 'store-card' + (ins ? ' is-installed' : ''));
@@ -312,8 +319,8 @@
     var sub = add(head, el('div', 'store-card-sub'));
     add(sub, el('span', 'store-card-ver', 'v' + (p.version || '?')));
     var badges = add(card, el('div', 'store-badges'));
-    var depth = p.depth_level === 'production' ? 'production' : 'basic';
-    add(badges, el('span', 'store-badge ' + depth, depth === 'production' ? 'production · 生产级' : 'basic · 基础级'));
+    var depth = depthInfo(p.depth_level);
+    add(badges, el('span', 'store-badge ' + depth.cls, depth.text));
     var state = cardState(ins, p.version);
     if (state === 'latest') {
       var installedBadge = add(badges, el('span', 'store-badge installed'));
