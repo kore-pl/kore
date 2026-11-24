@@ -117,7 +117,7 @@ KORE_FILE_WRITE_ALLOW_DIRS=/srv/kore/certs/ sudo -E scripts/install-root-once.sh
 | `KORE_BACKUP_DIR` / `KORE_BACKUP_ALLOW_ROOTS` | 不进 unit | 同上，`backup` 插件走 `config.json` + 界面配置，改完 `restart_required=false` |
 | `KORE_STATE_DIR` / `KORE_HOME` | `KORE_HOME` **要进**（unit 已注入） | 安装根决定 portable 布局；`KORE_STATE_DIR` 未设时由 profile 派生为 `<install>/data`，不需要额外钉死 |
 
-> **已知跨仓缺口（本轮核实，未在本仓修）**：`ssl` 插件当前默认证书目录是 `<KORE_STATE_DIR>/ssl`，而内核注入插件的 `KORE_STATE_DIR` 是 `<install>/data/plugins/<id>`，即实际落点 `<install>/data/plugins/ssl/ssl`——与安装器默认注入的 `<install>/data/ssl/` **不一致**。在 `ssl` 仓把默认目录对齐到 `<install>/data/ssl/`（或运维用 `KORE_SSL_CERT_DIR` 钉到白名单内目录）之前，SSL 站点仍会被拒。判据：`ssl` status 返回的 `cert_dir` 必须落在 unit 注入的白名单前缀内。
+> **跨仓缺口：已修（`kore-plugin-ssl` v0.7.1）**。历史缺陷：`ssl` 插件默认证书目录曾是 `<KORE_STATE_DIR>/ssl`，而内核注入的 `KORE_STATE_DIR` 是 `<install>/data/plugins/<id>`，实际落点 `<install>/data/plugins/ssl/ssl`——与安装器默认注入的 `<install>/data/ssl/` 不一致，SSL 站点写配置时被受控写全部拒绝。现在解析顺序为 `KORE_SSL_CERT_DIR` > **`<KORE_INSTALL_DIR>/data/ssl`**（ADR-0023 §3.4 方案 C / ADR-0052 §104，与本脚本 `resolve_allow_dirs` 的默认值逐字一致）> `<KORE_STATE_DIR>/ssl`（仅内核未注入安装根时兜底）> 可执行文件旁 `data/ssl`。判据（可执行，见 `kore-plugin-ssl/internal/certs/certdir_whitelist_test.go`）：`ssl` status 的 `cert_dir` == unit 注入的白名单前缀去掉尾斜杠，且 `ssl` 返回的 `cert_path`/`key_path` 落在该前缀内。**运维无需改 unit**；显式设过 `KORE_SSL_CERT_DIR` 的部署行为不变。
 
 ### 6.2 卸载（卸载链，ADR-0023 阶段 B）
 
