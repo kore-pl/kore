@@ -24,6 +24,18 @@
 #      判据不放宽：清单是「存量豁免登记」，不是放行名单——新仓新错一律 FAIL。
 #   6) out_of_box × depth_level（G-20 明文：basic 插件不得被预设标为「开箱可用」）：
 #      out_of_box=true 的预设不得引用索引 depth_level≠production 的插件（不看 desired）。
+#   7) 生产级声明内容（G-20 判据①②，2026-11-24 接入）：声明 production 的插件必须**真的**
+#      满足两条判据，而不只是索引与 info.json 自洽：
+#        判据② 故障注入：<插件仓>/tests/fault/ 存在，且含 `func Test` 的 *_test.go（静态核对；
+#                实跑由各仓 CI / make check 负责，本门禁不重复跑 go test）
+#        判据① 边界用例：<插件仓>/tests/boundary/ 存在 + 含 `func Test` 的 *_test.go
+#                + 并发证据 ≥1（`t.Parallel` / `go func` / `sync.`）
+#                + 四类代表性覆盖各 ≥1（异常输入 / 并发 / 权限 / 资源耗尽；取文件名 + 注释行）
+#      分层上线（存量 15 条 tests/boundary 全缺，不能一次打红）：
+#        · id 登记在 scripts/boundary-pending.txt → [WARN]，不阻断
+#        · 未登记（新增 production 声明）→ [FAIL]，阻断
+#        · 清单条目已满足判据①② / 已非 production / 已不在索引 → [WARN] 提示移除
+#      清单是「存量补测试的登记处」，不是放行名单：移出清单即转硬判据。
 #
 # 不联网、不调用 git、不修改任何文件。退出码 0 无 FAIL；1 有 FAIL；2 参数错误。
 set -euo pipefail
@@ -34,6 +46,8 @@ INDEX_FILE="${INDEX_FILE:-$ROOT/../kore-plugins/index/plugins.json}"
 PLUGIN_REPOS_DIR="${PLUGIN_REPOS_DIR:-$ROOT/..}"
 # depth_level 已知待裁决清单（G-20）：存量不一致的登记处，新增不一致仍 FAIL
 DEPTH_PENDING_FILE="${DEPTH_PENDING_FILE:-$ROOT/scripts/depth-level-pending.txt}"
+# 判据① 边界用例已知待裁决清单（G-20）：存量补测试的登记处，新增声明缺失即 FAIL
+BOUNDARY_PENDING_FILE="${BOUNDARY_PENDING_FILE:-$ROOT/scripts/boundary-pending.txt}"
 
 usage() {
   cat <<'USAGE'
@@ -43,8 +57,9 @@ usage() {
   preset.json   指定要校验的预设文件，可多个（默认扫描 presets 目录）
   --help        打印本帮助
 
-环境变量: INDEX_FILE / PRESETS_DIR / PLUGIN_REPOS_DIR / DEPTH_PENDING_FILE
-  DEPTH_PENDING_FILE 指向 depth_level 已知待裁决清单（默认 scripts/depth-level-pending.txt）
+环境变量: INDEX_FILE / PRESETS_DIR / PLUGIN_REPOS_DIR / DEPTH_PENDING_FILE / BOUNDARY_PENDING_FILE
+  DEPTH_PENDING_FILE    指向 depth_level 已知待裁决清单（默认 scripts/depth-level-pending.txt）
+  BOUNDARY_PENDING_FILE 指向判据① 边界用例已知待裁决清单（默认 scripts/boundary-pending.txt）
 
 退出码: 0 无 FAIL；1 有 FAIL；2 参数错误。
 USAGE
@@ -191,7 +206,8 @@ MAX_RESIDENT="${MAX_RESIDENT:-3}"
 BIN_MAX_BYTES="${BIN_MAX_BYTES:-26214400}"
 
 python3 - "$INDEX_FILE" "$PLUGIN_REPOS_DIR" "$RSS_RED_MIB" "$RSS_GOAL_MIB" \
-         "$MAX_RESIDENT" "$BIN_MAX_BYTES" "$DEPTH_PENDING_FILE" "${PRESETS[@]}" <<'PY'
+         "$MAX_RESIDENT" "$BIN_MAX_BYTES" "$DEPTH_PENDING_FILE" "$BOUNDARY_PENDING_FILE" \
+         "${PRESETS[@]}" <<'PY'
 import glob
 import json
 import os
@@ -205,7 +221,8 @@ rss_goal = float(sys.argv[4])
 max_resident = int(sys.argv[5])
 bin_max = int(sys.argv[6])
 pending_file = sys.argv[7]
-preset_files = sys.argv[8:]
+boundary_pending_file = sys.argv[8]
+preset_files = sys.argv[9:]
 
 TOKEN_RE = re.compile(r"^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$")
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -323,6 +340,7 @@ print("")
 
 # ── 深度等级一致性（G-20）：索引 ↔ 仓库 info.json ──
 pending_ids, pending_order = load_pending(pending_file)
+repo_levels = {}
 print("深度等级一致性（G-20）：索引 depth_level ↔ 仓库 info.json depth_level")
 diff_ids = set()
 for pid, entry in by_id.items():
@@ -349,6 +367,7 @@ for pid, entry in by_id.items():
         print(f"[FAIL] 仓库 depth_level 非法/缺失（G-20 必填）: {pid}={repo_level!r}"
               f"（../kore-plugin-{pid}/info.json）")
         continue
+    repo_levels[pid] = repo_level
     if repo_level == idx_level:
         continue
     diff_ids.add(pid)
@@ -376,6 +395,149 @@ for pid in pending_order:
 
 print(f"[INFO] depth_level 核对: {len(by_id)} 个已收录插件 · 不一致 {len(diff_ids)} 条"
       f"（已知待裁决 {len(diff_ids & pending_ids)} / 新增 {len(diff_ids - pending_ids)}）")
+print("")
+
+# ── 生产级声明内容（G-20 判据①②）：production 不得空口声明 ──
+# 判据② = tests/fault/（故障注入）；判据① = tests/boundary/（边界用例：用例 + 并发 + 四类）。
+# 此前 G-20 只比对「索引 ↔ 仓库」深度等级一致，两条判据在脚本里都没有执行面：
+# 索引写 production + tests/fault/ 存在就能一路绿灯，判据① 从未被核对。
+BOUNDARY_CATEGORIES = {
+    "异常输入": ("异常输入", "非法输入", "非法参数", "invalid input", "malformed", "invalid-arg"),
+    "并发": ("并发", "concurren", "parallel", "race"),
+    "权限": ("权限", "permission", "unauthorized", "只读", "read-only", "need_root"),
+    "资源耗尽": ("资源耗尽", "耗尽", "exhaust", "enospc", "磁盘满", "disk full", "out of memory", "oom", "ulimit", "cgroup"),
+}
+CONCURRENCY_RE = re.compile(r"t\.Parallel|go func|sync\.")
+
+
+def go_test_files(root):
+    """边界/故障目录下全部 *_test.go（递归，门禁不猜目录结构）。"""
+    found = []
+    if not os.path.isdir(root):
+        return found
+    for dirpath, _dirnames, names in os.walk(root):
+        for name in names:
+            if name.endswith("_test.go"):
+                found.append(os.path.join(dirpath, name))
+    return sorted(found)
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def has_test_func(paths):
+    return any(re.search(r"(?m)^func Test", read_text(path)) for path in paths)
+
+
+def evidence_lines(paths):
+    """四类覆盖的取证面：文件名 + 注释行（// 与 /* */ 块），不拿可执行代码凑关键词。"""
+    for path in paths:
+        yield os.path.basename(path)
+        in_block = False
+        for line in read_text(path).splitlines():
+            stripped = line.strip()
+            if in_block:
+                yield stripped
+                if "*/" in stripped:
+                    in_block = False
+                continue
+            if stripped.startswith("/*"):
+                yield stripped
+                if "*/" not in stripped:
+                    in_block = True
+                continue
+            if stripped.startswith("//") or stripped.startswith("#"):
+                yield stripped
+
+
+def missing_categories(paths, concurrency_ok):
+    blob = "\n".join(evidence_lines(paths)).lower()
+    missing = []
+    for category, keys in BOUNDARY_CATEGORIES.items():
+        if category == "并发":
+            continue  # 并发由独立证据检查判定（比关键词更可靠），不重复报
+        if not any(key.lower() in blob for key in keys):
+            missing.append(category)
+    return missing
+
+
+boundary_pending_ids, boundary_pending_order = load_pending(boundary_pending_file)
+print("生产级声明内容（G-20 判据①②）：production 的 tests/fault + tests/boundary")
+n_prod = 0
+n_prod_ok = 0
+for pid in sorted(by_id):
+    entry = by_id[pid]
+    idx_level = entry.get("depth_level")
+    # 任一侧声明 production 都算「生产级声明」：声明强于事实时必须被核对。
+    if idx_level != "production" and repo_levels.get(pid) != "production":
+        continue
+    n_prod += 1
+    fault_issues = []
+    boundary_issues = []
+    repo_dir = os.path.join(repos_dir, f"kore-plugin-{pid}")
+    if not os.path.isdir(repo_dir):
+        fault_issues.append(f"缺 ../kore-plugin-{pid}/ 仓库目录，无法核对判据①②")
+    else:
+        # 判据②（硬判据，待裁决清单不豁免）：故障注入用例必须真实存在
+        fault_root = os.path.join(repo_dir, "tests", "fault")
+        if not os.path.isdir(fault_root):
+            fault_issues.append("判据②不满足：缺 tests/fault/")
+        elif not has_test_func(go_test_files(fault_root)):
+            fault_issues.append("判据②不满足：tests/fault/ 无含 func Test 的 *_test.go")
+
+        # 判据①（分层上线）：目录 / 用例 / 并发证据 / 四类覆盖
+        boundary_root = os.path.join(repo_dir, "tests", "boundary")
+        boundary_files = go_test_files(boundary_root)
+        if not os.path.isdir(boundary_root):
+            boundary_issues.append("判据①不满足：缺 tests/boundary/")
+        elif not has_test_func(boundary_files):
+            boundary_issues.append("判据①不满足：tests/boundary/ 无含 func Test 的 *_test.go")
+        else:
+            concurrency_ok = any(CONCURRENCY_RE.search(read_text(path)) for path in boundary_files)
+            if not concurrency_ok:
+                boundary_issues.append(
+                    "判据①不满足：tests/boundary/ 缺并发证据（t.Parallel/go func/sync. 0 命中）")
+            missing = missing_categories(boundary_files, concurrency_ok)
+            if missing:
+                boundary_issues.append("判据①不满足：tests/boundary/ 四类覆盖缺 " + "、".join(missing))
+
+    if fault_issues:
+        for issue in fault_issues:
+            print(f"[FAIL] production 判据②不满足（硬判据，清单不豁免）: {pid}: {issue}")
+    if boundary_issues:
+        if pid in boundary_pending_ids:
+            n_warn += 1
+            print(f"[WARN] production 判据①待裁决（已知存量，不阻断）: {pid}: "
+                  + "；".join(boundary_issues)
+                  + f"（已登记 {os.path.basename(boundary_pending_file)}，补边界用例见后续卡）")
+        else:
+            for issue in boundary_issues:
+                print(f"[FAIL] production 判据①不满足（未登记待裁决清单，阻断）: {pid}: {issue}")
+    if fault_issues or (boundary_issues and pid not in boundary_pending_ids):
+        n_fail += 1
+    if not fault_issues and not boundary_issues:
+        n_prod_ok += 1
+        if pid in boundary_pending_ids:
+            n_warn += 1
+            print(f"[WARN] 判据①待裁决清单陈旧条目: {pid} 已满足判据①② —— "
+                  f"请从 {os.path.basename(boundary_pending_file)} 移除（移除后转硬判据）")
+
+for pid in boundary_pending_order:
+    if pid in by_id and (by_id[pid].get("depth_level") == "production"
+                         or repo_levels.get(pid) == "production"):
+        continue  # production 条目已在上面逐条给出 WARN
+    n_warn += 1
+    reason = "已不在索引" if pid not in by_id else "已不是 production"
+    print(f"[WARN] 判据①②待裁决清单陈旧条目: {pid} {reason} —— "
+          f"请从 {os.path.basename(boundary_pending_file)} 移除")
+
+print(f"[INFO] production 声明核对: {n_prod} 条 · 判据①②全满足 {n_prod_ok} 条"
+      f"（其余为待裁决 WARN 或已 FAIL）")
 print("")
 
 for path in preset_files:
@@ -521,7 +683,9 @@ print("")
 print("检查范围: id 可在索引解析 + 版本区间被实际版本满足（精确 / ^ / ~ / 比较器集合）"
       " + 常驻 RSS 红线与目标 + 同时常驻数 + 单插件包体积"
       " + 索引↔仓库 depth_level 一致性（G-20：新增不一致 FAIL / 已知待裁决 WARN）"
-      " + out_of_box 预设不得引用 non-production 插件（G-20）")
+      " + out_of_box 预设不得引用 non-production 插件（G-20）"
+      " + production 判据② tests/fault/ 与判据① tests/boundary/（用例/并发/四类；"
+      "清单内 WARN / 清单外 FAIL）")
 print(f"presets-check: {n_pass} pass, {n_warn} warn, {n_fail} fail")
 sys.exit(1 if n_fail else 0)
 PY

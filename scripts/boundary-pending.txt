@@ -1,0 +1,33 @@
+# G-20 判据①（边界用例）已知待裁决清单 —— 存量补测试的登记处，不是放行名单
+#
+# 判据真源 docs/PLUGIN-CATALOG.md:90：production 升级需 ① 边界用例覆盖
+# （异常输入 / 并发 / 权限不足 / 资源耗尽各 ≥1 例并进 CI）+ ② 故障注入通过。
+#
+# 判据：索引声明 depth_level=production（或仓库 info.json 声明）的插件，其
+#   ../kore-plugin-<id>/tests/boundary/ 必须存在、含 func Test 的 *_test.go、
+#   并发证据 ≥1（t.Parallel / go func / sync.）、四类覆盖各 ≥1（文件名或注释含关键词）。
+# 分层：
+#   · 在清单里 → [WARN]，不阻断 make check（本轮 15 条存量 tests/boundary 全缺）
+#   · 不在清单里（新增 production 声明）→ [FAIL]，阻断
+#   · 已满足判据①② / 已不是 production / 已不在索引 → [WARN] 提示移除
+# 一处补齐并过门禁即删对应行：移出清单 = 转硬判据，不再享有存量豁免。
+#
+# 2026-11-24 审计（.agents/verify/production-claim-audit.md）：15/15 无 tests/boundary/、
+# t.Parallel 0/15、sync.* 0/15；判据② 15/15 实跑 PASS（161 用例）。补测试由后续卡承接，
+# 本清单只负责「现在挡住新增空口声明，存量不一次性打红」。
+
+site
+file
+ssl
+cron
+monitor
+logs
+runtime-php
+db-mysql
+redis
+backup
+firewall
+app-deploy
+terminal
+process
+discover
