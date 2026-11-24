@@ -180,7 +180,8 @@ func TestLoginAuditFailedWrongPassword(t *testing.T) {
 	assertNoPassword(t, ev)
 }
 
-// TestLoginAuditRateLimited 锁定期内的登录写 login.failed reason=rate_limited。
+// TestLoginAuditRateLimited 惩罚模式下的错口令写 login.failed reason=rate_limited，
+// 且正确口令不受影响（P1 DoS 修复：不再有"锁定期内连正确口令也拒"的硬锁）。
 func TestLoginAuditRateLimited(t *testing.T) {
 	srv, recorder, _ := newAuditHTTPServer(t, nil, func(s *Server) {
 		s.loginLimiter = auth.NewLoginLimiter(1, time.Minute, time.Minute)
@@ -189,14 +190,19 @@ func TestLoginAuditRateLimited(t *testing.T) {
 		t.Fatalf("第 1 次错口令应 401，实际 %d", rec.Code)
 	}
 	recorder.reset()
-	if rec := auditLoginRequest(t, srv, "audit-password"); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("锁定期内应 429（连正确口令也拒），实际 %d", rec.Code)
+	// max=1：第 2 次错口令进入惩罚模式，1s 延迟后 429 并记 rate_limited。
+	if rec := auditLoginRequest(t, srv, "wrong-password"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("惩罚模式下错口令应 429 E_RATELIMIT，实际 %d", rec.Code)
 	}
 	events := recorder.byAction(auditActionLoginFailed)
 	if len(events) != 1 || events[0].Detail["reason"] != "rate_limited" {
 		t.Fatalf("应写 1 条 reason=rate_limited 的 login.failed，实际 %+v", events)
 	}
 	assertNoPassword(t, events[0])
+	// 正确口令在惩罚期间仍能登录：错口令不能把管理员锁死。
+	if rec := auditLoginRequest(t, srv, "audit-password"); rec.Code != http.StatusOK {
+		t.Fatalf("惩罚期间正确口令应 200，实际 %d", rec.Code)
+	}
 }
 
 // assertNoPassword 断言审计事件任何字段都不包含测试口令。

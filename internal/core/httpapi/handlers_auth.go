@@ -32,27 +32,13 @@ type sessionBody struct {
 
 // handleLogin 校验口令，成功签发会话并下发 cookie。
 //
-// 限速（docs/SECURITY §3.5）：先 Allow 后校验口令——锁定期内连正确口令也拒，
-// 避免"用正确口令探测是否已解锁"；拒绝回 429 E_RATELIMIT + Retry-After（秒）。
-// 计数口径为失败次数，成功登录清零。
+// 限速（docs/SECURITY §3.5，P1 DoS 修复）：**先校验口令、再对错误口令施加递增
+// 延迟**，不存在"锁定期"——因此任意本地进程无法用错口令把管理员永久锁死，正确
+// 口令在任何时候都短路放行。错误口令连续失败达到阈值后按 1s→2s→4s→…→30s
+// 递增延迟，把串行爆破压到 1/30s；并行爆破另由 BeginVerify 单飞限制猜测吞吐。
+// 计数口径为连续失败次数，成功登录清零、静默超过 security.login_rate_limit.lock
+// 后清零。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.loginLimiter != nil {
-		if ok, retryAfter := s.loginLimiter.Allow(loginRateKey); !ok {
-			// Retry-After 取整到秒并向上取整：不足 1s 也给 1，避免 0 被读成"立即重试"。
-			seconds := int64((retryAfter + time.Second - 1) / time.Second)
-			if seconds < 1 {
-				seconds = 1
-			}
-			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-			// 只记 key 与剩余秒数，绝不记口令；同时写 login.failed 审计（reason=rate_limited），
-			// 让暴力破解可从审计库追溯（docs/SECURITY §3.5 / DATA-MODEL §9）。
-			slog.Warn("登录限速命中", "key", loginRateKey, "retry_after_s", seconds)
-			s.recordLoginFailed(r, loginRateKey, "rate_limited")
-			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT,
-				"登录失败次数过多，请稍后重试", "")
-			return
-		}
-	}
 	var req loginRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&req); err != nil {
@@ -61,12 +47,54 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", "")
 		return
 	}
-	ok, err := s.auth.Verify(req.Password)
-	if err != nil || !ok {
-		if s.loginLimiter != nil {
-			s.loginLimiter.RecordFailure(loginRateKey)
+	// 口令校验：单飞串行化 PBKDF2，避免修掉硬锁后并行连接把猜测吞吐放大 N 倍。
+	var (
+		verified  bool
+		verifyErr error
+	)
+	if s.loginLimiter != nil {
+		release, acquired := s.loginLimiter.BeginVerify(r.Context())
+		if !acquired {
+			// ctx 已取消（客户端断开）：仍回 429 让调用方按 Retry-After 退避。
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT, "登录校验繁忙，请稍后重试", "")
+			return
 		}
-		s.recordLoginFailed(r, loginRateKey, "wrong_password")
+		verified, verifyErr = s.auth.Verify(req.Password)
+		release()
+	} else {
+		verified, verifyErr = s.auth.Verify(req.Password)
+	}
+	if verifyErr != nil || !verified {
+		var penalty, next time.Duration
+		if s.loginLimiter != nil {
+			penalty = s.loginLimiter.RecordFailure(loginRateKey)
+			if penalty > 0 {
+				next = s.loginLimiter.NextPenalty(loginRateKey)
+			}
+		}
+		reason := "wrong_password"
+		if penalty > 0 {
+			reason = "rate_limited"
+		}
+		// 先落审计再等待：等待期间进程若被杀，暴力破解仍可追溯。
+		s.recordLoginFailed(r, loginRateKey, reason)
+		if penalty > 0 {
+			// Retry-After 给"下一次错误尝试将被延迟的秒数"（向上取整、最小 1）。
+			seconds := int64((next + time.Second - 1) / time.Second)
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+			slog.Warn("登录错误口令惩罚延迟", "key", loginRateKey, "delay_ms", penalty.Milliseconds(),
+				"retry_after_s", seconds)
+			if !s.loginLimiter.Wait(r.Context(), penalty) {
+				return
+			}
+			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT,
+				"登录失败次数过多，请稍后重试", "")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "口令错误", "")
 		return
 	}
