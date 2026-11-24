@@ -166,7 +166,7 @@
 | timeout_s | int | 是 | 1–300；超时 kill transient unit |
 | description | string | 否 | ≤200 字符；启用/升级确认时展示 |
 | irreversible | bool | 否 | `true` 时必须携带一次性 `confirm` 令牌（见 §3.1.4） |
-| writes_host | bool | 否 | 声明本动作会修改安装目录外的宿主状态（ADR-0023 §3.5 #3）。`true` 时 `target` 必填；执行成功后内核追加一条 `changes.jsonl`（DATA-MODEL §9.1）；**无 `purge_op` 的写宿主动作按不可逆处理**（需 `confirm` 令牌） |
+| writes_host | bool | 否 | 声明本动作会修改安装目录外的宿主状态（ADR-0023 §3.5 #3）。`true` 时 `target` 必填；执行成功后内核追加一条 `changes.jsonl`（DATA-MODEL §9.1）；**无 `purge_op` 的写宿主动作按不可逆处理**（需 `confirm` 令牌）；**`file_write` 动作除外**：其 `purge_op` 由内核运行时生成（有备份→`file.restore`、新文件→`file.remove`），只有显式 `irreversible: true` 才需 `confirm` |
 | target | string | `writes_host=true` 时必填 | ≤200 字符；影响对象（人话），如 `/etc/nginx/conf.d/kore-a.conf`、`22/tcp`；写进变更账本供用户看懂"改了什么" |
 | purge_op | object | 否 | **结构化回滚操作**（ADR-0023 §3.4）：`{kind,args}`，kind ∈ `file.remove`（args=`[path]`）/ `file.restore`（args=`[原文件,目标]`），路径必须绝对、非根、无 `..`；仅允许与 `writes_host=true` 同时出现。**协议不提供 shell 字符串回滚字段**——那等于把 RCE 面写进账本 |
 | file_write | object | 否 | **受控文件写声明**（ADR-0052 裁决 A）：`{prefix_class, mode, content_policy, max_bytes?}`，见 §3.1.3.2。与 `argv` **互斥**（写文件不执行外部命令，声明了 `file_write` 还带 `argv` 直接拒绝）；出现时必须 `writes_host=true`、`target` 必须**逐字等于**类别目录（账本要能对上真实写入路径）；`timeout_s` 可省略。类别由内核定义，插件不能自报目录/后缀 |
@@ -211,16 +211,32 @@
 
 1. **schema**：`args` 必须恰为 1 个元素（单层文件名 `kore-<plugin>-<slug>.conf`）；`content` 只属于 file_write，exec 动作携带一律 `E_INVALID`（不静默丢弃）；声明仍走 `pluginapi.ValidateRootAction`（与 `argv` 互斥、必须 `writes_host`、`target` 必须等于类别目录）；
 2. **内容策略**：`pluginapi.ValidateFileWriteRequest`（K2 校验器）复核文件名形状/后缀/归属与正文；HTTP body 上限 `maxRootActionBody` 已提到 **2 MiB**（256 KiB 正文最坏 JSON 转义 ×6 + 余量），**解码后**仍按 256 KiB 硬顶判；
-3. **confirm → root → 账本**：`irreversible` 或「`writes_host` 且无 `purge_op`」仍需一次性 confirm 令牌；非 root 返回 `E_NEED_ROOT`；`changes.jsonl` 账本未装配即拒绝（不留「改了宿主却查无此事」）；
+3. **confirm → root → 账本**：**`file_write` 只在显式 `irreversible: true` 时要 confirm**（可回滚性由写前备份 + 运行时 `purge_op` 保证——干净声明不需要令牌，否则插件 bearer 永远拿不到只有管理员能签的令牌）；exec 动作仍按「`irreversible` 或 `writes_host` 且无 `purge_op`」判；非 root 返回 `E_NEED_ROOT`；`changes.jsonl` 账本未装配即拒绝（不留「改了宿主却查无此事」）；
 4. **写**：审计 begin（写盘前、fail-closed，只记 `path/sha256/size/mode/copy_path`，**不记正文**）→ 写前备份到 `<state>/backups/<plugin>/<ts>/` → 同目录临时文件 + `rename` 原子替换 → **属主复核 `root:root 0644`**（`internal/platform.VerifyOwner`；失败**回滚**：有备份则恢复，新文件则删除，并以 `E_OWNER_MISMATCH` 拒绝）→ 审计 end；同一路径的并发写在进程内**按路径锁**串行（锁覆盖「检查 → 写」整段，防 TOCTOU 与备份链错乱）；
 5. **回滚账本**：`changes.jsonl` 的 `purge_op` 是**运行时**得到的结构化操作——有备份 → `file.restore`（备份路径, 目标路径），新文件 → `file.remove`（目标路径）；永不存 shell 字符串。
 
-**证书/口令目录白名单（运行时注入）**：`FileWriteOptions.Nginx.CertPrefixes` / `AuthFilePrefixes` 缺省为空 → `ssl_certificate*` / `auth_basic_user_file` 一律拒绝（错误信息明说「白名单为空」，不猜安装路径）。内核侧的注入点是 `privilege.FileWriteOptions.Policy`，K3 单测覆盖「空 → 拒绝 / 注入 → 放行」；**值**的注入（`<install>/data/ssl/` + 类别目录）必须由 `pkg/pluginapi` 产出（`nginx`/`ssl` 是薄壳门禁业务域词，不得进 `cmd`/`internal`），K3 未跨域修改 `pkg/pluginapi`，生产值注入待独立小卡（见 §3.1.3.2 末「真机验证」）。
+**证书/口令目录白名单（运行时注入）**：`FileWriteOptions.Nginx.CertPrefixes` / `AuthFilePrefixes` 缺省为空 → `ssl_certificate*` / `auth_basic_user_file` 一律拒绝（错误信息明说「白名单为空」，不猜安装路径）。三张白名单**按文件种类分配**，不要把同一份目录列表同时喂给 cert 与 auth（最小权限）：
+
+| 白名单 | 吃什么目录 | 理由 |
+| --- | --- | --- |
+| `CertPrefixes`（`ssl_certificate*`） | **只**吃 `KORE_FILE_WRITE_ALLOW_DIRS` 注入的目录（`<install>/data/ssl/`） | 证书/私钥只有安装目录一个合法来源（ADR-0023 §3 C）；`/etc/nginx/conf.d/` 是 vhost drop-in 目录，不是证书目录——并进来只让 `ssl_certificate*` 可指向任意片段（nginx 解析失败、无外泄通道，但仍是放宽） |
+| `AuthFilePrefixes`（`auth_basic_user_file`） | **类别目录 + 注入目录** | 站点插件的 htpasswd **与 vhost 同目录**写（`<confDir>/kore-site-auth.<domain>.htpasswd`，`kore-plugin-site/password.go` `authFilePath`）；不给类别目录 = 站点 basic auth 过不了内核校验。注入目录保留「口令文件放 `<install>/data/…`」的部署 |
+| vhost 写盘 `internal/core/filewrite.AllowedPrefixes` | 类别目录（从 `FileWritePrefixClasses` 派生）+ ADR-0028 一期目录 | 只有 vhost 片段写在这里；与 cert/auth 是两个维度，不互相借道 |
+
+- **协议类别目录**（唯一真源，如 `/etc/nginx/conf.d/`）由内核从 `pluginapi.FileWritePrefixClasses` 派生，不在 `cmd`/`internal` 抄路径字面量；
+- **安装路径目录**（如 `<install>/data/ssl/`）只能**运行时注入**：环境变量 `KORE_FILE_WRITE_ALLOW_DIRS`（路径列表，`os.PathListSeparator` 分隔；未设置 = 空 = 拒绝）。内核不猜安装布局；
+- 分配结果经 `pluginapi.FileWriteOptionsWithDirs(certDirs, authDirs)` 注入——`nginx`/`ssl` 是薄壳门禁业务域词（G-01），赋值只允许发生在 `pkg/pluginapi`；helper 做词法规范化（绝对路径、无 `..`/变量/控制字符、补尾斜杠、去重、非法逐条丢弃），**纯词法不 stat/不解析软链**。
+- **运维口径：不要加引号**（`KORE_FILE_WRITE_ALLOW_DIRS` 用 systemd `Environment=` 固定，unit 内 root 所有、非 root 不可改；本地模式由同权用户控制）：
+  - 正确：`Environment=KORE_FILE_WRITE_ALLOW_DIRS=/opt/kore/data/ssl/:/opt/kore/data/auth/`
+  - 错误：`Environment="KORE_FILE_WRITE_ALLOW_DIRS=\"/opt/kore/data/ssl/\""`——多出来的引号让条目**不以 `/` 开头**，helper 视为非法并**逐条丢弃**，结果是 `ssl_certificate*` / `auth_basic_user_file` 继续被拒。这是 **fail-closed（不静默放行），但也不会报「引号多了」**，只表现为证书指令被拒，容易误判成"目录没建"。
+  - 同理不要用 `~` / `$HOME`（不展开，同样被丢弃）；不带尾斜杠可以（helper 会补），但**不要拼相对路径**。
+  - 落地后自检：`systemctl show kore -p Environment`（或 `printf '%s\n' "$KORE_FILE_WRITE_ALLOW_DIRS"`）确认每项都以 `/` 开头、值里没有引号。
+- 单测：`cmd/kored` 覆盖「空注入 → `<install>/data/ssl/` 证书拒绝 / 注入后放行 + `/opt/kore/data/ssl-evil/` 边界不被放行 / ssl_certificate 指向 conf.d 必须拒绝（收窄核心回归）/ auth 三类分配 / 反例自证：把 `certDirs` 改回 `dirs`（classDirs+envDirs）核心回归用例立即 FAIL / 非法条目丢弃」；`pkg/pluginapi` 覆盖 helper 语义与反例自证。
 
 **真机 root e2e（未执行；本机非 root，`/etc/nginx/conf.d` 为开发假象）**：
 
 1. `make build` 后以系统服务形态运行（`User=root`），或在隔离实例里用 `KORE_HOME=/tmp/kore-e2e sudo -E ./bin/kored --config <隔离配置>`；
-2. 管理会话登录后 `POST /api/v1/plugins/site/root-action`，body `{"action_id":"<file_write 动作>","args":["kore-site-test.conf"],"content":"server { listen 8099; server_name e2e.test; root /var/www/e2e; }"}`（动作无 `purge_op` 时先签发 confirm 令牌）；
+2. 管理会话登录后 `POST /api/v1/plugins/site/root-action`，body `{"action_id":"<file_write 动作>","args":["kore-site-test.conf"],"content":"server { listen 8099; server_name e2e.test; root /var/www/e2e; }"}`（干净的 `file_write` 声明不需要 confirm 令牌；只有显式 `irreversible: true` 才签）；
 3. `stat -c '%U:%G %a' /etc/nginx/conf.d/kore-site-test.conf` → `root:root 644`；`nginx -t`（宿主装 nginx 时）→ `syntax is ok`；
 4. 二次写同文件 → `<state>/backups/site/<ts>/kore-site-test.conf` 存在，`changes.jsonl` 末条 `purge_op.kind=file.restore`；按该 `purge_op` 回滚 → 恢复旧内容；删除目标后备份仍在；
 5. 反例：非 root 启动 → `E_NEED_ROOT`；文件名 `evil.conf` / 别的插件前缀 → `E_INVALID`；正文 >256 KiB → `E_INVALID`；含 `access_log` → `E_INVALID`。其余 exec 动作仍走：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
