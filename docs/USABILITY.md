@@ -89,7 +89,7 @@
 
 ### 5.2 USABILITY-AUDIT 16 条当前状态（2026-11-23 核对）
 
-判据来源 [USABILITY-AUDIT.md](./USABILITY-AUDIT.md)；只认代码/提交证据，未修的标「仍在」。计数：**已修 12 / 部分修 1 / 仍在 3**（2026-11-24 R10：P1-7、P2-5 修复入账）。
+判据来源 [USABILITY-AUDIT.md](./USABILITY-AUDIT.md)；只认代码/提交证据，未修的如实标注、不虚报已修。计数：**已修 15 / 部分修 1 / 仍在 0**（2026-11-24 R12：P1-6、P2-4、P2-6 修复入账）。
 
 | 编号 | 状态 | 证据（file:line 或 commit） |
 | --- | --- | --- |
@@ -100,15 +100,15 @@
 | P1-3 capability.denied 进 UI | **已修** | `d970fa5`；`web/alerts.js:23`、`web/app.js:1411`（权限不足被拒绝） |
 | P1-4 常驻槽位（未定义术语） | **已修** | `d970fa5`；`web/alerts.js:191`（常驻名额已满） |
 | P1-5 crontab / 内核调度器 / API 路径 | **已修** | `91709a2`；主流程 `web/tasks.js:676` 一句话，内部词仅在 `:688` 折叠 |
-| P1-6 DNS 文案含 ADR-0018 / 内核代理 | **仍在** | `web/dns.js:124`、`:271`（kored / ADR-0018 仍直出） |
+| P1-6 DNS 文案含 ADR-0018 / 内核代理 | **已修** | `a2f811c`；RUNBOOK_PRIV 深链去锚点、kore→Kore 面板，`web/dns.js` 中 ADR-0018/kored/capability/lifecycle 零命中 |
 | P1-7 终端兜底透出 err.message | **已修** | `2b68649`；7 处 catch 统一走 `web/terminal.js:605`（errorNode，err.message 只进折叠区）、`:617`（setError 白话+怎么办） |
 | P1-8 手机触摸目标 <44px | **已修** | `7499a2e`；`web/style.css:1702`、`:1891`、`:2176` 均为 `var(--kore-touch)` |
 | P2-1 凭据空态无按钮 | **已修** | `8898a9a`；`web/credentials.js:234`（新建第一条凭据） |
 | P2-2 审计空态无下一步 | **已修** | `8898a9a`；`web/audit.js:154`（刷新按钮） |
 | P2-3 cron 日志空态无重试 | **部分修** | 面板头有「刷新日志」`web/tasks.js:794`；空态块 `:581` 本身仍无按钮 |
-| P2-4 SSH 防护无独立入口 | **仍在** | `web/shell.js` 平台组无 ssh-guard 导航项（仍只在防火墙页内） |
+| P2-4 SSH 防护无独立入口 | **已修** | `a35097c`（ssh-guard 视图）+ `c88809d`（导航收敛）；`web/app.js:2162` 注册 sshguard 视图、`:2213`「安全」组含 sshguard tab、`web/sshguard.js`（53347B）、`web/shell.js:58` 图标 |
 | P2-5 防火墙「后端」内部词 | **已修** | `699cf4f`；`web/firewall.js:104`（backendText 映射），全文件 grep「后端」零命中，root/ufw 文案一并白话化 |
-| P2-6 DNS 空态 root/kored 文案 | **仍在** | `web/dns.js:271`（以 root 重启 kored 后刷新本页） |
+| P2-6 DNS 空态 root/kored 文案 | **已修** | `a2f811c`；`web/dns.js:199-201` 空态白话「Kore 面板不内置 DNS 服务…」、`:275` paintQueryMsg() 无该句 |
 
 ## 6. 评审与验收怎么用
 
