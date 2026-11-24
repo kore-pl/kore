@@ -50,10 +50,58 @@
 
 ## 3. 门禁
 
+本段由 `r10-docfix` 于 2026-11-24 补跑回填（ADR-0050 收敛轮 `r10-a1close` 留占位，未执行即不留通过结论）。
+
 ```
 $ make docs-check
-（见下方回填：本轮 commit 前执行）
+[RUN ] docs-check
+[INFO] 已排除 .agents/verify/（冻结证据，按证据规范而非文档模板）
+[INFO] 文档计数: 108 份（docs/**.md + .agents/**.md，不含 verify）· 证据计数: 220 份（.agents/verify/，仅参与链接检查）
+
+-- 1/6 必需文件 --
+[PASS] 必需文件齐全：16 项 + docs/DECISIONS 43 篇
+
+-- 2/6 元信息（前 5 行含 '> 状态:' 且含 '里程碑: M0–M5'） --
+[PASS] 全部 108 份文档元信息合规
+
+-- 3/6 相对链接可达性（文档 + 冻结证据） --
+[PASS] 检查 889 条相对链接，全部可达
+
+-- 4/6 占位词（每份文档 TODO / 待补充 / 待定 合计 ≤ 2 次） --
+[PASS] 占位词密度合规（全部 ≤ 2 次）
+
+-- 5/6 行数（docs/*.md 期望 100-400；MILESTONE-M0.md 放宽到 60-400；豁免逐条登记并打印理由） --
+[EXEMPT] docs/PLUGIN-PROTOCOL.md:561 行（登记区间 100-400，文档判据 100-400）— 理由: 真源类（插件协议 kore.plugin.v1）：§3.1 是 info.json 必填字段的唯一真源（AGENTS.md G-17 与 scripts/store-check.sh 均按节号引用），§4–§17 的帧格式 / 握手 / 状态机 / 错误码 / 事件类型互相引用，拆分会切断跨节不变量；AGENTS.md §7 明文允许真源类（协议/规格/append 型台账）超长
+[EXEMPT] docs/SIGNING-KEY-SOP.md:88 行（登记区间 100-400，文档判据 100-400）— 理由: 下限豁免（SOP 类）：§1–§7 已覆盖生成 / 备份 / 日常重签 / 轮换 / 泄漏应急 / 复核周期 / 机制自测，命令可直接执行；88 行低于 100 下限是信息密度高而非内容缺失，为凑下限加行即注水
+[WARN] 行数越界 1 份（WARN，不阻断）
+       行数越界: docs/SECURITY.md:455（期望 100-400）
+
+-- 6/6 关键口径（docs/ 内每项至少 2 个文件命中） --
+[PASS] 关键口径 '8 MiB' / 'kore.plugin.v1' / '/run/kore' 覆盖达标
+
+docs-check: 5 pass, 1 warn, 0 fail
+结果: 门禁通过（1 WARN 不阻断）
+EXIT=0
 ```
+
+只读回查（历史收敛提交 321c34d，非本轮提交；确认本文件已入 HEAD）：
+
+```
+$ git show --stat --format='%H%n%s' 321c34d
+321c34d7e1566e55c53774b513a1e082ddfc84bf
+[agent:r10-a1close] chore(agents): 收敛三文件在途挂账（monitor-cards G-32 图表 + ADR-0050 + 审计文档）
+
+ .agents/verify/db-runtime-architecture-audit.md   |  61 +++++
+ docs/DECISIONS/0050-db-and-runtime-aggregation.md | 256 +++++++++++++++++++
+ web/monitor-cards.js                              | 295 ++++++++++++++++++++--
+ 3 files changed, 588 insertions(+), 24 deletions(-)
+EXIT=0
+$ git merge-base --is-ancestor 321c34d HEAD && echo ANCESTOR=yes
+ANCESTOR=yes
+EXIT=0
+```
+
+结论：`make docs-check` exit 0（5 pass / 1 warn / 0 fail），唯一 WARN 是 `docs/SECURITY.md` 行数越界、不阻断；本文件在 commit `321c34d` 的版本已入 HEAD，本轮为占位回填的增量改动。
 
 ## 4. 未改动声明
 
