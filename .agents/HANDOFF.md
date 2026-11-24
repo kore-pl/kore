@@ -6,25 +6,28 @@
 **要做什么、怎么干、干到哪了、为什么这么定**。这份规范定义这四问分别由哪些文件回答，以及
 "什么才算落过文件"。
 
-## 0. 当前交接快照（2026-11-24 04:10）
+## 0. 当前交接快照（2026-11-24 10:20）
 
 > 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
 > 每条附命令 / `file:line` / commit；查不到的写「未确认」，不写推测。
-> 上一版快照为 2026-11-24 01:40（`f569fca`）；`890a6f5`（02:09）只补了第 17 段一行，本版按 03:56 的 HEAD 重新核实全节。
-> 本版写域只有本文件；`make check` 整条 aggregate 实跑：**exit 0（17/17 全过）**，`docs-check` / `store-check` /
-> `presets-check` 数字取自同一份输出（`/tmp/make-check-handoff2.log`），另单跑 `bash scripts/frontend-check.sh`
-> 复核 `web/dist`（`make check` 第 10 段会重写 dist，mtime 04:04:32）。
+> 上一版快照为 2026-11-24 04:10（`994ba74`）；本版按 10:09 的 HEAD **`3c53395`** 重新核实全节。
+> 本版写域只有本文件；`make check` 整条 aggregate 用**当前工作树**实跑：**exit 0（19/19）**，日志
+> `/tmp/make-check-handoff3.log`。口径说明：HEAD 的 `make check` 是 **18 段**（`git show HEAD:Makefile`
+> 第 392 行「聚合门禁（18 段）」）；工作树有他人在途的第 19 段「全仓 `-race`」（`Makefile` + 未跟踪的
+> `scripts/race-full-check.sh`，`AGENTS.md` 已同步为 19 段），**本轮 1–18 段全部通过**，第 19 段也通过
+> （17 包 / 53s / 零 DATA RACE）。
 
 ### A. 四问当前答案
 
 1. **要做什么**：M5 收口前的 v1.0 Linux GA 准备——22 能力域由 24 个插件仓提供，内核保持薄壳调度。
-   今天（2026-11-24）截至 03:56 共 **65** 个提交（`git log --since="2026-11-24 00:00" --oneline | wc -l` → `65`；
-   11-23 全天 `359`），01:40 之后增量 **28** 个（`--since="2026-11-24 01:40"`），当前 HEAD **`d61a0db`**
-   （`git log -1 --format="%h %ad %s"` → 2026-11-24 03:56:39）。01:40 之后集中在四条线：
-   **门禁补强**（canonical-check 规则 2 改值断言 / 第 17 段全仓交叉编译 / `README_VERSION_DRIFT`）、
-   **`depth_level` 8 条裁决并第 51 把重签**、**`post_upgrade` 三处缺口修复 + 运行态激活**、
-   **bus / oneshot / dns / cron 真 bug 修复**。
-2. **怎么干 / 事实约束**（七条硬边界，动手前先对齐）：
+   今天（2026-11-24）截至 10:09 共 **83** 个提交（`git log --since="2026-11-24 00:00" --oneline | wc -l` → `83`；
+   11-23 全天 `359`），04:10 之后增量 **18** 个（`--since="2026-11-24 04:10"`），当前 HEAD **`3c53395`**
+   （`git log -1 --format="%h %ad %s"` → 2026-11-24 10:09:13）。04:10 之后集中在四条线：
+   **门禁补强**（`make check` 18 段 + 在途第 19 段全仓 `-race`；G-20 判据①②真执行；`store-check` 两项补强）、
+   **深度等级收口**（15 个 production 判据①②全满足，`scripts/boundary-pending.txt` 清空）、
+   **并发丢数据 6 处真 bug 修复**（site / logs×2 / file / app-deploy / cmd/kored）、
+   **Gitee release prune 全量执行**（26 仓 dry-run / 真删 11 仓 / echo 例外跳过）。
+2. **怎么干 / 事实约束**（八条硬边界，动手前先对齐）：
    - **面板必须有登录页**：kore 自有 Web 登录——`POST /api/v1/auth/login`，凭据 = `auth.admin_password_hash`，
      **单管理员、无用户名、非 PAM / 非系统账号**。依据 `docs/DECISIONS/0043-login-gate-vs-passwordless-ops.md`
      头部 **`状态: accepted`**；实现 `a68c4b1`；登录视图 `web/app.js:347-430`（`input.type='password'`，`:367`）。
@@ -49,7 +52,17 @@
      `plugin_state.post_upgrade_pending`，下次 `Enable` 补跑；失败 WARN + 告警、不回滚安装。依据
      `docs/DECISIONS/0048-post-upgrade-hook.md:1`（`状态: accepted`）、`docs/PLUGIN-PROTOCOL.md:75,420`；
      实现 `internal/core/registry/validate.go:169-186` + `cmd/kored/serve_runtime.go:339`（`postUpgradeTimeout`
-     见 `:37`，15s）。
+     见 `:37`，15s）。**离线 CLI 升级同样落 `post_upgrade_pending`**（`520420c`）：`kored install --package`
+     在 serve 停着、不经过 `reloadOne` 时，由安装器在落库时写标记（值 = 新版本），下次 serve 启动
+     `consumePostUpgrade` 补跑一次并清空；禁用态插件留到下次启用。首次安装 / 同版本重装 / 未声明钩子
+     都不写。测试 `cmd/kored/serve_offline_upgrade_test.go:18`（改前 FAIL）。
+   - **`-race` 是硬判据，不再是"可选优化"**：`make check` 第 18 段只对 `./tests/boundary/` 加 `-race`
+     （`c6dbce3`，`scripts/race-gate-check.sh`），本轮实测「有边界用例 **15** 仓 · `-race` 真跑通过 **15** 仓」。
+     但 kore 本仓没有 `tests/boundary/` → 本仓 `make race` 恒 `[SKIP]`，等于**内核代码在 race detector 面零覆盖**；
+     所以工作树在途的第 19 段用 `GOWORK=off CGO_ENABLED=1 go test -race -count=1 ./...` 补位（`scripts/race-full-check.sh`，
+     实测 17 包 / 53s / 零 DATA RACE）。判据来源是 `bd3ac83`：`cmd/kored` 升级链路两处**真实数据竞争**
+     （结果审计先于终态发布 / launch 返回锁外快照）在普通 `go test ./...` 下全绿、断言全过，**只有 `-race` 能抓**——
+     没有这段，同类竞争下次照样合入。
 3. **干到哪了**：见 B 节（发版索引 / 插件能力 / 主壳 / 今日门禁与能力 / 运行态 / 挂账）。
 4. **为什么这么定**：
    - **登录门与免密分层** —— ADR-0043（accepted）：ADR-0041 把「操作免密」实现成「本机通道免登录」，
@@ -59,7 +72,18 @@
    - **升级后置动作走声明、不走协议保留方法** —— ADR-0048（accepted）：A 方案（协议保留
      `kore.post_upgrade`、升级时全量唤醒插件）否决，B 方案（cron 由 lazy 改 resident 永久占槽）否决，
      采 C（清单可选字段 + 内核按声明 `bus.Call`）。内核只读声明、不写业务，守住 G-01；`post_upgrade`
-     属加字段演进（可选、有默认值），不升 `kore.plugin.v2`、不升主版本。
+     属加字段演进（可选、有默认值），不升 `kore.plugin.v2`、不升主版本。**离线 CLI 也落标记**的理由：
+     安装器是唯一同时知道「旧版本→新版本」与「新清单声明了钩子」的地方；不写标记，serve 停着升级后
+     crontab 会一直跑旧版本，直到用户手工打开计划页。
+   - **`-race` 升硬判据** —— 普通 `go test` 绿不代表没有竞争：`bd3ac83` 修的两处竞争在普通测试下
+     全绿、断言全过，只有 race detector 抓得到。第 18 段守插件仓并发边界面（15 仓真跑），
+     第 19 段（在途）守内核本仓全仓；两段都不允许「缺 cgo 就跳过」。
+   - **15 个 production 判据①②全满足** —— 判据不是「声明了就算」：`f7e9cb3` 补齐 G-20 两条判据、
+     `f6ef74c` 把判据① 从目录静态核对改为 `go test` 真跑、`d6670d3` 清空 `boundary-pending.txt`
+     让 15 条全部转硬判据。实测「判据①②全满足 15 条 · 判据① 真跑 PASS 15 / 不通过 0」。
+   - **Gitee release 全量 prune** —— 机制 2026-11-23 就建好，一直没执行；本轮 26 仓 `--dry-run` 后
+     真删 11 仓各 1 个版本（护栏①②每仓 ✓），`echo v0.1.0` 因 GitHub 无对应 release 按例外保留。
+     证据 `.agents/verify/gitee-prune-2026-11-24.md`（`8011a53`）。
    - **8 条 `depth_level` 判 `basic`、不迁就索引** —— 判据是 `docs/PLUGIN-CATALOG.md:90` 升级要求
      **①边界用例 + ②故障注入两条都满足**；8 仓故障注入 8/8 PASS，但均缺 `tests/boundary/`（①不满足），
      所以仓库 `production` 是过度声明、索引 `basic` 才对。裁决 `.agents/verify/depth-level-decision.md`
@@ -73,35 +97,42 @@
 
 #### B.1 发版与索引
 
-唯一事实源：`../kore-plugins/index/plugins.json`（实测 **24** 条）；索引仓 HEAD **`e3425cd`**
-「第 51 把重签 — echo 0.1.5 / integrity 0.5.1 / dns 0.4.2 / runtime-node 0.2.5 / runtime-python 0.3.2 /
-db-postgres 0.3.4 / waf 0.4.5 / container 0.5.5」（`git -C ../kore-plugins log -1 --format="%h %ad %s"`，
-2026-11-24 03:49:29）。第 51 把证据 `.agents/verify/resign-51.md`（`b12a6f8`，明确「未 `make build`、
-未重启 kored」）；公钥未变，第 16 段双端一致 `3e461a07…`。
+唯一事实源：`../kore-plugins/index/plugins.json`（实测 **24** 条）；索引仓 HEAD **`339efa7`**
+「monitor 0.3.1 入索引并重签（pluginapi v0.1.1→v0.1.3，dist 86fed8f2）」
+（`git -C ../kore-plugins log -1 --format="%h %ad %s"`，2026-11-24 09:11:38）。第 51 把证据
+`.agents/verify/resign-51.md`（`b12a6f8`）；公钥未变，第 16 段双端一致 `3e461a07…`。
+**索引落后 3 个插件仓**：site **0.4.4**（`dd1f565`）/ file **0.3.3**（`40d3feb`）/ app-deploy **0.3.2**（`463f14f`）
+已 bump 并打出 dist，但 `plugins.json` / `versions.lock.json` 仍停在上一个版本（逐仓比对 info.json.version
+→ 3 条 DRIFT；`ls dist/` 已有新包）。**商店当前拿不到这三处并发修复** → 下一轮第 52 把重签。
 
 | 插件 @ 索引版本 | 插件 @ 索引版本 |
 | --- | --- |
-| echo **0.1.5** | site 0.4.3 |
-| file 0.3.2 | ssl 0.6.0 |
+| echo **0.1.5** | site 0.4.3（仓 0.4.4 未收录） |
+| file 0.3.2（仓 0.3.3 未收录） | ssl 0.6.0 |
 | integrity **0.5.1** | cron **0.7.0** |
-| ssh-guard 0.3.1 | monitor 0.3.0 |
-| logs 0.5.1 | dns **0.4.2** |
+| ssh-guard 0.3.1 | monitor **0.3.1** |
+| logs **0.5.2** | dns **0.4.2** |
 | runtime-php 0.2.2 | runtime-node **0.2.5** |
 | runtime-python **0.3.2** | db-mysql 0.4.1 |
 | db-postgres **0.3.4** | redis 0.6.0 |
 | backup 0.4.2 | firewall 0.2.6 |
 | waf **0.4.5** | container **0.5.5** |
-| app-deploy 0.3.1 | terminal 0.2.1 |
+| app-deploy 0.3.1（仓 0.3.2 未收录） | terminal 0.2.1 |
 | process 0.3.0 | discover 0.3.1 |
 
 索引 `depth_level`：`basic` **9** 条（8 条裁决仓 `echo` / `integrity` / `dns` / `runtime-node` /
 `runtime-python` / `db-postgres` / `waf` / `container` + `ssh-guard`），`production` **15** 条
-（`PLUGIN-CATALOG` §6.1 的 12 产品级 + `terminal` / `process` / `discover`）。
+（`PLUGIN-CATALOG` §6.1 的 12 产品级 + `terminal` / `process` / `discover`）；15 条今晚全部满足 G-20 判据①②。
 
 #### B.2 插件能力（以各仓 `CHANGELOG.md` 为准）
 
 | 能力 | 版本 | 证据（仓 / 行） |
 | --- | --- | --- |
+| **`site` 清单读-改-写跨进程锁**（8 实例并发建站不再丢站点；锁固定在旁路 `.lock`，读者靠 rename 原子可见性） | **0.4.4** | `kore-plugin-site/CHANGELOG.md:5`；`dd1f565` |
+| **`logs` retention / download 并发串行化 + 唯一临时名**（4 来源并发只落 2/4 → 4/4；`os.CreateTemp` + fsync + rename） | **0.5.2** | `kore-plugin-logs/CHANGELOG.md:8`；`abe74b7` |
+| **`file` rename / move / copy TOCTOU 收口**（`renameat2(RENAME_NOREPLACE)`，并发抢同一目标恰好一胜一 `E_CONFLICT`） | **0.3.3** | `kore-plugin-file/CHANGELOG.md:3`；`40d3feb` |
+| **`app-deploy` deployments / jobs 旁路 flock**（8 并发 deploy 从 1 条恢复到恰好 8 条） | **0.3.2** | `kore-plugin-app-deploy/CHANGELOG.md:3`；`463f14f` |
+| **`kored` 升级链路两处真实竞争**（结果审计先于终态发布 / launch 返回锁内快照，`-race` 抓出） | 内核 | `cmd/kored/`；`bd3ac83` |
 | `container.exec`（固定 argv、非 root 默认、超时夹取 30s、输出截断 256 KiB；`docker.sock` 无权访问由 `E_UNSUPPORTED` 改 `E_NEED_ROOT`） | 0.5.5 | `kore-plugin-container/CHANGELOG.md:3-8` |
 | `process.history/trend/watchdog.suggest`（60 点环形缓冲、插件内零 ticker） | 0.3.0 | `kore-plugin-process/CHANGELOG.md:12` |
 | `ssh-guard.suggest`（只读 `system:read`，`dry_run` 恒 true；`depth_level` 按事实为 basic） | 0.3.1 | `kore-plugin-ssh-guard/CHANGELOG.md:5-9` |
@@ -126,32 +157,43 @@ db-postgres 0.3.4 / waf 0.4.5 / container 0.5.5」（`git -C ../kore-plugins log
 | `web/*.js` 文件数 | **34** | `ls web/*.js \| wc -l` → `34` |
 | 导航项 | **24** | `web/shell.js` NAV_GROUPS 四组 id 合计（ops 5 + biz 5 + res 4 + platform 10） |
 | `web/dist` 文件数 | **38** | `ls web/dist \| wc -l` → `38`（其中 `.js` 36 = 34 模块 + 2 语言包） |
-| 首屏 gzip | **65,213 B / 307,200 B** | `bash scripts/frontend-check.sh`（对既有 dist；`make check` 第 10 段重写后 mtime 04:04:32） |
+| 首屏 gzip | **65,213 B / 307,200 B** | `bash scripts/frontend-check.sh` 口径；`make check` 第 10 段重写后 mtime 10:1x |
 | i18n 增量 gzip | **2,909 B / 3,072 B** | 同上（余量 163 B，贴线） |
 
 最新视图：服务发现 `discover`（代码 `0cd5dab`，G-28 双端截图 `caa582e`）。
-开工前工作区**干净**：`git status --short | wc -l` → `0`；本轮编辑后只有本文件为 `M`。
+**工作区不是干净的**：本轮开工时已有 11 项他人在途改动（`M AGENTS.md` / `M Makefile` / `M .agents/QUALITY-GATES.md` /
+`M .github/workflows/ci.yml` / `M scripts/*.sh` / `?? scripts/race-full-check.sh` / `?? docs/RUNBOOK-INSTALL.md` 等），
+本版**只写 `.agents/HANDOFF.md`**，提交只用精确路径一步到位，不碰他人改动。
 
 #### B.4 今天落地的门禁与能力（全部给 commit）
 
-**B.4.1 新增 / 强化门禁（6 条）**
+**B.4.1 今晚新增 / 强化门禁（7 条 + 1 条在途）**
 
 | 门禁 | commit | 关键点 / 证据 |
 | --- | --- | --- |
-| **canonical-check 规则 2 改「值断言」** | `0679bf6` | `scripts/canonical-check.sh:6,114-174`：从「拦 `GOGC=200` 字面量」改成「运行时锚点实际值 == ADR-0015 规定值」。实测输出 `规则2 运行时默认 GOGC=50 / GOMEMLIMIT=6 / GOMAXPROCS=8 == ADR-0015 规定值`，Makefile 契约行 `GOGC=50` / `GOMEMLIMIT=6MiB` 同源校验；`规则2b GOGC=200 零命中` 保留。历史缺口见 `:119`：旧规则拦不到「注释写 100、代码实为 50」 |
-| **第 17 段交叉编译扩到全仓 `go build ./...`** | `890a6f5` | `Makefile:106,117,458`：`make cross` 五目标**全仓** `go build ./...`（不只 `cmd/kored` 闭包）+ kored 五产物；`make check` 17/17 实测五目标全过、`1732ms`。`cross-vet` 为 `_test.go` 跨平台类型检查的信息入口，不入 17 段 |
-| **`store-check` 第 6 项 `DIST_SHA_DIFF`** | `c569e12`（实现）+ `e172fde`（文档） | `scripts/store-check.sh:21-30,307-315`：本地 `dist/<id>-<ver>.tar.gz` sha 与索引账本比对，输出 `DIST_SHA_DIFF <id> <ver> index=… dist=…`，**WARN 不阻断**；比对全部版本（防 bump 后旧野产物漏检） |
-| **`store-check` 第 7 项 `README_VERSION_DRIFT`** | `af9e701`（实现）+ `d61a0db`（文档） | `scripts/store-check.sh:34,367`：只解析 README「发布产物」行的 `dist/<id>-<semver>.tar.gz` 与 `info.json.version` 比对，输出 `README_VERSION_DRIFT <id> info=<ver> readme=<ver>`，**WARN 不阻断**；解析不确定则 SKIP 并说明原因 |
-| **`presets-check` 的 `depth_level` 一致性 + `out_of_box`** | `45685a2` | `scripts/presets-check.sh:326-377`（索引↔仓库；清单内 WARN、新增不一致 FAIL）+ `:470-483`（`out_of_box=true` 不得引用非 production）。清单 `scripts/depth-level-pending.txt` 现只剩注释行（0 个 id） |
-| **`gitee-release-prune.sh` 按 tag 语义版本判序 + 两道护栏** | `22962bc` | 按 `sort -V` 判序，**不用 `created_at` / release id**（事故 `33088d9`：integrity v0.4.0 版本第 2 新却被误删）；护栏 ① 删除后剩余 == `--keep` ② 被删版本全部严格小于保留集最小版本；同版本多前缀歧义→整仓跳过不删（`scripts/gitee-release-prune.sh:5-22`） |
+| **canonical-check 规则 2 改「值断言」** | `0679bf6` | `scripts/canonical-check.sh:114-174`：从「拦 `GOGC=200` 字面量」改成「从 ADR-0015 解析期望值、从代码常量解析实际值，两者必须相等」。实测 `规则2 运行时默认 GOGC=50 / GOMEMLIMIT=6 / GOMAXPROCS=8 == ADR-0015 规定值`；Makefile 契约行 `GOGC=50` / `GOMEMLIMIT=6MiB` 同源校验。旧规则拦不到「注释写 100、代码实为 50」——`:119` 有记录 |
+| **第 17 段交叉编译扩到全仓 `go build ./...`** | `890a6f5`（段本身 `6bd09ee`） | `Makefile:106-127`：`make cross` 五目标**全仓** `go build ./...`（不只 `cmd/kored` 闭包）+ kored 五产物。实测「全仓五目标可编译 · 交叉产物 5 个 · 1669ms」；`cross-vet` 只做 `_test.go` 跨平台类型检查，是信息入口、不入第 17 段 |
+| **第 18 段 race 门禁** | `c6dbce3` | `Makefile:479` + `scripts/race-gate-check.sh:20-95`：`-race` **只跑** `./tests/boundary/`，逐仓核对 Makefile `race` 目标 / check 独立段 / ci.yml 显式跑，再 `make race` 真跑。实测「有边界用例 **15** 仓 · `-race` 真跑通过 **15** 仓」，全绿 |
+| **G-20 判据①② 两条都真执行** | `f7e9cb3`（补两条判据）+ `f6ef74c`（判据① 真跑） | `scripts/presets-check.sh:414-610`：判据② `tests/fault/` 硬判据（`:560-565`）；判据① `tests/boundary/` 目录/用例/并发/四类静态核对（`:567-581`）**之后 `GOWORK=off go test ./tests/boundary/ -count=1` 真跑**（`:503-532,583-592`）。实测「静态核对通过 15 仓 → go test PASS 15 / 不通过 0 · 累计 11.6s」 |
+| **`store-check` 第 6 项 `DIST_SHA_DIFF` 缺件可见** | `4c516e6` + `ef59908`（修误带他人改动） | `scripts/store-check.sh:146-149,318-362,418`：守卫改判「索引可达 + 有本仓 id」，**不再以 dist/ 存在为前提**；索引当前版本本地无 dist → 逐条 `[SKIP] … 本地无 dist，未比对`，汇总分账「151 一致 / 0 缺件跳过 / 12 索引未收录跳过」。缺件不 WARN 不 FAIL（dist 是构建产物），但**不再静默**=「0 warn 不再同时代表全部一致和全部没查」 |
+| **`store-check` 第 7 项 `README_VERSION_DRIFT` 扩到全文 + 行号** | `d9ffea7`（原行级 `af9e701`） | `scripts/store-check.sh:33-44,365-410`：README **全文逐行**扫所有 `dist/<id>-<ver>.tar.gz`（代码块 / 正文都算），带 `(line N)` 输出；只比 `<id> == info.json.id` 的引用，解析不出就 SKIP 不硬猜 |
+| **`boundary-pending.txt` 已清空，15 个 production 全转硬判据** | `d6670d3`（增量清 5 条 `155c008`） | `scripts/boundary-pending.txt` 只剩注释（0 个 id）；`presets-check` 实测「production 声明核对 15 条 · 判据①②全满足 15 条」。清单外新增 production 缺判据即 FAIL |
+| **（在途，未提交）第 19 段全仓 `-race`** | 未提交 | `scripts/race-full-check.sh` + `Makefile:482`：`GOWORK=off CGO_ENABLED=1 go test -race -count=1 ./...` 固定面必绿，缺 cgo 直接 FAIL 不降级。本轮实跑「17 个包 / 53s / 零 DATA RACE」；`AGENTS.md` / `QUALITY-GATES.md` 已同步 19 段，属他人写域 |
 
 **B.4.2 关键能力与真 bug 修复（本轮新增 / 更新）**
 
 | 能力 / 修复 | commit | 关键点 / 证据 |
 | --- | --- | --- |
+| **并发丢数据①：`site` manifest** | `dd1f565`（site 仓） | 清单 RMW 无互斥 → 8 实例并发建站只剩 1–2 条；create/delete 的「读清单→落 vhost→写回」整段进 flock 临界区，锁在旁路 `kore-site-manifest.json.lock`（清单 rename 后 inode 更替，锁挂清单会失效）。回归 `TestBoundaryConcurrencyManifestNoLostUpdate` |
+| **并发丢数据②：`logs` retention** | `abe74b7`（logs 仓） | 固定临时名 `retention.json.tmp` 让 4 来源并发只落 2/4；state 目录级 flock（跨进程 5s）+ `os.CreateTemp` 唯一名 + fsync + rename。回归 `TestBoundaryConcurrentRetentionSet`（4/4） |
+| **并发丢数据③：`logs` download** | `abe74b7`（同笔） | 导出落盘同样改唯一临时名（固定 `.tmp` 同类问题） |
+| **并发丢数据④：`file` rename TOCTOU** | `40d3feb`（file 仓） | `overwrite=false` 的 Lstat 与 `os.Rename` 之间无原子性，171/300 轮复现「都成功、一方被静默覆盖」；落名改 `renameat2(RENAME_NOREPLACE)`，跨设备回退与 `copy` 同收口。0.3.2→0.3.3 |
+| **并发丢数据⑤：`app-deploy` deployments/jobs** | `463f14f`（app-deploy 仓） | `deployments.json` / `artifact-jobs.json` RMW 加旁路 flock（同一把锁管两文件），8 并发 deploy 从 1 条恢复到 8 条；锁不包 `docker run`，同名并发锁内重读回 `E_CONFLICT` 并回滚容器 |
+| **并发丢数据⑥：`cmd/kored` 升级 job** | `bd3ac83` | 两处真实竞争：结果审计先于终态发布 / launch 返回锁外快照；`-race` 抓出、普通 `go test` 全绿 |
 | **`post_upgrade` 声明式后置动作** | `b71a900` | `info.json` 可选 `<id>.<method>`；内核只校验形态与自身域、字符串原样交 `bus.Call`（15s），不认识业务（ADR-0048）；`cmd/kored/serve_runtime.go` + `docs/DECISIONS/0048-post-upgrade-hook.md` |
 | **禁用态升级的 `post_upgrade` 补跑** | `67d80c1` | `desired=disabled` 升级只落 `plugin_state.post_upgrade_pending`，下次 `Enable` 成功后补跑一次并清空（`cmd/kored/serve_daemon_actions.go`） |
 | **installer 保留 `post_upgrade_pending`** | `a3dbdbb` | `plugin_state` 从整段覆盖改为读改写，保留未知字段，避免升级/重装时把待补跑标记抹掉（`internal/core/installer/record.go`） |
+| **离线 CLI 升级落 `post_upgrade_pending`** | `520420c` | serve 停着 `kored install --package` 时安装器写标记；下次 serve 启动 `consumePostUpgrade` 补跑；首次安装/同版本重装/未声明不写；CLI 输出打印「待补跑」（`cmd/kored/serve_offline_upgrade_test.go:18`） |
 | **bus 超时后迟到帧毒化下一次调用** | `8c50d21` | 超时后重同步迟到响应帧，避免下一次调用误报 `E_INVALID`；新增内部/外部两组测试（`internal/core/bus/call.go`） |
 | **oneshot 超时后进程不回收、令牌不归还** | `1a326af` | 超时回收进程 + 归还串行令牌（`internal/core/supervisor/oneshot.go`；`bus/call.go` 同步） |
 | **cron 钉死旧版本 / 升级后静默跑旧二进制** | `6efaaa3`（cron 仓） | 稳定路径 `current/bin/<id>` + `cron.migrate` + 启动期 `MigrateStaleBinaries` + `binary_status`（`kore-plugin-cron/internal/croncore/stablepath.go:207`、`main.go:53`） |
@@ -168,89 +210,97 @@ db-postgres 0.3.4 / waf 0.4.5 / container 0.5.5」（`git -C ../kore-plugins log
 | **插件降权显式化 / 权限授予记录层 / 审计保留期清理** | `a514a90` / `2ccbf0c`+`310cc2d` / `8d09b58` | `supervisor/demote.go:20-36` 非 root 必给 `Reason`；`installer/grant.go` 记录 `granted_capabilities`；`scheduler/auditclean.go` 默认 90 天、单次 ≤1000 条 |
 | **cron 稳定路径（内核侧）/ 方法名字符集放宽** | `cc1472f` / `512f1a2` | installer 维护 `current -> <version>` 相对链接（`installer/layout.go:17-22`）；`registry/validate.go:66` 与 `infocheck.go:56` 逐字一致，下划线合法、连字符非法 |
 
+**WARN 现状（10:19 实跑，工作树含他人在途改动）**：`docs-check: 5 pass / 1 warn`（3 份行数越界：
+`docs/PLUGIN-PROTOCOL.md:480` / `docs/RUNBOOK.md:557` / `docs/SIGNING-KEY-SOP.md:88`）、
+`case-check: 27 pass / 1 warn`（4 个 `github.com/Microsoft/...` 历史 URL 的 owner 段大写）。
+**10:25 复核**：这两处已被在途改动降为 0 WARN（`docs-check: 6 pass / 0 warn`，2 份登记豁免；
+`case-check: 28 pass / 0 warn`）——不属本文件写域，只记录事实，不改判据。
+
 已闭环（旧挂账移除）：`docs/DECISIONS/0028-controlled-file-write.md` 头部为 `accepted`；
 ADR-0041 为 `superseded-in-part`（`9b5d4dc`）；`web/.cache/` 已进 `.gitignore:13-15`；
-**8 条 `depth_level` 待裁决清零**（`957a26d` + `b12a6f8`，原 B.6-4 已闭环移除）。
+**8 条 `depth_level` 待裁决清零**（`957a26d` + `b12a6f8`，原 B.6-4 已闭环移除）；
+**Gitee「只保留最新 5 个」已执行**（`8011a53`，26 仓 dry-run / 11 仓真删 / echo 例外）；
+**README 代码块版本号已纳入门禁**（`d9ffea7` 扩到全文 + 行号，原 B.6-8 移除）；
+**cron 离线 CLI 迁移缺口已补**（`520420c`，原 B.6-6 移除）；**判据① 待裁决清单已清空**（`d6670d3`）。
 
-#### B.5 运行态（只报告，不杀进程、不改主配置；04:05 实测）
+#### B.5 运行态（只报告，不杀进程、不改主配置；10:20 复核，与 04:05 一致）
 
 | 对象 | 事实 |
 | --- | --- |
-| 主实例 pid / 启动 | **`809422`**，`2026-11-24 03:34:03`（`ps -o lstart= -p 809422`），uid **1000（非 root）** |
+| 主实例 pid / 启动 | **`809422`**（未重启），`2026-11-24 03:34:03`，uid **1000（非 root）** |
 | `/proc/809422/exe` | → `/home/pt/Work/GolandProjects/kore/bin/kored`（无 `(deleted)`），sha256 **`6c4b503ea6aa72a1af2e95617c85fd90e869fe57dd5fcc845633f760605e69ba`** |
 | `bin/kored` | 同 sha **`6c4b503e…`**，**10,510,498 B**，mtime `2026-11-24 03:33` → 运行中与磁盘一致（SHA_MATCH=YES） |
+| **运行镜像不含 `bd3ac83`** | `bin/kored` mtime 03:33 < 提交 10:00；`cmd/kored` 的升级竞争修复**只有源码与 `-race` 证据，没进运行态**。要用：`make build` + `systemctl --user restart kored-local`，重启后复核 exe sha |
 | 运行身份 / cgroup | **uid 1000**；`user.slice/user-1000.slice/user@1000.service/app.slice/kored-local.service`（systemd `--user`） |
 | `GET /-/healthz` | **200** `{"status":"ok"}` |
 | 未登录 `GET /api/v1/system/info` | **401** `{"code":"E_UNAUTHORIZED","message":"未授权","detail":""}` → 登录门生效 |
-| `strings /proc/809422/exe \| grep -c post_upgrade` | **4**（新代码已在运行镜像内） |
+| `strings /proc/809422/exe \| grep -c post_upgrade` | **4**（`post_upgrade` 代码在镜像内，离线 CLI 补跑那笔 04:17 也不在） |
 | `GET /` / `kore_csrf` | **200** 登录页（`<title>Kore · 控制台</title>` + 「登录」）；`kore_csrf` 非 HttpOnly（`.agents/verify/restart-activate.md` §4） |
 | `paths.index_dir` / 商店版本 | **未确认**：被登录门挡住（无管理员口令），本轮未为取证改主配置 |
 | systemd 系统 unit | **未安装**：`systemctl status kore` → `Unit kore.service could not be found.`；`/etc/systemd/system/kore.service` 不存在 |
 | 插件系统用户 | `getent passwd \| grep -c "^kore-"` → **0** |
 
-**结论**：主实例已切到含 4 个内核修复的新二进制（exe == 磁盘 sha、`post_upgrade` 符号在镜像内、
-healthz 200 / 未登录 401），但仍是 **uid 1000 的 `kored-local.service` 降级形态**；
-系统级 root 部署与插件降权仍只有代码，见 B.6-2/3。
+**结论**：主实例仍是 03:33 的二进制（含 4 个内核修复与 `post_upgrade`），**今晚 04:17 之后的
+`520420c` / `bd3ac83` 都不在运行镜像里**；形态仍是 **uid 1000 的 `kored-local.service` 降级**。
+系统级 root 部署与插件降权仍只有代码，见 B.6-1/2/3。
 
-#### B.6 已知挂账（未闭环，按证据）
+#### B.6 已知挂账（未闭环，按证据；已修项已从清单移除）
 
 1. **升级 / 卸载的真实 systemd 重启链路未实测**：`93d63c7` 的替换 → `systemctl --no-block restart` →
    serve 入口 finalize `pending`→`success` 只有代码 + 单测；本机非 root，`kored upgrade` 直接 `exit 6`，
-   验不到正路径。`.agents/verify/kore-upgrade-drill.md` 是**隔离实例换二进制**演练，不是 `kored upgrade`
-   命令 + 系统 unit 重启。
+   验不到正路径。`.agents/verify/kore-upgrade-drill.md` 是**隔离实例换二进制**演练，不是命令 + 系统 unit 重启。
 2. **系统级 root 服务未真装**：ADR-0042 `accepted`，但 `systemctl status kore` → Unit not found、
    `/etc/systemd/system/kore.service` 不存在，主实例实际是 `user.slice/.../kored-local.service` + uid 1000。
    **accepted ≠ 已部署**。
 3. **插件未真正降权**：`kore-*` 用户数 **0**；非 root 内核下 `Demotion.Enabled=false` 并给 `Reason`
    （`internal/core/supervisor/demote.go:20-36`），插件进程与内核同 uid → OS 层隔离为零。
 4. **`tasks` bucket 保留期未实现（承诺已撤销）**：`docs/DATA-MODEL.md:166`、`:327` 明确「预留 bucket，
-   当前无写入方 → 不定义保留窗口（不承诺天数）」。审计保留期已落地（B.4.2），**只剩 tasks**。
+   当前无写入方 → 不定义保留窗口（不承诺天数）」。审计保留期已落地，**只剩 tasks**。
 5. **无 UA / IP 指纹绑定；CSRF 纯双提交**：`grep -rn "UserAgent\|RemoteAddr" internal/core/auth/` 零命中；
-   会话只凭 `kore_session` cookie；CSRF 只比对 cookie + 同名请求头（`internal/core/httpapi/middleware.go:110-145`），
-   `kore_csrf` 非 HttpOnly（`csrf_local.go:64`），同站脚本可读，无会话绑定。
-6. **cron 存量迁移依赖 `post_upgrade`，离线 CLI 升级不触发**：hook 只在 serve 的升级重载路径执行
-   （`cmd/kored/serve_runtime.go:339`）；`kored install --package` 是 serve 未启动时的离线 CLI
-   （`docs/CORE.md:126`），没有守护进程执行 hook；cron 又是 `lifecycle=lazy`，未打开页面就不启动，
-   旧 crontab 仍可能跑旧版本。在线升级已由 0.7.0 覆盖，**离线 CLI 路径仍未覆盖**。
-7. **Gitee「只保留最新 5 个」未闭环**：`.agents/verify/gitee-release-fill-latest5.md:13-14` 记录
-   **24 仓中 19 仓超 5、release 总数 157（补建前 74）**；该轮只补建、**未执行 prune**，新发版后仍会继续超限。
-   Gitee API 匿名查询本次遇 `403 Rate Limit Exceeded`，**当前实时条数未确认**。
-8. **README 代码块版本号无门禁守护**：`README_VERSION_DRIFT` 只解析「发布产物」那一行
-   （`scripts/store-check.sh:34`）；`kore-plugin-app-deploy/README.md:98` 的代码块
-   `tar -tzf dist/app-deploy-0.3.1.tar.gz` 不在解析范围内，bump 后不会告警。注意：根 `README.md:98`
-   当前是空行（旧行号已漂移），实际同类代码块在插件仓 README。
-9. **`echo` 的 3 个 fault 缺口未补（P2）**：`ping` / `slow` / `timeout` 零触及
-   （`.agents/verify/fault-method-audit.md:13`；全书 42 缺口 = dns 8 / ssl 8 / integrity 5 / site 18 / echo 3）。
-10. **插件 UI 分发链未实现**：ADR-0040 裁决 v1.0 前不补；`web/app.js:1131` 的旧 iframe 路径仍指向不存在的
-    `/plugin-assets/...`（死代码，服务端无路由）。
-11. **能力声明的运行期强制仍为零**：授予记录层已落地（B.4.2），但插件进程自身行为（读文件 / 联网 / exec /
-    写 `/etc`）无 seccomp / namespace 强制；`grep -rn "seccomp\|Resource.Apply" internal/ pkg/` 零命中。
-12. **waf 0.4.5 整链真机证据未落本仓**：本仓最新 WAF e2e 是 `.agents/verify/waf-e2e-044.md`（0.4.4）；
-    0.4.5 只有插件仓 CHANGELOG 记述 → **未确认**。
+   会话只凭 `kore_session` cookie；CSRF 只比对 cookie + 同名请求头（`internal/core/httpapi/middleware.go:110-145`）。
+6. **`app-deploy` upgrade 快照目录竞态（P2）**：`kore-plugin-app-deploy/internal/apop/artifact.go:682-696`
+   快照目录 `<state>/snapshots/<name>/<UTC 秒>`，状态锁只护 JSON 记录、不护快照目录；同一应用同一秒两次
+   upgrade 会撞同一快照路径（`MkdirAll` 不报错、`copyTree` 相互覆盖）。披露 commit `463f14f`。
+7. **`logs` `uniqueExportPath` check-then-act（P3）**：`kore-plugin-logs/internal/logic/download.go:354-368`
+   先 `Lstat` 判不存在再返回路径，`:91-95` 用 `writeFilePrivate` 落盘（非 `O_EXCL`）；同秒并发导出
+   同名时后写覆盖前写。披露 commit `abe74b7`。
+8. **`file` P3 诊断信息缺 errno**：披露于 `699db82` 轮次，仓内未落独立证据 → 具体错误消息位置**未确认**。
+9. **`backup` P3 错误消息不提权限**：披露于 `07e9ac5` 轮次，仓内未落独立证据 → 具体消息**未确认**。
+10. **`site` `apply.go` 回滚快照跨锁**：`kore-plugin-site/apply.go:43-47,96-100` 在调用
+    `withManifestLock`（`vhost.go:59`）**之前**拍 conf/manifest 快照；回滚用的是锁外旧快照，
+    并发写者可能被回滚覆盖。披露 commit `dd1f565`。
+
+以下旧挂账本轮未动、仍有效：**插件 UI 分发链未实现**（ADR-0040 裁决 v1.0 前不补，`web/app.js:1131`
+仍指向不存在的 `/plugin-assets/...`）；**能力声明的运行期强制为零**（无 seccomp / namespace，
+`grep -rn "seccomp\|Resource.Apply" internal/ pkg/` 零命中）；**waf 0.4.5 整链真机证据未落本仓**
+（最新 e2e 为 0.4.4）；**`echo` 的 3 个 fault 缺口未补**（`ping` / `slow` / `timeout`，
+`.agents/verify/fault-method-audit.md:13`）。
 
 ### C. 下一轮建议（≤5 条，按优先级）
 
 | # | 动作 | 为什么（优先级理由） | 验收 |
 | --- | --- | --- | --- |
-| 1 | 在**真 root + 真 systemd 系统 unit** 装一次机，跑通 `kored upgrade --bin <本地文件> --sha256 <值>` → `--no-block restart` → 新进程 finalize `pending`→`success`，再跑一次自卸载 | 同时收挂账 1+2；ADR-0042 是提权设计地基，现在**零真机正路径证据**；沙箱非 root 直接 `exit 6` | `journalctl -u kore` 有 Started/Stopped；`/proc/<newpid>/exe` sha == 入参；pending→success 可读；卸载后 unit 不存在 |
-| 2 | 登录一次后读 `GET /api/v1/system/info`，复核 `paths.index_dir` == `kore-plugins/index` 且商店 24 条版本 == 索引 `e3425cd` | 唯一没取到的运行态验收项；G-29 明确「回切后验数据不验配置」 | `paths.index_dir` 字面相等；商店 24 条版本与索引逐条一致 |
-| 3 | 在 root 内核下验证插件降权：`system/info.demotion.enabled=true` + 插件进程 uid == `kore-<id>` + 失败回滚路径 | 挂账 3 只有代码；产品定位「插件低权运行」当前不可验证 | `ps -o uid= -p <plugin pid>` 为 `kore-<id>`；`getent passwd` 有对应账户；kill 后回滚不残留 |
-| 4 | 覆盖离线 CLI 升级的 cron 迁移：`kored install --package` 后显式触发 `cron.migrate`（或在文档/安装器里明确要求手动调用） | 挂账 6：`post_upgrade` 只覆盖 serve 在线升级，离线 CLI + lazy 组合仍会让旧 crontab 跑旧二进制 | 停 serve → CLI 升级 cron → `crontab -l` 中该插件行已指向 `.../current/bin/cron`；或文档给出可复制的 `cron.migrate` 调用 |
-| 5 | 执行 Gitee release prune（19 仓超 5，先 `--dry-run`）+ 把插件 README 代码块版本号纳入 `store-check` | 挂账 7+8：镜像容量策略与文档漂移都在「机制已建、最后一公里没走」 | prune 后每仓 ≤5 且被删版本严格最旧；新增判据能在 `README.md:98` 类代码块 bump 未同步时 WARN |
+| 1 | **第 52 把重签：把 site 0.4.4 / file 0.3.3 / app-deploy 0.3.2 收进索引**（`plugins.json` + `versions.lock.json` + sig），并核对 dist sha | 唯一「已修但用户拿不到」的缺口：三处并发修复都已发版打 dist，商店仍发旧版；P1 安全修复（file TOCTOU）在旧版里 | 索引 24 条版本 == 各仓 `info.json.version`；`store-check` 的 `DIST_SHA_DIFF` 0 漂移；商店端版本逐条等于索引 |
+| 2 | 在**真 root + 真 systemd 系统 unit** 装一次机，跑通 `kored upgrade --bin <本地文件> --sha256 <值>` → `--no-block restart` → finalize `pending`→`success`，再跑一次自卸载 | 挂账 1+2；ADR-0042 是提权设计地基，现在**零真机正路径证据**；沙箱非 root 直接 `exit 6` | `journalctl -u kore` 有 Started/Stopped；`/proc/<newpid>/exe` sha == 入参；pending→success 可读；卸载后 unit 不存在 |
+| 3 | 重建并重启主实例，把 `520420c` + `bd3ac83` 带进运行镜像；登录一次读 `system/info`，复核 `paths.index_dir` == `kore-plugins/index` 与版本一致 | 门禁全绿但运行态还是 03:33 的旧二进制；G-29 要求「验数据不验配置」，而索引路径从未取到 | 重启后 `/proc/<pid>/exe` sha == 新 `bin/kored`；`paths.index_dir` 字面相等；商店版本 == 索引 |
+| 4 | 在 root 内核下验证插件降权：`demotion.enabled=true` + 插件进程 uid == `kore-<id>` + 失败回滚 | 挂账 3 只有代码；产品定位「插件低权运行」当前不可验证 | `ps -o uid= -p <plugin pid>` 为 `kore-<id>`；`getent passwd` 有对应账户；kill 后回滚不残留 |
+| 5 | 收 4 个并发残留（都带锁边界）：app-deploy 快照目录唯一名 / logs 导出 `O_EXCL` / site 回滚快照进锁 / file&backup 的 P3 错误消息 | 今晚修的是「丢数据 P1」，剩下的是同代码路径的 P2/P3；趁热改成本最低，留着下次还会以「偶发」出现 | 各仓 `tests/boundary` 加「同秒并发」用例先 FAIL 后 PASS；`-race` 全绿 |
 
 ### D. 本轮「未确认」清单
 
+- **`store-check:343` NameError 的独立修复 commit**：仓内无任何 commit message / 文档记录该崩溃；当前
+  `scripts/store-check.sh:149` 已初始化 `dist_unrecorded`、`:342` 自增，崩溃现场与修复动作**未确认到 sha**
+  （推断随 `4c516e6` 的 dist 缺件可见改动一并落地，不作定论）。
+- **file / backup 两笔 P3 的具体位置**：`699db82` / `07e9ac5` 的 commit message 与仓内文件均未记
+  「errno / 权限提示」细节，**未确认**到 `file:line`。
 - 主实例 `paths.index_dir` / 商店版本：`GET /api/v1/system/info` → `401`（登录门生效的副作用），未登录侧取不到；
   本轮**没有**为取值改口令或改主配置。
 - `kored upgrade` 正路径（替换 + `--no-block restart` + finalize）与卸载：本机非 root，`exit 6`，**未实测**。
 - root 形态下插件降权的实际 uid / 系统用户：`kore-*` 用户数 0，**只有代码路径**。
-- Gitee 当前实时 release 条数：匿名 API `403 Rate Limit Exceeded`；仅有 `.agents/verify/gitee-release-fill-latest5.md`
-  的 157 条 / 19 仓超 5 快照。
+- **第 19 段全仓 `-race` 的最终落地形态**：本轮实跑通过（17 包 / 53s），但 `Makefile` / `scripts/race-full-check.sh` /
+  `AGENTS.md` 都还在工作树（他人在途），**是否原样提交、段号是否定为 19 段未确认**。
 - waf 0.4.5 端到端行为：本仓无 0.4.5 e2e 报告（最新为 0.4.4）。
-- 24 个插件仓 `CHANGELOG` 条目与 git tag 的逐仓 sha 对应：本轮只核索引版本与 CHANGELOG 条目，未逐仓 `git rev-parse`。
-- 根 `README.md:98` 的「代码块版本号」：该行当前为空行，**行号已漂移**；同类代码块实际在
-  `kore-plugin-app-deploy/README.md:98`（已核实）。写挂账时按机制层缺口记，不按旧行号记。
-- 另一会话 `docs-scribe` 当前是否仍活动：无进程级 / 会话级证据，**不作结论**。
+- 24 个插件仓 `CHANGELOG` 条目与 git tag 的逐仓 sha 对应：本轮只核索引版本、`info.json.version` 与 CHANGELOG 头部，未逐仓 `git rev-parse`。
 
 ## 1. 总原则：文件之外无事实
 
