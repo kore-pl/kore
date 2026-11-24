@@ -224,8 +224,7 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
  - **R9 重建重启（15:18，r9-restart）**：`make build` 重建 `bin/kored`（sha256 `721a748d9d56b0ca…`，
    `stat` 15:18:46）+ 重启主实例 8787，新 **PID 1533701**（`ps` 实测存活），**15 commit 全部生效**。
  - **新增四项特征命中**：help **0→6** / ssl **0→2** / search **0→2** / 本地化 tr **0→26**（旧二进制全 0）。
- - **独立 verifier `r9-runverify` 复核中——待 r9-runverify PASS**（以其回报为准；本写域不代填 PASS；
-   未鉴权 curl `/api/v1/system/info` 实测 `E_UNAUTHORIZED`，运行态特征复核需其独立口径）。
+ - 独立 verifier r9-runverify 复核 **VERDICT: PASS**：四项特征真 UI（help 0→6 / ssl 0→2 / search 0→2 / 本地化 tr 0→26 命中，逐条用命中行上下文排除注释假象）+ 新 PID 1533701 / exe sha==bin sha 721a748d… / version 0.1.1 / 三组件 200 / cgroup 合规 / auth 401 / validate-index exit 0，零 FAIL——15 commit 真正在用户面板生效，坐实。
 
 **2. 商店态收口（R8-B1 + B2）——已核实（git log / 索引文件逐项比对）**
 
@@ -284,7 +283,7 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 | ② | ~~P1~~ **已闭环（同上两笔 commit）** | G-28 截图收口验收：`873409c` / `204be96` 两批已交付并回读 PASS | 16 张双端截图 + 自评三问齐备，`file`/`identify` 校验宽高、md5 全异——全部命中 |
 | ③ | P2 | site 外部 ADR-0052 收敛后单独成批入索引 | 索引 site 版本与仓库一致，重签 + 公钥不变 |
 | ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 结论落 DECISIONS / ADR（§0.0.3 第 3 条） |
-| ⑤ | P3 | ~~主实例已是新构建，可抽查生产态三组件~~ → **R9 已重建重启到 15:18 新构建**（PID 1533701 / sha `721a748d`），本轮 UI / 本地化已生效；生产态抽查由 `r9-runverify` 复验（四项特征 > 0） | `r9-runverify` 复核 PASS（待其回报；本卡不代填） |
+| ⑤ | P3 | ~~主实例已是新构建，可抽查生产态三组件~~ → **R9 已重建重启到 15:18 新构建**（PID 1533701 / sha `721a748d`），本轮 UI / 本地化已生效；生产态抽查由 `r9-runverify` 复验（四项特征 > 0） | 独立 verifier r9-runverify **PASS**（四项特征真 UI + 八项门禁全绿，零 FAIL） |
 
 ## 0. 当前交接快照（2026-11-24 10:20）
 
