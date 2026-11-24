@@ -86,8 +86,34 @@
     '.logs-chart-tip[hidden]{display:none;}' +
     '.logs-chart-tip-title{font-weight:600;margin-bottom:2px;}' +
     '.logs-chart-tip-row{color:var(--kore-text-2);font-variant-numeric:tabular-nums;}' +
+    /* 磁盘占用概览：每条一行，数值自带单位（G-32），超策略红标 + 原因。 */
+    '.logs-usage{margin-top:var(--kore-space-2);padding-top:var(--kore-space-2);border-top:1px solid var(--kore-border-1);}' +
+    '.logs-usage-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);margin-bottom:var(--kore-space-1);}' +
+    '.logs-usage-title{font-size:var(--kore-font-12);font-weight:600;color:var(--kore-text-1);}' +
+    '.logs-usage-total{font-size:var(--kore-font-12);color:var(--kore-text-2);font-variant-numeric:tabular-nums;}' +
+    '.logs-usage-refresh{margin-left:auto;min-height:32px;}' +
+    '.logs-usage-row{padding:var(--kore-space-1) 0;}' +
+    '.logs-usage-line{display:flex;align-items:center;gap:var(--kore-space-1);font-size:var(--kore-font-12);color:var(--kore-text-2);}' +
+    '.logs-usage-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+    '.logs-usage-val{flex:none;color:var(--kore-text-1);font-variant-numeric:tabular-nums;}' +
+    '.logs-usage-badge{flex:none;color:var(--kore-danger);font-weight:600;}' +
+    '.logs-usage-track{height:6px;margin-top:4px;border-radius:999px;background:var(--kore-bg-2);overflow:hidden;}' +
+    '.logs-usage-fill{height:100%;border-radius:999px;background:var(--kore-info);}' +
+    '.logs-usage-fill.is-over{background:var(--kore-danger);}' +
+    '.logs-usage-why{font-size:var(--kore-font-12);color:var(--kore-danger);line-height:1.5;}' +
+    '.logs-usage-note{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;}' +
+    /* 保留策略表单：中文标签 + 一行帮助；折叠在独立弹窗，不挤占首屏。 */
+    '.logs-ret-row{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);margin-bottom:var(--kore-space-2);}' +
+    '.logs-ret-field{flex:1 1 140px;display:flex;flex-direction:column;gap:2px;}' +
+    '.logs-ret-field span{font-size:var(--kore-font-12);color:var(--kore-text-1);}' +
+    '.logs-ret-field small{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.4;}' +
+    '.logs-ret-field input,.logs-ret-field select{min-height:36px;padding:0 var(--kore-space-1);color:var(--kore-text-1);' +
+    'background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font:inherit;font-size:var(--kore-font-12);}' +
+    '.logs-ret-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--kore-space-2);margin-top:var(--kore-space-2);}' +
+    '.logs-ret-note{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;}' +
     '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}.logs-config-actions .btn{min-height:44px;}' +
-    '.logs-chart-tab,.logs-chart-row{min-height:44px;}.logs-chart-donut{width:96px;height:96px;}}';
+    '.logs-chart-tab,.logs-chart-row{min-height:44px;}.logs-chart-donut{width:96px;height:96px;}' +
+    '.logs-usage-refresh,.logs-clean-btn,.logs-restore-btn,.logs-ret-actions .btn,.logs-ret-field input,.logs-ret-field select{min-height:44px;}}';
 
   function fresh() {
     return { root: null, sources: [], selected: '', lines: 200, query: '', mode: 'tail',
@@ -95,7 +121,10 @@
       stats: null, count: 0, scanned: 0, truncated: false, lineTruncated: false,
       aggregate: null, chartMode: 'source', chartHost: null, chart: null,
       levelFilter: '', follow: false, followTimer: null, followBusy: false, configOpen: false,
-      searchTimer: null, notice: '', error: '', busy: false, destroyed: false };
+      searchTimer: null, notice: '', error: '', busy: false, destroyed: false,
+      /* 清理/保留策略/占用（R19-4）*/
+      usage: null, retention: null, cleanPreview: null, cleanOpen: false, cleanBusy: false,
+      restoreBusy: false, retentionOpen: false, retentionBusy: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -151,6 +180,15 @@
     return (n / 1048576).toFixed(1) + ' MB';
   }
   function fmtInt(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('zh-CN') : '—'; }
+  /* 错误文案人话+怎么办（USABILITY §4）：优先走主壳统一 errorText（「什么错了。怎么办：动作。」），
+     主壳未挂载时本地兜底，原始错误原文只进 title/details，绝不裸甩给用户。 */
+  function plainError(err, fallback) {
+    if (window.KoreUI && typeof window.KoreUI.errorText === 'function') {
+      try { return window.KoreUI.errorText(err, fallback); } catch (e) { /* 回退本地兜底 */ }
+    }
+    var detail = err && err.message ? String(err.message) : (fallback || '操作未完成');
+    return String(detail).replace(/^E_[A-Z_]+[:：]\s*/, '') + '。怎么办：请重试；仍失败请刷新页面或查看插件日志。';
+  }
   function fmtTime(iso) {
     var d = new Date(iso);
     return isNaN(d.getTime()) ? String(iso || '—') : d.toLocaleString('zh-CN', { hour12: false });
@@ -262,6 +300,63 @@
       badge.appendChild(chipEl('fail', '不可读'));
     }
     if (d.note) add(host, el('div', 'logs-stat-note', d.note));
+  }
+  /* ===== 来源磁盘占用（logs.usage）：谁在吃磁盘，一眼看清 =====
+     数据源 logs.usage：sources[].total_bytes/active_bytes/rotated_bytes/files/over_policy/reasons/policy。
+     每条自带单位（G-32 判据：每点可读且带单位），超策略红标 + 原因；占比条仅作视觉参考，
+     数值以带单位文本为准；journal 来源 Note 说明不占可清理文件。零图表库，随视图注入。 */
+  function paintUsage() {
+    if (!S.usageHost) return;
+    var host = S.usageHost, d = S.usage;
+    host.textContent = '';
+    var wrap = add(host, el('div', 'logs-usage'));
+    var head = add(wrap, el('div', 'logs-usage-head'));
+    add(head, el('span', 'logs-usage-title', '来源磁盘占用'));
+    add(head, el('span', 'logs-usage-total', d ? '合计 ' + fmtSize(d.total_bytes) +
+      (d.over_count ? ' · ' + d.over_count + ' 个来源超策略' : '') : '读取中…'));
+    var refresh = add(head, el('button', 'btn btn-ghost logs-usage-refresh', '刷新占用'));
+    refresh.type = 'button';
+    refresh.setAttribute('aria-label', '重新读取各来源磁盘占用');
+    on(refresh, loadUsage);
+    if (!d || !d.sources || !d.sources.length) {
+      add(wrap, el('div', 'logs-usage-note', d ? '暂无占用数据（配置日志来源后显示）' : '正在读取各来源占用…'));
+      return;
+    }
+    var maxBytes = 0;
+    d.sources.forEach(function (s) { if (s.total_bytes > maxBytes) maxBytes = s.total_bytes; });
+    d.sources.forEach(function (s) {
+      var row = add(wrap, el('div', 'logs-usage-row'));
+      var line = add(row, el('div', 'logs-usage-line'));
+      add(line, el('span', 'logs-usage-name', s.source));
+      add(line, el('span', 'logs-usage-val', fmtSize(s.total_bytes)));
+      if (s.over_policy) add(line, el('span', 'logs-usage-badge', '⚠ 超策略'));
+      var track = add(row, el('div', 'logs-usage-track'));
+      var fill = add(track, el('div', 'logs-usage-fill' + (s.over_policy ? ' is-over' : '')));
+      fill.style.width = (maxBytes > 0 && s.total_bytes > 0 ? Math.max(2, s.total_bytes / maxBytes * 100) : 0) + '%';
+      var parts = ['活跃 ' + fmtSize(s.active_bytes), '轮转 ' + fmtSize(s.rotated_bytes),
+        '轮转文件 ' + fmtInt(s.files) + ' 个'];
+      if (s.policy && s.policy.max_size_mb > 0) parts.push('上限 ' + fmtInt(s.policy.max_size_mb) + ' MB');
+      add(row, el('div', 'logs-usage-note', parts.join(' · ')));
+      if (s.over_policy && s.reasons && s.reasons.length) {
+        add(row, el('div', 'logs-usage-why', '原因：' + s.reasons.join('、')));
+      }
+      if (s.note) add(row, el('div', 'logs-usage-note', s.note));
+    });
+    if (d.note) add(wrap, el('div', 'logs-usage-note', d.note + ' 可用下方「清理旧日志」处理。'));
+  }
+  /* logs.usage 无入参（stateDir 由后端注入）；失败降级为行内提示，不影响 tail/search。 */
+  function loadUsage() {
+    if (S.destroyed) return;
+    invoke('logs.usage', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.usage = d; paintUsage();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.usage = { sources: [], total_bytes: 0, over_count: 0 };
+      paintUsage();
+      if (S.usageHost) add(add(S.usageHost, el('div', 'logs-usage-note')),
+        el('span', null, '占用读取失败：' + plainError(err, '占用读取失败')));
+    });
   }
   /* ===== G-32 占比图（静态 SVG，FRONTEND §13）：来源 / 级别分布 =====
      数据源 logs.aggregate：groups[].count（来源）、entries[].level（级别）。
@@ -531,8 +626,10 @@
     S.count = 0; S.total = 0; S.scanned = 0; S.position = 0; S.query = '';
     S.truncated = false; S.lineTruncated = false; S.levelFilter = '';
     S.notice = ''; S.error = '';
+    S.cleanPreview = null; S.cleanOpen = false;   // 切来源时丢弃旧来源的清理预览，避免误确认
     if (S.searchInput) S.searchInput.value = '';
     paintLevelChips(); paintSources(); paintStats(); paintOutput(); paintNotices(); paintFoot(); paintChart();
+    paintMaint();
     loadStats(); loadTail(); loadAggregate();
   }
   function loadStats() {
@@ -750,6 +847,241 @@
       paintNotices(); paintFoot();
     });
   }
+  /* ===== R19-4：保留策略 / 清理旧日志 / 撤销上次清理 =====
+     后端契约从 kore-plugin-logs/methods.go + internal/logic/retention.go 源码实读（非猜测）：
+       retention.get {} -> {defaults:{max_age_days,max_size_mb,max_files,rotate_size_mb},policies,note}
+       retention.set {source,max_age_days?,max_size_mb?,max_files?,rotate_size_mb?}（0=不限制）
+       clean {source,dry_run?,confirm?}  dry_run 默认 true；真实清理须 confirm=true；移入回收区
+       clean.restore {source} -> {restored[],skipped[],note}
+     危险操作走「dry_run 预览 → 内联确认 → 真执行 → 撤销入口」，不用 window.confirm（USABILITY §7）。 */
+  function closeClean() {
+    S.cleanPreview = null; S.cleanOpen = false;
+    paintMaint();
+  }
+  /* 第一步：dry_run 列出将清理的轮转文件（活跃文件永不被清）。 */
+  function previewClean() {
+    var name = S.selected;
+    if (!name || S.cleanBusy) return;
+    S.cleanBusy = true; S.error = ''; S.notice = ''; paintNotices(); paintMaint();
+    invoke('logs.clean', { source: name, dry_run: true }).then(function (d) {
+      if (S.destroyed) return;
+      S.cleanBusy = false;
+      S.cleanPreview = { source: name, result: d };
+      S.cleanOpen = true;
+      paintMaint();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.cleanBusy = false;
+      S.error = '清理预览失败：' + plainError(err, '清理预览失败'); paintNotices(); paintMaint();
+    });
+  }
+  /* 第二步：内联确认后才真执行；后端强制 confirm=true。 */
+  function confirmClean() {
+    var p = S.cleanPreview;
+    if (!p || S.cleanBusy) return;
+    var name = p.source;
+    S.cleanBusy = true; S.error = ''; S.notice = ''; paintNotices(); paintMaint();
+    invoke('logs.clean', { source: name, dry_run: false, confirm: true }).then(function (d) {
+      if (S.destroyed) return;
+      S.cleanBusy = false;
+      var moved = (d.moved || []).length;
+      S.notice = '已清理 ' + moved + ' 个旧日志文件' +
+        (d.evicted && d.evicted.length ? '（回收区淘汰 ' + d.evicted.length + ' 个最旧文件）' : '') +
+        '；文件在回收区，可用「撤销上次清理」恢复。';
+      S.cleanPreview = null; S.cleanOpen = false;
+      paintNotices(); paintMaint();
+      loadUsage(); loadSources();
+      if (name === S.selected) { loadStats(); loadTail(); }
+    }, function (err) {
+      if (S.destroyed) return;
+      S.cleanBusy = false;
+      S.error = '清理失败：' + plainError(err, '清理失败');
+      paintNotices(); paintMaint();
+    });
+  }
+  /* 撤销：把上次清理移入回收区的文件移回（同名不覆盖）。 */
+  function restoreClean() {
+    var name = S.selected;
+    if (!name || S.restoreBusy) return;
+    S.restoreBusy = true; S.error = ''; S.notice = ''; paintNotices(); paintMaint();
+    invoke('logs.clean.restore', { source: name }).then(function (d) {
+      if (S.destroyed) return;
+      S.restoreBusy = false;
+      var n = (d.restored || []).length;
+      S.notice = n ? ('已恢复 ' + n + ' 个日志文件' +
+        (d.skipped && d.skipped.length ? '，' + d.skipped.length + ' 个同名文件被跳过（未覆盖）' : ''))
+        : '回收区没有可恢复的文件。';
+      if (d.note) S.notice += ' ' + d.note;
+      paintNotices(); paintMaint();
+      loadUsage(); loadSources();
+      if (name === S.selected) { loadStats(); loadTail(); }
+    }, function (err) {
+      if (S.destroyed) return;
+      S.restoreBusy = false;
+      S.error = '撤销失败：' + plainError(err, '撤销失败');
+      paintNotices(); paintMaint();
+    });
+  }
+  /* 保留策略：retention.get 读默认值 + 按来源覆盖；表单默认值预填（预设优先）。 */
+  function openRetention() {
+    if (S.retentionBusy) return;
+    S.retentionBusy = true; S.error = ''; S.notice = ''; paintNotices();
+    invoke('logs.retention.get', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.retentionBusy = false;
+      S.retention = d; S.retentionOpen = true;
+      paintMaint();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.retentionBusy = false;
+      S.error = '保留策略读取失败：' + plainError(err, '保留策略读取失败'); paintNotices();
+    });
+  }
+  function closeRetention() { S.retentionOpen = false; paintMaint(); }
+  function saveRetention(fields) {
+    if (S.retentionBusy) return;
+    var name = fields.source.value;
+    if (!name) { S.error = '请先选择日志来源。怎么办：在左侧来源列表点选一个来源后再保存。'; paintNotices(); return; }
+    function num(input, min, max, label) {
+      var raw = String(input.value || '').trim();
+      if (raw === '') return null;
+      var v = Number(raw);
+      if (!isFinite(v) || v < min || v > max || Math.floor(v) !== v) {
+        throw new Error(label + '需填 ' + min + ' 到 ' + max + ' 的整数（0=不限制）。');
+      }
+      return v;
+    }
+    var params = { source: name };
+    try {
+      params.max_age_days = num(fields.age, 0, 3650, '保留天数');
+      params.max_size_mb = num(fields.size, 0, 1048576, '体积上限');
+      params.max_files = num(fields.files, 0, 10000, '保留份数');
+      params.rotate_size_mb = num(fields.rotate, 0, 1048576, '切割阈值');
+    } catch (e) {
+      S.error = e.message + ' 怎么办：改到允许范围后重试。'; paintNotices(); return;
+    }
+    S.retentionBusy = true; S.error = ''; S.notice = ''; paintNotices(); paintMaint();
+    invoke('logs.retention.set', params).then(function (d) {
+      if (S.destroyed) return;
+      S.retentionBusy = false;
+      S.retentionOpen = false;
+      S.notice = '已保存「' + name + '」的保留策略，立即生效（无需重启）。';
+      paintNotices(); paintMaint();
+      loadUsage();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.retentionBusy = false;
+      S.error = '保留策略保存失败：' + plainError(err, '保留策略保存失败');
+      paintNotices(); paintMaint();
+    });
+  }
+  /* 维护区渲染：操作入口常驻；预览/表单按需展开，全部 textContent，不拼 HTML。 */
+  function paintMaint() {
+    if (!S.maintHost) return;
+    var host = S.maintHost;
+    host.textContent = '';
+    var wrap = add(host, el('div', 'logs-usage'));
+    var bar = add(wrap, el('div', 'logs-usage-head'));
+    var retBtn = add(bar, el('button', 'btn btn-ghost logs-clean-btn', '⚙ 保留策略'));
+    retBtn.type = 'button';
+    retBtn.setAttribute('aria-label', '设置日志保留策略');
+    on(retBtn, openRetention);
+    var cleanBtn = add(bar, el('button', 'btn btn-ghost logs-clean-btn', '🧹 清理旧日志'));
+    cleanBtn.type = 'button';
+    cleanBtn.setAttribute('aria-label', '预览并清理旧日志');
+    if (S.cleanBusy) cleanBtn.disabled = true;
+    on(cleanBtn, previewClean);
+    var restoreBtn = add(bar, el('button', 'btn btn-ghost logs-restore-btn', '↩ 撤销上次清理'));
+    restoreBtn.type = 'button';
+    restoreBtn.setAttribute('aria-label', '撤销上次清理，把回收区文件移回');
+    if (S.restoreBusy) { restoreBtn.disabled = true; restoreBtn.textContent = '恢复中…'; }
+    on(restoreBtn, restoreClean);
+    add(wrap, el('div', 'logs-usage-note',
+      '清理只处理旧的轮转日志，正在写入的日志文件不会被清；清理后文件进回收区，可随时撤销。'));
+
+    /* 清理预览（危险操作内联二次确认）。 */
+    if (S.cleanOpen && S.cleanPreview) {
+      var p = S.cleanPreview, r = p.result || {};
+      var box = add(wrap, el('div', 'logs-ret-note'));
+      var cands = r.candidates || [];
+      add(box, el('div', 'logs-usage-title',
+        '待清理预览 · ' + p.source + '：' + cands.length + ' 个文件，共 ' + fmtSize(r.total_bytes)));
+      if (!cands.length) {
+        add(box, el('div', 'logs-usage-note', '当前没有需要清理的旧日志（未超过保留策略）。'));
+      } else {
+        cands.slice(0, 50).forEach(function (c) {
+          add(box, el('div', 'logs-usage-note',
+            '• ' + String(c.file || '').split('/').pop() + ' · ' + fmtSize(c.size_bytes) +
+            ' · ' + (c.reason || '超过保留策略')));
+        });
+        if (cands.length > 50) add(box, el('div', 'logs-usage-note', '……其余 ' + (cands.length - 50) + ' 个未列出'));
+      }
+      var acts = add(box, el('div', 'logs-ret-actions'));
+      var ok = add(acts, el('button', 'btn logs-clean-btn',
+        S.cleanBusy ? '清理中…' : ('确认清理 ' + cands.length + ' 个')));
+      ok.type = 'button'; if (S.cleanBusy) ok.disabled = true;
+      on(ok, confirmClean);
+      var cancel = add(acts, el('button', 'btn btn-ghost', '取消'));
+      cancel.type = 'button'; on(cancel, closeClean);
+      if (r.note) add(box, el('div', 'logs-ret-note', r.note));
+    }
+
+    /* 保留策略表单。 */
+    if (S.retentionOpen && S.retention) {
+      var d = S.retention;
+      var defaults = d.defaults || {};
+      var chosen = S.selected || (S.sources[0] && S.sources[0].name) || '';
+      var cur = (d.policies && d.policies[chosen]) || defaults;
+      var form = add(wrap, el('div', 'logs-ret-note'));
+      add(form, el('div', 'logs-usage-title', '保留策略 · 超过即由清理回收'));
+      var sourceSel = el('select');
+      if (!S.sources.length) {
+        var o0 = el('option', null, '（无来源）'); o0.value = ''; sourceSel.appendChild(o0);
+      }
+      S.sources.forEach(function (src) {
+        var o = el('option', null, src.name); o.value = src.name;
+        if (src.name === chosen) o.selected = true;
+        sourceSel.appendChild(o);
+      });
+      sourceSel.setAttribute('aria-label', '策略适用来源');
+      var frow = add(form, el('div', 'logs-ret-row'));
+      var srcField = el('label', 'logs-ret-field');
+      add(srcField, el('span', null, '日志来源'));
+      srcField.appendChild(sourceSel);
+      add(srcField, el('small', null, '策略只对该来源生效'));
+      frow.appendChild(srcField);
+      function retInput(labelText, help, val, max) {
+        var f = el('label', 'logs-ret-field');
+        add(f, el('span', null, labelText));
+        var inp = el('input'); inp.type = 'number'; inp.min = '0'; inp.max = String(max);
+        inp.step = '1'; inp.value = (val == null ? 0 : String(val));
+        f.appendChild(inp);
+        add(f, el('small', null, help));
+        frow.appendChild(f);
+        return inp;
+      }
+      var age = retInput('保留天数', '0=不限制；默认 30 天', cur.max_age_days, 3650);
+      var size = retInput('体积上限（MB）', '0=不限制；默认 1024 MB', cur.max_size_mb, 1048576);
+      var files = retInput('保留份数', '0=不限制；默认 30 份', cur.max_files, 10000);
+      var rotate = retInput('切割阈值（MB）', '超过即切一份；默认 100 MB，0=用默认', cur.rotate_size_mb || 0, 1048576);
+      sourceSel.addEventListener('change', function () {
+        var np = (d.policies && d.policies[sourceSel.value]) || defaults;
+        age.value = np.max_age_days == null ? 0 : np.max_age_days;
+        size.value = np.max_size_mb == null ? 0 : np.max_size_mb;
+        files.value = np.max_files == null ? 0 : np.max_files;
+        rotate.value = np.rotate_size_mb || 0;
+      });
+      var fact = add(form, el('div', 'logs-ret-actions'));
+      var save = add(fact, el('button', 'btn', S.retentionBusy ? '保存中…' : '保存并生效'));
+      save.type = 'button'; if (S.retentionBusy) save.disabled = true;
+      on(save, function () {
+        saveRetention({ source: sourceSel, age: age, size: size, files: files, rotate: rotate });
+      });
+      var cancel2 = add(fact, el('button', 'btn btn-ghost', '收起'));
+      cancel2.type = 'button'; on(cancel2, closeRetention);
+      if (d.note) add(form, el('div', 'logs-ret-note', d.note));
+    }
+  }
   function build(root) {
     ensureStyles();
     S.root = root;
@@ -806,6 +1138,9 @@
     on(S.rotateBtn, rotateSource);
     var refresh = add(tools, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
     S.statHost = add(viewPanel, el('div', 'logs-stats'));
+    S.usageHost = add(viewPanel, el('div', 'logs-usage-host'));
+    S.maintHost = add(viewPanel, el('div', 'logs-maint-host'));
+    paintUsage(); paintMaint();
     S.chartHost = add(viewPanel, el('div', 'logs-chart-host'));
     paintChart();
     S.noticeHost = add(viewPanel, el('div', 'logs-notices'));
@@ -832,13 +1167,14 @@
     S = fresh(); container.textContent = '';
     ensureStyles();
     var root = add(container, el('section', 'logs'));
-    build(root); loadSources();
+    build(root); loadSources(); loadUsage();
     return { destroy: function () {
       S.destroyed = true;
       stopFollow(); stopSearchTimer(); stopAggTimer(); disposeChart();
       var mask = document.querySelector('.logs-config-mask');
       if (mask && mask.parentNode) mask.parentNode.removeChild(mask);
       S.configOpen = false;
+      S.cleanPreview = null; S.cleanOpen = false; S.retentionOpen = false;
     } };
   }
   /* G-32 验收钩子：count() 返回当前实例数（结构上限 1），dispose() 供冒烟脚本清场。 */
