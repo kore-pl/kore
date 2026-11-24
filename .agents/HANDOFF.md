@@ -384,6 +384,42 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 | ④ | site 0.8.1 外部 ADR-0052 在途 | 索引保持 0.4.4 未误收（§0.0.3 第 2/3 条） |
 | ⑤ | 内存 17.8 MiB | 用户裁决延至上线前优化，**不判失败**（§0.0.8 第 5 条） |
 
+### 0.0.10 战略转向与第 12 轮快照（2026-11-24 18:12，r20 E2E + r21-strategy）
+
+> 本节记录用户明确战略转向、四方向依赖路线、第 12 轮 E2E 结论与下一轮启动建议，供接手人不再重复「零散补洞」。事实口径：**索引版本 / PARITY 结论 / deploy 与 system 报告数字本轮用 `grep` + `read` 复核**；r21-strategy 路线与 content 双版本口径为会话产出、未单独落报告文件，来源如实标注。§0.0.1–§0.0.9 及更早内容为历史，全部保留不动。本轮写域只有本文件。
+
+**1. 用户战略转向决策（2026-11-24，G-23 判断留痕）**
+
+- **决策**：选定四大方向（全选）——①黄金用户旅程（从装上到 `curl 200` 端到端）②产品定位与差异化（零侵占薄壳，可演示可度量）③生产可用体系（功能都有 → 敢上生产）④插件生态与扩展（SDK + 市场 + 第三方可扩展）。
+- **被否决选项**：继续「前端没接小洞」式零散补卡（R18/R19 那种逐仓找缺口、逐个接线）。
+- **否决依据**：用户原话批评前 11 轮「一个小破问题一直在改，大方向一点没动」——补洞只堵点、不动方向，ROI 低且形不成可演示的端到端闭环。
+- **执行口径（从此生效）**：停止零散补卡，围绕四方向拆任务；每条任务卡必须回答「落在哪个方向、推进哪条依赖链」。
+
+**2. 四方向路线决策（r21-strategy 产出；会话产出，未单独落报告文件）**
+
+- **依赖顺序**：③生产可用（地基，无依赖）→ ①黄金旅程（主路径，依赖 ③）→ ②差异化 + ④生态（放大器，待 ①③ 有可演示底座后再放大）。
+- **关键发现（四条，本轮已复核或标注来源）**：
+  - **黄金旅程最后一步「真实 `curl 200`」从未取证**：e2e-deploy 报告只返回 `access_url: http://127.0.0.1:18090/`，没有对该 URL 真发 `curl` 并记 200 + body（来源 `.agents/verify/e2e-deploy-write.md` §2 第 3a 行 + §6「未证明」）。
+  - **site 索引 0.4.4 缺 PHP 三方法**：`strings` 命中 0；`setPHP` / `getPHP` / `unsetPHP` 在 site 仓 `65e3293`（v0.6.0）才引入，索引强制匹配版本致调用 400 / `E_NOTFOUND`（索引 `0.4.4` 本轮 `grep plugins.json` 复核确认；site 侧来源为 r20-e2e-content 横向交流，见 deploy 报告 §6）。
+  - **内存 17.8 MiB 超红线是差异化软肋**：主壳空载红线 16 MiB（G-03 / ADR-0016），17.8 已超；用户裁决**延至上线前**优化，不判失败（§0.0.8 第 5 条 / §0.0.9 挂账⑤）。
+  - **`docs/PARITY-GAP.md`「达标 0」结论已过期**：文档头写「更新于 HEAD `e2043da`、里程碑 M4」，当前 HEAD `bc9b237`；其「22 能力域达标数 0 / v1.0 gate 九类取证完整 0 类」（原文 :107–111）**不可对外引用**，须重算后再用（本轮 `grep` 复核）。
+
+**3. 第 12 轮 E2E 结果（r20 系列）**
+
+| 轨道 | 结论 | 关键证据 |
+| --- | --- | --- |
+| deploy（真机，报告已落盘） | **全绿，零 FAIL** | 隔离实例 18884 + Docker v29.7.2；`templates` `count=4`（nginx-static / wordpress / redis / postgres）→ `deploy {template:"nginx-static"}` 真起容器 `f3a94fd2329bf…`（DeployResult `deployed:true`）→ `list` 出现 1 → `remove {name,confirm:true}` `removed:true` → `list` 归零；不存在名字回 404 `E_NOTFOUND`；清理三重确认（API remove + trap + 手工复核），容器/卷/实例/脚本零残留；8787 主实例零改动。证据 `.agents/verify/e2e-deploy-write.md` |
+| content（双版本口径；会话产出，未单独落报告） | site 0.4.4 缺三方法坐实；0.6.0 首次实现版真跑三方法 | 索引 `site@0.4.4` dist 不含 `setPHP` / `getPHP` / `unsetPHP`（`strings` 命中 0），索引强制匹配致 400；site 仓 `65e3293`（v0.6.0）三方法首次实现并真跑通。来源：r20-e2e-content 会话回报 + deploy 报告 §6 横向标注；本轮无独立报告文件，不计「已验真机」 |
+| system（真机，报告已落盘） | **无 FAIL**：PASS×11 / 降级态正确×2 / 环境阻塞×1 | 防火墙 `status` 非 root 降级 `available=false` + `E_NEED_ROOT` + hint；`enable` / `disable` 的 `dry_run=true` 真返 argv 且不执行，`dry_run=false` 非 root 回 403 `E_NEED_ROOT`；真开关需 root，本机 uid1000 + `no_new_privs` 不可测（环境阻塞，未碰宿主防火墙）。日志 `sources → usage → retention.get/set 往返 → clean dry_run → confirm 真清（移回收区非 rm）→ clean.restore 撤销 → 文件原位恢复` 全链路真跑通；缺 CSRF 401、缺 confirm 400 安全门实测。证据 `.agents/verify/e2e-system-write.md` |
+| db（r20-e2edb） | **进行中**（未回报 / 无报告落盘） | 本轮 `git status --short` 仅见 deploy / system 两份新增报告，db 轨道尚无回报；不提前宣称通过 |
+
+**4. 下一轮启动建议（按路线 ③→① 的依赖）**
+
+- **并行启动两项，均不需用户凭据、主实例零改动（G-29）**：
+  - ①**黄金旅程五步链真实 `curl 200` E2E**：补齐黄金旅程缺失的最后一步——对 deploy 返回的 `access_url` 真发 `curl`，取证 HTTP 200 + body 非空 + 结束后清理；走隔离实例，8787 只读。
+  - ④**SDK 八条命令自检（零依赖）**：`pkg/pluginapi` 公开 SDK 的八条命令自证，纯本地、不连主实例、不需凭据。
+- **两条写域不相交（G-08）**：①落 `.agents/verify/e2e-golden-curl.md`，④落 `.agents/verify/sdk-selfcheck.md`，互不改对方文件；主实例运行态一律不碰。
+
 ## 0. 当前交接快照（2026-11-24 10:20）
 
 > 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
