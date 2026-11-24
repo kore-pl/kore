@@ -244,3 +244,34 @@ curl -sS --unix-socket $S -b $J 'http://kore/api/v1/audit?action=root.action&lim
 - **[RUNBOOK-INSTALL.md](RUNBOOK-INSTALL.md)** — §6 安装 / 卸载（零侵入 profile，ADR-0023）· §7 重置管理员口令与配置路径
 - 零侵入判据一句话：**删掉安装目录即等于卸载**；安装目录外只允许 ADR-0023 §3.5 的 4 项豁免
 - 需要执行升级 / 卸载 / 改口令时，直接跳 [RUNBOOK-INSTALL.md](RUNBOOK-INSTALL.md)，本节不保留副本（单一真源，避免两处漂移）
+
+## 8. UI 截图（G-28）：`scripts/ui-shot.sh`
+
+任何 UI 交付需要双端证据时，**不要再现写桩服务 / 手工起实例 / 手工挑端口**。一条命令完成：隔离实例（config/state/run/log 全落 `/tmp`，不碰 8787）→ `/-/healthz` 就绪 → 注入登录态 → 路由存在性校验 → PC 1440×900（full-page）/ 手机 390×844 → `identify` 实测宽高 → 停实例、删临时目录。
+
+```bash
+# 双端两条（默认都拍）
+scripts/ui-shot.sh --scene store --route store --desktop --mobile
+
+# 单端 + 等页面出现指定文本（防截到登录页/空壳）
+scripts/ui-shot.sh --scene dashboard --route dashboard --desktop --expect-text 概览
+
+# 需要空态 / 错误态桩数据时：JSON 数组，Playwright 路由拦截
+scripts/ui-shot.sh --scene store-empty --route store --mock /tmp/mock.json --desktop --mobile
+# mock.json: [{"url":"**/api/v1/store/plugins","status":200,"body":{"plugins":[]}}]
+```
+
+产出固定命名：`.agents/verify/screenshots/<场景>-desktop-01.png` / `<场景>-mobile-01.png`（`--out-dir` 可改）。脚本自己用 `identify` 校验：PC 宽必须 1440、高 ≥900（full-page 允许超过 900）；手机必须精确 390×844，不符直接非零退出。
+
+| 选项 | 说明 |
+| --- | --- |
+| `--scene` / `--route` | 必填；route 是 hash id（`dashboard` / `store` / `security/dns`），不带 `#/` |
+| `--port <n>` | 首选端口；**被占用自动改选空闲端口**（默认直接自动选） |
+| `--binary <path>` | 指定 kored（跳过构建）；默认从当前工作树构建并缓存到 `/tmp/kore-ui-shot-cache` |
+| `--mock <file.json>` | 桩数据：`[{"url","status","body","contentType"}]`，在页面内拦截，不需要单独桩服务 |
+| `--expect-text <s>` | 截图前断言页面包含该文本 |
+| `--keep` | 保留 `/tmp` 临时目录（排障） |
+
+退出码即失败步骤：`2` 用法/依赖 · `3` 构建 · `4` 实例未就绪 · `5` 登录 · `6` 渲染（含路由不存在、落到登录页）· `7` 截图或宽高不符。失败时**不产出图片**、打印对应步骤与 `kored` 日志尾部——不会静默给你一张黑图/登录页。
+
+行为约束（与 G-29 一致）：实例 PID 精确 `kill`，**不用 `pkill -f`**；`state/run/log/config` 全部在 `mktemp -d /tmp/kore-ui-shot.*` 内，退出即删；主实例 8787 与其运行态文件零触碰。工作树含他人在途不可编译改动时，脚本回退 HEAD 归档构建并 WARN——此时截图只反映 HEAD 的 UI，要拍未提交改动需先让工作树可编译或 `--binary` 指定二进制。
