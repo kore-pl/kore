@@ -30,7 +30,10 @@
       renice: false, renicePreset: 'normal', reniceCustom: '', reniceBusy: false, reniceResult: null, reniceError: '',
       // 图表状态：history/trend 原样缓存，panel/host 为持久节点引用。
       history: null, historyNote: '', sysPanel: null, sysNote: null,
-      trend: null, trendPid: 0, trendHint: '', trendSection: null };
+      trend: null, trendPid: 0, trendHint: '', trendSection: null,
+      // R15-2：端口占用（process.ports）/ 守护建议（process.watchdog.suggest）抽屉内按需加载。
+      portsOpen: false, ports: null, portsLoading: false, portsError: '', portsCode: '',
+      wdOpen: false, wd: null, wdLoading: false, wdError: '', wdCode: '' };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -94,6 +97,37 @@
     if (d) return d + ' 天 ' + h + ' 小时';
     if (h) return h + ' 小时 ' + m + ' 分';
     return m ? m + ' 分' : sec + ' 秒';
+  }
+  /* ---------- R15-2：端口占用 / 守护建议（纯展示，独立 CSS 命名空间，不碰趋势图） ---------- */
+  var extraCssId = 'kore-proc-extra-css';
+  function ensureExtraCss() {
+    if (document.getElementById(extraCssId)) return;
+    var css = [
+      '.proc-extra-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.proc-extra-head .btn{margin-left:auto;min-height:44px}',
+      '.proc-extra-tip{margin:0 0 8px;font-size:12px;color:var(--kore-text-3);line-height:1.6}',
+      '.proc-port-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}',
+      '.proc-port-table th{text-align:left;padding:6px 8px;font-weight:400;font-size:11px;color:var(--kore-text-3);border-bottom:1px solid var(--kore-border-2)}',
+      '.proc-port-table td{padding:8px;border-top:1px solid var(--kore-border-2);word-break:break-all;font-variant-numeric:tabular-nums}',
+      '.proc-port-table tbody tr:first-child td{border-top:0}',
+      '.proc-port-meta{margin:8px 0 0;font-size:11px;color:var(--kore-text-3);line-height:1.6}',
+      '.proc-wd-card{padding:10px 12px;border:1px solid var(--kore-border-2);border-left:3px solid var(--kore-info);border-radius:6px;background:var(--kore-bg-0)}',
+      '.proc-wd-row{margin:0 0 8px;font-size:12px;line-height:1.7;color:var(--kore-text-2);word-break:break-word}',
+      '.proc-wd-row:last-child{margin-bottom:0}',
+      '.proc-wd-k{color:var(--kore-text-3)}',
+      '.proc-wd-pre{margin:6px 0;max-height:180px;overflow:auto;padding:8px;background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all}',
+      '.proc-wd-boundary{margin:8px 0 0;font-size:11px;color:var(--kore-text-3);line-height:1.6}',
+      '@media (max-width:640px){',
+      '.proc-port-table thead{display:none}',
+      '.proc-port-table,.proc-port-table tbody,.proc-port-table tr,.proc-port-table td{display:block;width:100%}',
+      '.proc-port-table tr{padding:8px 0;border-top:1px solid var(--kore-border-2)}',
+      '.proc-port-table tbody tr:first-child{border-top:0}',
+      '.proc-port-table td{border-top:0;padding:2px 8px}',
+      '.proc-port-table td::before{content:attr(data-label) "：";display:inline-block;min-width:52px;color:var(--kore-text-3);font-size:11px}',
+      '}'
+    ].join('');
+    var st = document.createElement('style'); st.id = extraCssId; st.textContent = css;
+    document.head.appendChild(st);
   }
   /* ---------- 自研 Canvas 时序折线（G-32 / §13：零库 / 零动画 / hover+tap 读数带单位） ---------- */
   var chartCssId = 'kore-proc-chart-css';
@@ -520,6 +554,7 @@
   }
   function paintDrawer() {
     if (!S.drawerBody) return;
+    ensureExtraCss(); // R15-2：端口/建议样式按视图懒注入（幂等），不进首屏、不碰图表 CSS
     var host = S.drawerBody;
     host.textContent = '';
     S.drawerTitle.textContent = S.detailPid ? '进程详情 · PID ' + S.detailPid : '进程详情';
@@ -576,6 +611,21 @@
       if (S.treeOpen) { S.treeOpen = false; S.tree = null; S.treeError = ''; paintDrawer(); return; }
       showTree(d.pid);
     });
+    // R15-2：两个只读入口，点开即按 pid 拉数据；再点一次收起（可点/可关）。
+    var portsBtn = add(ops, el('button', 'btn btn-ghost', S.portsOpen ? '收起端口占用' : '端口占用'));
+    portsBtn.type = 'button';
+    on(portsBtn, function () {
+      if (S.portsOpen) { S.portsOpen = false; paintDrawer(); return; }
+      S.portsOpen = true; loadPorts(d);
+    });
+    var wdBtn = add(ops, el('button', 'btn btn-ghost', S.wdOpen ? '收起守护建议' : '守护建议'));
+    wdBtn.type = 'button';
+    on(wdBtn, function () {
+      if (S.wdOpen) { S.wdOpen = false; paintDrawer(); return; }
+      S.wdOpen = true; loadWatchdog(d);
+    });
+    if (S.portsOpen) paintPorts(host, d);
+    if (S.wdOpen) paintWatchdog(host);
     if (S.renice) paintRenice(host, d);
     if (S.confirm) paintConfirm(host, d);
     if (S.killError) {
@@ -620,6 +670,9 @@
     S.detailPid = 0; S.detail = null; S.detailError = ''; S.confirm = false; S.killResult = null;
     S.killError = ''; S.killCode = ''; S.tree = null; S.treeError = ''; S.treeOpen = false;
     S.renice = false; S.reniceResult = null; S.reniceError = ''; S.reniceBusy = false;
+    // R15-2：关闭抽屉清掉端口/建议状态，避免下次打开别的进程时残留旧数据。
+    S.portsOpen = false; S.ports = null; S.portsLoading = false; S.portsError = ''; S.portsCode = '';
+    S.wdOpen = false; S.wd = null; S.wdLoading = false; S.wdError = ''; S.wdCode = '';
     disposeCharts('trend'); // 关抽屉即销毁单进程趋势实例，实例计数回落（§13-6）
     S.trend = null; S.trendHint = '';
     if (S.trendSection) { S.trendSection.hidden = true; S.trendSection.textContent = ''; }
@@ -632,6 +685,9 @@
     S.killError = ''; S.killCode = ''; S.killBusy = false; S.tree = null; S.treeError = ''; S.treeOpen = false;
     S.renice = false; S.reniceResult = null; S.reniceError = ''; S.reniceBusy = false;
     S.renicePreset = 'normal'; S.reniceCustom = '';
+    // R15-2：切换进程时重置两区状态；未点开不加载，点开才按新 pid 拉。
+    S.portsOpen = false; S.ports = null; S.portsLoading = false; S.portsError = ''; S.portsCode = '';
+    S.wdOpen = false; S.wd = null; S.wdLoading = false; S.wdError = ''; S.wdCode = '';
     setDrawer(true); paintDrawer();
     // 单进程趋势在抽屉打开后按需拉取：首调 insufficient_data 会按 hint 提示，不画空图。
     if (S.trendSection) S.trendSection.hidden = false;
@@ -804,6 +860,117 @@
     charts.forEach(function (c) { if (c.scope === 'trend') setChartData(c, pts); });
     add(host, el('div', 'proc-chart-note', '共 ' + pts.length + ' 点 · 采样间隔约 2s · 单图 ≤' +
       CHART_MAX_POINTS + ' 点 · 悬停/点按读数'));
+  }
+
+  /* ---------- R15-2：端口占用（process.ports）/ 守护建议（process.watchdog.suggest） ---------- */
+  // 只读展示：入参 {pid}；三态 loading/空/失败；错误文案走 KoreUI（人话+怎么办），手机端表格转卡片。
+  function loadPorts(d) {
+    S.portsLoading = true; S.portsError = ''; S.portsCode = ''; paintDrawer();
+    invoke('process.ports', { pid: d.pid }).then(function (r) {
+      if (S.destroyed || S.detailPid !== d.pid) return;
+      S.portsLoading = false; S.ports = r; paintDrawer();
+    }, function (err) {
+      if (S.destroyed || S.detailPid !== d.pid) return;
+      S.portsLoading = false; S.portsError = err.message || '读取失败'; S.portsCode = err.code || ''; paintDrawer();
+    });
+  }
+  function paintPorts(host, d) {
+    var box = add(host, el('div', 'proc-tree'));
+    var head = add(box, el('div', 'proc-extra-head'));
+    add(head, el('div', 'proc-tree-title', '端口占用（监听中的端口）'));
+    var refreshBtn = add(head, el('button', 'btn btn-ghost', '重新读取'));
+    refreshBtn.type = 'button'; on(refreshBtn, function () { loadPorts(d); });
+    if (S.portsLoading) {
+      add(box, el('p', 'muted proc-tree-note', '正在读取该进程监听的端口…'));
+      return;
+    }
+    if (S.portsError) {
+      box.appendChild(window.KoreUI.errorBlock({ code: S.portsCode, message: S.portsError }, {
+        title: '端口占用读取失败',
+        action: '确认进程仍在运行且 kored 以足够权限启动（读 /proc/<pid>/fd 需 root 时有受限提示），再点「重新读取」',
+        retryLabel: '重新读取', onRetry: function () { loadPorts(d); }
+      }));
+      return;
+    }
+    var listeners = S.ports && Array.isArray(S.ports.listeners) ? S.ports.listeners : [];
+    if (!listeners.length) {
+      box.appendChild(window.KoreUI.emptyBlock({
+        title: '该进程没有监听端口',
+        text: '这次扫描没发现它持有 LISTEN 状态的套接字；普通后台进程常不监听端口，属正常情况。',
+        hint: '端口归属来自 /proc/net/tcp{,6} 与 /proc/<pid>/fd 的反查，只反映读取那一刻的状态。',
+        label: '重新读取', onClick: function () { loadPorts(d); }
+      }));
+      return;
+    }
+    var table = add(box, el('table', 'proc-port-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['端口', '协议', '监听地址'].forEach(function (h) { add(htr, el('th', null, h)); });
+    var tbody = add(table, el('tbody'));
+    listeners.forEach(function (l) {
+      var tr = add(tbody, el('tr'));
+      [[l.port, '端口'], [l.protocol || '—', '协议'], [l.address || '—', '监听地址']].forEach(function (cell) {
+        var td = add(tr, el('td', null, cell[0]));
+        td.setAttribute('data-label', cell[1]);
+      });
+    });
+    var scanned = S.ports ? (' · 扫描 ' + fmtInt(S.ports.scanned_processes) + ' 个进程 / ' +
+      fmtInt(S.ports.scanned_fds) + ' 个 fd') : '';
+    var note = '共 ' + listeners.length + ' 个监听端口' + scanned +
+      (S.ports && S.ports.truncated ? '（部分 fd 因超限未扫描，结果可能不完整）' : '');
+    add(box, el('p', 'proc-port-meta', note));
+  }
+  function loadWatchdog(d) {
+    S.wdLoading = true; S.wdError = ''; S.wdCode = ''; paintDrawer();
+    invoke('process.watchdog.suggest', { pid: d.pid, name: d.name || '' }).then(function (r) {
+      if (S.destroyed || S.detailPid !== d.pid) return;
+      S.wdLoading = false; S.wd = r; paintDrawer();
+    }, function (err) {
+      if (S.destroyed || S.detailPid !== d.pid) return;
+      S.wdLoading = false; S.wdError = err.message || '读取失败'; S.wdCode = err.code || ''; paintDrawer();
+    });
+  }
+  function paintWatchdog(host) {
+    var box = add(host, el('div', 'proc-tree'));
+    var head = add(box, el('div', 'proc-extra-head'));
+    add(head, el('div', 'proc-tree-title', '守护建议'));
+    var refreshBtn = add(head, el('button', 'btn btn-ghost', '重新生成'));
+    refreshBtn.type = 'button'; on(refreshBtn, function () { loadWatchdog(S.detail); });
+    add(box, el('p', 'proc-extra-tip', '下面是一套可直接复制的 systemd 开机自启建议。Kore 只生成文本，不替你写文件、不启动服务。'));
+    if (S.wdLoading) {
+      add(box, el('p', 'muted proc-tree-note', '正在生成守护建议…'));
+      return;
+    }
+    if (S.wdError) {
+      box.appendChild(window.KoreUI.errorBlock({ code: S.wdCode, message: S.wdError }, {
+        title: '守护建议生成失败',
+        action: '确认进程仍在运行（按 PID 与名称都查一次）；进程已退出时请从列表重新打开一个在跑的进程再试',
+        retryLabel: '重新生成', onRetry: function () { loadWatchdog(S.detail); }
+      }));
+      return;
+    }
+    var w = S.wd;
+    if (!w) { add(box, el('p', 'muted proc-tree-note', '尚未生成建议。')); return; }
+    var card = add(box, el('div', 'proc-wd-card'));
+    function row(k, v) {
+      var p = add(card, el('p', 'proc-wd-row'));
+      add(p, el('span', 'proc-wd-k', k + '：')); add(p, el('span', null, v));
+    }
+    row('建议服务名', w.unit_name || '—');
+    row('启动命令', w.exec_start || '—');
+    if (w.scope_guide) {
+      add(card, el('p', 'proc-wd-row', '两种用法，选一种（在终端里执行）：'));
+      var guide = add(card, el('pre', 'proc-wd-pre'));
+      guide.textContent = w.scope_guide;
+    }
+    if (w.user_unit) {
+      add(card, el('p', 'proc-wd-row', '① 用户级 unit（无需 root，存到 ~/.config/systemd/user/）：'));
+      var uu = add(card, el('pre', 'proc-wd-pre')); uu.textContent = w.user_unit;
+    }
+    if (w.system_unit) {
+      add(card, el('p', 'proc-wd-row', '② 系统级 unit（需 root，存到 /etc/systemd/system/）：'));
+      var su = add(card, el('pre', 'proc-wd-pre')); su.textContent = w.system_unit;
+    }
+    if (w.boundary) add(card, el('p', 'proc-wd-boundary', w.boundary));
   }
 
   function load() {
