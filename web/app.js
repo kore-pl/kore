@@ -2167,7 +2167,20 @@
     runtimes: ['KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境'],
     appdeploy: ['KoreAppDeploy', '/assets/appdeploy.js', 'nav.appdeploy', '应用部署'],
     container: ['KoreContainer', '/assets/container.js', 'nav.container', '容器'],
-    terminal: ['KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端']
+    terminal: ['KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端'],
+    // R22 新功能：统一在此登记懒加载子视图（一级菜单仍 10 项，G-33 A6）。
+    // 每项 = [全局名, 脚本, i18n 键, 中文兜底]；视图文件由各卡交付，懒加载不进首屏。
+    health: ['KoreHealth', '/assets/health.js', 'nav.health', '系统体检'],
+    report: ['KoreReport', '/assets/report.js', 'nav.report', '运行报告'],
+    topology: ['KoreTopology', '/assets/topology.js', 'nav.topology', '服务拓扑'],
+    calendar: ['KoreCalendar', '/assets/calendar.js', 'nav.calendar', '运维日历'],
+    batch: ['KoreBatch', '/assets/batch.js', 'nav.batch', '批量操作'],
+    snapshot: ['KoreSnapshot', '/assets/snapshot.js', 'nav.snapshot', '配置快照'],
+    migrate: ['KoreMigrate', '/assets/migrate.js', 'nav.migrate', '配置迁移'],
+    webhook: ['KoreWebhook', '/assets/webhook.js', 'nav.webhook', '通知通道'],
+    // settings / tasks 原为单视图，改为 hub 后在此保留原模块，避免把原「设置 / 计划任务」弄丢。
+    settings: ['KoreSettings', '/assets/settings.js', 'nav.settings', '设置'],
+    tasks: ['KoreTasks', '/assets/tasks.js', 'nav.tasks', '计划任务']
   };
 
   var HUB_DEFS = [
@@ -2177,7 +2190,8 @@
         { sub: 'sites', label: '网站', labelKey: 'nav.sites', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
         { sub: 'runtimes' },
         { sub: 'appdeploy' },
-        { sub: 'container' }
+        { sub: 'container' },
+        { sub: 'batch' }
       ]
     },
     {
@@ -2200,11 +2214,15 @@
     {
       id: 'monitor', label: '监控', views: [
         { sub: 'monitor', label: '监控', labelKey: 'nav.monitor', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
+        { sub: 'health' },
+        { sub: 'report' },
+        { sub: 'topology' },
         { sub: 'logs' },
         { sub: 'process' }
       ]
     },
-    { id: 'tasks', label: '计划任务', render: moduleView('KoreTasks', '/assets/tasks.js', '计划任务') },
+    // R22：计划任务从单视图改为 hub（原 KoreTasks 通过 SHELL_VIEWS.tasks 保留），新增运维日历 tab。
+    { id: 'tasks', label: '计划任务', views: [{ sub: 'tasks' }, { sub: 'calendar' }] },
     {
       // 「安全」收的是「对外暴露面的防守」：网络边界（防火墙/WAF/DNS/SSH）、信任链（证书）、
       // 资产完整性（完整性校验）、本机暴露面盘点（服务发现）。同一心智模型：
@@ -2215,7 +2233,10 @@
       ]
     },
     { id: 'terminal', label: '终端', views: [{ sub: 'terminal' }] },
-    { id: 'settings', label: '设置', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
+    // R22：设置从单视图改为 hub（原 KoreSettings 通过 SHELL_VIEWS.settings 保留），新增快照/迁移/通知三个 tab。
+    { id: 'settings', label: '设置', views: [
+      { sub: 'settings' }, { sub: 'snapshot' }, { sub: 'migrate' }, { sub: 'webhook' }
+    ] }
   ];
 
   // 把注册表展开成 shell 要的 routes：单子视图的一级项直接渲染（不显示只有一格的 tab 条）。

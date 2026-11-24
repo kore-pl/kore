@@ -18,7 +18,9 @@
 // onboarding.js / onboarding.css / theme.js / theme.css / shortcuts.js 是个性化组件
 // （首次使用引导 / 深浅色主题 / 快捷键帮助；shell.js 首屏渲染后按 theme→shortcuts→onboarding
 // 顺序懒加载并 mount，不进首屏六件套、不计首屏 gzip 预算）。
-// 43个文件全部编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
+// R22 新增视图（health / calendar / batch / report / topology 等）都是 sub 懒加载模块，
+// 由 app.js 的 SHELL_VIEWS 登记、切到对应 tab 才注入，不进首屏六件套、不计首屏预算。
+// 全部文件编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
 package web
 
 import "embed"
@@ -68,8 +70,13 @@ import "embed"
 //	dist/theme.js
 //	dist/theme.css
 //	dist/shortcuts.js
+//	dist/health.js
+//	dist/calendar.js
+//	dist/batch.js
+//	dist/report.js
+//	dist/topology.js
 //
 // httpapi 用 embed.FS.ReadFile 按精确路径读取，不暴露子目录遍历面。
 //
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js dist/onboarding.js dist/onboarding.css dist/theme.js dist/theme.css dist/shortcuts.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js dist/onboarding.js dist/onboarding.css dist/theme.js dist/theme.css dist/shortcuts.js dist/health.js dist/calendar.js dist/batch.js dist/report.js dist/topology.js
 var Dist embed.FS
