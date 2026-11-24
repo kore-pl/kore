@@ -100,8 +100,8 @@ infer_repo() {
 api() {
   local method="$1" path="$2" out="$3"
   local url="$API_BASE$path"
-  if [[ "$url" == *"?"* ]]; then url="$url&access_token=${GITEE_TOKEN}"; else url="$url?access_token=${GITEE_TOKEN}"; fi
-  curl -sS --max-time 120 -X "$method" "$url" -o "$out" -w '%{http_code}'
+  curl -sS --max-time 120 -X "$method" \
+    -H "Authorization: token ${GITEE_TOKEN}" "$url" -o "$out" -w '%{http_code}'
 }
 
 api_get() {  # $1=path $2=outfile ; prints http code
@@ -113,9 +113,7 @@ list_releases() {  # $1=owner/repo $2=outfile ; prints count
   : > "$out"
   while :; do
     local tmp; tmp="$(mktemp)"
-    local code; code="$(curl -sS --max-time 120 \
-      "$API_BASE/repos/$repo/releases?access_token=${GITEE_TOKEN}&page=$page&per_page=100" \
-      -o "$tmp" -w '%{http_code}')"
+    local code; code="$(api GET "/repos/$repo/releases?page=$page&per_page=100" "$tmp")"
     if [ "$code" != "200" ]; then rm -f "$tmp"; return 1; fi
     local n; n="$(jq 'length' "$tmp" 2>/dev/null || echo 0)"
     if [ "$n" = "0" ]; then rm -f "$tmp"; break; fi
