@@ -32,10 +32,13 @@
     '.kore-alert-panel{position:fixed;top:var(--kore-topbar-h);right:0;bottom:0;z-index:71;width:400px;max-width:100%;' +
     'display:flex;flex-direction:column;background:var(--kore-bg-1);border-left:1px solid var(--kore-border-1);' +
     'box-shadow:var(--kore-shadow)}' +
-    '.kore-alert-head{display:flex;align-items:center;gap:var(--kore-space-2);' +
+    '.kore-alert-head{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;' +
     'padding:var(--kore-space-3) var(--kore-space-4);border-bottom:1px solid var(--kore-border-1)}' +
-    '.kore-alert-title{font-size:var(--kore-font-16);font-weight:600;flex:1}' +
-    '.kore-alert-count{font-size:var(--kore-font-12);color:var(--kore-text-3)}' +
+    '.kore-alert-headline{display:flex;align-items:baseline;gap:var(--kore-space-2);flex-wrap:wrap;min-width:0}' +
+    '.kore-alert-title{font-size:var(--kore-font-16);font-weight:600;white-space:nowrap;flex:none}' +
+    '.kore-alert-count{font-size:var(--kore-font-12);color:var(--kore-text-3);white-space:nowrap}' +
+    '.kore-alert-ops{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap;margin-left:auto}' +
+    '.kore-alert-ops .btn{min-height:32px}' +
     '.kore-alert-body{flex:1;overflow:auto;padding:var(--kore-space-3) var(--kore-space-4)}' +
     '.kore-alert-item{display:flex;gap:var(--kore-space-3);padding:var(--kore-space-3);margin-bottom:var(--kore-space-2);' +
     'background:var(--kore-bg-2);border:1px solid var(--kore-border-1);border-left:4px solid var(--kore-text-3);' +
@@ -58,6 +61,9 @@
     '.kore-alert-empty b{display:block;font-size:var(--kore-font-16);color:var(--kore-success);margin-bottom:var(--kore-space-2)}' +
     '.kore-alert-empty small{color:var(--kore-text-3)}' +
     '@media (max-width:639px){.kore-alert-panel{top:auto;height:calc(100% - var(--kore-topbar-h));width:100%;border-left:0}' +
+    '.kore-alert-headline{flex:1 1 100%}' +
+    '.kore-alert-ops{margin-left:0;flex:1 1 100%}' +
+    '.kore-alert-ops .btn{flex:1 1 auto;min-height:var(--kore-touch);white-space:nowrap}' +
     '.kore-alert-act{min-height:var(--kore-touch)}}';
 
   function el(tag, cls, text) {
@@ -326,22 +332,26 @@
     S.panel.setAttribute('aria-modal', 'true');
     S.panel.setAttribute('aria-label', '告警中心');
     var head = el('div', 'kore-alert-head');
-    head.appendChild(el('span', 'kore-alert-title', '告警中心'));
+    var headline = el('div', 'kore-alert-headline');
+    headline.appendChild(el('span', 'kore-alert-title', '告警中心'));
     S.head = el('span', 'kore-alert-count', '');
-    head.appendChild(S.head);
+    headline.appendChild(S.head);
+    head.appendChild(headline);
+    var ops = el('div', 'kore-alert-ops');
     S.seenBtn = el('button', 'btn btn-ghost', '全部标为已读');
     S.seenBtn.type = 'button';
     S.seenBtn.hidden = true;
     S.seenBtn.addEventListener('click', markAllSeen);
-    head.appendChild(S.seenBtn);
+    ops.appendChild(S.seenBtn);
     var again = el('button', 'btn btn-ghost', '重新检查');
     again.type = 'button';
     again.addEventListener('click', refresh);
-    head.appendChild(again);
+    ops.appendChild(again);
     var shut = el('button', 'btn btn-ghost', '关闭');
     shut.type = 'button';
     shut.addEventListener('click', close);
-    head.appendChild(shut);
+    ops.appendChild(shut);
+    head.appendChild(ops);
     S.panel.appendChild(head);
     S.body = el('div', 'kore-alert-body');
     S.panel.appendChild(S.body);
