@@ -1187,6 +1187,11 @@ button:disabled, .btn:disabled {
   .store-preset-btn { min-height: var(--kore-touch); }
   .store-btn-install, .store-btn-danger, .store-btn-offline { min-height: var(--kore-touch); font-size: var(--kore-font-14); }
   .store-pkg-inline-actions .btn { min-height: var(--kore-touch); }
+  /* 卡片操作条在 390px 上按钮等宽撑满，触摸目标 ≥44px（裁决41） */
+  .store-ops { justify-content: stretch; }
+  .store-ops .btn { flex: 1 1 auto; min-height: var(--kore-touch); }
+  .store-upgrade-all { min-height: var(--kore-touch); }
+  .store-pager .btn { min-height: var(--kore-touch); }
 }
 
 /* ===== 布局壳：左侧固定导航 + 视图区（web/shell.js）——仅追加，不改既有类 =====
@@ -1929,8 +1934,24 @@ button:disabled, .btn:disabled {
 @media (max-width: 639px) {
   .proc-toolbar .btn, .proc-input, .proc-actions .btn, .proc-confirm-ops .btn, .proc-confirm-ops .proc-input { min-height: var(--kore-touch); }
   .proc-search { max-width: none; }
-  .proc-table { min-width: 720px; }
+  /* 进程列表在手机上不转卡片（100+ 行会撑成超长单页），走 C 方案：隐藏次要列，
+     只留 PID / 名称 / RSS / CPU%，完整信息点行进抽屉看（裁决41）。 */
+  .proc-table { min-width: 0; }
+  .proc-table-host { overflow-x: visible; }
+  .proc-table th:nth-child(3), .proc-table td:nth-child(3),
+  .proc-table th:nth-child(4), .proc-table td:nth-child(4),
+  .proc-table th:nth-child(7), .proc-table td:nth-child(7) { display: none; }
+  .proc-table th, .proc-table td { padding: var(--kore-space-2) var(--kore-space-2); }
+  .proc-table th:first-child, .proc-table td:first-child { padding-left: var(--kore-space-3); }
+  .proc-table th:last-child, .proc-table td:last-child { padding-right: var(--kore-space-3); }
+  .proc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proc-row { min-height: var(--kore-touch); }
+  .proc-more .btn { min-height: var(--kore-touch); }
   .proc-drawer { width: 100%; }
+}
+
+@media (min-width: 640px) {
+  .proc-table { min-width: 720px; }
 }
 
 /* ===== SSL 证书视图（web/ssl.js）——仅追加，不改既有类 =====
@@ -2030,6 +2051,18 @@ button:disabled, .btn:disabled {
 @media (max-width: 639px) {
   .ssl-verify-input, .ssl-verify-box, .ssl-verify-box .btn { flex: 1 1 100%; }
   .ssl-table, .bak-table { font-size: var(--kore-font-12); }
+  /* 证书表 9 列（min-width 1000px）在 390px 只能横向拖 2.5 屏：转 A 方案卡片，
+     字段名走各 td 已有的 data-label（裁决41，与 files/sites/tasks 同口径）。 */
+  .ssl-table-host { overflow-x: visible; }
+  .ssl-table { min-width: 0; }
+  .ssl-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .ssl-table, .ssl-table tbody, .ssl-table tr, .ssl-table td { display: block; width: 100%; }
+  .ssl-table tbody tr { padding: var(--kore-space-2) 0 var(--kore-space-3); border-top: 1px solid var(--kore-border-2); }
+  .ssl-table td { display: flex; align-items: center; gap: var(--kore-space-3); padding: var(--kore-space-1) var(--kore-space-4); border: 0; }
+  .ssl-table td::before { content: attr(data-label); flex: 0 0 84px; color: var(--kore-text-3); font-size: var(--kore-font-12); }
+  .ssl-table td.cell-ops { flex-wrap: wrap; }
+  .ssl-table td.cell-ops .btn { flex: 1 1 auto; min-height: var(--kore-touch); }
+  .ssl-fp { word-break: break-all; }
   .ssl-acme .btn, .bak-confirm-ops .btn, .bak-form .btn, .ssl-form .btn, .bak-ops .btn { min-height: var(--kore-touch); }
   .ssl-acme-note { flex: 1 1 100%; }
   .ssl-acme-note { flex: 1 1 100%; }
@@ -2126,6 +2159,8 @@ button:disabled, .btn:disabled {
 }
 @media (max-width: 639px) {
   .files-table td.cell-ops, .sites-table td.cell-ops, .tasks-table td.cell-ops { flex-wrap: wrap; }
+  /* 复选框本体 18px，点击热区是外面的 label：整行撑到 ≥44px（裁决41） */
+  .field-bool, .ssl-acme-confirm { min-height: var(--kore-touch); align-items: center; }
 }
 
 /* 文件操作列：列宽不够时按钮换行，不把「删除」裁到面板外 */
@@ -2263,6 +2298,20 @@ button:disabled, .btn:disabled {
   .redis-toolbar { align-items: stretch; }
   .redis-limit-input { width: 100%; }
   .redis-field { flex: 1 1 140px; }
+}
+
+/* 防火墙规则表：8 列 min-width 720px，在 390px 上要横向拖两屏才看到「动作」；
+   <640px 转 A 方案卡片（每条规则一张卡），列名走 firewall.js 的 data-label（裁决41）。 */
+@media (max-width: 639px) {
+  .fw-rules-scroll { overflow-x: visible; }
+  .fw-table { min-width: 0; }
+  .fw-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .fw-table, .fw-table tbody, .fw-table tr, .fw-table td { display: block; width: 100%; }
+  .fw-table tbody tr { padding: var(--kore-space-2) 0 var(--kore-space-3); border-top: 1px solid var(--kore-border-2); }
+  .fw-table td { display: flex; align-items: center; gap: var(--kore-space-3); padding: var(--kore-space-1) var(--kore-space-4); }
+  .fw-table td::before { content: attr(data-label); flex: 0 0 84px; color: var(--kore-text-3); font-size: var(--kore-font-12); }
+  .fw-table td.fw-ops { flex-wrap: wrap; }
+  .fw-table td.fw-ops .btn { flex: 1 1 auto; min-height: var(--kore-touch); }
 }
 
 /* ===== 自动检测横幅（web/db.js / web/redis.js） ===== */

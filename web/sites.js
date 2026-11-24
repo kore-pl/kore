@@ -325,6 +325,8 @@
           opt.value = optValue;
         });
       } else if (f.type === 'bool') {
+        // 布尔字段：整行 label 即点击热区，<640px 由 .field-bool 撑到 ≥44px（裁决41）
+        box.classList.add('field-bool');
         input = add(box, el('input', 'files-checkbox'));
         input.type = 'checkbox';
       } else {

@@ -182,7 +182,14 @@
       return;
     }
     if (!S.rulesLoaded) { add(S.rulesHost, el('div', 'muted fw-loading', '正在读取规则…')); return; }
-    if (!S.rules.length) { add(S.rulesHost, el('div', 'panel-empty', '当前后端没有可展示的规则。')); return; }
+    if (!S.rules.length) {
+      S.rulesHost.appendChild(window.KoreUI.emptyBlock({
+        title: '当前没有防火墙规则',
+        text: '后端没有返回任何规则；可能是规则被清空，或防火墙还没初始化。读一次就能确认。',
+        label: '重新读取规则', onClick: loadRules
+      }));
+      return;
+    }
     var scroll = add(S.rulesHost, el('div', 'fw-rules-scroll'));
     var table = add(scroll, el('table', 'fw-table'));
     var htr = add(add(table, el('thead')), el('tr'));
@@ -190,14 +197,20 @@
     var tbody = add(table, el('tbody'));
     S.rules.forEach(function (rule) {
       var tr = add(tbody, el('tr'));
-      add(tr, el('td', 'fw-index', '#' + rule.index));
-      add(tr, el('td', 'fw-action ' + actionKls(rule.action), rule.action || '—'));
-      add(tr, el('td', null, rule.direction || 'in'));
-      add(tr, el('td', null, rule.proto || 'any'));
-      add(tr, el('td', 'fw-port', fmtPort(rule.port)));
-      add(tr, el('td', 'fw-from', rule.from || '0.0.0.0/0'));
-      add(tr, el('td', 'fw-comment', rule.comment || ''));
-      var td = add(tr, el('td', 'fw-ops'));
+      // data-label：<640px 表格转卡片时由 CSS ::before 复原列名（裁决41，与 files/sites/tasks 同口径）
+      function cell(label, cls, text) {
+        var c = add(tr, el('td', cls, text));
+        c.dataset.label = label;
+        return c;
+      }
+      cell('编号', 'fw-index', '#' + rule.index);
+      cell('动作', 'fw-action ' + actionKls(rule.action), rule.action || '—');
+      cell('方向', null, rule.direction || 'in');
+      cell('协议', null, rule.proto || 'any');
+      cell('端口', 'fw-port', fmtPort(rule.port));
+      cell('来源', 'fw-from', rule.from || '0.0.0.0/0');
+      cell('备注', 'fw-comment', rule.comment || '');
+      var td = cell('操作', 'fw-ops');
       var del = add(td, el('button', 'btn fw-danger', '删除')); del.type = 'button';
       del.disabled = !S.canWrite;
       del.title = S.canWrite ? '先预览命令，确认后再删除' : '需要 root 权限且后端为 ufw';
