@@ -110,6 +110,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+alertsPath, s.handleAlertsWrite)
 	s.mux.HandleFunc("POST "+alertsPath+"/{id}/seen", s.handleAlertSeen)
 	s.mux.HandleFunc(alertsPath+"/", s.handleNotFound)
+	// 通知通道（ADR-0054，用户显式配置的出站推送）：列表 system:read，写/删/测试 system:admin。
+	s.mux.HandleFunc("GET "+webhookPath, s.handleWebhookList)
+	s.mux.HandleFunc("POST "+webhookPath, s.handleWebhookCreate)
+	s.mux.HandleFunc("DELETE "+webhookPath+"/{id}", s.handleWebhookDelete)
+	s.mux.HandleFunc("POST "+webhookPath+"/{id}/test", s.handleWebhookTest)
+	s.mux.HandleFunc(webhookPath+"/", s.handleNotFound)
 	// 定时任务（ADR-0019）：列表 / 创建 / 立即执行 / 删除；能力要求 system:admin。
 	// 配置快照（时光机）：列表/创建/删除/差异预览/回滚。精确路由在前，/{id} 兜底在后（go-build-api）。
 	s.mux.HandleFunc("GET "+snapshotsPath, s.handleSnapshotsList)
@@ -122,6 +128,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+schedulerTasksPath+"/{id}/run", s.handleSchedulerRun)
 	s.mux.HandleFunc("DELETE "+schedulerTasksPath+"/{id}", s.handleSchedulerDelete)
 	s.mux.HandleFunc("/api/v1/scheduler/", s.handleNotFound)
+	// 配置迁移（R22 migrate）：导出 / 预览 / 应用；system:admin。
+	s.mux.HandleFunc("GET "+migrateExportPath, s.handleMigrateExport)
+	s.mux.HandleFunc("POST "+migratePreviewPath, s.handleMigratePreview)
+	s.mux.HandleFunc("POST "+migrateApplyPath, s.handleMigrateApply)
 	s.mux.HandleFunc("/", s.handleNotFound)
 }
 
