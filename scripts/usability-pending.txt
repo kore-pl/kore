@@ -8,7 +8,8 @@
 # 一处修好就删/下调对应行；条目消失或条数下降会被门禁 WARN 提示——移出清单即转硬判据。
 #
 # 2026-11-24 首次基线（4400601 判据落地时实测）：
-#   A1 23/24（仅 backup 有 TestCreateZeroParamsUsesDefaultPreset；门禁真跑 PASS）
+#   A1 22/24（backup / ssl 已转硬：两者均有 Test*ZeroParam 且 `go test -run ZeroParam ./...` 真跑 PASS；
+#     ssl 于 09106ae 新增单站点零参数推断能力后移出清单）
 #   A2 24/24（24 个 info.json 全无 presets 字段——审计预估「若干」实为全量，已在 QUALITY-GATES 更正）
 #   A3 474 条（多为 parse/校验错误只写现象、没写"怎么办"）
 #   A4 4 处（alerts.js 2 / app.js 1 / db-l2.js 1；db.js / redis.js 已被在途卡片修掉，条目删除即是转硬）
@@ -37,7 +38,6 @@ A1 runtime-php
 A1 runtime-python
 A1 site
 A1 ssh-guard
-A1 ssl
 A1 terminal
 A1 waf
 A2 app-deploy
