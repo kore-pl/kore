@@ -2,7 +2,10 @@
    调用形态：POST /api/v1/invoke/container/container.<action>；方法段写完整限定名。
    数据：container.list（含 protected 标记）/ logs（tail 200 + since）/ stats / inspect（关键字段，
    含重启策略/健康）/ start / stop / restart（stop/restart 需 confirm=true）。分页 20 行 + 加载更多；
-   行操作开日志/详情抽屉（日志等宽字体）；停止/重启手输容器名确认；保护名单行锁标 + 禁用操作。 */
+   行操作开日志/详情抽屉（日志等宽字体）；停止/重启手输容器名确认；保护名单行锁标 + 禁用操作。
+   镜像管理页签：container.images（列表三态）/ pull（手输镜像名 confirm）/ rmi（手输镜像名 +
+   可选 force）/ update（容器行资源限额：memory_bytes 或 cpus + 手输容器名 confirm）——
+   四方法入参出参以 ../kore-plugin-container/internal/containerop/types.go 为唯一真源。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/container/', PAGE = 20, TIMEOUT_MS = 20000;
@@ -51,11 +54,28 @@
     '.ctr-exec-out{margin:0 0 6px;padding:8px 10px;border-radius:4px;background:var(--kore-bg-0);border:1px solid var(--kore-border-1);white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:var(--kore-font-12);max-height:260px;overflow:auto}' +
     '@media (max-width:640px){.ctr-exec-opts{flex-direction:column;align-items:stretch}' +
     '.ctr-exec-opts .ctr-field{min-width:0}.ctr-exec-actions{flex-direction:column}' +
-    '.ctr-exec-actions .btn{min-height:44px;width:100%}.ctr-exec-out-label .btn{min-height:44px}}';
+    '.ctr-exec-actions .btn{min-height:44px;width:100%}.ctr-exec-out-label .btn{min-height:44px}}' +
+    // 镜像管理：页签 / 拉取输入 / 镜像行 / 通用确认弹层字段（手机端复用 ctr-table 卡片化，触摸≥44px）
+    '.ctr-tabs{display:flex;gap:4px;border-bottom:1px solid var(--kore-border-2);margin-bottom:12px}' +
+    '.ctr-tab{min-height:44px;padding:0 16px;background:none;border:0;border-bottom:2px solid transparent;color:var(--kore-text-2);font-size:var(--kore-font-13);cursor:pointer}' +
+    '.ctr-tab[aria-selected="true"]{color:var(--kore-text-1);border-bottom-color:var(--kore-text-1)}' +
+    '.ctr-pull{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px}' +
+    '.ctr-pull .ctr-field{flex:1;min-width:220px;margin:0}' +
+    '.ctr-pull .btn{min-height:44px}' +
+    '.ctr-pull-result{margin:8px 0;padding:8px 10px;border-radius:4px;font-size:var(--kore-font-13);line-height:1.6}' +
+    '.ctr-pull-result[hidden]{display:none}.ctr-pull-result.is-ok{color:var(--kore-success)}.ctr-pull-result.is-fail{color:var(--kore-danger)}' +
+    '.img-ref{font-family:ui-monospace,Menlo,Consolas,monospace}.img-dangling{color:var(--kore-warning);font-size:var(--kore-font-12)}' +
+    '.ctr-dlg-extra{margin:10px 0}.ctr-dlg-extra[hidden]{display:none}.ctr-dlg-extra .ctr-field{margin:8px 0}' +
+    '.ctr-dlg-check{display:flex;align-items:center;gap:8px;min-height:44px;font-size:var(--kore-font-13);margin:8px 0}' +
+    '@media (max-width:639px){.ctr-tabs{overflow-x:auto}.ctr-tab{flex:1 1 0;min-width:96px}' +
+    '.ctr-pull{flex-direction:column;align-items:stretch}.ctr-pull .ctr-field{min-width:0;width:100%}.ctr-pull .btn{width:100%}}';
   function fresh() {
     return { items: [], all: false, loadError: '', loadFail: null, shown: PAGE, destroyed: false, stats: {}, statsBusy: false,
       drawer: null, drawerEl: null, drawerId: '', drawerData: null, drawerError: '', drawerFail: null, since: '', sinceInput: null, confirm: null, notice: '',
-      execFor: '', exec: { cmd: '', workdir: '', user: '', confirm: false, busy: false, result: null, error: '' } };
+      execFor: '', exec: { cmd: '', workdir: '', user: '', confirm: false, busy: false, result: null, error: '' },
+      tab: 'containers', busyPull: false, pullResult: '', pullRef: '',
+      images: [], imagesLoaded: false, imagesError: '', imagesFail: null,
+      imgConfirmRule: '', imgConfirmRef: '', imgForce: false, updateFor: '' };
   }
   var S = fresh();
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined && text !== null) n.textContent = String(text); return n; }
@@ -117,7 +137,23 @@
     if (/E_UNAUTHORIZED|保护名单/.test(msg)) return '该容器在保护名单（KORE_PROTECTED_CONTAINERS）内，属于核心服务，不允许在此操作。';
     if (/E_NOTFOUND|容器不存在/.test(msg)) return '容器可能已被删除：点「刷新」重新拉取列表。';
     if (/E_UPSTREAM|超时/.test(msg)) return 'docker 命令执行失败或超时：确认 daemon 运行中、磁盘未满，稍后重试。';
+    if (/镜像引用|E_INVALID/.test(msg)) return '镜像名格式不对：须以字母或数字开头，只能用字母数字与 . _ / : @ -，不能带空格、引号或 $()；例如 nginx:latest、registry.example.com/app:v1。';
     return '请确认 Docker 已启动且当前用户可访问 docker socket（或把用户加入 docker 组），然后重试。';
+  }
+  // 镜像页四类操作的「怎么办」：按错误码 + 关键词给可执行的下一步，不显示裸英文码了事。
+  function imageHint(rule, err) {
+    var msg = String((err && err.message) || err || '');
+    var code = (err && err.code) || '';
+    if (/E_INVALID/.test(code)) {
+      if (rule === 'update') return '内存要在 6 MiB～1 TiB、CPU 要在 0.01～1024 核之间；至少填一项，改完再确认。';
+      if (rule === 'pull') return '检查镜像名：如 nginx:latest、redis:7；仓库地址要写全（如 registry.example.com/app:v1），不要带空格或协议头 http://。';
+      return '镜像名不对：用列表里显示的「仓库:标签」或镜像 ID，别手输十六进制短名；需要强删时勾「强制删除」。';
+    }
+    if (/E_NOTFOUND/.test(code)) return '镜像可能已被删掉或改名：回到镜像列表点「刷新」，从列表里复制完整引用再试。';
+    if (/E_UPSTREAM|超时|pull/.test(msg) && rule === 'pull') return '检查网络连接与镜像仓库地址：私有仓库要先 docker login；确认磁盘空间充足，然后重试。';
+    if (/E_UPSTREAM|被占用|in use|超时/.test(msg) && rule === 'rmi') return '镜像正被容器占用：先到「容器」页停掉并删除相关容器，或勾「强制删除」再确认。';
+    if (/E_UNAUTHORIZED|保护名单/.test(msg)) return '该容器在保护名单内，不允许修改资源限额；联系管理员从 KORE_PROTECTED_CONTAINERS 移除后再试。';
+    return hintFor(msg);
   }
   function noticeBox(text) { var n = el('div', 'db-notice', text); n.setAttribute('role', 'alert'); return n; }
   function stateChip(state) {
@@ -143,6 +179,7 @@
     }); return svg; }
   function smallBtn(label, fn) { var b = el('button', 'btn btn-ghost', label); b.type = 'button'; if (fn) on(b, fn); return b; }
   function paintList() {
+    if (S.tab === 'images') return paintImages();
     var host = S.listHost; host.textContent = '';
     if (S.countMeta) S.countMeta.textContent = ''; // 失败/空态先清掉上一次的计数，避免残留误导
     if (S.loadError) {
@@ -185,7 +222,8 @@
     if (c.protected) ops.title = '核心服务容器，不允许在此操作';
     // [标签, 动作, 禁用条件]：保护名单行全部禁用；非运行中禁停止/重启，运行中禁启动。
     [['日志', openLogs, false], ['详情', openDetail, false], ['启动', doStart, c.state === 'running'],
-      ['停止', askStop, c.state !== 'running'], ['重启', askRestart, c.state !== 'running']].forEach(function (op) {
+      ['停止', askStop, c.state !== 'running'], ['重启', askRestart, c.state !== 'running'],
+      ['限额', function () { askImgConfirm('update', c.id, c); }, false]].forEach(function (op) {
         var b = smallBtn(op[0], function () { op[1](c); }); if (c.protected || op[2]) b.disabled = true; ops.appendChild(b);
       });
     return tr;
@@ -197,6 +235,172 @@
   }
   function loadMore() { S.shown += PAGE; paintList(); }
   function toggleAll() { S.all = !S.all; load(); }
+
+  // ---------- 镜像管理页（container.images / pull / rmi / update） ----------
+  // 三态：未加载显示「正在读取…」；失败显示人话 + 怎么办 + 重试；成功空列表给下一步按钮。
+  function paintImages() {
+    var host = S.listHost; host.textContent = '';
+    if (S.countMeta) S.countMeta.textContent = '';
+    if (S.imagesError) {
+      var view = errorView(S.imagesFail || { message: S.imagesError });
+      var fail = add(host, el('div', 'empty-state'));
+      add(fail, el('p', 'empty-state-title', view.title || '镜像列表读取失败'));
+      add(fail, el('p', 'empty-state-text', view.detail || S.imagesError));
+      add(fail, el('p', 'empty-state-text', '怎么办：' + (view.action || hintFor(S.imagesError))));
+      add(fail, smallBtn('重新读取', loadImages)); return;
+    }
+    if (!S.imagesLoaded) { add(host, el('p', 'muted', '正在读取镜像…')); return; }
+    if (!S.images.length) {
+      var empty = add(host, el('div', 'empty-state'));
+      add(empty, el('p', 'empty-state-title', '本机还没有镜像'));
+      add(empty, el('p', 'empty-state-text', '在上方输入镜像名（如 nginx:latest）点「拉取镜像」，拉取成功后就会出现在这里。'));
+      add(empty, smallBtn('刷新镜像列表', loadImages)); return;
+    }
+    S.countMeta.textContent = '共 ' + S.images.length + ' 个镜像';
+    var table = add(host, el('table', 'ctr-table')), htr = add(add(table, el('thead')), el('tr'));
+    ['仓库', '标签', '大小', '创建时间', '操作'].forEach(function (t) { add(htr, el('th', null, t)); });
+    var body = add(table, el('tbody'));
+    S.images.forEach(function (img) { body.appendChild(imageRowOf(img)); });
+  }
+  function imageRowOf(img) {
+    var tr = el('tr'), ref = imageRefOf(img);
+    var repo = add(tr, el('td', 'img-ref', img.dangling ? '<none>' : (img.repository || '—'))); repo.setAttribute('data-label', '仓库');
+    var tag = add(tr, el('td', null, img.dangling ? '<none>' : (img.tag || '—'))); tag.setAttribute('data-label', '标签');
+    var size = add(tr, el('td', null, img.size || '—')); size.setAttribute('data-label', '大小');
+    var created = add(tr, el('td', null, img.created || '—')); created.setAttribute('data-label', '创建时间');
+    var ops = add(tr, el('td', 'ctr-ops')); ops.setAttribute('data-label', '操作');
+    var del = smallBtn('删除', function () { askImgConfirm('rmi', ref, null); });
+    del.title = '删除镜像（需手输镜像名确认，不可撤销）'; del.style.color = 'var(--kore-danger)';
+    ops.appendChild(del);
+    if (img.dangling) add(ops, el('span', 'img-dangling', '悬空镜像'));
+    return tr;
+  }
+  // 镜像引用优先「仓库:标签」；悬空镜像没有 tag，只能按 id 删除（后端 ref 支持镜像 ID）。
+  function imageRefOf(img) {
+    if (img.dangling || !img.repository) return img.id || '';
+    return img.repository + (img.tag ? ':' + img.tag : '');
+  }
+  function loadImages() {
+    S.imagesError = ''; S.imagesFail = null; S.imagesLoaded = false; S.images = []; paintImages();
+    invoke('container.images', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.images = d.images || []; S.imagesLoaded = true; paintImages();
+    }, function (err) { if (S.destroyed) return; S.imagesError = err.message; S.imagesFail = err; S.imagesLoaded = true; paintImages(); });
+  }
+  function paintPull() {
+    if (!S.pullHost) return;
+    var host = S.pullHost; host.textContent = '';
+    var form = add(host, el('form', 'ctr-pull'));
+    var label = add(form, el('label', 'ctr-field'));
+    add(label, el('span', null, '镜像名（如 nginx:latest、redis:7；私有仓库写全地址）'));
+    var input = add(label, el('input')); input.value = S.pullRef; input.placeholder = 'nginx:latest';
+    input.setAttribute('aria-label', '要拉取的镜像名'); input.autocomplete = 'off';
+    var btn = add(form, el('button', 'btn btn-primary', S.busyPull ? '正在拉取…' : '拉取镜像'));
+    btn.type = 'submit'; btn.disabled = S.busyPull || input.value.trim() === '';
+    input.addEventListener('input', function () { S.pullRef = input.value; btn.disabled = S.busyPull || input.value.trim() === ''; });
+    var result = add(host, el('div', 'ctr-pull-result')); result.hidden = !S.pullResult; result.setAttribute('role', 'status');
+    if (S.pullResult) result.textContent = S.pullResult;
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var ref = input.value.trim(); if (!ref || S.busyPull) return;
+      askImgConfirm('pull', ref, null);
+    });
+  }
+  function doPull(ref) {
+    S.busyPull = true; S.pullResult = ''; paintPull();
+    invoke('container.pull', { ref: ref, confirm: true }).then(function (d) {
+      if (S.destroyed) return;
+      S.busyPull = false; S.pullRef = '';
+      S.pullResult = '已拉取「' + (d.ref || ref) + '」' + (d.truncated ? '（输出已截断，仅显示摘要）' : '') +
+        (d.message ? '：' + d.message : '');
+      paintPull(); loadImages();
+    }, function (err) {
+      if (S.destroyed) return;
+      var av = errorView(err), hint = imageHint('pull', err);
+      S.busyPull = false;
+      S.pullResult = '拉取失败：' + (av.detail || err.message) + '。怎么办：' + (av.mapped ? av.action : hint);
+      paintPull();
+    });
+  }
+  function doRmi(ref, force) {
+    invoke('container.rmi', { ref: ref, confirm: true, force: !!force }).then(function () {
+      if (S.destroyed) return;
+      S.notice = '已删除镜像「' + ref + '」'; closeConfirm(); paintNotice(); loadImages();
+    }, function (err) {
+      if (S.destroyed) return;
+      var av = errorView(err);
+      if (S.confirm) { S.confirmMsg.textContent = (av.mapped ? av.title + '：' + av.action : err.message) + '。怎么办：' + imageHint('rmi', err); S.confirmMsg.setAttribute('role', 'alert'); return; }
+      S.notice = err.message; paintNotice();
+    });
+  }
+  function doUpdate(id, memoryBytes, cpus, name) {
+    var params = { id: id, confirm: true };
+    if (memoryBytes !== null) params.memory_bytes = memoryBytes;
+    if (cpus !== null) params.cpus = cpus;
+    invoke('container.update', params).then(function () {
+      if (S.destroyed) return;
+      S.notice = '已更新「' + name + '」的资源限额'; closeConfirm(); paintNotice();
+      if (S.drawerId === id) closeDrawer();
+    }, function (err) {
+      if (S.destroyed) return;
+      var av = errorView(err);
+      if (S.confirm) { S.confirmMsg.textContent = (av.mapped ? av.title + '：' + av.action : err.message) + '。怎么办：' + imageHint('update', err); S.confirmMsg.setAttribute('role', 'alert'); return; }
+      S.notice = err.message; paintNotice();
+    });
+  }
+  // 通用二次确认层：pull/rmi 手输镜像名解锁，update 手输容器名解锁；force 复选框仅 rmi 显示。
+  // 复用既有 S.confirm 状态与确认 DOM（askConfirm 同款），不新建第二套弹层。
+  function askImgConfirm(rule, ref, c) {
+    S.confirm = { action: rule, ref: ref, name: c ? (c.name || c.id) : ref, updateFor: c ? c.id : '' };
+    S.imgConfirmRule = rule; S.imgForce = false;
+    if (rule === 'update') {
+      S.confirmTitle.textContent = '修改容器资源限额';
+      S.confirmName.textContent = '容器：' + S.confirm.name + '；请手动输入容器名确认：';
+      S.confirmLabel.textContent = '容器名（与上面完全一致才解锁确认按钮，防误操作）';
+      S.confirmInput.placeholder = '输入上面的容器名';
+    } else {
+      S.confirmTitle.textContent = rule === 'rmi' ? '删除镜像（不可撤销）' : '拉取镜像（会联网）';
+      S.confirmName.textContent = '镜像：' + ref + '；请手动输入完整镜像名确认：';
+      S.confirmLabel.textContent = '镜像名（与上面完全一致才解锁确认按钮，防误操作）';
+      S.confirmInput.placeholder = '输入上面的镜像名';
+    }
+    S.confirmInput.value = ''; S.confirmMsg.textContent = ''; S.confirmOk.disabled = true;
+    paintConfirmExtra(rule);
+    S.confirmMask.hidden = false; S.confirmInput.focus();
+  }
+  // 确认弹层里的额外表单：update 的内存/CPU 两个可选输入；rmi 的 force 勾选。
+  function paintConfirmExtra(rule) {
+    if (!S.confirmExtra) return;
+    S.confirmExtra.textContent = '';
+    S.confirmExtra.hidden = rule === 'pull';
+    if (rule === 'rmi') {
+      var chk = add(S.confirmExtra, el('label', 'ctr-dlg-check'));
+      var box = add(chk, el('input')); box.type = 'checkbox'; box.checked = S.imgForce;
+      box.addEventListener('change', function () { S.imgForce = box.checked; });
+      add(chk, el('span', null, '强制删除（镜像被容器占用时才需要，可能导致容器无法启动）'));
+    } else if (rule === 'update') {
+      var mf = add(S.confirmExtra, el('label', 'ctr-field'));
+      add(mf, el('span', null, '内存上限（MiB，留空=不改；范围 6 MiB～1 TiB）'));
+      S.updateMem = add(mf, el('input')); S.updateMem.type = 'number'; S.updateMem.min = '6'; S.updateMem.placeholder = '如 512';
+      var cf = add(S.confirmExtra, el('label', 'ctr-field'));
+      add(cf, el('span', null, 'CPU 核数（留空=不改；范围 0.01～1024）'));
+      S.updateCpu = add(cf, el('input')); S.updateCpu.type = 'number'; S.updateCpu.min = '0.01'; S.updateCpu.step = '0.01'; S.updateCpu.placeholder = '如 1.5';
+      add(S.confirmExtra, el('p', 'ctr-exec-hint', '至少填一项；只改填了的那一项，另一项保持原样。'));
+    }
+  }
+  function submitImgConfirm() {
+    var c = S.confirm; if (!c) return;
+    if (c.action === 'pull') { closeConfirm(); doPull(c.ref); return; }
+    if (c.action === 'rmi') { doRmi(c.ref, S.imgForce); return; }
+    if (c.action === 'update') {
+      var memRaw = S.updateMem ? S.updateMem.value.trim() : '', cpuRaw = S.updateCpu ? S.updateCpu.value.trim() : '';
+      var mem = memRaw === '' ? null : Math.round(Number(memRaw) * 1048576);
+      var cpu = cpuRaw === '' ? null : Number(cpuRaw);
+      if (mem === null && cpu === null) { S.confirmMsg.textContent = '请至少填写内存或 CPU 中的一项。'; S.confirmMsg.setAttribute('role', 'alert'); return; }
+      if ((mem !== null && !isFinite(mem)) || (cpu !== null && !isFinite(cpu))) { S.confirmMsg.textContent = '请输入有效的数字。'; S.confirmMsg.setAttribute('role', 'alert'); return; }
+      doUpdate(c.updateFor, mem, cpu, c.name);
+    }
+  }
   // fetchStats：只为可见的运行中行补一次 stats（docker stats --no-stream 较慢，串行拉取）。
   function fetchStats() {
     if (S.statsBusy || S.destroyed) return;
@@ -392,16 +596,36 @@
     syncExec();
   }
   function askConfirm(action, c) {
+    S.imgConfirmRule = ''; // 与镜像确认层共用 DOM：先清规则，submit 才不会误走镜像分支
     S.confirm = { action: action, id: c.id, name: c.name || c.id };
     S.confirmTitle.textContent = action === 'stop' ? '停止容器' : '重启容器';
     S.confirmName.textContent = '容器名：' + S.confirm.name;
+    S.confirmLabel.textContent = '容器名（与上面完全一致才解锁确认按钮，防误操作）';
     S.confirmInput.value = ''; S.confirmMsg.textContent = ''; S.confirmOk.disabled = true;
+    if (S.confirmExtra) { S.confirmExtra.textContent = ''; S.confirmExtra.hidden = true; }
     S.confirmMask.hidden = false; S.confirmInput.focus();
   }
   function askStop(c) { askConfirm('stop', c); }
   function askRestart(c) { askConfirm('restart', c); }
   function doStart(c) { act('start', c, false); }
-  function closeConfirm() { S.confirmMask.hidden = true; S.confirm = null; }
+  function closeConfirm() { S.confirmMask.hidden = true; S.confirm = null; S.imgConfirmRule = ''; }
+  // 页签切换：只切当前页，抽屉/确认层留在 root 上不动；首次切到镜像页才真正拉取列表。
+  function switchTab(tab) {
+    if (S.tab === tab) return;
+    S.tab = tab;
+    if (S.tabs) {
+      var all = S.tabs.querySelectorAll('.ctr-tab');
+      for (var i = 0; i < all.length; i++) all[i].setAttribute('aria-selected', all[i].dataset.tab === tab ? 'true' : 'false');
+    }
+    if (S.pullHost) S.pullHost.hidden = tab !== 'images';
+    if (S.moreHost) S.moreHost.hidden = tab === 'images';
+    if (S.toggleAllBtn) S.toggleAllBtn.hidden = tab === 'images';
+    if (S.refreshBtn) S.refreshBtn.textContent = '刷新';
+    if (S.panelTitle) S.panelTitle.textContent = tab === 'images' ? '镜像列表' : '容器列表';
+    if (S.panelMeta) S.panelMeta.textContent = tab === 'images' ? '拉取 / 删除本机镜像' : '点行看日志与详情';
+    if (tab === 'images') { paintPull(); if (!S.imagesLoaded && !S.imagesError) loadImages(); else paintImages(); }
+    else { paintPull(); load(); }
+  }
   function act(action, c, confirm) {
     var params = { id: c.id };
     if (confirm) params.confirm = true;
@@ -430,14 +654,28 @@
     }, function (err) { if (S.destroyed) return; S.loadError = err.message; S.loadFail = err; S.items = []; paintList(); });
   }
   function build(root) {
-    var head = add(root, el('header', 'view-head')); add(head, el('h2', 'view-title', '容器')); add(head, el('p', 'view-sub', '本机 Docker 容器：列表、日志、统计与启停；核心服务容器带锁标不可操作。'));
+    var head = add(root, el('header', 'view-head')); add(head, el('h2', 'view-title', '容器')); add(head, el('p', 'view-sub', '本机 Docker 容器：列表、日志、统计、启停与资源限额；切到「镜像」页可拉取/删除镜像。核心服务容器带锁标不可操作。'));
     S.noticeHost = add(root, el('div', 'ctr-notice-host'));
-    var panel = add(root, el('section', 'panel')), ph = add(panel, el('div', 'panel-head'));
-    add(ph, el('span', 'panel-title', '容器列表')); add(ph, el('span', 'panel-meta', '点行看日志与详情'));
+    // 两个页签：容器 / 镜像。切换只重绘当前页，不销毁抽屉/确认层（它们挂在 root 上）。
+    S.tabs = add(root, el('div', 'ctr-tabs')); S.tabs.setAttribute('role', 'tablist');
+    [['containers', '容器'], ['images', '镜像']].forEach(function (t) {
+      var b = add(S.tabs, el('button', 'ctr-tab', t[1])); b.type = 'button'; b.dataset.tab = t[0];
+      b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', S.tab === t[0] ? 'true' : 'false');
+      on(b, function () { switchTab(t[0]); });
+    });
+    var panel = add(root, el('section', 'panel'));
+    // 拉取入口只在镜像页出现（容器页不常驻技术输入框，符合易用性四原则③）
+    S.pullHost = add(panel, el('div', 'ctr-pull-host')); S.pullHost.hidden = S.tab !== 'images';
+    var ph = add(panel, el('div', 'panel-head'));
+    S.panelTitle = add(ph, el('span', 'panel-title', S.tab === 'images' ? '镜像列表' : '容器列表'));
+    S.panelMeta = add(ph, el('span', 'panel-meta', S.tab === 'images' ? '拉取 / 删除本机镜像' : '点行看日志与详情'));
     var metaBtns = add(ph, el('span', 'panel-meta actions'));
-    add(metaBtns, smallBtn(S.all ? '只看运行中' : '包含已停止的容器', toggleAll)); add(metaBtns, smallBtn('刷新', load));
+    S.toggleAllBtn = add(metaBtns, smallBtn(S.all ? '只看运行中' : '包含已停止的容器', toggleAll));
+    S.refreshBtn = add(metaBtns, smallBtn('刷新', function () { S.tab === 'images' ? loadImages() : load(); }));
+    S.toggleAllBtn.hidden = S.tab === 'images';
     S.countMeta = add(ph, el('span', 'panel-meta', ''));
     S.listHost = add(panel, el('div', 'ctr-list-host')); S.moreHost = add(panel, el('div', 'ctr-more'));
+    S.moreHost.hidden = S.tab === 'images';
     S.mask = add(root, el('div', 'ctr-mask')); S.mask.hidden = true; on(S.mask, closeDrawer);
     S.drawerEl = add(root, el('aside', 'ctr-drawer')); S.drawerEl.hidden = true;
     S.drawerEl.setAttribute('role', 'dialog'); S.drawerEl.setAttribute('aria-modal', 'true'); S.drawerEl.setAttribute('aria-label', '容器详情');
@@ -450,14 +688,20 @@
     var form = add(S.confirmMask, el('form', 'kore-modal-box')); S.confirmTitle = add(form, el('div', 'ctr-confirm-title', ''));
     S.confirmName = add(form, el('p', 'kore-modal-text', '容器名将在下方显示；请手动输入完整容器名确认：'));
     var f = add(form, el('label', 'ctr-field'));
-    add(f, el('span', null, '容器名（与上面完全一致才解锁确认按钮，防误操作）'));
+    S.confirmLabel = add(f, el('span', null, '容器名（与上面完全一致才解锁确认按钮，防误操作）'));
     S.confirmInput = add(f, el('input')); S.confirmInput.autocomplete = 'off'; S.confirmInput.placeholder = '输入上面的容器名';
     S.confirmInput.addEventListener('input', function () { S.confirmOk.disabled = S.confirmInput.value !== S.confirm.name; });
+    S.confirmExtra = add(form, el('div', 'ctr-dlg-extra')); S.confirmExtra.hidden = true;
     S.confirmMsg = add(form, el('div', 'kore-modal-msg'));
     var acts = add(form, el('div', 'kore-modal-actions'));
     var cancel = add(acts, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button'; on(cancel, closeConfirm);
     S.confirmOk = add(acts, el('button', 'btn', '确认执行')); S.confirmOk.type = 'submit'; S.confirmOk.disabled = true;
-    form.addEventListener('submit', function (ev) { ev.preventDefault(); if (S.confirmOk.disabled) return; act(S.confirm.action, { id: S.confirm.id, name: S.confirm.name }, true); });
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault(); if (S.confirmOk.disabled) return;
+      if (S.confirm && S.imgConfirmRule) submitImgConfirm();
+      else act(S.confirm.action, { id: S.confirm.id, name: S.confirm.name }, true);
+    });
+    paintPull(); // 容器页隐藏也先生成结构，切到镜像页直接可用
     S.onKey = function (ev) { if (ev.key !== 'Escape') return; if (S.confirm && !S.confirmMask.hidden) closeConfirm(); else if (S.drawerId) closeDrawer(); };
     document.addEventListener('keydown', S.onKey);
   }
