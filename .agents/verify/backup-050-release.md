@@ -10,7 +10,7 @@
 - 三端 release 均已建，`backup-0.5.0.tar.gz` + `.sha256` 三端 `curl -L` 全 200，size=1717615、sha=`f76a165a…` 与本地一致
 - 索引已收录 `backup@0.5.0`，`versions.lock.json` 已追加，两处 preset pin 已同步 0.5.0，索引已重签，`market/plugins.js` 已重建
 - `validate-index.sh` / `validate-presets.sh` 正例 exit 0；两个反例均按预期非 0 并已还原
-- **索引 24 条资产全量核对：`TOTAL=24 OK=23 BAD_COUNT=1`**，唯一 BAD 是**他人轨道**的 `file@0.3.4`（release 资产 404，非本卡写域，已横向通报 `file-manager-rebuild`；见 §7）
+- **索引 24 条资产全量核对：`TOTAL=24 OK=24 BAD_COUNT=0`**（中途曾出现 `file@0.3.4` 404 —— 属他人轨道、非本卡写域，横向通报 `file-manager-rebuild` 补建后复测转绿；见 §7）
 - 公钥未变（`3e461a07…`），**不需重启 kored**；kored 进程启动于 10:28:16（早于本卡开工），本轮未重启
 
 ## 1. 核实（改前）
@@ -211,7 +211,16 @@ OK  backup@0.5.0 http=200 size=1717615 sha=f76a165a0b5b
 poll 1..6: file@0.3.4 http=404   (10:49:56 / 10:50:19 / 10:50:40 / 10:51:01 / 10:51:23 / 10:51:45)
 ```
 
-结论：本卡范围内 24 条中 23 条 OK、`backup@0.5.0` 实测 200+sha+size 三项全对；缺口在另一轨道，需其补建 release 后才能到 `BAD_COUNT=0`。我**没有**为凑数改它的条目或放宽校验（不放宽判据是本卡的底线）。
+结论：首次核对时 24 条中 23 条 OK、`backup@0.5.0` 实测 200+sha+size 三项全对；缺口在另一轨道。我**没有**为凑数改它的条目或放宽校验（不放宽判据是本卡的底线）。
+
+**最终复核（通报后约 3 分钟，peer 已补建 file@0.3.4 release）：**
+
+```text
+OK  backup@0.5.0 http=200 size=1717615 sha=f76a165a0b5b
+FINAL: TOTAL=24 OK=24 BAD_COUNT=0
+```
+
+全量 24 个索引条目均 `http=200` 且实测 size/sha256 与索引记录逐字一致。
 
 ## 8. 公钥未变（不需重启 kored）
 
