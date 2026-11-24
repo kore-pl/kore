@@ -545,7 +545,8 @@
       (pg ? ['用户', '操作'] : ['用户', '主机', '操作']).forEach(function (h) { mk(htr, 'th', null, h); });
       var tbody = mk(table, 'tbody');
       users.forEach(function (u) {
-        var name = String(u.user === undefined ? (u.User !== undefined ? u.User : u.rolname) : u.user);
+        var name = String(u.user !== undefined ? u.user
+          : (u.User !== undefined ? u.User : (u.rolname !== undefined ? u.rolname : u.role_name)));
         var h = String(u.host === undefined ? (u.Host !== undefined ? u.Host : '') : u.host);
         var tr = mk(tbody, 'tr');
         mk(tr, 'td', 'db-l2-user', name);
@@ -568,7 +569,9 @@
       tableHost.textContent = '';
       mk(tableHost, 'p', 'db-l2-note', '正在读取账号列表…');
       var sql = pg
-        ? "SELECT rolname AS user FROM pg_roles WHERE rolcanlogin AND rolname NOT LIKE 'pg_%' AND rolname <> 'postgres' ORDER BY rolname"
+        // 用 role_name 而非 user 作别名：USER 在 PostgreSQL 是保留关键字（CURRENT_USER 别名），
+        // 裸写 `AS user` 会被解析报错；role_name 无争议，paint 侧已兼容该别名。
+        ? "SELECT rolname AS role_name FROM pg_roles WHERE rolcanlogin AND rolname NOT LIKE 'pg_%' AND rolname <> 'postgres' ORDER BY rolname"
         : 'SELECT user, host FROM mysql.user ORDER BY user, host';
       ctx.invoke(m(ctx, 'query'), {
         instance: ctx.instance, sql: sql, limit: 1000
