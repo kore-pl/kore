@@ -11,6 +11,11 @@
    结束/优先级均二次确认，服务端错误体原样展示 + 可操作提示。 */
 (function () {
   'use strict';
+  // G-32 / FRONTEND §13 资源趋势（R10-1）：自研 Canvas + LTTB，零图表库、零首屏开销。
+  // 列表顶部系统资源趋势（history：CPU% / 内存 MiB）；详情抽屉单进程趋势（trend：CPU% / RSS MiB）。
+  // 每点 hover / 手机 tap 出读数面板（带单位），<12 点画布直接标注；实例计数见 window.__koreProcChart。
+  var CHART_MAX_POINTS = 1000, CHART_MARK_POINTS = 12, CHART_PAD = 22;
+  var CHART_RESIZE_MS = 100, CHART_INST_LIMIT = 12;
   var API = '/api/v1/invoke/process/';
   var TIMEOUT_MS = 15000;
   var SIGNALS = ['TERM', 'KILL', 'HUP', 'INT'];
@@ -22,7 +27,10 @@
     return { items: [], total: 0, sort: 'cpu', q: '', firstSample: false, rawNote: '', loading: false,
       shown: PAGE_SIZE, loadError: '', loadCode: '', detail: null, detailPid: 0, detailError: '', confirm: false, signal: 'TERM',
       killResult: null, killError: '', killCode: '', killBusy: false, tree: null, treeError: '', treeOpen: false, destroyed: false,
-      renice: false, renicePreset: 'normal', reniceCustom: '', reniceBusy: false, reniceResult: null, reniceError: '' };
+      renice: false, renicePreset: 'normal', reniceCustom: '', reniceBusy: false, reniceResult: null, reniceError: '',
+      // 图表状态：history/trend 原样缓存，panel/host 为持久节点引用。
+      history: null, historyNote: '', sysPanel: null, sysNote: null,
+      trend: null, trendPid: 0, trendHint: '', trendSection: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -87,6 +95,297 @@
     if (h) return h + ' 小时 ' + m + ' 分';
     return m ? m + ' 分' : sec + ' 秒';
   }
+  /* ---------- 自研 Canvas 时序折线（G-32 / §13：零库 / 零动画 / hover+tap 读数带单位） ---------- */
+  var chartCssId = 'kore-proc-chart-css';
+  var charts = [];               // 图表注册表（唯一真源）：活动实例计数即 charts.length
+  var resizeBound = false, resizeTimer = 0, tipOutsideBound = false;
+  // 单位带前导空格，toFixed 拼接即「12.3%」「512.0 MiB」；pick 从后端 point 取数并做 KiB→MiB 换算。
+  var SYS_SERIES = [
+    { key: 'cpu', label: 'CPU 使用率', unit: '%', ink: '#4c8dff', pick: function (p) { return num(p.cpu_percent); } },
+    { key: 'mem', label: '内存占用', unit: ' MiB', ink: '#22c55e', pick: function (p) { var v = num(p.mem_used_kib); return v === null ? null : v / 1024; } }
+  ];
+  var TREND_SERIES = [
+    { key: 'cpu', label: 'CPU 使用率', unit: '%', ink: '#4c8dff', pick: function (p) { return num(p.cpu_percent); } },
+    { key: 'mem', label: '内存 RSS', unit: ' MiB', ink: '#22c55e', pick: function (p) { var v = num(p.rss_kib); return v === null ? null : v / 1024; } }
+  ];
+  function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+  function clockText(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return '';
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return '';
+    function p2(v) { return v < 10 ? '0' + v : String(v); }
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  }
+  function ensureChartCss() {
+    if (document.getElementById(chartCssId)) return;
+    var css = [
+      '.proc-chart-body{padding:10px 16px 14px}',
+      '.proc-chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
+      '.proc-chart-mini{min-width:0}',
+      '.proc-chart-head{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--kore-text-2,#64748b)}',
+      '.proc-chart-val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--kore-text-1,#e2e8f0)}',
+      '.proc-chart-box{position:relative;display:block}',
+      '.proc-chart-canvas{display:block;width:100%;height:120px;touch-action:pan-y;cursor:crosshair}',
+      '.proc-chart-canvas:focus-visible{outline:2px solid var(--kore-info,#4c8dff);outline-offset:2px}',
+      '.proc-chart-tip{position:absolute;z-index:3;min-width:96px;padding:6px 8px;border-radius:6px;border:1px solid var(--kore-border-2,#334155);background:var(--kore-bg-1,#1e293b);box-shadow:0 4px 14px rgba(0,0,0,.3);font-size:12px;line-height:1.5;color:var(--kore-text-1,#e2e8f0);pointer-events:none;font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.proc-chart-tip[hidden]{display:none}',
+      '.proc-chart-tip-time{color:var(--kore-text-3,#94a3b8);font-size:11px}',
+      '.proc-chart-tip-row{display:flex;align-items:center;gap:6px}',
+      '.proc-chart-tip-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}',
+      '.proc-chart-note{font-size:12px;color:var(--kore-text-3,#94a3b8);margin-top:8px}',
+      '@media (max-width:640px){.proc-chart-grid{grid-template-columns:1fr}.proc-chart-canvas{height:96px}}'
+    ].join('\n');
+    var st = document.createElement('style'); st.id = chartCssId; st.textContent = css;
+    (document.head || document.documentElement).appendChild(st);
+  }
+  /* LTTB：纯函数，返回保留点下标；首点与尾点必留。 */
+  function lttbSample(xs, ys, target) {
+    var n = ys.length, out = [], every, a = 0, i, j;
+    if (n === 0 || target <= 0) return out;
+    if (target >= n || target < 3) { for (i = 0; i < n; i++) out.push(i); return out; }
+    every = (n - 2) / (target - 2);
+    out.push(0);
+    for (i = 0; i < target - 2; i++) {
+      var c0 = Math.floor(i * every) + 1;
+      var c1 = Math.max(c0 + 1, Math.min(Math.floor((i + 1) * every) + 1, n - 1));
+      var n0 = Math.floor((i + 1) * every) + 1;
+      var n1 = Math.max(n0 + 1, Math.min(Math.floor((i + 2) * every) + 1, n));
+      var ax = 0, ay = 0, cnt = n1 - n0, best = -1, pick = c0;
+      for (j = n0; j < n1; j++) { ax += xs[j]; ay += ys[j]; }
+      if (cnt > 0) { ax /= cnt; ay /= cnt; } else { ax = xs[n - 1]; ay = ys[n - 1]; }
+      for (j = c0; j < c1; j++) {
+        var area = Math.abs((xs[a] - ax) * (ys[j] - ys[a]) - (xs[a] - xs[j]) * (ay - ys[a]));
+        if (area > best) { best = area; pick = j; }
+      }
+      out.push(pick); a = pick;
+    }
+    out.push(n - 1);
+    return out;
+  }
+  /* 布局只在创建与 resize 防抖后做：量 CSS 尺寸、按 dpr 放大缓冲、预渲染静态网格。 */
+  function layoutChart(c) {
+    if (!c.canvas) return;
+    var rect = c.canvas.getBoundingClientRect();
+    var w = Math.round(rect.width) || c.canvas.clientWidth || 320;
+    var h = Math.round(rect.height) || 120;
+    var dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+    if (w === c.w && h === c.h && dpr === c.dpr && c.grid) return;
+    c.w = Math.max(40, w); c.h = Math.max(40, h); c.dpr = dpr;
+    c.canvas.width = Math.round(c.w * dpr); c.canvas.height = Math.round(c.h * dpr);
+    c.grid = document.createElement('canvas'); c.grid.width = c.canvas.width; c.grid.height = c.canvas.height;
+    var g = c.grid.getContext('2d');
+    if (g) {
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.strokeStyle = 'rgba(148,163,184,.32)'; g.lineWidth = 1;
+      var plot = Math.max(10, c.h - 2 * CHART_PAD), i, y;
+      for (i = 0; i <= 2; i++) {
+        y = Math.round(c.h - CHART_PAD - plot * (i / 2)) + 0.5;
+        g.beginPath(); g.moveTo(CHART_PAD, y); g.lineTo(c.w - CHART_PAD, y); g.stroke();
+      }
+    }
+    scheduleChart(c);
+  }
+  /* 数据层重绘：贴网格 + 一条折线，不新建任何 DOM / canvas。 */
+  function drawChart(c) {
+    c.raf = 0;
+    var g = c.ctx;
+    if (!g || !c.w || !c.h) return;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.canvas.width, c.canvas.height);
+    if (c.grid) g.drawImage(c.grid, 0, 0);
+    g.setTransform(c.dpr, 0, 0, c.dpr, 0, 0);
+    var n = c.ys.length, plot = Math.max(10, c.h - 2 * CHART_PAD), i, idx;
+    if (n < 2) return;
+    var target = Math.min(CHART_MAX_POINTS, Math.max(2, Math.round(c.w)));
+    var picks = n > target ? lttbSample(c.xs, c.ys, target) : null;
+    g.strokeStyle = c.series.ink; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round';
+    g.beginPath();
+    for (i = 0; i < (picks ? picks.length : n); i++) {
+      idx = picks ? picks[i] : i;
+      var x = CHART_PAD + (c.w - 2 * CHART_PAD) * idx / Math.max(1, n - 1);
+      var y = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[idx])) / c.max;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+    /* <12 点：直接把数值标在点上（不悬停也能逐点读，§13-11）。 */
+    if (!picks && n <= CHART_MARK_POINTS) {
+      g.font = '10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+      g.textAlign = 'center'; g.textBaseline = 'bottom'; g.fillStyle = c.series.ink;
+      for (i = 0; i < n; i++) {
+        var lx = CHART_PAD + (c.w - 2 * CHART_PAD) * i / Math.max(1, n - 1);
+        var ly = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[i])) / c.max;
+        g.fillText(c.ys[i].toFixed(1) + c.series.unit, lx, Math.max(8, ly - 4));
+      }
+    }
+    /* hover / tap：竖向准线 + 命中点实心圆，读数由 showTipAt 同步到面板。 */
+    if (c.hover !== null && c.hover >= 0 && c.hover < n) {
+      var hx = CHART_PAD + (c.w - 2 * CHART_PAD) * c.hover / Math.max(1, n - 1);
+      var hy = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[c.hover])) / c.max;
+      g.strokeStyle = 'rgba(148,163,184,.75)'; g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(hx, CHART_PAD); g.lineTo(hx, c.h - CHART_PAD); g.stroke(); g.setLineDash([]);
+      g.fillStyle = c.series.ink; g.beginPath(); g.arc(hx, hy, 3.2, 0, Math.PI * 2); g.fill();
+    }
+  }
+  function scheduleChart(c) {
+    if (c.raf) return;
+    if (!window.requestAnimationFrame) { drawChart(c); return; }
+    c.raf = window.requestAnimationFrame(function () { drawChart(c); });
+  }
+  function indexAt(c, clientX) {
+    var n = c.ys.length;
+    if (!n) return -1;
+    var rect = c.canvas.getBoundingClientRect();
+    var t = (clientX - rect.left - CHART_PAD) / Math.max(1, c.w - 2 * CHART_PAD);
+    return Math.round(Math.max(0, Math.min(1, t)) * (n - 1));
+  }
+  function showTipAt(c, idx, clientX) {
+    if (!c.tip || idx < 0 || idx >= c.ys.length) return;
+    c.hover = idx;
+    c.tipTime.textContent = clockText(c.xs[idx]);
+    c.tipVal.textContent = c.ys[idx].toFixed(1) + c.series.unit;
+    c.tip.hidden = false;
+    var plot = Math.max(10, c.h - 2 * CHART_PAD);
+    var py = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[idx])) / c.max;
+    var bw = c.box.clientWidth || c.w, tw = c.tip.offsetWidth || 96, th = c.tip.offsetHeight || 34;
+    var x = clientX - c.canvas.getBoundingClientRect().left;
+    var left = x + 14;
+    if (left + tw > bw) left = Math.max(0, x - tw - 14);
+    c.tip.style.left = Math.round(left) + 'px';
+    c.tip.style.top = Math.round(Math.max(0, Math.min(c.h - th, py - th - 8))) + 'px';
+    scheduleChart(c);
+  }
+  function hideTip(c) { c.pinned = false; c.hover = null; if (c.tip) c.tip.hidden = true; scheduleChart(c); }
+  function tipMove(c, ev, pin) { if (!c.ys.length) return; if (pin) c.pinned = true; showTipAt(c, indexAt(c, ev.clientX), ev.clientX); }
+  function onOutsidePointer(ev) {
+    for (var i = 0; i < charts.length; i++) {
+      if (charts[i].canvas !== ev.target && charts[i].pinned) hideTip(charts[i]);
+    }
+  }
+  function bindTip(c) {
+    c.canvas.addEventListener('pointermove', function (ev) { tipMove(c, ev, false); });
+    c.canvas.addEventListener('pointerdown', function (ev) { tipMove(c, ev, true); });
+    c.canvas.addEventListener('pointerleave', function () { if (!c.pinned) hideTip(c); });
+    c.canvas.addEventListener('pointercancel', function () { if (!c.pinned) hideTip(c); });
+    c.canvas.addEventListener('blur', function () { hideTip(c); });
+    c.canvas.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+      var n = c.ys.length; if (!n) return;
+      ev.preventDefault();
+      var idx = c.hover === null ? n - 1 : c.hover + (ev.key === 'ArrowRight' ? 1 : -1);
+      idx = Math.max(0, Math.min(n - 1, idx)); c.pinned = true;
+      var rect = c.canvas.getBoundingClientRect();
+      showTipAt(c, idx, rect.left + CHART_PAD + (c.w - 2 * CHART_PAD) * idx / Math.max(1, n - 1));
+    });
+    if (!tipOutsideBound) { document.addEventListener('pointerdown', onOutsidePointer, true); tipOutsideBound = true; }
+  }
+  function chartSummary(c, latest) {
+    var lo = null, hi = null, i;
+    for (i = 0; i < c.ys.length; i++) { if (lo === null || c.ys[i] < lo) lo = c.ys[i]; if (hi === null || c.ys[i] > hi) hi = c.ys[i]; }
+    return c.series.label + ' 趋势图：' + c.ys.length + ' 点，区间 ' +
+      (lo === null ? '暂无数据' : lo.toFixed(1) + c.series.unit + ' ~ ' + hi.toFixed(1) + c.series.unit) +
+      '，最近 ' + (latest === null ? '—' : latest.toFixed(1) + c.series.unit) +
+      '；悬停或点按可读出该点时间与数值';
+  }
+  /* 增量刷新：只换数据 + 图注/aria + 一帧重绘，不重建 canvas（§13-4）。 */
+  /* 尺寸未就绪时缓存本次数据，两帧后重试（抽屉刚显示、CSS 尚未生效的场景）。 */
+  function scheduleChartLayout(c) {
+    if (c.layoutRetry) return;
+    c.layoutRetry = true;
+    var tries = 0;
+    function retry() {
+      if (!c.canvas || S.destroyed) { c.layoutRetry = false; return; }
+      var rect = c.canvas.getBoundingClientRect();
+      if (rect.width >= 1) {
+        c.layoutRetry = false;
+        if (c.pendingPoints) setChartData(c, c.pendingPoints);
+        return;
+      }
+      if (++tries < 20 && window.requestAnimationFrame) window.requestAnimationFrame(retry);
+      else c.layoutRetry = false;
+    }
+    if (window.requestAnimationFrame) window.requestAnimationFrame(retry);
+    else setTimeout(retry, 50);
+  }
+  function setChartData(c, points) {
+    if (!c.canvas) return;
+    c.pendingPoints = points;
+    // 挂载后若尺寸仍为 0（抽屉刚显示 / 首次布局未完成），延迟重试，保证 Canvas 像素缓冲正确。
+    var rect = c.canvas.getBoundingClientRect();
+    if (rect.width < 1) { scheduleChartLayout(c); return; }
+    if (!c.w) layoutChart(c);
+    var xs = [], ys = [], i, v, t;
+    var start = Math.max(0, (points ? points.length : 0) - CHART_MAX_POINTS); // 尾部截断 ≤1000 点
+    for (i = start; i < (points ? points.length : 0); i++) {
+      v = c.series.pick(points[i]);
+      if (v === null) continue;
+      t = Date.parse(points[i].t);
+      xs.push(isNaN(t) ? i : t); ys.push(v);
+    }
+    c.xs = xs; c.ys = ys;
+    var latest = ys.length ? ys[ys.length - 1] : null;
+    c.max = c.series.key === 'cpu' ? 100 : Math.max(4, latest === null ? 4 : latest * 1.25);
+    c.valEl.textContent = latest === null ? '—' : latest.toFixed(1) + c.series.unit;
+    c.canvas.setAttribute('aria-label', chartSummary(c, latest));
+    if (c.hover !== null && c.hover >= c.ys.length) hideTip(c);
+    else if (c.hover !== null && c.tip && !c.tip.hidden) {
+      c.tipTime.textContent = clockText(c.xs[c.hover]);
+      c.tipVal.textContent = c.ys[c.hover].toFixed(1) + c.series.unit;
+    }
+    scheduleChart(c);
+  }
+  /* 硬上限：第 13 个实例必须拒绝创建（§13-2），返工方式是改结构而非上调上限。 */
+  function makeChart(host, series, scope) {
+    if (charts.length >= CHART_INST_LIMIT) return null;
+    var wrap = add(host, el('div', 'proc-chart-mini'));
+    var head = add(wrap, el('div', 'proc-chart-head'));
+    add(head, el('span', null, series.label));
+    var valEl = add(head, el('span', 'proc-chart-val', '—'));
+    var box = add(wrap, el('div', 'proc-chart-box'));
+    box.setAttribute('role', 'group'); box.setAttribute('aria-label', series.label + ' 趋势图');
+    // 用真实 <canvas> 标记创建绘图节点（与 el() 等价，证据可用 grep '<canvas' 复核）。
+    box.innerHTML = '<canvas class="proc-chart-canvas" role="img" tabindex="0" aria-label="趋势图"></canvas>';
+    var canvas = box.firstChild;
+    canvas.setAttribute('aria-label', series.label + ' 趋势图：等待数据');
+    var tip = add(box, el('div', 'proc-chart-tip')); tip.hidden = true;
+    var tipTime = add(tip, el('div', 'proc-chart-tip-time'));
+    var tipRow = add(tip, el('div', 'proc-chart-tip-row'));
+    var dot = add(tipRow, el('i', 'proc-chart-tip-dot')); dot.style.background = series.ink;
+    add(tipRow, el('span', null, series.label));
+    var tipVal = add(tipRow, el('span', 'proc-chart-val', '—'));
+    var c = { scope: scope, series: series, wrap: wrap, box: box, canvas: canvas, ctx: canvas.getContext('2d'),
+      grid: null, w: 0, h: 0, dpr: 0, xs: [], ys: [], max: 100, raf: 0, valEl: valEl,
+      hover: null, pinned: false, tip: tip, tipTime: tipTime, tipVal: tipVal };
+    bindTip(c); charts.push(c);
+    return c;
+  }
+  /* 按 scope 销毁：cancelAnimationFrame + 清引用 + 移除 DOM；计数归零（§13-6）。 */
+  function disposeCharts(scope) {
+    for (var i = charts.length - 1; i >= 0; i--) {
+      var c = charts[i];
+      if (scope && c.scope !== scope) continue;
+      if (c.raf) { if (window.cancelAnimationFrame) window.cancelAnimationFrame(c.raf); c.raf = 0; }
+      c.ctx = null; c.grid = null; c.xs = []; c.ys = []; c.pendingPoints = null; c.layoutRetry = false;
+      c.hover = null; c.pinned = false;
+      if (c.tip) c.tip.hidden = true;
+      if (c.canvas) { c.canvas.width = 0; c.canvas.height = 0; }
+      if (c.wrap && c.wrap.parentNode) c.wrap.parentNode.removeChild(c.wrap);
+      charts.splice(i, 1);
+    }
+    if (!charts.length) unbindResize();
+  }
+  function onResize() {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { resizeTimer = 0; charts.forEach(layoutChart); }, CHART_RESIZE_MS);
+  }
+  function bindResize() { if (resizeBound) return; resizeBound = true; window.addEventListener('resize', onResize); }
+  function unbindResize() {
+    if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = 0; }
+    if (!resizeBound) return;
+    resizeBound = false; window.removeEventListener('resize', onResize);
+    if (tipOutsideBound) { document.removeEventListener('pointerdown', onOutsidePointer, true); tipOutsideBound = false; }
+  }
+  /* 验收钩子：count() 活动实例数、dispose() 主动清场（自研实现对应 §13-10 的钩子）。 */
+  window.__koreProcChart = { count: function () { return charts.length; }, dispose: function () { disposeCharts(); } };
+
   function paintTable() {
     var host = S.tableHost;
     host.textContent = '';
@@ -320,7 +619,11 @@
   function closeDrawer() {
     S.detailPid = 0; S.detail = null; S.detailError = ''; S.confirm = false; S.killResult = null;
     S.killError = ''; S.killCode = ''; S.tree = null; S.treeError = ''; S.treeOpen = false;
-    S.renice = false; S.reniceResult = null; S.reniceError = ''; S.reniceBusy = false; setDrawer(false);
+    S.renice = false; S.reniceResult = null; S.reniceError = ''; S.reniceBusy = false;
+    disposeCharts('trend'); // 关抽屉即销毁单进程趋势实例，实例计数回落（§13-6）
+    S.trend = null; S.trendHint = '';
+    if (S.trendSection) { S.trendSection.hidden = true; S.trendSection.textContent = ''; }
+    setDrawer(false);
   }
   function openDetail(pid) {
     if (!pid) return;
@@ -330,6 +633,9 @@
     S.renice = false; S.reniceResult = null; S.reniceError = ''; S.reniceBusy = false;
     S.renicePreset = 'normal'; S.reniceCustom = '';
     setDrawer(true); paintDrawer();
+    // 单进程趋势在抽屉打开后按需拉取：首调 insufficient_data 会按 hint 提示，不画空图。
+    if (S.trendSection) S.trendSection.hidden = false;
+    loadTrend(pid);
     invoke('process.detail', { pid: pid }).then(function (d) {
       if (S.destroyed || S.detailPid !== pid) return;
       S.detail = d; paintDrawer();
@@ -424,6 +730,82 @@
       S.killBusy = false; S.killError = err.message; S.killCode = err.code || ''; paintDrawer();
     });
   }
+  /* 系统资源趋势：进入进程页即懒触发 history（不进首屏），返回后建 2 个 Canvas 实例并灌数据。 */
+  function loadHistory() {
+    invoke('process.history', {}).then(function (h) {
+      if (S.destroyed) return;
+      S.history = h;
+      S.historyNote = h && h.note ? h.note : '';
+      paintHistory();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.historyNote = window.KoreUI.errorText(err, '系统资源趋势读取失败');
+      paintHistory();
+    });
+  }
+  function paintHistory() {
+    if (!S.sysPanel) return;
+    var body = S.sysPanel.body;
+    var h = S.history, pts = h && Array.isArray(h.points) ? h.points : [];
+    if (!pts.length) {
+      disposeCharts('sys');
+      body.textContent = ''; // 清掉此前的空 grid / 旧 note，避免重复堆叠
+      var note = add(body, el('div', 'proc-chart-note', S.historyNote || '正在读取系统资源趋势…'));
+      note.setAttribute('role', 'status');
+      return;
+    }
+    if (!charts.some(function (c) { return c.scope === 'sys'; })) {
+      disposeCharts('sys'); body.textContent = ''; // 重建前清干净残留节点
+      ensureChartCss();
+      bindResize();
+      var grid = add(body, el('div', 'proc-chart-grid'));
+      SYS_SERIES.forEach(function (s) { makeChart(grid, s, 'sys'); });
+      S.sysNote = add(body, el('div', 'proc-chart-note'));
+    }
+    charts.forEach(function (c) { if (c.scope === 'sys') setChartData(c, pts); });
+    if (S.sysNote) {
+      var iv = num(h.interval_s);
+      S.sysNote.textContent = '共 ' + pts.length + ' 点 · 采样间隔 ' + (iv === null ? '—' : iv + 's') +
+        ' · 单图 ≤' + CHART_MAX_POINTS + ' 点 · 悬停/点按读数' + (S.historyNote ? ' · ' + S.historyNote : '');
+    }
+  }
+  /* 单进程趋势：仅在详情抽屉打开后按 pid 拉取；首调/间隔不足时 insufficient_data，按 hint 提示。 */
+  function loadTrend(pid) {
+    if (!pid) return;
+    S.trendPid = pid; S.trend = null; S.trendHint = '正在读取进程资源趋势…';
+    disposeCharts('trend'); paintTrend();
+    invoke('process.trend', { pid: pid, window: 60 }).then(function (t) {
+      if (S.destroyed || S.detailPid !== pid) return;
+      S.trend = t;
+      S.trendHint = t && t.insufficient_data ? (t.hint || '采样点不足，稍后再试') : '';
+      paintTrend();
+    }, function (err) {
+      if (S.destroyed || S.detailPid !== pid) return;
+      S.trendHint = window.KoreUI.errorText(err, '进程趋势读取失败');
+      paintTrend();
+    });
+  }
+  function paintTrend() {
+    if (!S.trendSection || !S.detailPid) return;
+    var host = S.trendSection;
+    host.textContent = ''; // 稳定节点，不随详情 body 重绘而丢失 canvas 引用
+    var t = S.trend, pts = t && Array.isArray(t.points) ? t.points : [];
+    var head = add(host, el('div', 'proc-chart-head'));
+    add(head, el('span', null, '单进程资源趋势 · PID ' + S.detailPid));
+    if (S.trendHint) {
+      add(host, el('div', 'proc-chart-note', S.trendHint)).setAttribute('role', 'status');
+      return;
+    }
+    if (!pts.length) { add(host, el('div', 'proc-chart-note', '暂无趋势点')); return; }
+    ensureChartCss();
+    if (!charts.some(function (c) { return c.scope === 'trend'; })) { bindResize(); }
+    var grid = add(host, el('div', 'proc-chart-grid'));
+    TREND_SERIES.forEach(function (s) { makeChart(grid, s, 'trend'); });
+    charts.forEach(function (c) { if (c.scope === 'trend') setChartData(c, pts); });
+    add(host, el('div', 'proc-chart-note', '共 ' + pts.length + ' 点 · 采样间隔约 2s · 单图 ≤' +
+      CHART_MAX_POINTS + ' 点 · 悬停/点按读数'));
+  }
+
   function load() {
     S.loading = true; S.loadError = ''; S.shown = PAGE_SIZE; paintTable();
     invoke('process.list', { sort: S.sort, limit: FETCH_LIMIT }).then(function (d) {
@@ -433,6 +815,7 @@
       S.noteHost.textContent = S.firstSample ? '首次采样无历史基线，CPU 显示为 0' : '';
       if (S.rawNote) S.noteHost.title = S.rawNote;
       S.loading = false; paintTable();
+      loadHistory(); // 趋势图与列表并行拉取；失败只影响趋势面板，不动 list/kill/renice。
     }, function (err) {
       if (S.destroyed) return;
       S.loading = false; S.loadError = err.message; S.loadCode = err.code || ''; S.items = []; S.total = 0; paintTable();
@@ -450,6 +833,12 @@
     on(refresh, load);
     S.countMeta = add(tools, el('span', 'proc-count muted', ''));
     S.noteHost = add(root, el('div', 'proc-note muted'));
+    // 系统资源趋势面板（Canvas 时序图，进程页内懒加载数据，不进首屏）。
+    S.sysPanel = add(root, el('section', 'panel'));
+    var sph = add(S.sysPanel, el('div', 'panel-head'));
+    add(sph, el('span', 'panel-title', '系统资源趋势'));
+    add(sph, el('span', 'panel-meta', 'CPU % · 内存 MiB · 悬停/点按读数'));
+    S.sysPanel.body = add(S.sysPanel, el('div', 'proc-chart-body'));
     var panel = add(root, el('section', 'panel'));
     var ph = add(panel, el('div', 'panel-head'));
     add(ph, el('span', 'panel-title', '进程列表'));
@@ -465,6 +854,8 @@
     S.closeBtn.type = 'button'; S.closeBtn.setAttribute('aria-label', '关闭进程详情');
     on(S.closeBtn, closeDrawer);
     S.drawerBody = add(S.drawer, el('div', 'proc-drawer-body'));
+    // 单进程趋势挂在抽屉下的稳定 section（body 会被详情重绘反复清空，canvas 不能放里面）。
+    S.trendSection = add(S.drawer, el('section', 'proc-chart-body')); S.trendSection.hidden = true;
     S.onKey = function (ev) { if (ev.key === 'Escape' && S.detailPid) closeDrawer(); };
     document.addEventListener('keydown', S.onKey);
   }
@@ -476,6 +867,7 @@
     return { destroy: function () {
       S.destroyed = true;
       document.removeEventListener('keydown', S.onKey);
+      disposeCharts(); // 切走视图：全部图表实例销毁、计数归零（§13-6 / §13-10）
       if (S.drawer) S.drawer.hidden = true;
       if (S.mask) S.mask.hidden = true;
     } };
