@@ -13,6 +13,10 @@
    - 设置：logs.config.get 读取表单 schema 与当前来源，logs.config.set 保存（每行「名称=绝对路径」或
      「名称=journal」），保存即生效、无需重启；来源白名单仍由插件侧校验。
    - 下载：logs.download 导出 <state>/exports/<source>-<ts>.log 并以 Blob 触发浏览器下载（同 file.download 通道）。
+   - 统计图表（G-32 / FRONTEND §13）：logs.aggregate 最近命中按「来源 / 级别」画静态占比环。
+     DOM 形态为 <svg viewBox="0 0 112 112">（背景环 + N 条 dasharray 弧 + 环心读数），
+     每段有名称/条数/百分比直接标注，并有 hover / focus / tap 读数面板（数值带单位「条」）。
+     零图表库、不进首屏；实例数结构上限 1，切视图 dispose 清零。
    安全口径：日志正文一律 textContent / createTextNode，不拼 HTML、不 innerHTML；
    界面只显示来源名与文件名，绝不渲染宿主绝对路径。 */
 (function () {
@@ -54,12 +58,42 @@
     'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);}' +
     '.logs-config-actions{display:flex;justify-content:flex-end;gap:var(--kore-space-2);margin-top:var(--kore-space-3);}' +
     '.logs-config-meta{margin-top:var(--kore-space-1);color:var(--kore-text-3);font-size:var(--kore-font-12);}' +
-    '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}.logs-config-actions .btn{min-height:44px;}}';
+    /* G-32 占比图：SVG 环 + 图例 + 读数面板。样式随视图注入，不进 style.css / 首屏。 */
+    '.logs-chart{margin-top:var(--kore-space-3);padding:var(--kore-space-2) 0;border-top:1px solid var(--kore-border-1);}' +
+    '.logs-chart-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);margin-bottom:var(--kore-space-1);}' +
+    '.logs-chart-title{font-size:var(--kore-font-12);font-weight:600;color:var(--kore-text-1);}' +
+    '.logs-chart-tabs{display:inline-flex;gap:var(--kore-space-1);margin-left:auto;}' +
+    '.logs-chart-tab{min-height:32px;padding:0 var(--kore-space-2);color:var(--kore-text-2);background:var(--kore-bg-0);' +
+    'border:1px solid var(--kore-border-1);border-radius:999px;font:inherit;font-size:var(--kore-font-12);cursor:pointer;}' +
+    '.logs-chart-tab.is-active{color:var(--kore-text-1);border-color:var(--kore-info);background:var(--kore-bg-2);font-weight:600;}' +
+    '.logs-chart-note{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;}' +
+    '.logs-chart-body{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-3);}' +
+    '.logs-chart-donut{flex:none;width:112px;height:112px;}' +
+    '.logs-chart-legend{flex:1 1 160px;min-width:0;display:flex;flex-direction:column;gap:2px;}' +
+    '.logs-chart-row{display:flex;align-items:center;gap:var(--kore-space-1);min-height:32px;padding:0 var(--kore-space-1);' +
+    'border-radius:var(--kore-radius-control);font:inherit;font-size:var(--kore-font-12);color:var(--kore-text-2);' +
+    'background:transparent;border:0;cursor:default;text-align:left;width:100%;}' +
+    '.logs-chart-row.is-interactive{cursor:pointer;}' +
+    '.logs-chart-row:hover,.logs-chart-row:focus-visible{background:var(--kore-bg-2);outline:none;}' +
+    '.logs-chart-dot{flex:none;width:10px;height:10px;border-radius:2px;}' +
+    '.logs-chart-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+    '.logs-chart-val{flex:none;color:var(--kore-text-1);font-variant-numeric:tabular-nums;}' +
+    '.logs-chart-empty{font-size:var(--kore-font-12);color:var(--kore-text-3);padding:var(--kore-space-2) 0;}' +
+    '.logs-chart-tip{position:absolute;z-index:5;top:0;left:0;min-width:150px;max-width:min(280px,90vw);padding:var(--kore-space-1) var(--kore-space-2);' +
+    'background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);' +
+    'box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:var(--kore-font-12);color:var(--kore-text-1);' +
+    'line-height:1.55;pointer-events:none;}' +
+    '.logs-chart-tip[hidden]{display:none;}' +
+    '.logs-chart-tip-title{font-weight:600;margin-bottom:2px;}' +
+    '.logs-chart-tip-row{color:var(--kore-text-2);font-variant-numeric:tabular-nums;}' +
+    '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}.logs-config-actions .btn{min-height:44px;}' +
+    '.logs-chart-tab,.logs-chart-row{min-height:44px;}.logs-chart-donut{width:96px;height:96px;}}';
 
   function fresh() {
     return { root: null, sources: [], selected: '', lines: 200, query: '', mode: 'tail',
       entries: [], matches: [], total: 0, position: 0, cursor: '',
       stats: null, count: 0, scanned: 0, truncated: false, lineTruncated: false,
+      aggregate: null, chartMode: 'source', chartHost: null, chart: null,
       levelFilter: '', follow: false, followTimer: null, followBusy: false, configOpen: false,
       searchTimer: null, notice: '', error: '', busy: false, destroyed: false };
   }
@@ -229,6 +263,192 @@
     }
     if (d.note) add(host, el('div', 'logs-stat-note', d.note));
   }
+  /* ===== G-32 占比图（静态 SVG，FRONTEND §13）：来源 / 级别分布 =====
+     数据源 logs.aggregate：groups[].count（来源）、entries[].level（级别）。
+     结构上限 1 实例；切来源 / 重渲染 / destroy 均 dispose；无 window 级监听，
+     移除宿主 DOM 即解绑所有点事件。SVG viewBox 自适应，手机无需 JS resize。 */
+  var CHART_SVG_NS = 'http://www.w3.org/2000/svg';
+  var MAX_CHART_POINTS = 1000;      // §13-9：单图点数上限，超出合并为「其他」
+  var AGG_DEBOUNCE_MS = 100;        // 快速切来源 / 切维度时只发最后一次请求（§13-7 口径）
+  var CHART_TONES = {
+    error: 'var(--kore-danger)', warn: 'var(--kore-warning)',
+    info: 'var(--kore-info)', debug: 'var(--kore-text-3)', other: 'var(--kore-text-2)'
+  };
+  var SOURCE_TONES = ['var(--kore-info)', 'var(--kore-ok)', 'var(--kore-warning)',
+    'var(--kore-danger)', 'var(--kore-text-3)', '#8b7cf6'];
+  function chartSvg(tag, attrs) {
+    var n = document.createElementNS(CHART_SVG_NS, tag), k;
+    for (k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+  function disposeChart() {
+    if (S.chart) {
+      if (S.chart.host) S.chart.host.textContent = '';
+      S.chart = null;
+    }
+  }
+  function stopAggTimer() {
+    if (S.aggTimer !== null) { clearTimeout(S.aggTimer); S.aggTimer = null; }
+  }
+  /* 聚合为占比段：来源取 groups[].count；级别遍历 entries[].level。
+     超过 MAX_CHART_POINTS 合并为「其他」，保证单图 ≤1000 点。 */
+  function chartSegments() {
+    var agg = S.aggregate, raw = [];
+    if (!agg) return raw;
+    if (S.chartMode === 'level') {
+      var levels = {}, groups = agg.groups || [];
+      for (var g = 0; g < groups.length; g++) {
+        var entries = groups[g].entries || [];
+        for (var e = 0; e < entries.length; e++) {
+          var lv = String(entries[e].level || '').toLowerCase();
+          var key = (lv === 'error' || lv === 'warn' || lv === 'info' || lv === 'debug') ? lv : 'other';
+          levels[key] = (levels[key] || 0) + 1;
+        }
+      }
+      ['error', 'warn', 'info', 'debug', 'other'].forEach(function (k) {
+        if (levels[k]) raw.push({ name: k === 'other' ? '其他级别' : k.toUpperCase(), count: levels[k], tone: CHART_TONES[k] });
+      });
+    } else {
+      (agg.groups || []).forEach(function (grp) {
+        raw.push({ name: grp.source || '未命名', count: grp.count || 0,
+          tone: grp.error ? 'var(--kore-text-3)' : SOURCE_TONES[raw.length % SOURCE_TONES.length] });
+      });
+    }
+    raw = raw.filter(function (x) { return x.count > 0; });
+    if (raw.length > MAX_CHART_POINTS) {
+      var head = raw.slice(0, MAX_CHART_POINTS - 1), rest = 0;
+      for (var i = MAX_CHART_POINTS - 1; i < raw.length; i++) rest += raw[i].count;
+      head.push({ name: '其他（' + (raw.length - MAX_CHART_POINTS + 1) + ' 项）', count: rest, tone: 'var(--kore-text-3)' });
+      return head;
+    }
+    return raw;
+  }
+  function paintTip(tip, host, seg, total, clientX) {
+    tip.textContent = '';
+    var pct = total > 0 ? (seg.count / total * 100).toFixed(1) : '0.0';
+    add(tip, el('div', 'logs-chart-tip-title', seg.name));
+    add(tip, el('div', 'logs-chart-tip-row', seg.count.toLocaleString('zh-CN') + ' 条 · ' + pct + '%'));
+    tip.hidden = false;
+    var hw = host.clientWidth || 0, tw = tip.offsetWidth || 0;
+    var left = host.getBoundingClientRect().left;
+    var x = typeof clientX === 'number' && isFinite(clientX) ? clientX - left : (hw - tw) / 2;
+    x = Math.max(2, Math.min(x - tw / 2, Math.max(2, hw - tw - 2)));
+    tip.style.left = x + 'px';
+  }
+  /* 一个段绑鼠标 hover、键盘 focus、手机 touchstart 三个读数入口；
+     touchstart 用 passive，不夺滚动手势；tap 后面板保持可见。 */
+  function bindPoint(node, tip, host, seg, total) {
+    function show(ev) {
+      var cx = null;
+      if (ev && ev.touches && ev.touches[0]) cx = ev.touches[0].clientX;
+      else if (ev && typeof ev.clientX === 'number') cx = ev.clientX;
+      paintTip(tip, host, seg, total, cx);
+    }
+    node.addEventListener('mouseenter', show);
+    node.addEventListener('focus', show);
+    node.addEventListener('touchstart', show, { passive: true });
+    node.addEventListener('mouseleave', function () { tip.hidden = true; });
+    node.addEventListener('blur', function () { tip.hidden = true; });
+  }
+  function paintChart() {
+    if (!S.chartHost) return;
+    disposeChart();
+    var host = S.chartHost;
+    host.textContent = '';
+    var wrap = add(host, el('div', 'logs-chart'));
+    var head = add(wrap, el('div', 'logs-chart-head'));
+    add(head, el('span', 'logs-chart-title', '最近命中分布'));
+    var agg = S.aggregate;
+    var scopeNote = agg && agg.truncated
+      ? '最近 ' + (agg.count || 0) + ' 条（已达上限，仅样本）'
+      : '最近 ' + (agg && agg.count ? agg.count : 0) + ' 条';
+    add(head, el('span', 'logs-chart-note', scopeNote));
+    var tabs = add(head, el('span', 'logs-chart-tabs'));
+    tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', '统计维度');
+    [['source', '按来源'], ['level', '按级别']].forEach(function (t) {
+      var b = add(tabs, el('button', 'logs-chart-tab' + (S.chartMode === t[0] ? ' is-active' : ''), t[1]));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', S.chartMode === t[0] ? 'true' : 'false');
+      on(b, function () {
+        if (S.chartMode === t[0]) return;
+        S.chartMode = t[0]; stopAggTimer(); loadAggregate();
+      });
+    });
+    var body = add(wrap, el('div', 'logs-chart-body'));
+    var tip = add(body, el('div', 'logs-chart-tip'));
+    tip.hidden = true;
+    var segs = chartSegments();
+    if (!segs.length) {
+      add(body, el('div', 'logs-chart-empty', '暂无可统计的命中数据（读取日志后显示来源 / 级别占比）'));
+      S.chart = { host: host, svg: null, tip: tip };
+      return;
+    }
+    var total = 0;
+    segs.forEach(function (s) { total += s.count; });
+    var R = 44, C = 2 * Math.PI * R, cx = 56, cy = 56;
+    var svg = chartSvg('svg', { viewBox: '0 0 112 112', class: 'logs-chart-donut',
+      role: 'img', 'aria-label': '最近命中' + (S.chartMode === 'source' ? '来源' : '级别') +
+        '分布，共 ' + total + ' 条；' + segs.map(function (s) {
+          return s.name + ' ' + s.count + ' 条';
+        }).join('；') });
+    svg.appendChild(chartSvg('circle', { cx: cx, cy: cy, r: R, fill: 'none',
+      stroke: 'var(--kore-bg-0)', 'stroke-width': 14 }));
+    var acc = 0;
+    segs.forEach(function (s) {
+      var len = total > 0 ? C * s.count / total : 0;
+      var arc = chartSvg('circle', { cx: cx, cy: cy, r: R, fill: 'none',
+        stroke: s.tone, 'stroke-width': 14,
+        'stroke-dasharray': Math.max(0, len - 0.6).toFixed(2) + ' ' + C.toFixed(2),
+        'stroke-dashoffset': (-acc).toFixed(2), transform: 'rotate(-90 ' + cx + ' ' + cy + ')' });
+      svg.appendChild(arc);
+      acc += len;
+      bindPoint(arc, tip, body, s, total);
+      /* SVG <title> 给无脚本兜底；桌面原生 tooltip + 自绘面板并存。 */
+      var title = chartSvg('title');
+      title.textContent = s.name + '：' + s.count + ' 条 · ' + (total ? (s.count / total * 100).toFixed(1) : '0.0') + '%';
+      arc.appendChild(title);
+    });
+    var mid = chartSvg('text', { x: cx, y: cy - 3, 'text-anchor': 'middle',
+      fill: 'var(--kore-text-1)', 'font-size': 16, 'font-weight': 600 });
+    mid.textContent = total.toLocaleString('zh-CN');
+    svg.appendChild(mid);
+    var unit = chartSvg('text', { x: cx, y: cy + 13, 'text-anchor': 'middle',
+      fill: 'var(--kore-text-3)', 'font-size': 9 });
+    unit.textContent = '条命中';
+    svg.appendChild(unit);
+    body.appendChild(svg);
+    var legend = add(body, el('div', 'logs-chart-legend'));
+    legend.setAttribute('aria-label', '各段明细');
+    segs.forEach(function (s) {
+      var pct = total > 0 ? (s.count / total * 100).toFixed(1) : '0.0';
+      var row = add(legend, el('div', 'logs-chart-row is-interactive'));
+      row.tabIndex = 0;
+      var dot = add(row, el('i', 'logs-chart-dot')); dot.style.background = s.tone;
+      add(row, el('span', 'logs-chart-name', s.name));
+      add(row, el('span', 'logs-chart-val', s.count.toLocaleString('zh-CN') + ' 条 · ' + pct + '%'));
+      bindPoint(row, tip, body, s, total);
+    });
+    S.chart = { host: host, svg: svg, tip: tip };
+  }
+  function loadAggregate() {
+    if (!S.selected || S.destroyed) return;
+    var name = S.selected;
+    stopAggTimer();
+    S.aggTimer = setTimeout(function () {
+      S.aggTimer = null;
+      if (S.destroyed || S.selected !== name) return;
+      invoke('logs.aggregate', { sources: [name], limit: 500 }).then(function (d) {
+        if (S.destroyed || S.selected !== name) return;
+        S.aggregate = d; paintChart();
+      }, function (err) {
+        if (S.destroyed || S.selected !== name) return;
+        /* 聚合失败不影响 tail/search/download：图表给降级提示，不污染主流程。 */
+        S.aggregate = null; paintChart();
+        if (S.chartHost) add(add(S.chartHost, el('div', 'logs-chart-note')),
+          el('span', null, '分布图加载失败：' + err.message));
+      });
+    }, AGG_DEBOUNCE_MS);
+  }
   function levelOf(item) {
     var lv = item.level || '';
     return lv === 'error' || lv === 'warn' || lv === 'debug' ? lv : '';
@@ -305,14 +525,15 @@
   }
   function selectSource(name) {
     if (!name) return;
-    stopFollow(); stopSearchTimer();
+    stopFollow(); stopSearchTimer(); stopAggTimer(); disposeChart();
     S.selected = name; S.mode = 'tail'; S.entries = []; S.matches = []; S.stats = null;
+    S.aggregate = null;
     S.count = 0; S.total = 0; S.scanned = 0; S.position = 0; S.query = '';
     S.truncated = false; S.lineTruncated = false; S.levelFilter = '';
     S.notice = ''; S.error = '';
     if (S.searchInput) S.searchInput.value = '';
-    paintLevelChips(); paintSources(); paintStats(); paintOutput(); paintNotices(); paintFoot();
-    loadStats(); loadTail();
+    paintLevelChips(); paintSources(); paintStats(); paintOutput(); paintNotices(); paintFoot(); paintChart();
+    loadStats(); loadTail(); loadAggregate();
   }
   function loadStats() {
     var name = S.selected;
@@ -585,6 +806,8 @@
     on(S.rotateBtn, rotateSource);
     var refresh = add(tools, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
     S.statHost = add(viewPanel, el('div', 'logs-stats'));
+    S.chartHost = add(viewPanel, el('div', 'logs-chart-host'));
+    paintChart();
     S.noticeHost = add(viewPanel, el('div', 'logs-notices'));
     S.out = add(viewPanel, el('div', 'logs-out'));
     S.out.setAttribute('aria-label', '日志行'); S.out.tabIndex = 0;
@@ -612,11 +835,16 @@
     build(root); loadSources();
     return { destroy: function () {
       S.destroyed = true;
-      stopFollow(); stopSearchTimer();
+      stopFollow(); stopSearchTimer(); stopAggTimer(); disposeChart();
       var mask = document.querySelector('.logs-config-mask');
       if (mask && mask.parentNode) mask.parentNode.removeChild(mask);
       S.configOpen = false;
     } };
   }
+  /* G-32 验收钩子：count() 返回当前实例数（结构上限 1），dispose() 供冒烟脚本清场。 */
+  window.__koreLogsChart = {
+    count: function () { return S.chart ? 1 : 0; },
+    dispose: function () { stopAggTimer(); disposeChart(); }
+  };
   window.KoreLogs = { render: render };
 })();
