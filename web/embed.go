@@ -15,12 +15,15 @@
 // search.js 是全局搜索命令面板（首次 Ctrl/Cmd+K 或点顶栏入口才注入）；
 // audit.js 是设置页「操作审计」tab（首次切到该 tab 才注入）；
 // alerts.js 是顶栏铃铛的告警中心（首屏后懒探测 / 点铃铛才注入）。
-// 36个文件全部编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
+// onboarding.js / onboarding.css / theme.js / theme.css / shortcuts.js 是个性化组件
+// （首次使用引导 / 深浅色主题 / 快捷键帮助；shell.js 首屏渲染后按 theme→shortcuts→onboarding
+// 顺序懒加载并 mount，不进首屏六件套、不计首屏 gzip 预算）。
+// 43个文件全部编进二进制，运行期按精确路径只读托管，不暴露子目录遍历面。
 package web
 
 import "embed"
 
-// Dist 是主壳静态资源文件系统，包含以下36个精确路径：
+// Dist 是主壳静态资源文件系统，包含以下43个精确路径：
 //
 //	dist/index.html
 //	dist/app.js
@@ -59,8 +62,14 @@ import "embed"
 //	dist/search.js
 //	dist/audit.js
 //	dist/alerts.js
+//	dist/credentials.js
+//	dist/onboarding.js
+//	dist/onboarding.css
+//	dist/theme.js
+//	dist/theme.css
+//	dist/shortcuts.js
 //
 // httpapi 用 embed.FS.ReadFile 按精确路径读取，不暴露子目录遍历面。
 //
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/terminal.js dist/db.js dist/db-l2.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js dist/onboarding.js dist/onboarding.css dist/theme.js dist/theme.css dist/shortcuts.js
 var Dist embed.FS

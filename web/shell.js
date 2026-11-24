@@ -620,16 +620,165 @@
     var btn = buildSearchTrigger();
     if (btn.parentNode !== conn) conn.insertBefore(btn, conn.firstChild);
   }
+  /* ===== 个性化体验入口：主题三选一 / 快捷键帮助 / 新手引导（R6-4/5/6 接线）=====
+     三组件懒加载、不进首屏六件套。主壳首屏渲染后按 theme → shortcuts → onboarding 顺序注入
+     （文件头对齐结论：onboarding 外观步骤调 KoreTheme.toggle()、shortcuts 帮助面板引用
+     KoreTheme 与 KoreOnboarding，故 theme 最先、onboarding 最后；各引用均作存在性判断）。
+     入口控件与搜索/告警共用 .conn 挂点，app.js 重绘顶栏后由同一 MutationObserver 重新挂回。 */
+  var EXPERIENCE_CSS = '.kore-theme-select{height:32px;padding:0 6px;border:1px solid var(--kore-border-1);' +
+    'border-radius:4px;background:var(--kore-bg-2);color:var(--kore-text-2);font-size:12px;cursor:pointer}' +
+    '#kore-shortcut-trigger,.kore-onboarding-trigger{display:inline-flex;align-items:center;justify-content:center;' +
+    'min-width:32px;min-height:32px;padding:0 8px;border:1px solid var(--kore-border-1);border-radius:4px;' +
+    'background:var(--kore-bg-2);color:var(--kore-text-2);font-size:12px;cursor:pointer;white-space:nowrap}' +
+    '#kore-shortcut-trigger:hover,.kore-onboarding-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+    '.kore-experience-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:var(--z-modal,1000);' +
+    'padding:10px 18px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-1);' +
+    'color:var(--kore-text-1);font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.2)}' +
+    '.kore-experience-toast[hidden]{display:none}' +
+    '@media (max-width:639px){.kore-theme-select{max-width:88px}' +
+    '#kore-shortcut-trigger,.kore-onboarding-trigger{min-width:44px;min-height:44px}}';
+  var themeSelect = null;
+  var expTrigger = null;
+  var onboardTrigger = null;
+  var experienceListening = false;
+  var experienceBooted = false;
+
+  function ensureExperienceCss() {
+    if (document.getElementById('kore-experience-css')) return;
+    var s = el('style'); s.id = 'kore-experience-css'; s.textContent = EXPERIENCE_CSS;
+    document.head.appendChild(s);
+  }
+  // 组件 CSS 按需注入（theme.css 不在首屏六件套；shortcuts/onboarding 各自会注入自身样式）。
+  function injectCssOnce(url, id) {
+    if (document.getElementById(id)) return;
+    var link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = url; link.id = id;
+    document.head.appendChild(link);
+  }
+  function koreToast(msg) {
+    var t = document.getElementById('kore-experience-toast');
+    if (!t) { t = el('div', 'kore-experience-toast'); t.id = 'kore-experience-toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.hidden = false;
+    if (koreToast._timer) clearTimeout(koreToast._timer);
+    koreToast._timer = setTimeout(function () { t.hidden = true; }, 2200);
+  }
+  // 打开引导：onboarding 可能尚未就绪（帮助面板里的回调可先于其加载完成触发），按需懒加载。
+  function openOnboarding(reset) {
+    ensureLazy('/assets/onboarding.js', 'KoreOnboarding', function (m) { return m && typeof m.mount === 'function'; })
+      .then(function (ob) {
+        if (reset && typeof ob.reset === 'function') ob.reset();
+        else if (typeof ob.open === 'function') ob.open();
+      }, function () { koreToast('新手引导暂时无法加载，请稍后再试'); });
+  }
+  // 三个入口各自幂等懒建：任一组件先加载完就先建自己那个，不被其它组件缺席阻塞。
+  function buildThemeSelect() {
+    if (themeSelect || !window.KoreTheme) return;
+    var theme = window.KoreTheme;
+    themeSelect = el('select', 'kore-theme-select');
+    themeSelect.id = 'kore-theme-select';
+    themeSelect.setAttribute('aria-label', '外观');
+    themeSelect.title = '外观设置';
+    var opts = [['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']];
+    for (var i = 0; i < opts.length; i++) {
+      var o = document.createElement('option');
+      o.value = opts[i][0]; o.textContent = opts[i][1];
+      themeSelect.appendChild(o);
+    }
+    themeSelect.value = typeof theme.get === 'function' ? theme.get() : 'system';
+    themeSelect.addEventListener('change', function () {
+      if (typeof theme.set === 'function') theme.set(themeSelect.value);
+    });
+    if (typeof theme.onChange === 'function') {
+      theme.onChange(function (p) { if (p && p.mode) themeSelect.value = p.mode; });
+    }
+  }
+  function buildShortcutTrigger() {
+    if (expTrigger || !window.KoreShortcuts) return;
+    if (typeof window.KoreShortcuts.createTrigger !== 'function') return;
+    expTrigger = window.KoreShortcuts.createTrigger(); // 组件自带「快捷键」文案 + 点击开帮助
+  }
+  function buildOnboardTrigger() {
+    if (onboardTrigger || !window.KoreOnboarding) return;
+    onboardTrigger = el('button', 'kore-onboarding-trigger', '新手引导');
+    onboardTrigger.type = 'button';
+    onboardTrigger.id = 'kore-onboarding-trigger';
+    onboardTrigger.title = '重新查看新手引导';
+    onboardTrigger.setAttribute('aria-label', '重新查看新手引导');
+    onboardTrigger.addEventListener('click', function () { openOnboarding(true); });
+  }
+  function buildExperienceEntries() {
+    buildThemeSelect(); buildShortcutTrigger(); buildOnboardTrigger();
+  }
+  function placeExperienceEntries() {
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    var conn = top.querySelector('.conn');
+    if (!conn) { setTimeout(placeExperienceEntries, 60); return; }
+    buildExperienceEntries();
+    if (themeSelect && themeSelect.parentNode !== conn) conn.appendChild(themeSelect);
+    if (expTrigger && expTrigger.parentNode !== conn) conn.appendChild(expTrigger);
+    if (onboardTrigger && onboardTrigger.parentNode !== conn) conn.appendChild(onboardTrigger);
+  }
+  // shortcuts 派发的三个事件：做实际动作或明确降级，杜绝"按了没反应"。
+  function installShortcutEvents() {
+    if (experienceListening) return;
+    experienceListening = true;
+    // Mod+S：Kore 各视图表单即时保存、无全局草稿；给可见反馈即为明确降级。
+    document.addEventListener('kore:shortcut-save', function () {
+      koreToast('当前页面内容已自动保存，无需手动保存');
+    });
+    // Mod+Shift+X：依次关引导 / 帮助浮层 / 抽屉（各自幂等）；无面板可关时给提示。
+    document.addEventListener('kore:shortcut-close', function () {
+      var acted = false;
+      if (window.KoreOnboarding && typeof window.KoreOnboarding.isOpen === 'function' && window.KoreOnboarding.isOpen()) {
+        window.KoreOnboarding.close(); acted = true;
+      }
+      if (window.KoreShortcuts && typeof window.KoreShortcuts.closeHelp === 'function') {
+        window.KoreShortcuts.closeHelp(); acted = true;
+      }
+      if (drawerOpen) { setDrawer(false, true); acted = true; }
+      if (!acted) koreToast('当前没有需要关闭的面板');
+    });
+    // 帮助浮层开/关：仅同步顶栏触发按钮的 aria-expanded，不改浮层自身行为。
+    document.addEventListener('kore:shortcut-help', function (ev) {
+      if (!expTrigger) return;
+      var open = !!(ev && ev.detail && ev.detail.open);
+      expTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  // 主壳渲染后按 theme → shortcuts → onboarding 顺序 mount；每步失败只降级该组件，不阻断后续。
+  function bootExperience() {
+    if (experienceBooted) return;
+    experienceBooted = true;
+    ensureExperienceCss();
+    installShortcutEvents();
+    var noop = function () {};
+    ensureLazy('/assets/theme.js', 'KoreTheme', function (m) { return m && typeof m.set === 'function'; })
+      .then(function () { injectCssOnce('/assets/theme.css', 'kore-theme-css'); }, noop)
+      .then(function () { return ensureLazy('/assets/shortcuts.js', 'KoreShortcuts', function (m) { return m && typeof m.mount === 'function'; }); }, noop)
+      .then(function (sc) {
+        if (sc && typeof sc.mount === 'function') sc.mount({
+          onboardingAction: function () { openOnboarding(false); },
+          onboardingLabel: '重新查看新手引导'
+        });
+      }, noop)
+      .then(function () { return ensureLazy('/assets/onboarding.js', 'KoreOnboarding', function (m) { return m && typeof m.mount === 'function'; }); }, noop)
+      .then(function (ob) { if (ob && typeof ob.mount === 'function') ob.mount({ autoOpen: true }); }, noop)
+      .then(function () { buildExperienceEntries(); placeExperienceEntries(); }, noop);
+  }
+
   function watchTopbar() {
     ensureSearchCss();
     ensureBellCss();
+    ensureExperienceCss();
     placeSearchTrigger();
     placeAlertTrigger();
+    placeExperienceEntries();
     if (!window.MutationObserver) return;
     if (searchObserver) searchObserver.disconnect();
     var top = document.getElementById('kore-topbar');
     if (!top) return;
-    searchObserver = new MutationObserver(function () { placeSearchTrigger(); placeAlertTrigger(); });
+    searchObserver = new MutationObserver(function () { placeSearchTrigger(); placeAlertTrigger(); placeExperienceEntries(); });
     searchObserver.observe(top, { childList: true, subtree: true });
   }
   function onGlobalKey(ev) {
@@ -758,6 +907,9 @@
       alertListening = true;
     }
     watchTopbar();
+    // 首屏渲染完成后按顺序懒加载并 mount 三组件（theme→shortcuts→onboarding），
+    // 再挂顶栏入口；全程不进首屏六件套，失败只降级对应组件。
+    bootExperience();
     // 首屏渲染完成后懒探测一次告警；不做 setInterval，打开面板时 alerts.js 会再查。
     setTimeout(probeAlerts, 800);
     if (!drawerListening) {
