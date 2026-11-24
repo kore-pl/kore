@@ -416,15 +416,24 @@ presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + �
 # ── G-14 协议兼容自洽（版本断言 · 2026-11-24）──
 # 为什么单独成一个目标而不并进 make check 21 段：它是**跨仓**判据（依赖 ../kore-plugin-*），
 # 独立 clone 时必须能 SKIP；且它只回答「版本声明彼此打不打架」，不重复 store-check 的字段校验。
-# 三条断言：
+# 四条断言：
 #   ① Makefile VERSION == cmd/kored/main.go 的内置默认值（否则 `go run` 与 `make build` 报不同版本）；
 #   ② VERSION ∈ 每个插件 info.json 的 requires_kore 区间（下界含、上界不含，与
 #      internal/core/installer/requires.go 的语义一致：插件装了跑不起来，是安装期就该拒的事）；
 #   ③ 声明 file_write 的插件，requires_kore 下界必须 ≥0.1.1——0.1.1 是首个含受控写的内核版本，
-#      声明了却不抬下界，等于允许装到旧内核上、运行时才 E_INVALID（2026-11-24 G-14 事故的成因）。
+#      声明了却不抬下界，等于允许装到旧内核上、运行时才 E_INVALID（2026-11-24 G-14 事故的成因）；
+#   ④ 声明 file_delete 的插件，requires_kore 下界同样必须 ≥0.1.1——受控删除自首个含该原语的内核
+#      版本（0.1.1）起支持。与 ③ 同型：一个原语一条断言，只查 file_write 会让 file_delete 裸奔
+#      （2026-11-24 第二次同型盲区：`site` 的 `vhost-delete` 声明了 file_delete，旧断言却看不见）。
+#
+# 为什么其它原语**不加**断言（已逐个核实，别凭感觉补）：`writes_host` / `purge_op`（ADR-0023 §3.4
+# 账本字段）与 `irreversible`（ADR-0018 一次性 confirm 指纹）都是 0.1.1 边界**之前**就存在的
+# root_action 基线协议，24 个插件一律声明 >=0.1.0；给它们造 ≥0.1.1 下界会与版本时间线矛盾，并把
+# 4 个声明 `irreversible` 的插件（dns / firewall / ssh-guard / waf）误判 FAIL。将来新增**带版本边界**
+# 的原语时，按 ③/④ 的形状各加一条 `X[FILENAME]=1` 检测 + 一条 `cmp(lower, V) < 0` 断言。
 .PHONY: version-check
 
-version-check: ## G-14 自洽：内核 VERSION ↔ 24 插件 requires_kore（file_write 插件下界 ≥0.1.1）
+version-check: ## G-14 自洽：内核 VERSION ↔ 24 插件 requires_kore（file_write / file_delete 插件下界 ≥0.1.1）
 	@cur=$$(sed -n 's/^VERSION[[:space:]]*?=[[:space:]]*//p' Makefile); \
 	mver=$$(sed -n 's/^var version = "\(.*\)"/\1/p' cmd/kored/main.go); \
 	echo "[RUN ] version-check（G-14：内核 VERSION=$$cur ↔ 插件 requires_kore）"; \
@@ -451,6 +460,7 @@ version-check: ## G-14 自洽：内核 VERSION ↔ 24 插件 requires_kore（fil
 	  s = substr($$0, RSTART, RLENGTH); sub(/.*"[ \t]*:[ \t]*"/, "", s); sub(/"$$/, "", s); rk[FILENAME] = s; \
 	} \
 	/"file_write"[ \t]*:/ { fw[FILENAME] = 1 } \
+	/"file_delete"[ \t]*:/ { fd[FILENAME] = 1 } \
 	END { \
 	  bad = 0; fails = 0; \
 	  if (n == 0) { print "[FAIL] 没有扫到任何 ../kore-plugin-*/info.json"; exit 1 } \
@@ -466,7 +476,8 @@ version-check: ## G-14 自洽：内核 VERSION ↔ 24 插件 requires_kore（fil
 	    if (cmp(cur, lower) < 0) { printf "[FAIL] %-24s requires_kore=%s 下界高于内核 %s（装上也只会 E_UNSUPPORTED）\n", name, r, cur; bad = 1; fails++; verdict = "FAIL" } \
 	    if (upper != "" && cmp(cur, upper) >= 0) { printf "[FAIL] %-24s requires_kore=%s 上界不高于内核 %s（区间已不含当前内核）\n", name, r, cur; bad = 1; fails++; verdict = "FAIL" } \
 	    if ((f in fw) && cmp(lower, "0.1.1") < 0) { printf "[FAIL] %-24s 声明 file_write 但下界 %s < 0.1.1（受控写自 0.1.1 起才有内核支持）\n", name, lower; bad = 1; fails++; verdict = "FAIL" } \
-	    if (verdict == "OK") printf "[ OK ] %-24s %-20s%s\n", name, r, ((f in fw) ? "  ← file_write" : ""); \
+	    if ((f in fd) && cmp(lower, "0.1.1") < 0) { printf "[FAIL] %-24s 声明 file_delete 但下界 %s < 0.1.1（受控删除自首个含该原语的内核版本 0.1.1 起支持）\n", name, lower; bad = 1; fails++; verdict = "FAIL" } \
+	    if (verdict == "OK") printf "[ OK ] %-24s %-20s%s%s\n", name, r, ((f in fw) ? "  ← file_write" : ""), ((f in fd) ? "  ← file_delete" : ""); \
 	    total++; \
 	  } \
 	  if (bad == 0) { \

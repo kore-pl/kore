@@ -128,11 +128,12 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 
 判定顺序（kore 加载插件时）：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 才继续 hello；任一不满足回 `E_UNSUPPORTED`，不降级、不猜。
 
-**当前内核版本 = `0.1.1`**（`Makefile` 的 `VERSION` 是唯一真源，`make build` 注入 `main.version`，`cmd/kored/main.go` 的默认值必须与它相同）。0.1.1 是首个含 [`file_write`](./PLUGIN-PROTOCOL.md) 受控写（ADR-0052 K3）的内核版本，因此：
+**当前内核版本 = `0.1.1`**（`Makefile` 的 `VERSION` 是唯一真源，`make build` 注入 `main.version`，`cmd/kored/main.go` 的默认值必须与它相同）。0.1.1 是首个含 [`file_write`](./PLUGIN-PROTOCOL.md) 受控写（ADR-0052 K3）与 [`file_delete`](./PLUGIN-PROTOCOL.md) 受控删除（ADR-0053）的内核版本，因此：
 
-- 声明了 `file_write` 的插件**必须**把下界抬到 `">=0.1.1 <0.2.0"`（当前仅 `kore-plugin-site`）；留在 `>=0.1.0` 等于允许装到没有受控写的内核上，装得上、跑到写文件时才 `E_INVALID`。
-- 不声明 `file_write` 的插件保持 `">=0.1.0 <0.2.0"` 即可：协议仍是 `kore.plugin.v1`，exec 动作的声明与请求形状未变（SDK 侧是加法：`RootAction.FileWrite` 为 `omitempty`）。
-- 自洽断言：`make version-check`（G-14）——校验 `Makefile VERSION` ↔ `cmd/kored/main.go` 默认值 ↔ 24 个插件 `requires_kore` 区间，并对 `file_write` 插件额外断言下界 ≥0.1.1；跨仓判据，独立 clone 时 SKIP。
+- 声明了 `file_write` **或** `file_delete` 的插件**必须**把下界抬到 `">=0.1.1 <0.2.0"`（当前仅 `kore-plugin-site`）；留在 `>=0.1.0` 等于允许装到没有该原语的内核上，装得上、运行时才 `E_INVALID`。
+- 不声明这两个受控原语的插件保持 `">=0.1.0 <0.2.0"` 即可：协议仍是 `kore.plugin.v1`，exec 动作的声明与请求形状未变（SDK 侧是加法：`RootAction.FileWrite` / `FileDelete` 均为 `omitempty`）。
+- 自洽断言：`make version-check`（G-14）——校验 `Makefile VERSION` ↔ `cmd/kored/main.go` 默认值 ↔ 24 个插件 `requires_kore` 区间，并对 `file_write` / `file_delete` 插件**分别**断言下界 ≥0.1.1（一个原语一条断言，只查第一个原语是 2026-11-24 两次同型盲区的成因）；跨仓判据，独立 clone 时 SKIP。
+- 其余原语（`writes_host` / `purge_op` / `irreversible`）属 0.1.1 边界之前的 root_action 基线协议（ADR-0023 §3.4 / ADR-0018），不另加版本下界断言——给它们造 ≥0.1.1 反而会与版本时间线矛盾、误判现网插件。
 
 ## 6. 仓库创建清单（里程碑分区）
 

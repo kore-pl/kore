@@ -12,7 +12,7 @@
 ### Added
 
 - **公开 SDK `pkg/pluginapi/v0.2.0`**（annotated tag，2026-11-24）：`file_write` 受控写协议（ADR-0052 K2/K3）——`FileWrite` 声明、`ValidateFileWrite`、`FileWritePrefixClasses`（当前唯一类别 `nginx.conf.d`）、`MaxFileWriteContentBytes`（256 KiB 硬顶）、nginx 片段指令 allowlist（`ValidateNginxVHost`）、`FileWriteOptionsWithDirs`（证书/口令目录注入）；root_action 变更账本字段 `writes_host` / `target` / `purge_op` 与结构化回滚白名单（ADR-0023 §3.4）。**纯加法**：新字段一律 `omitempty`，exec 动作的声明与请求形状不变，旧插件在新内核上行为不变；用 `file_write` 的插件依赖新内核 → 由 `requires_kore >=0.1.1` 表达，不是破坏性协议改动（协议仍是 `kore.plugin.v1`，不需要主版本递增）。
-- **公开 SDK `pkg/pluginapi/v0.3.0`**（annotated tag，2026-11-24）：受控删除协议层（ADR-0053）——`FileDelete{prefix_class}` 声明、`ValidateFileDelete` / `ValidateFileDeleteTarget` / `FileDeletePath` / `ValidateFileDeleteRequest`，以及 `RootAction.FileDelete`（`json:"file_delete,omitempty"`，与 `file_write` 互斥、不得与 `argv` 并存）。**纯加法**：既有 `file_write` / exec 动作的声明与请求形状不变，`file_delete` 缺省时行为与 v0.2.0 完全一致，协议仍是 `kore.plugin.v1`——按 RELEASE.md §1「feat → minor +1」从 0.2.0 升 0.3.0，不是 breaking、不动主版本。用 `file_delete` 的插件依赖含该原语的内核，`requires_kore` 下界须覆盖首个含受控删除的内核版本（`make version-check` 当前只断言 `file_write`，file_delete 断言随 plugin-site 迁移卡同轮补）。
+- **公开 SDK `pkg/pluginapi/v0.3.0`**（annotated tag，2026-11-24）：受控删除协议层（ADR-0053）——`FileDelete{prefix_class}` 声明、`ValidateFileDelete` / `ValidateFileDeleteTarget` / `FileDeletePath` / `ValidateFileDeleteRequest`，以及 `RootAction.FileDelete`（`json:"file_delete,omitempty"`，与 `file_write` 互斥、不得与 `argv` 并存）。**纯加法**：既有 `file_write` / exec 动作的声明与请求形状不变，`file_delete` 缺省时行为与 v0.2.0 完全一致，协议仍是 `kore.plugin.v1`——按 RELEASE.md §1「feat → minor +1」从 0.2.0 升 0.3.0，不是 breaking、不动主版本。用 `file_delete` 的插件依赖含该原语的内核，`requires_kore` 下界须覆盖首个含受控删除的内核版本（0.1.1）；`make version-check` 对 `file_write` / `file_delete` **分别**断言下界 ≥0.1.1（G-14）。
 - **文档基线（M0）**：VISION / ARCHITECTURE / CORE / PLUGIN-PROTOCOL / RESOURCE-MODEL / DATA-MODEL / FRONTEND / SECURITY / ROADMAP / PLAN / GLOSSARY，以及 ADR 决策记录体系。
 - **公开 SDK**：`pkg/pluginapi` 作为独立嵌套 module（根 `go.mod` 用 `replace => ./` 指向），插件只依赖该包。
 - **内核六模块（M1）**：`config` / `store` / `auth` / `httpapi` / `registry` / `supervisor` 落地；`bus` / `installer` / `market` 由后续里程碑补齐。
@@ -37,6 +37,7 @@
 
 ### Fixed
 
+- **`make version-check` 只断言 `file_write`、漏掉第二个受控原语 `file_delete`（2026-11-24）**：`site` 的 `vhost-delete` 已声明 `file_delete`，但 G-14 门禁只扫描 `"file_write":`，一个下界仍是 `>=0.1.0` 的插件声明受控删除也能过门禁，装到不含该原语的内核上才 `E_INVALID`——与 2026-11-24 `file_write` 事故同型（判据只覆盖第一个原语）。补 `/"file_delete"[ \t]*:/ { fd[FILENAME]=1 }` 检测与「下界 ≥0.1.1」断言（文案：受控删除自首个含该原语的内核版本起支持），OK 行标注 `← file_delete`；同时逐个核实 `writes_host` / `purge_op` / `irreversible` 属 0.1.1 边界之前的 root_action 基线协议，**不另加断言**（给它们造 ≥0.1.1 会误判 4 个声明 `irreversible` 的插件）。用隔离副本四例自证：`file_delete`+`>=0.1.0` → `[FAIL]` exit 2 / `file_write`+`>=0.1.0` → exit 2（既有断言未放宽）/ 删掉 `vhost-delete`+`>=0.1.0` → exit 0 / `file_delete`+`>=0.1.1` → exit 0。
 - **HTTP 业务方法名校验（2026-11-23）**：`validateMethod` 的方法段此前只允许小写，插件按自身命名声明的方法（如 `site.bindSSL` / `site.setRewrite`）经 `POST /api/v1/invoke` 会被 400 拒绝；现放宽为「段首小写、段内允许 camelCase」，与插件方法注册表一致，既有纯小写方法不受影响。
 - **SDK 发布链（2026-11-22）**：`pkg/pluginapi/v0.1.0` 打 tag 时 `go.mod` 仍是旧 module 路径（`github.com/kore-project/...`），干净目录无法消费；发布物不可改写（proxy / sumdb 已缓存），改为 `retract v0.1.0` 并发布 `pkg/pluginapi/v0.1.1`，`kore-plugin-echo` 同步升到 `v0.1.1`。
 
