@@ -31,10 +31,25 @@
 2. **与宝塔 / 1Panel 同类功能的差距**：宝塔/1Panel 的 SSL 管理以"单站点证书"为中心，缺跨站点的全局到期资产视图；本看板补的是"全局资产 + 过期风险"这一层。差距/局限：本看板只做登记与状态展示，不替站点插件写 web 服务器配置（G-13 边界，解绑只删归属登记）；证书签发仍需到 ssl 页完成（空态已给跳转按钮）；未引入证书自动续期的可视化编排，自动续期状态只读展示内核任务。
 3. **当前是"可用"还是"占位"**：**可用**（非占位）。数据来自真实插件方法（ssl.list / bind.list / verify），续期/解绑走真实 ssl 方法并有二次确认，高亮与排序基于真实 days_left；无 mock 数据、无"敬请期待"。局限是尚未接入双端运行截图（G-28 后置，见下）。
 
-## G-28 截图（后置）
-- 模块由 integration 在 SHELL_VIEWS 挂载路由 `cert-lifecycle` 后才能真机渲染；本任务交付时路由未接线，故截图后置，不伪造 mock 页面截图。
-- 已同步 r23-integration：接线完成后提供截图窗口，落盘 `.agents/verify/screenshots/cert-lifecycle-desktop-*.png`（1440×900）/ `cert-lifecycle-mobile-*.png`（390×844），并在这里补回截图证据。
-- 自评三问已在上方先行落盘，不依赖浏览器。
+## G-28 双端截图（已完成 · 2026-11-24 19:35 Asia/Shanghai）
+接线 HEAD `3fcf520`（integration 统一注册 `cert-lifecycle: ['KoreCertLifecycle','/assets/cert-lifecycle.js','nav.certLifecycle','证书看板']` 挂 security hub）就位后，按 lead 裁决 A 走隔离实例真机自拍，不依赖主实例 8787 重启。
+
+**取证口径（G-29 / G-30）**：
+- 隔离实例：复用 HEAD 归档构建的独立二进制 `/tmp/kore-ui-shot-cache/kored-head-3fcf520a59b0`，config/state/run/log 全落 `/tmp/kore-certlife-shot.6Rr9nn`，端口 18890（避开主 8787 与 peer 的 18888/18889/18891）。
+- 首轮用项目自带 `scripts/ui-shot.sh --scene cert-lifecycle --route security/cert-lifecycle --expect-text 证书看板 --port 18890` exit 0，但首次登录的「欢迎使用 Kore」新手引导遮罩挡住主内容；如实作废该轮图，不用设计稿/同图缩放替代。
+- 补拍：同 HEAD 二进制 + playwright 真实浏览器，走真实 API 登录拿 cookie → 真实点击「以后再看」关掉引导遮罩 → 路由断言 `KoreShell.current()==='security/cert-lifecycle'` → 等「证书看板」文案出现 → 截图。临时脚本/随机口令/隔离目录用完即删。
+- **本轮是否改动过主实例运行态配置：否。** 未碰 `.kore-local.yaml`、主 state/run/socket、未重建主 `bin/kored`、未重启 8787；复核 `bin/kored` mtime `2026-11-24 19:04:26`（早于本轮）、`.kore-local.yaml` mtime `2026-11-23 04:59:58`（未变）、8787 healthz=200、主进程 PID 2396602 仍在用主配置、18890 已停监听。
+- `make secret-check` exit 0：`0 FAIL / 22 处匹配（占位写法均合规）`。
+
+**截图清单（`.agents/verify/screenshots/`，`file` + `identify` 实测）**：
+| 文件 | 实测尺寸 | 字节 | md5 |
+| --- | --- | --- | --- |
+| `cert-lifecycle-desktop-02-clean.png` | 1440×900 | 106708 | `b1db4c6a307dd2458025082bd48cbab2` |
+| `cert-lifecycle-mobile-02-clean.png` | 390×844 | 78100 | `49540f50c76a9aa120e9fae3e09882b1` |
+
+- 双端 md5 全异；目视确认 PC 为横向概览卡 + 居中空态、手机端导航收进「更多」抽屉 + 卡片 2×2 纵向堆叠 + 触摸按钮 ≥44px，证伪同图缩放。
+- 截图 DOM 状态证据：`cards:4, rows:0, empty:1`，页面真实出现「证书看板 / 证书总数 / 即将过期 / 已过期 / 自动续期开启 / 还没有证书 / 去签发证书」。
+- **诚实边界**：隔离实例未安装 ssl 插件，故状态栏显示 `E_NOTFOUND：插件 ssl 未安装`，看板落在空数据态。这不是模块缺陷，恰好真实覆盖了「读取失败提示 + 空态下一步按钮」；有证书数据时的排序表、红色高亮、行展开详情未能在本次无数据隔离实例中取证，标注**未证明**，不伪造桩数据冒充真数据。
 
 ## 安全与纪律核对
 - 无新增后端方法、无新依赖、无外链、无遥测；危险操作（续期/解绑）均 `window.confirm` 二次确认后才发请求。
