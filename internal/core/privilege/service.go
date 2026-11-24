@@ -28,6 +28,9 @@ type Options struct {
 	// FileWrite 是受控文件写执行面（file_write 动作走这里，不走 os/exec）；
 	// nil 时 file_write 动作一律 E_UNSUPPORTED（fail-closed）。
 	FileWrite *FileWriteOptions
+	// FileDelete 是受控删除执行面（file_delete 动作走这里，ADR-0053）；
+	// nil 时 file_delete 动作一律 E_UNSUPPORTED（fail-closed）。
+	FileDelete *FileDeleteOptions
 	// Runner 是 systemd-run 执行器；nil 用真实实现。
 	Runner Runner
 	// Root 报告 kored 是否 root；nil 用 os.Geteuid()==0。
@@ -83,6 +86,9 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 	// 这里只按声明分派，不再二次推断。
 	if req.Action.FileWrite != nil {
 		return s.executeFileWrite(ctx, req)
+	}
+	if req.Action.FileDelete != nil {
+		return s.executeFileDelete(ctx, req)
 	}
 	if req.Content != "" {
 		// exec 动作不接受正文：允许它会让「同一请求一半走参数、一半走文件」的语义

@@ -58,6 +58,20 @@ func newFileWriteOptions(stateDir string) *privilege.FileWriteOptions {
 	}
 }
 
+// newFileDeleteOptions 组装 file_delete 执行面（ADR-0053）。
+//
+// 与写共用同一个 CopyRoot：删除前的备份与写的备份落在同一棵树下，账本里的
+// `purge_op: file.restore` 对两种动作是同一条恢复链路，运维只学一套。
+// 属主复核同样走 internal/platform（删前复核，防「同名文件被替换后被我们删掉」）。
+func newFileDeleteOptions(stateDir string) *privilege.FileDeleteOptions {
+	return &privilege.FileDeleteOptions{
+		CopyRoot: filepath.Join(stateDir, filewrite.CopyRootDirName),
+		OwnerCheck: func(path string, mode os.FileMode) error {
+			return platform.VerifyOwner(path, "root", "root", mode)
+		},
+	}
+}
+
 // classPrefixDirs 返回协议类别目录（如 `/etc/nginx/conf.d/`），按类别名排序。
 //
 // `FileWritePrefixClasses` 是 map，直接遍历会让白名单顺序抖动——校验器报

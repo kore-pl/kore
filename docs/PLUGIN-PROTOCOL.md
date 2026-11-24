@@ -170,6 +170,7 @@
 | target | string | `writes_host=true` 时必填 | ≤200 字符；影响对象（人话），如 `/etc/nginx/conf.d/kore-a.conf`、`22/tcp`；写进变更账本供用户看懂"改了什么" |
 | purge_op | object | 否 | **结构化回滚操作**（ADR-0023 §3.4）：`{kind,args}`，kind ∈ `file.remove`（args=`[path]`）/ `file.restore`（args=`[原文件,目标]`），路径必须绝对、非根、无 `..`；仅允许与 `writes_host=true` 同时出现。**协议不提供 shell 字符串回滚字段**——那等于把 RCE 面写进账本 |
 | file_write | object | 否 | **受控文件写声明**（ADR-0052 裁决 A）：`{prefix_class, mode, content_policy, max_bytes?}`，见 §3.1.3.2。与 `argv` **互斥**（写文件不执行外部命令，声明了 `file_write` 还带 `argv` 直接拒绝）；出现时必须 `writes_host=true`、`target` 必须**逐字等于**类别目录（账本要能对上真实写入路径）；`timeout_s` 可省略。类别由内核定义，插件不能自报目录/后缀 |
+| file_delete | object | 否 | **受控删除声明**（ADR-0053）：`{prefix_class}`，见 §3.1.3.3。与 `argv` **互斥**、与 `file_write` **不可同时声明**（一个动作只能有一种文件语义）；出现时必须 `writes_host=true`、`target` 必须**逐字等于**类别目录、**不得声明静态 `purge_op`**（回滚信息由内核按备份路径运行时生成）；`timeout_s` 可省略 |
 
 **受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `resolvectl` `unbound-control` `dig` `fail2ban-client`（13 个）。**未使用的命令不进表**：每多一个命令就多一条被误用路径，`ipset` 因无消费者已被移除（ADR-0022）。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
 
@@ -241,7 +242,30 @@
 4. 二次写同文件 → `<state>/backups/site/<ts>/kore-site-test.conf` 存在，`changes.jsonl` 末条 `purge_op.kind=file.restore`；按该 `purge_op` 回滚 → 恢复旧内容；删除目标后备份仍在；
 5. 反例：非 root 启动 → `E_NEED_ROOT`；文件名 `evil.conf` / 别的插件前缀 → `E_INVALID`；正文 >256 KiB → `E_INVALID`；含 `access_log` → `E_INVALID`。其余 exec 动作仍走：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
 
-**G-01 边界**：内核只校验 schema（id/argv/timeout/file_write）与**参数形状**（族/前缀/地址/端口、文件名/内容策略这些语法级约束），不判断「这是防火墙动作 / 这是建站动作」——业务语义留在插件自己的 `id` 与 `description`；nginx 片段的指令 allowlist 实现放在 `pkg/pluginapi`（协议策略层），不进 `internal/core`（业务词表会触发薄壳门禁）。
+#### 3.1.3.3 受控删除（`file_delete`，ADR-0053）
+
+删除是**第三种**动作形状（exec / file_write 之外的 file_delete），与 `file_write` 对称：只声明类别，不声明目录、不声明文件名，请求只给 `args[0]`。
+
+| 请求字段 | 类型 | 必填 | 约束 |
+| --- | --- | --- | --- |
+| `args[0]` | string | `file_delete` 动作必填 | **单层文件名**，与 `file_write` 同一套规则（`kore-<plugin>-<slug>.conf`、≤128 字符、只允许 `[A-Za-z0-9._-]`、不得含 `..`/路径分隔符/后缀伪装）——**谁能写这个文件就必须谁能删它**，否则 A 插件能删 B 插件的片段 |
+| `content` | — | 禁止 | `file_delete` 带正文一律 `E_INVALID`（不许「同名删除 + 顺便写点什么」两种语义混在一条请求里） |
+
+**执行口径（已接线，2026-11-24）**：`file_delete` 走 `privilege.executeFileDelete`，**不走 `os/exec`**（绝不退化成 `rm`）：
+
+1. **schema**：`args` 必须恰为 1 个元素；声明走 `pluginapi.ValidateRootAction`（无 `argv`、`writes_host=true`、`target` 等于类别目录、无静态 `purge_op`、不与 `file_write` 并存）；
+2. **confirm → root → 账本**：**只在显式 `irreversible: true` 时要 confirm**——删除在实现上**强制先备份**，可回滚性由备份 + 运行时 `purge_op` 保证；非 root → `E_NEED_ROOT`；账本未装配 → 拒绝（不留「删了却查无此事」）；
+3. **删**：**删前**属主复核（`internal/platform.VerifyOwner`，防同名文件被替换）→ 备份到 `<state>/backups/<plugin>/<ts>/`（**失败即中止删除**，不存在无备份删除）→ 审计 begin（fail-closed，记 `path/sha256/size/mode/copy_path`，不记正文）→ `unlink` → `fsync(dir)`（unlink 是目录项变更，不 sync 崩溃后文件会复活）→ 审计 end；
+4. **回滚账本**：`purge_op` **恒为** `file.restore(备份路径, 原路径)`——`file.restore` 的执行体是 `rename(备份, 目标)`，即完整的删除恢复机制，**不需要新增 purge kind**；
+5. **目标不存在 → `E_NOTFOUND`，不静默成功**：静默成功会让「我删了」与「本来就没有」不可区分，账本会记一条没发生过的删除（审计说谎）。**幂等由插件层负责**（site 的 `deleteLocked` 按自身清单幂等返回 `deleted=false`）。
+
+**为什么不复用 `purge_op` 当删除请求**：`PurgeOp` 没有类别约束（只有 `kind` + `args`，路径只挡 `/` 与 `..`），一旦可当请求用，插件就从「只能删类别目录下自己的片段」变成「能删任意绝对路径」——那是权限放大。`purge_op` 的语义是「如何**撤销**这个动作」，且由内核运行时生成、不可由插件请求。
+
+**为什么不用「写空片段」代替删除**：协议层拒空正文，且 nginx 的 `include .../*.conf` 仍会加载该文件——「站点的 server 块没了但文件还在」，用户看到的是「站删了又没删」。删除的定义是文件不存在。
+
+**停用/启用的推荐表达（插件侧）**：`os.Rename` 不是写也不是删。推荐「停用 = 内容备份到插件自有目录 + `file_delete`；启用 = `file_write` 写回」——用已有两个原语表达，**不新增 rename 原语**，同时消灭留在 conf.d 里的 `.conf.disabled` 孤儿文件。
+
+**G-01 边界**：内核只校验 schema（id/argv/timeout/file_write/file_delete）与**参数形状**（族/前缀/地址/端口、文件名/内容策略这些语法级约束），不判断「这是防火墙动作 / 这是建站动作」——业务语义留在插件自己的 `id` 与 `description`；nginx 片段的指令 allowlist 实现放在 `pkg/pluginapi`（协议策略层），不进 `internal/core`（业务词表会触发薄壳门禁）。
 
 **降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT` + 可操作 `hint`；**无 systemd 不再是降级条件**（ADR-0049 后照常执行）；平台无进程组语义（当前仅 Tier B 未实现 Job Object）→ `502 E_UPSTREAM` 显式拒绝，禁止静默退化为「只杀直接子进程」。禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
 

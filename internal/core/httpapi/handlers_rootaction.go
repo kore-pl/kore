@@ -71,9 +71,10 @@ func (s *Server) handleRootAction(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, perr)
 		return
 	}
-	// 正文只属于受控写：exec 动作带 content 直接拒绝（不静默丢弃，不让两种语义混在一条请求里）。
+	// 正文只属于受控写：exec / file_delete 动作带 content 直接拒绝
+	// （不静默丢弃，不让两种语义混在一条请求里）。
 	if body.Content != "" && action.FileWrite == nil {
-		writeFailure(w, errCodeInvalid("content 仅用于 file_write 动作，exec 动作不得携带正文"))
+		writeFailure(w, errCodeInvalid("content 仅用于 file_write 动作，exec 与 file_delete 动作不得携带正文"))
 		return
 	}
 	result, err := s.privilege.Execute(r.Context(), privilege.Request{

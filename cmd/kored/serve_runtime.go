@@ -137,6 +137,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 			Auditor:        &rootActionAuditor{db: db},
 			ChangeRecorder: newRootChangeRecorder(cfg.StateDir),
 			FileWrite:      newFileWriteOptions(cfg.StateDir),
+			FileDelete:     newFileDeleteOptions(cfg.StateDir),
 		}),
 		credential:    credentialSvc,
 		pluginRootDir: root,

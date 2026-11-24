@@ -41,6 +41,11 @@ type RootAction struct {
 	// 与 Argv 互斥：file_write 动作不声明 argv，请求体改用 `args[0]`（文件名）+
 	// `content`（正文）。非 nil 时 WritesHost 必须为 true、Target 必须等于类别目录。
 	FileWrite *FileWrite `json:"file_write,omitempty"`
+	// FileDelete 声明本动作是**受控删除**（ADR-0053），与 FileWrite 对称但不可同时声明。
+	//
+	// 请求体只用 `args[0]`（单层文件名），不带 content。删除前内核**强制备份**，
+	// 失败即中止——回滚信息（备份路径）由内核运行时生成，声明里不得有静态 purge_op。
+	FileDelete *FileDelete `json:"file_delete,omitempty"`
 }
 
 // PurgeOp 是结构化回滚操作：白名单 kind + 参数，由内核分派执行，永不拼 shell。
@@ -154,11 +159,22 @@ func ValidateRootAction(action RootAction) error {
 	}
 	// file_write 动作与 exec 动作是**互斥的两种形状**：前者不执行外部命令（无 argv），
 	// 后者必须有 argv。混在一起会让审计/confirm 口径分叉，因此逐字段拒绝。
+	if action.FileWrite != nil && action.FileDelete != nil {
+		return fmt.Errorf("file_write 与 file_delete 不能同时声明：一个动作只能有一种文件语义")
+	}
 	if action.FileWrite != nil {
 		if err := validateFileWriteAction(action); err != nil {
 			return err
 		}
 		// 写文件不跑子进程，timeout_s 无意义；允许缺省 0，填了就必须合法。
+		if action.TimeoutS != 0 && (action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS) {
+			return fmt.Errorf("timeout_s=%d 超出 %d–%d", action.TimeoutS, MinRootTimeoutS, MaxRootTimeoutS)
+		}
+	} else if action.FileDelete != nil {
+		if err := validateFileDeleteAction(action); err != nil {
+			return err
+		}
+		// 删除同样不跑子进程，timeout_s 口径与 file_write 一致。
 		if action.TimeoutS != 0 && (action.TimeoutS < MinRootTimeoutS || action.TimeoutS > MaxRootTimeoutS) {
 			return fmt.Errorf("timeout_s=%d 超出 %d–%d", action.TimeoutS, MinRootTimeoutS, MaxRootTimeoutS)
 		}
