@@ -110,6 +110,16 @@
     原 owner 待确认。**r8-terminalui 已获 lead 批准在其之上增量做 R8-7（多标签 + 字号持久化）**：
     用 GIT_INDEX_FILE 临时索引只提自己 hunk、commit 注明吸收来源（文件 / 行 / 原 owner 待确认）；
     **未清理 / 未回滚这批在途改动**。后续若原 owner 出现，需协调收敛。
+ 8. **i18n 结构性现状（r8-i18nui 自检证据推翻 R8-5 任务卡前提，不必派迁移卡）**：
+    **骨架完整**——真源码 `web/i18n/en-US.js`（任务卡写的 `i18n-en-US.js` 是 dist 名）；`en-US` 与 `zh-CN`
+    各 **68 key**、双向 `comm` 差集空（无合法缺项）。**但页面视图未接 `tr()`**——`sites` / `files` / `db` /
+    `ssl` / `backups` 五个高频视图 `tr()` 调用全 **0**，中文硬编码分别 **447 / 513 / 589 / 335 / 357** 处
+    （合计 2000+），页面根本没接 i18n，此时加 key 反而让回退链露键名。`frontend-check` 卡的是
+    `i18n.js` + `zh-CN` 的 gzip（2922 / 3072），`en-US` 懒加载不进首屏。
+    **定性**：这是 **ADR-0021 承认的阶段性取舍、不构成 G-11 违规**；页面内部文案迁移需**另立卡**，
+    且必须**同时改 `zh-CN` + `en-US` + 视图 `tr()`**（会撞 helpui 的 `shell.js` / progressui 的 `backups.js`
+    在途），**不在本轮范围**。详细证据 r8-i18nui 落 `.agents/verify/i18n-structure-finding.md`（引用路径，
+    以该文件落地版为准）。
 
 #### 0.0.4 下一轮建议（≤5 条，按优先级，每条含可执行动作 + 验收）
 
