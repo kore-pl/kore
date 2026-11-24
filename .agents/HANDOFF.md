@@ -164,6 +164,9 @@
 **工作区不是干净的**：本轮开工时已有 11 项他人在途改动（`M AGENTS.md` / `M Makefile` / `M .agents/QUALITY-GATES.md` /
 `M .github/workflows/ci.yml` / `M scripts/*.sh` / `?? scripts/race-full-check.sh` / `?? docs/RUNBOOK-INSTALL.md` 等），
 本版**只写 `.agents/HANDOFF.md`**，提交只用精确路径一步到位，不碰他人改动。
+**注意索引也可能是脏的**：10:21 实测 `git status` 里出现 `D  scripts/race-full-check.sh`（staged 删除）
+与 `?? scripts/race-full-check.sh`（同名未跟踪）并存，`Makefile:482` 又确实在调它——这是他人临时索引的
+中间态。**不要 `git add -A` / 裸 `git commit`**，只 `git commit -m … -- .agents/HANDOFF.md` 这种精确路径。
 
 #### B.4 今天落地的门禁与能力（全部给 commit）
 
@@ -210,11 +213,11 @@
 | **插件降权显式化 / 权限授予记录层 / 审计保留期清理** | `a514a90` / `2ccbf0c`+`310cc2d` / `8d09b58` | `supervisor/demote.go:20-36` 非 root 必给 `Reason`；`installer/grant.go` 记录 `granted_capabilities`；`scheduler/auditclean.go` 默认 90 天、单次 ≤1000 条 |
 | **cron 稳定路径（内核侧）/ 方法名字符集放宽** | `cc1472f` / `512f1a2` | installer 维护 `current -> <version>` 相对链接（`installer/layout.go:17-22`）；`registry/validate.go:66` 与 `infocheck.go:56` 逐字一致，下划线合法、连字符非法 |
 
-**WARN 现状（10:19 实跑，工作树含他人在途改动）**：`docs-check: 5 pass / 1 warn`（3 份行数越界：
-`docs/PLUGIN-PROTOCOL.md:480` / `docs/RUNBOOK.md:557` / `docs/SIGNING-KEY-SOP.md:88`）、
-`case-check: 27 pass / 1 warn`（4 个 `github.com/Microsoft/...` 历史 URL 的 owner 段大写）。
-**10:25 复核**：这两处已被在途改动降为 0 WARN（`docs-check: 6 pass / 0 warn`，2 份登记豁免；
-`case-check: 28 pass / 0 warn`）——不属本文件写域，只记录事实，不改判据。
+**WARN 现状（实跑快照；工作区正被他人并发修改，数字会变）**：10:19 的 19/19 实跑里
+`docs-check: 5 pass / 1 warn`（3 份行数越界：`docs/PLUGIN-PROTOCOL.md:480` / `docs/RUNBOOK.md:557` /
+`docs/SIGNING-KEY-SOP.md:88`）、`case-check: 27 pass / 1 warn`（4 个 `github.com/Microsoft/...` 历史 URL 的
+owner 段大写）。之后复核时两处都曾降为 0 WARN（2 份登记豁免 / `case-check: 28 pass`），再跑
+`docs/SECURITY.md:405` 又越界 1 份——**在途改动仍在动，WARN 数只能以当次实跑为准，不作判据**。
 
 已闭环（旧挂账移除）：`docs/DECISIONS/0028-controlled-file-write.md` 头部为 `accepted`；
 ADR-0041 为 `superseded-in-part`（`9b5d4dc`）；`web/.cache/` 已进 `.gitignore:13-15`；
