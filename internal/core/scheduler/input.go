@@ -37,6 +37,12 @@ func (in CreateInput) normalize(now time.Time) (Task, error) {
 	if !pluginIDPattern.MatchString(in.Plugin) {
 		return Task{}, fmt.Errorf("%w: plugin %q 不合法", ErrInvalid, in.Plugin)
 	}
+	// 内置任务保留名只允许内核自己写（BuiltinPlugin 是伪插件名，不是真插件）。
+	// 放行等于给「审计删除」开出第二个入口：调用方自建 plugin=kore/method=audit.clean
+	// 的任务并带上自己的 params，就能把审计清零（P1，见 api-security-redteam §5.2）。
+	if in.Plugin == BuiltinPlugin {
+		return Task{}, fmt.Errorf("%w: plugin %q 是内核内置任务的保留名，不能通过 API 创建任务；内置任务由内核自行注册", ErrInvalid, in.Plugin)
+	}
 	if !methodNamePattern.MatchString(in.Method) {
 		return Task{}, fmt.Errorf("%w: method %q 不合法", ErrInvalid, in.Method)
 	}

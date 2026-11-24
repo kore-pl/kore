@@ -17,6 +17,11 @@ const (
 	auditCleanTimeoutS = 60
 	// maxAuditCleanBatch 是单次删除上限的硬顶（配置校验同口径，防误配一次删爆）。
 	maxAuditCleanBatch = 10000
+	// minAuditRetentionSeconds 是保留期硬下限：24h，与 config.validateAudit 对
+	// audit.retention 的下限（1 天）**同口径**。作用不是限制运维，而是保证
+	// 「任何一次清理都删不掉最近 24h 的审计」——即使任务 params 被伪造或残留旧值。
+	// 不设上限：保留期越长删得越少，不是风险。
+	minAuditRetentionSeconds int64 = int64(24 * time.Hour / time.Second)
 )
 
 // auditCleanParams 是内置任务 params 的形状：保留期与单次上限随任务落库，
@@ -89,25 +94,57 @@ func (s *Service) syncAuditCleanTask() error {
 	return s.saveTask(task)
 }
 
-// cleanAudit 执行一次按龄清理。失败只返回错误（落 scheduler_runs + WARN 日志），
-// 不阻塞调度循环、不影响其他任务；清理结果本身写一条审计（写失败只 WARN）。
-func (s *Service) cleanAudit(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-	out, err := s.runAuditClean(ctx, params)
+// cleanAudit 执行一次按龄清理。**只有内核内置任务 builtin-audit-clean 可以触发**：
+// 用户创建的定时任务不得冒用内置 plugin/method，否则「删除审计」会多出第二个入口
+// （P1：拿到会话就能自建任务把审计清零，见 .agents/verify/api-security-redteam-2026-11-24.md §5.2）。
+// 被拒绝的尝试也写一条审计——删除审计这个动作本身必须可追溯。
+//
+// 失败只返回错误（落 scheduler_runs + WARN 日志），不阻塞调度循环、不影响其他任务；
+// 清理结果本身写一条审计（写失败只 WARN）。
+func (s *Service) cleanAudit(ctx context.Context, task Task) (json.RawMessage, error) {
+	if task.ID != builtinAuditCleanID {
+		var attempted auditCleanParams
+		// 尽力解析参数，仅用于把「有人尝试冒用清理入口」记进审计；解析失败不影响拒绝。
+		_ = json.Unmarshal(task.Params, &attempted)
+		err := fmt.Errorf("%w: %s 只能由内核内置任务 %q 执行（拒绝任务 %q）",
+			ErrInvalid, AuditCleanMethod, builtinAuditCleanID, task.ID)
+		s.recordAuditClean(attempted, store.AuditCleanReport{}, err)
+		s.log.Warn("拒绝非内置任务执行审计清理", "task_id", task.ID, "err", err)
+		return nil, err
+	}
+	out, err := s.runAuditClean(ctx, task.Params)
 	if err != nil {
 		s.log.Warn("审计按龄清理失败（不影响调度与其他任务）", "err", err)
 	}
 	return out, err
 }
 
+// validateAuditCleanParams 校验清理参数：保留期 ≥ 24h（与 audit.retention 配置下限同口径）、
+// 单次上限 1–maxAuditCleanBatch。校验失败不删任何记录。
+func validateAuditCleanParams(in auditCleanParams) error {
+	if in.RetentionSeconds < minAuditRetentionSeconds {
+		return fmt.Errorf("%w: %s 参数非法（retention_seconds 不得小于 %d 秒 = 24 小时，实际 %d；拒绝删除最近审计）",
+			ErrInvalid, AuditCleanMethod, minAuditRetentionSeconds, in.RetentionSeconds)
+	}
+	if in.Batch <= 0 || in.Batch > maxAuditCleanBatch {
+		return fmt.Errorf("%w: %s 参数非法（batch 取 1–%d）",
+			ErrInvalid, AuditCleanMethod, maxAuditCleanBatch)
+	}
+	return nil
+}
+
 // runAuditClean 是清理的实际执行体：解析参数 → 按龄删除 → 记录结果。
 func (s *Service) runAuditClean(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 	var in auditCleanParams
 	if err := json.Unmarshal(params, &in); err != nil {
-		return nil, fmt.Errorf("%w: %s 参数无法解析: %v", ErrInvalid, AuditCleanMethod, err)
+		parseErr := fmt.Errorf("%w: %s 参数无法解析: %v", ErrInvalid, AuditCleanMethod, err)
+		s.recordAuditClean(in, store.AuditCleanReport{}, parseErr)
+		return nil, parseErr
 	}
-	if in.RetentionSeconds <= 0 || in.Batch <= 0 || in.Batch > maxAuditCleanBatch {
-		return nil, fmt.Errorf("%w: %s 参数非法（retention_seconds 必须为正，batch 取 1–%d）",
-			ErrInvalid, AuditCleanMethod, maxAuditCleanBatch)
+	if err := validateAuditCleanParams(in); err != nil {
+		// 被拒绝的清理尝试同样留痕：删除审计这个动作本身必须可追溯。
+		s.recordAuditClean(in, store.AuditCleanReport{}, err)
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -100,6 +100,27 @@ func TestSchedulerEndpoints(t *testing.T) {
 	}
 }
 
+// TestSchedulerCreateRejectsBuiltinPlugin 是 P1 攻击路径的端点级回归：
+// POST /scheduler/tasks 不得创建 plugin=kore 的内置任务——否则可自建 audit.clean
+// 任务、带上 retention_seconds=1 把审计清零（见 api-security-redteam-2026-11-24 §5.2）。
+func TestSchedulerCreateRejectsBuiltinPlugin(t *testing.T) {
+	server, _ := newSchedulerServer(t)
+	body := map[string]any{
+		"name": "h", "plugin": "kore", "method": "audit.clean",
+		"params":     map[string]any{"retention_seconds": 1, "batch": 1000},
+		"interval_s": 3600, "enabled": true,
+	}
+	code, data := doScheduler(t, server, http.MethodPost, schedulerTasksPath, body)
+	if code != http.StatusBadRequest {
+		t.Fatalf("创建 plugin=kore 任务应回 400，实际 %d: %s", code, data)
+	}
+	code, data = doScheduler(t, server, http.MethodGet, schedulerTasksPath, nil)
+	var list schedulerListBody
+	if code != http.StatusOK || json.Unmarshal(data, &list) != nil || len(list.Tasks) != 0 {
+		t.Fatalf("被拒绝的任务不得出现在列表，实际 %d: %s", code, data)
+	}
+}
+
 // TestSchedulerEndpointErrors 覆盖非法输入 / 未知任务 / 未装配三类失败口径。
 func TestSchedulerEndpointErrors(t *testing.T) {
 	server, _ := newSchedulerServer(t)

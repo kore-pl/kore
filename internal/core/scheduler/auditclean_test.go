@@ -144,7 +144,7 @@ func TestAuditCleanBatchLimit(t *testing.T) {
 	params := json.RawMessage(`{"retention_seconds":7776000,"batch":2}`)
 	wantDeleted, wantMore := []int{2, 2, 1}, []bool{true, true, false}
 	for i := range wantDeleted {
-		out, err := service.cleanAudit(context.Background(), params)
+		out, err := service.cleanAudit(context.Background(), Task{ID: builtinAuditCleanID, Params: params})
 		if err != nil {
 			t.Fatalf("第 %d 次清理失败: %v", i+1, err)
 		}

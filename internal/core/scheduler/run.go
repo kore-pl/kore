@@ -39,7 +39,7 @@ func (s *Service) execute(ctx context.Context, task Task) Run {
 func (s *Service) invoke(ctx context.Context, task Task) (json.RawMessage, error) {
 	if task.Plugin == BuiltinPlugin {
 		if task.Method == AuditCleanMethod {
-			return s.cleanAudit(ctx, task.Params)
+			return s.cleanAudit(ctx, task)
 		}
 		if s.builtin == nil {
 			return nil, fmt.Errorf("内置任务处理器未装配")
