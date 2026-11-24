@@ -452,8 +452,17 @@
     if (!S.listHost) return;
     S.listHost.textContent = ''; S.count.textContent = S.backups.length ? S.backups.length + ' 个' : '';
     if (!S.backups.length) {
-      var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', '还没有备份；建议先备份站点目录'));
+      // 空态三件套：当前没有 X + 一句话说明 + 下一步按钮（跳到上方「新建备份」表单）。
+      S.listHost.appendChild(window.KoreUI.emptyBlock({
+        title: '还没有备份',
+        text: '第一次备份成功后会按时间列在这里，并按保留份数自动清理。建议先备份站点目录。',
+        label: '去创建第一个备份',
+        onClick: function () {
+          var form = document.querySelector('.bak-form');
+          if (form && form.scrollIntoView) form.scrollIntoView({ block: 'center' });
+          if (S.submit) S.submit.focus();
+        }
+      }));
       return;
     }
     var scroll = add(S.listHost, el('div', 'bak-table-host'));

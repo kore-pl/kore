@@ -317,7 +317,7 @@
       box.classList.add('is-none');
       badge('PostgreSQL');
       title('PostgreSQL 数据库连接未配置或不可达');
-      text(S.instHint || (isMissingPlugin(S.loadError) ? pgHintFor(S.loadError) : '正在读取实例与连接配置…'));
+      text(S.instHint || (isMissingPlugin(S.loadError) ? pgHintFor(S.loadError) : '正在读取连接配置…'));
       if (S.autoNotice) add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
       act('btn-primary', '配置连接', function () { openSettings(false); });
       act('btn-ghost', '重新读取', function () { loadInstances(false); });
@@ -332,7 +332,7 @@
       badge('已连接');
       title('已连接 ' + connectedLabel(conn, S.discovery) + (connVersion ? ' ' + connVersion : '') +
         '（' + (conn.host || '127.0.0.1') + ':' + (conn.port || 3306) + '）');
-      text('服务端版本来自已连通的实例（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
+      text('服务端版本来自已连通的连接（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
         '自动检测只探到客户端版本时以这里为准。连接信息可在右上角「设置」里修改。');
       if (S.autoNotice) {
         add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
@@ -418,10 +418,10 @@
   function paintInstances() {
     if (!S.instBody) return;
     S.instBody.textContent = '';
-    S.instCount.textContent = S.instances.length ? S.instances.length + ' 个实例' : '';
+    S.instCount.textContent = S.instances.length ? S.instances.length + ' 个连接' : '';
     if (S.loadError) {
       var fail = add(S.instBody, el('div', 'empty-state db-empty'));
-      add(fail, el('p', 'empty-state-title', '读取实例失败'));
+      add(fail, el('p', 'empty-state-title', '读取连接失败'));
       add(fail, el('p', 'empty-state-text', S.loadError));
       add(fail, el('p', 'empty-state-text', '怎么办：' + errHint(S.loadError)));
       var retry = add(fail, el('button', 'btn btn-primary', '重新读取'));
@@ -496,7 +496,7 @@
     if (!S.statusHost) return;
     S.statusHost.textContent = '';
     if (S.statusError) { S.statusHost.appendChild(notice('状态读取失败：' + S.statusError)); return; }
-    if (!S.status) { add(S.statusHost, el('div', 'db-status-loading muted', '正在读取实例状态…')); return; }
+    if (!S.status) { add(S.statusHost, el('div', 'db-status-loading muted', '正在读取连接状态…')); return; }
     var d = S.status, grid = add(S.statusHost, el('div', 'db-stats'));
     var stats = isPg()
       ? [['连接数', fmtInt(d.connections)], ['数据库', fmtInt(d.databases)], ['运行时长', fmtUptime(d.uptime_s)],
@@ -596,9 +596,9 @@
       return '当前账号没有 performance_schema 的读取权限：请让 DBA 授予 SELECT ON performance_schema.* 后再试';
     }
     if (/2002|2003|refused|Can't connect|连接|timed out|超时/i.test(msg)) {
-      return '检查实例连接配置：数据库是否已启动、地址与端口（默认 3306）是否正确，再点「分析」重试';
+      return '检查连接配置：数据库是否已启动、地址与端口（默认 3306）是否正确，再点「分析」重试';
     }
-    return '先确认实例连通，再降低耗时阈值或换一个库重试；仍失败请把下方原始信息交给 DBA';
+    return '先确认连接可用，再降低耗时阈值或换一个库重试；仍失败请把下方原始信息交给 DBA';
   }
   // fmtMS 把毫秒压成 1 位小数的 ms 或 2 位小数的 s。
   function fmtMS(ms) {
@@ -634,7 +634,7 @@
     var activeInst = currentInstance();
     if (activeInst && !activeInst.reachable) {
       add(formHost, el('p', 'db-slow-raw',
-        '当前实例不可达：点上方实例卡或右上角「设置」修改连接后重试，也可切到其他可达实例。'));
+        '当前连接不可达：点上方连接卡或右上角「设置」改一下地址 / 账号后重试，也可以切到其他可达的连接。'));
     }
     // 库：全部 + 已加载的库列表。
     var schemaWrap = add(formHost, el('label', null, '库'));
@@ -778,7 +778,7 @@
       : '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
     if (isPg()) {
       add(dbPanel, el('p', 'db-pg-note',
-        'PostgreSQL 前端本版只读：实例探测、库列表与只读 SQL；建库 / 建用户 / 导入导出不在本版本范围。'));
+        'PostgreSQL 前端本版只读：连接探测、库列表与只读 SQL；建库 / 建用户 / 导入导出不在本版本范围。'));
     }
     sysToggle.addEventListener('change', function () {
       S.includeSystem = sysBox.checked;
@@ -1013,18 +1013,18 @@
     S.root = root;
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '数据库'));
-    add(head, el('p', 'view-sub', 'MySQL / MariaDB 与 PostgreSQL 实例、库列表与只读 SQL 控制台；' +
+    add(head, el('p', 'view-sub', 'MySQL / MariaDB 与 PostgreSQL 连接、库列表与只读 SQL 控制台；' +
       'MySQL 本机服务可自动检测并一键连接，PostgreSQL 走插件配置（空态会给下一步引导）。'));
     S.bannerHost = add(root, el('div', 'db-banner-host'));
     var instPanel = add(root, el('section', 'panel')), instHead = add(instPanel, el('div', 'panel-head'));
-    add(instHead, el('span', 'panel-title', dbTitle() + ' 实例'));
+    add(instHead, el('span', 'panel-title', dbTitle() + ' 连接'));
     S.instCount = add(instHead, el('span', 'panel-meta', ''));
     var gear = add(instHead, el('button', 'btn btn-ghost', '设置'));
     gear.type = 'button'; on(gear, function () { openSettings(false); });
     // 实例类型切换放在独立一行：手机上标题/计数/设置已经占满 panel-head。
     var typeRow = add(instPanel, el('div', 'db-type-row'));
     var typeSwitch = add(typeRow, el('div', 'db-type-switch'));
-    typeSwitch.setAttribute('role', 'group'); typeSwitch.setAttribute('aria-label', '实例类型');
+    typeSwitch.setAttribute('role', 'group'); typeSwitch.setAttribute('aria-label', '连接类型');
     [['mysql', 'MySQL'], ['postgres', 'PostgreSQL']].forEach(function (item) {
       var typeBtn = add(typeSwitch, el('button', 'btn btn-ghost', item[1]));
       typeBtn.type = 'button';

@@ -147,14 +147,14 @@
     var msg = String(text || '');
     if (/NOAUTH|WRONGPASS|AUTH|invalid password|认证/i.test(msg)) {
       return '请确认 Redis 密码，可在 /etc/redis/redis.conf 的 requirepass 查看；' +
-        'Docker 启动的实例看容器命令里的 --requirepass 或 REDIS_PASSWORD 环境变量。';
+        'Docker 启动的 Redis 看容器命令里的 --requirepass 或 REDIS_PASSWORD 环境变量。';
     }
     if (/refused|连接.*失败|dial tcp/i.test(msg)) {
       return 'Redis 未在目标端口监听：确认服务已启动（systemctl status redis-server），' +
         'Docker 用 docker ps 核对端口映射。';
     }
     if (/no such host|Name or service not known/i.test(msg)) {
-      return '主机名无法解析：本机 Redis 请填 127.0.0.1，远程实例请填可解析的 IP 或域名。';
+      return '主机名无法解析：本机 Redis 请填 127.0.0.1，远程服务请填可解析的 IP 或域名。';
     }
     return '检查地址、端口和密码，确认 Redis 已启动并允许从本机连接，然后重试。';
   }
@@ -178,7 +178,7 @@
       badge('已连接');
       title('已连接 Redis' + (connVersion ? ' ' + connVersion : '') +
         '（' + (conn.host || '127.0.0.1') + ':' + (conn.port || 6379) + '）');
-      text('服务端版本来自已连通的实例（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
+      text('服务端版本来自已连通的连接（用配置里的凭据真实连上服务端），比本机自动检测更可信；' +
         '自动检测只探到客户端版本时以这里为准。连接信息可在右上角「设置」里修改。');
       if (S.autoNotice) {
         add(main, el('p', 'db-auto-result ' + (S.autoNotice.tone || 'ok'), S.autoNotice.text));
@@ -272,7 +272,7 @@
     S.instBody.textContent = ''; S.instCount.textContent = S.instances.length ? S.instances.length + ' 个连接' : '';
     if (S.loadError) {
       var fail = add(S.instBody, el('div', 'empty-state'));
-      add(fail, el('p', 'empty-state-title', '读取实例失败'));
+      add(fail, el('p', 'empty-state-title', '读取连接失败'));
       add(fail, el('p', 'empty-state-text', S.loadError));
       add(fail, el('p', 'empty-state-text', '怎么办：' + hintFor(S.loadError)));
       var retry = add(fail, el('button', 'btn btn-primary', '重新读取'));
@@ -340,7 +340,7 @@
     S.infoPanel.hidden = !S.selected; S.infoHost.textContent = '';
     if (!S.selected) return;
     if (S.infoError) { S.infoHost.appendChild(notice('信息读取失败：' + S.infoError)); return; }
-    if (!S.info) { add(S.infoHost, el('div', 'muted redis-loading', '正在读取实例信息…')); return; }
+    if (!S.info) { add(S.infoHost, el('div', 'muted redis-loading', '正在读取连接信息…')); return; }
     var info = S.info, server = info.server || {}, clients = info.clients || {}, memory = info.memory || {}, stats = info.stats || {};
     var hits = stats.keyspace_hits || 0, misses = stats.keyspace_misses || 0, total = hits + misses;
     var grid = add(S.infoHost, el('div', 'redis-stats'));
@@ -396,7 +396,15 @@
     paintDeleteBtn();
     if (S.keysError) { S.keysHost.appendChild(notice('扫描键失败：' + S.keysError)); paintKeyFooter(); return; }
     if (!S.keysLoaded) { add(S.keysHost, el('div', 'muted redis-loading', '正在扫描键…')); paintKeyFooter(); return; }
-    if (!S.keys.length) { add(S.keysHost, el('div', 'panel-empty', '没有匹配的键。')); paintKeyFooter(); return; }
+    if (!S.keys.length) {
+      S.keysHost.appendChild(window.KoreUI.emptyBlock({
+        title: S.pattern ? '没有匹配的键' : '这个库是空的',
+        text: S.pattern ? '当前匹配「' + S.pattern + '」没有命中；换个通配符，或清空匹配看全部键。' : '当前 DB 里一个键也没有；写入数据后这里会自动出现。',
+        label: '重新读取键列表', onClick: loadKeys
+      }));
+      paintKeyFooter();
+      return;
+    }
     // 只渲染前 shown 行：键空间可能有数千个键，全量渲染会让页面长到十几屏。
     var rows = S.keys.slice(0, S.shown);
     var scroll = add(S.keysHost, el('div', 'redis-key-host')), table = add(scroll, el('table', 'redis-table'));
@@ -492,7 +500,7 @@
       var fv = add(fragCard, el('div', 'redis-ops-value', ratio.toFixed(2)));
       fv.classList.add(ratio >= 1.5 ? 'is-warn' : 'is-ok');
       add(fragCard, el('div', 'redis-ops-sub', ratio >= 1.5 ? '偏高（≥1.5），关注淘汰与内存交换' : '正常（<1.5）'));
-    } else fragV(fragCard, '—', '实例未返回碎片率', '');
+    } else fragV(fragCard, '—', '服务端未返回碎片率', '');
     // 卡 3：AOF / RDB 状态点
     var persCard = add(grid, el('div', 'redis-ops-card'));
     add(persCard, el('span', 'redis-ops-label', 'AOF / RDB'));
@@ -614,14 +622,14 @@
     }
     if (!S.keyInfo) { add(S.detailHost, el('div', 'muted redis-loading', '正在读取键详情…')); return; }
     var ki = S.keyInfo, grid = add(S.detailHost, el('div', 'redis-detail-kv'));
-    [['类型', ki.type || '—'], ['编码', ki.encoding || '（实例未返回）'], ['TTL', fmtTTL(ki.ttl_s)],
+    [['类型', ki.type || '—'], ['编码', ki.encoding || '（服务端未返回）'], ['TTL', fmtTTL(ki.ttl_s)],
       ['内存占用', ki.memory_bytes > 0 ? fmtBytes(ki.memory_bytes) : '—']].forEach(function (item) {
       add(grid, el('span', 'redis-detail-label', item[0]));
       add(grid, el('span', 'redis-detail-value', item[1]));
     });
     add(S.detailHost, el('div', 'redis-detail-hint', ki.memory_bytes > 0
       ? '内存占用含键与值的结构与数据（MEMORY USAGE 采样估算）。'
-      : '实例未返回内存占用（MEMORY USAGE 需 Redis ≥ 4.0）。'));
+      : '服务端未返回内存占用（MEMORY USAGE 需 Redis ≥ 4.0）。'));
     var actions = add(S.detailHost, el('div', 'redis-actions'));
     actions.appendChild(btn(S.value ? 'btn-ghost' : 'btn-primary', S.value ? '重新读取值' : '读取值', function () { loadValue(S.activeKey); }));
     // TTL 预设：1h / 1d / 7d + 清除过期（persist）；不让人填任意秒数。
@@ -775,7 +783,7 @@
     var msg = String(text || '');
     if (/READONLY/i.test(msg)) return '当前连到的是只读副本（replica）：请切换到主节点再写';
     if (/NOAUTH|WRONGPASS|NO_PERM|ACL/i.test(msg)) return '当前账号没有写权限：请用有 SET/HSET/RPUSH/SADD/ZADD 权限的账号连接';
-    if (/OOM|maxmemory/i.test(msg)) return '实例内存已满（maxmemory）：先扩容或在「服务端配置」里调整淘汰策略';
+    if (/OOM|maxmemory/i.test(msg)) return 'Redis 内存已满（maxmemory）：先扩容或在「服务端配置」里调整淘汰策略';
     if (/E_INVALID|非法|不得为空|超过上限/i.test(msg)) return '键名或值不合法：键名不能为空，元素数与单值字节需在后端上限内';
     return hintFor(msg);
   }
@@ -869,7 +877,7 @@
         'timeout 必须是非负整数秒（0 = 不断开空闲连接）';
     }
     if (/CONFIG|disabled|rename-command|unknown command/i.test(msg)) {
-      return '实例禁用了 CONFIG 命令（rename-command 或 ACL）：请在 redis.conf 里启用 CONFIG，' +
+      return 'Redis 禁用了 CONFIG 命令（rename-command 或 ACL）：请在 redis.conf 里启用 CONFIG，' +
         '或改用允许 CONFIG 的管理账号';
     }
     return hintFor(msg);
@@ -1094,13 +1102,13 @@
     S = fresh(); container.textContent = '';
     S.root = add(container, el('section', 'redis'));
     var head = add(S.root, el('header', 'view-head'));
-    add(head, el('h2', 'view-title', 'Redis')); add(head, el('p', 'view-sub', '连接已有 Redis 实例：查看实例与内存、浏览键、读取值、批量删除。'));
+    add(head, el('h2', 'view-title', 'Redis')); add(head, el('p', 'view-sub', '连接一个已有的 Redis 服务：查看连接与内存、浏览键、读取值、批量删除。'));
     S.noticeHost = add(S.root, el('div', 'redis-notice-host'));
     S.bannerHost = add(S.root, el('div', 'db-banner-host'));
-    var inst = panel('Redis 实例', ''); add(S.root, inst.panel); S.instCount = add(inst.meta, el('span', null, ''));
+    var inst = panel('Redis 连接', ''); add(S.root, inst.panel); S.instCount = add(inst.meta, el('span', null, ''));
     var gear = add(inst.meta, el('button', 'btn btn-ghost', '设置')); gear.type = 'button'; on(gear, function () { openSettings(false); });
     S.instBody = add(inst.panel, el('div', 'redis-instance-body'));
-    var info = panel('实例信息', '内存 / 连接 / 命中率 / keyspace');
+    var info = panel('连接信息', '内存 / 连接 / 命中率 / keyspace');
     S.infoPanel = info.panel; S.infoPanel.hidden = true; add(S.root, S.infoPanel); S.infoHost = add(S.infoPanel, el('div', 'redis-info'));
     // 运维指标卡：内存用量 / 碎片率 / AOF·RDB / 慢查询（选中实例后加载）。
     S.opsHost = add(S.root, el('div', 'redis-ops-host')); S.opsHost.hidden = true;

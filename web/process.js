@@ -20,7 +20,7 @@
   var NICE_PRESETS = [['high', '高（nice 0）', 0], ['normal', '普通（nice 10）', 10], ['low', '低（nice 19）', 19]];
   function fresh() {
     return { items: [], total: 0, sort: 'cpu', q: '', firstSample: false, rawNote: '', loading: false,
-      shown: PAGE_SIZE, loadError: '', detail: null, detailPid: 0, detailError: '', confirm: false, signal: 'TERM',
+      shown: PAGE_SIZE, loadError: '', loadCode: '', detail: null, detailPid: 0, detailError: '', confirm: false, signal: 'TERM',
       killResult: null, killError: '', killCode: '', killBusy: false, tree: null, treeError: '', treeOpen: false, destroyed: false,
       renice: false, renicePreset: 'normal', reniceCustom: '', reniceBusy: false, reniceResult: null, reniceError: '' };
   }
@@ -87,25 +87,14 @@
     if (h) return h + ' 小时 ' + m + ' 分';
     return m ? m + ' 分' : sec + ' 秒';
   }
-  // hintFor：服务端 message 已含可操作提示时不再重复；否则按错误码补一句"怎么办"。
-  function hintFor(err) {
-    var msg = (err && err.message) || '';
-    if (/root|刷新后重试/.test(msg)) return '';
-    var code = (err && err.code) || '';
-    if (code === 'E_NEED_ROOT') return '（需要内核以系统服务（root）运行：把 kore 配成 systemd 服务后重启，再重试）';
-    if (code === 'E_UNAUTHORIZED') return '（该进程在保护名单内，不允许此操作）';
-    if (code === 'E_NOTFOUND') return '（进程可能已退出：点「刷新」重新拉取）';
-    if (code === 'E_CONFLICT') return '（进程名不符，可能 PID 已复用：点「刷新」后重试）';
-    return '';
-  }
   function paintTable() {
     var host = S.tableHost;
     host.textContent = '';
     if (S.loadError) {
-      var box = add(host, el('div', 'proc-empty'));
-      add(box, el('p', 'proc-empty-text', '进程列表加载失败：' + S.loadError));
-      var retry = add(box, el('button', 'btn', '重试')); retry.type = 'button';
-      on(retry, load);
+      // 统一错误块（KoreUI.errorBlock）：说什么错了 + 服务端原文 + 「怎么办」+ 重试按钮。
+      host.appendChild(window.KoreUI.errorBlock({ code: S.loadCode, message: S.loadError }, {
+        title: '进程列表读取失败', retryLabel: '重新读取', onRetry: load
+      }));
       paintMore();
       return;
     }
@@ -118,7 +107,21 @@
     S.countMeta.textContent = S.items.length
       ? '已显示 ' + fmtInt(shown) + ' / 共 ' + fmtInt(displayTotal) + ' 个进程' + (q ? '（已过滤）' : '')
       : '';
-    if (!S.items.length) { add(host, el('div', 'proc-empty-text', S.loading ? '正在读取进程列表…' : '没有可显示的进程')); paintMore(); return; }
+    if (!S.items.length) {
+      if (S.loading) { add(host, el('div', 'proc-empty-text', '正在读取进程列表…')); paintMore(); return; }
+      S.countMeta.textContent = '';
+      var filtering = !!q;
+      host.appendChild(window.KoreUI.emptyBlock({
+        title: filtering ? '没有匹配的进程' : '没有可显示的进程',
+        text: filtering
+          ? '当前筛选「' + S.q.trim() + '」没有命中；换个进程名或命令行的关键词，或点下面按钮看全部进程。'
+          : '这次读取回来的进程列表是空的（刚启动或采样被内核截断时会这样）；点下面按钮再读一次。',
+        label: filtering ? '清空筛选，看全部进程' : '重新读取进程列表',
+        onClick: filtering ? clearQuery : load
+      }));
+      paintMore();
+      return;
+    }
     var table = add(host, el('table', 'proc-table'));
     var htr = add(add(table, el('thead')), el('tr'));
     [['pid', 'PID', 'pid'], ['name', '名称', 'name'], ['user', '用户', ''], ['state', '状态', ''],
@@ -162,6 +165,8 @@
     });
     paintMore();
   }
+  // clearQuery：清空过滤框并重绘（空态 CTA 的实际动作）。
+  function clearQuery() { S.q = ''; S.shown = PAGE_SIZE; if (S.qEl) S.qEl.value = ''; paintTable(); }
   // paintMore：底部固定显示「已显示 X / 共 Y 个进程」+「加载更多」。
   // 接口最多返回 500 条；到上限后说明剩余需后端扩上限，不假装还能加载。
   function paintMore() {
@@ -221,7 +226,7 @@
     S.drawerTitle.textContent = S.detailPid ? '进程详情 · PID ' + S.detailPid : '进程详情';
     if (S.detailError) {
       var derr = add(host, el('div', 'proc-error'));
-      derr.setAttribute('role', 'alert'); derr.textContent = '详情读取失败：' + S.detailError;
+      derr.setAttribute('role', 'alert'); derr.textContent = S.detailError;
       var retry = add(host, el('button', 'btn', '重试')); retry.type = 'button';
       on(retry, function () { openDetail(S.detailPid); });
       return;
@@ -276,7 +281,8 @@
     if (S.confirm) paintConfirm(host, d);
     if (S.killError) {
       var kerr = add(host, el('div', 'proc-error'));
-      kerr.setAttribute('role', 'alert'); kerr.textContent = '结束失败：' + S.killError + hintFor({ message: S.killError, code: S.killCode });
+      kerr.setAttribute('role', 'alert');
+      kerr.textContent = window.KoreUI.errorText({ code: S.killCode, message: S.killError }, '结束进程失败');
     } else if (S.killResult) {
       var r = S.killResult, alive = r.killed && !r.still_alive;
       var kbox = add(host, el('div', alive ? 'proc-kill-ok' : 'proc-kill-warn'));
@@ -290,7 +296,7 @@
       add(tbox, el('div', 'proc-tree-title', '进程树'));
       if (S.treeError) {
         var terr = add(tbox, el('div', 'proc-error'));
-        terr.setAttribute('role', 'alert'); terr.textContent = '进程树读取失败：' + S.treeError;
+        terr.setAttribute('role', 'alert'); terr.textContent = S.treeError;
       } else if (!S.tree) add(tbox, el('p', 'muted proc-tree-note', '正在读取进程树…'));
       else {
         var pre = add(tbox, el('pre', 'proc-tree-pre'));
@@ -329,7 +335,7 @@
       S.detail = d; paintDrawer();
     }, function (err) {
       if (S.destroyed || S.detailPid !== pid) return;
-      S.detailError = err.message + hintFor(err); paintDrawer();
+      S.detailError = window.KoreUI.errorText(err, '进程详情读取失败'); paintDrawer();
     });
   }
   function showTree(pid) {
@@ -340,7 +346,7 @@
       S.tree = t; paintDrawer();
     }, function (err) {
       if (S.destroyed || S.detailPid !== pid) return;
-      S.treeError = err.message + hintFor(err); paintDrawer();
+      S.treeError = window.KoreUI.errorText(err, '进程树读取失败'); paintDrawer();
     });
   }
   // paintRenice：预设三档（高0/普通10/低19）+ 自定义 0..19 兜底；后端拒负数，这里也不给负数入口。
@@ -373,7 +379,7 @@
     if (S.reniceError) {
       var rerr = add(box, el('div', 'proc-error'));
       rerr.setAttribute('role', 'alert');
-      rerr.textContent = '调整失败：' + S.reniceError;
+      rerr.textContent = S.reniceError;
     } else if (S.reniceResult) {
       var r = S.reniceResult, rbox = add(box, el('div', 'proc-kill-ok'));
       rbox.setAttribute('role', 'status');
@@ -387,7 +393,7 @@
     if (String(S.reniceCustom).trim() !== '') {
       value = parseInt(S.reniceCustom, 10);
       if (isNaN(value) || value < 0 || value > 19) {
-        S.reniceError = '自定义优先级必须是 0–19 的整数（数字越小优先级越高）'; paintDrawer(); return;
+        S.reniceError = '优先级没改成。怎么办：自定义优先级填 0–19 的整数（数字越小优先级越高）。'; paintDrawer(); return;
       }
     } else {
       NICE_PRESETS.forEach(function (p) { if (p[0] === S.renicePreset) value = p[2]; });
@@ -400,7 +406,7 @@
       setTimeout(function () { if (!S.destroyed) load(); }, 400); // 回读新 nice
     }, function (err) {
       if (S.destroyed) return;
-      S.reniceBusy = false; S.reniceError = err.message + hintFor(err); paintDrawer();
+      S.reniceBusy = false; S.reniceError = window.KoreUI.errorText(err, '调整优先级失败'); paintDrawer();
     });
   }
   function doKill(d) {
@@ -429,7 +435,7 @@
       S.loading = false; paintTable();
     }, function (err) {
       if (S.destroyed) return;
-      S.loading = false; S.loadError = err.message; S.items = []; S.total = 0; paintTable();
+      S.loading = false; S.loadError = err.message; S.loadCode = err.code || ''; S.items = []; S.total = 0; paintTable();
     });
   }
   function build(root) {

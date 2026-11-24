@@ -267,7 +267,7 @@
         '建议先导出一份当前库作为回滚点，并确认目标库选对。',
       fields: [
         { key: 'database', label: '目标库', type: 'select', value: ctx.selectedDb || '',
-          options: dbOptions(ctx, false), hint: '只列出当前实例可见的库；没有目标库请先「新建数据库」。' },
+          options: dbOptions(ctx, false), hint: '只列出当前连接可见的库；没有目标库请先「新建数据库」。' },
         { key: 'path', label: 'SQL 文件', placeholder: 'kore_app-20260101-120000.sql', mono: true,
           hint: '必须是导出目录内的文件（与「导出」同一个根目录）。' }
       ],

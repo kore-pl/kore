@@ -348,7 +348,11 @@
       return;
     }
     if (!S.jobs.length) {
-      add(S.jobsHost, el('p', 'muted', '还没有任务记录：上传或升级一次就会在这里出现时间线。'));
+      S.jobsHost.appendChild(window.KoreUI.emptyBlock({
+        title: '还没有部署任务',
+        text: '上传或升级一次应用就会在这里出现时间线；没有记录通常说明还没做过部署。',
+        label: '刷新任务记录', onClick: loadJobs
+      }));
       return;
     }
     S.jobs.forEach(function (j) {
