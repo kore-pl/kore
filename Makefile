@@ -59,7 +59,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross cross-build cross-vet compat-info vet test web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check check clean fmt
+.PHONY: help build cross cross-build cross-vet compat-info vet test race web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -182,6 +182,14 @@ test: web-dist ## 运行单元测试（源码未就绪时 SKIP）
 	@if [ ! -f go.mod ] || { [ ! -d ./cmd ] && [ ! -d ./internal ]; }; then echo "[SKIP] 源码未就绪（无 go.mod 或 cmd/internal 缺失），M1 实现"; exit 0; fi; \
 	$(GO) test -timeout 200s ./...; \
 	echo "[OK] go test 通过"
+
+# race 门禁（本仓）：只对 ./tests/boundary/ 加 -race。并发断言集中在那里；-race 通常慢 2–10 倍，
+# 全仓 -race 不划算。kore 当前无 tests/boundary → SKIP；新增后自动生效。跨仓接线 + 真跑见
+# scripts/race-gate-check.sh（make check 第 18 段）。-race 需要 cgo（本地 gcc / CI ubuntu-latest 自带）。
+race: ## -race 跑并发边界用例（本仓无 ./tests/boundary/ 时 SKIP）
+	@if [ ! -d tests/boundary ]; then echo "[SKIP] 本仓无 tests/boundary：race 门禁无目标（新增后自动生效）"; exit 0; fi; \
+	echo "[RUN ] race: CGO_ENABLED=1 $(GO) test -race -count=1 -timeout 300s ./tests/boundary/..."; \
+	CGO_ENABLED=1 $(GO) test -race -count=1 -timeout 300s ./tests/boundary/...
 
 frontend: web-dist ## 构建前端产物并核对首屏体积（M2-D：零依赖静态拷贝 + gzip ≤300 KiB）
 	@if [ ! -f web/index.html ] || [ ! -f web/app.js ] || [ ! -f web/style.css ]; then echo "[SKIP] web/ 壳未就绪，M2 实现"; exit 0; fi; \
@@ -378,15 +386,15 @@ case-check: ## 大小写一致性门禁（module 路径全小写 / 同目录大�
 store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 字段 + 描述类字段四选一（全缺 WARN）+ id/目录一致 + info/manifest 版本一致 + replace 跨仓拦截 + 本地 dist sha ↔ 索引 sha（WARN，DIST_SHA_DIFF）+ README 全文 dist/<id>-<ver>.tar.gz 引用版本 ↔ info.json.version（WARN，README_VERSION_DRIFT，带行号））
 	@bash scripts/store-check.sh
 
-presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production）
+presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production / 判据① 边界用例 go test 真跑）
 	@bash scripts/presets-check.sh
 
-check: ## 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源（ADR-0025）+ 交叉编译（G-16，五目标真编译，阻断级）
+check: ## 聚合门禁（18 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 薄壳边界 + 跨仓库边界 + 口径唯一性 + 台账 + worktree + oss-check + 大小写一致性 + frontend 首屏体积 + 零侵入（ADR-0023）+ 插件仓开源资产（G-26 延伸）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源（ADR-0025）+ 交叉编译（G-16，五目标真编译，阻断级）
 	@fail=0; \
-	echo "[RUN ] 1/17 docs-check"; \
+	echo "[RUN ] 1/18 docs-check"; \
 	if ! bash scripts/docs-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 2/17 依赖白名单 + 兼容基线【仅参数文本层】G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false（真编译见 17/17，本段不编译）"; \
+	echo "[RUN ] 2/18 依赖白名单 + 兼容基线【仅参数文本层】G-16：GOAMD64=v1 / GOARM64=v8.0 / GOOS=linux / -buildvcs=false（真编译见 17/17，本段不编译）"; \
 	s=0; \
 	if ! grep -qE '^GOAMD64[[:space:]]*\?=[[:space:]]*v1$$' Makefile; then echo "[FAIL] GOAMD64 基线漂移（应 GOAMD64 ?= v1）"; s=1; fi; \
 	if ! grep -qE '^GOARM64[[:space:]]*\?=[[:space:]]*v8\.0$$' Makefile; then echo "[FAIL] GOARM64 基线漂移（应 GOARM64 ?= v8.0）"; s=1; fi; \
@@ -399,7 +407,7 @@ check: ## 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单
 	echo "[INFO] 依赖白名单（第三方 ≤3 个；同仓 module 不计配额，须 replace => ./）"; \
 	if ! bash scripts/dep-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 3/17 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
+	echo "[RUN ] 3/18 薄壳边界检查（主壳不含业务逻辑 / 不做同进程动态库插件）"; \
 	if [ ! -d ./cmd ] && [ ! -d ./internal ]; then \
 	  echo "[N/A] 源码未就绪（cmd/internal 缺失），薄壳边界检查跳过，M1 自动生效"; \
 	else \
@@ -409,54 +417,57 @@ check: ## 聚合门禁（17 段）：docs-check + 明文凭据 + 依赖白名单
 	  if [ "$$s" -eq 0 ]; then echo "[OK] 薄壳边界通过"; else fail=1; fi; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 4/17 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
+	echo "[RUN ] 4/18 repo-check（跨仓库边界：本仓库不含插件代码 / 插件 import / 插件索引）"; \
 	if ! $(MAKE) --no-print-directory repo-check; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 5/17 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
+	echo "[RUN ] 5/18 canonical-check（口径唯一性：旧预算 / 旧字段 / 幽灵 id 清零）"; \
 	if ! bash scripts/canonical-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 6/17 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 6/18 log-check（判断留痕台账：WARN 级，不阻断提交）"; \
 	log_out=$$(bash scripts/log-check.sh 2>&1 || true); printf '%s\n' "$$log_out"; \
 	log_warn=$$(printf '%s\n' "$$log_out" | grep -c '^\[WARN\]' || true); log_warn=$${log_warn:-0}; \
 	if [ "$$log_warn" -gt 0 ]; then echo "[WARN] 台账有 $$log_warn 处缺口（WARN 级，不阻断；里程碑收口时人工判）"; fi; \
 	echo ""; \
-	echo "[RUN ] 7/17 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
+	echo "[RUN ] 7/18 wt-check（worktree 卫生：WARN 级，不阻断提交）"; \
 	wt_out=$$(bash scripts/wt-check.sh 2>&1 || true); printf '%s\n' "$$wt_out"; \
 	wt_warn=$$(printf '%s\n' "$$wt_out" | grep -c '^\[WARN\]' || true); wt_warn=$${wt_warn:-0}; \
 	if [ "$$wt_warn" -gt 0 ]; then echo "[WARN] worktree 卫生有 $$wt_warn 处残留（WARN 级，不阻断；里程碑收口前必须清空）"; fi; \
 	echo ""; \
-	echo "[RUN ] 8/17 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
+	echo "[RUN ] 8/18 oss-check（开源资产：MIT LICENSE / 根文档 / CI / 占位符 / 协议头；G-26）"; \
 	if ! bash scripts/oss-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 9/17 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
+	echo "[RUN ] 9/18 case-check（大小写一致性：module 路径 / 同目录冲突 / 旧仓库名 / 插件 id / 文档 URL）"; \
 	if ! bash scripts/case-check.sh; then fail=1; fi; \
-	echo "[RUN ] 10/17 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
+	echo "[RUN ] 10/18 frontend 首屏体积（G-03：≤300 KiB gzip · R4：dist 无 map/.vite/字体，阻断级）"; \
 	if ! $(MAKE) --no-print-directory frontend; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 11/17 零侵入门禁（ADR-0023：隔离安装根下系统路径零新增 / 豁免项单列）"; \
+	echo "[RUN ] 11/18 零侵入门禁（ADR-0023：隔离安装根下系统路径零新增 / 豁免项单列）"; \
 	if ! bash scripts/zero-intrusion-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 12/17 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
+	echo "[RUN ] 12/18 secret-check（G-30：docs/ 与 .agents/verify/ 明文凭据扫描）"; \
 	if ! bash scripts/secret-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 13/17 插件仓开源资产（G-26 延伸：25 仓九件套 + .github 模板 + CI，见 scripts/plugin-oss-check.sh）"; \
+	echo "[RUN ] 13/18 插件仓开源资产（G-26 延伸：25 仓九件套 + .github 模板 + CI，见 scripts/plugin-oss-check.sh）"; \
 	if ! bash scripts/plugin-oss-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 14/17 store-check（G-17：插件仓三件套 + info.json 必填字段 + id/目录一致 + info/manifest 版本一致 + 本地 dist sha ↔ 索引记录 sha（WARN，DIST_SHA_DIFF）+ README 全文 dist/<id>-<ver>.tar.gz 引用版本 ↔ info.json.version（WARN，README_VERSION_DRIFT，带行号）；WARN 级）"; \
+	echo "[RUN ] 14/18 store-check（G-17：插件仓三件套 + info.json 必填字段 + id/目录一致 + info/manifest 版本一致 + 本地 dist sha ↔ 索引记录 sha（WARN，DIST_SHA_DIFF）+ README 全文 dist/<id>-<ver>.tar.gz 引用版本 ↔ info.json.version（WARN，README_VERSION_DRIFT，带行号）；WARN 级）"; \
 	store_out=$$(bash scripts/store-check.sh 2>&1 || true); printf '%s\n' "$$store_out"; \
 	store_fail=$$(printf '%s\n' "$$store_out" | grep -c '^\[FAIL\]' || true); store_fail=$${store_fail:-0}; \
 	if [ "$$store_fail" -gt 0 ]; then \
 	  echo "[WARN] store-check 有 $$store_fail 处不合规（WARN 级不阻断：判据未放宽，单跑 bash scripts/store-check.sh 为 exit 1；转阻断条件见 QUALITY-GATES §G-17）"; \
 	fi; \
 	echo ""; \
-	echo "[RUN ] 15/17 presets-check（G-18：预设 id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积；G-20：索引↔仓库 depth_level 一致 + out_of_box×depth_level；阻断级）"; \
+	echo "[RUN ] 15/18 presets-check（G-18：预设 id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积；G-20：索引↔仓库 depth_level 一致 + out_of_box×depth_level + 判据① tests/boundary 静态核对后 go test 真跑；阻断级）"; \
 	if ! bash scripts/presets-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 16/17 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \
+	echo "[RUN ] 16/18 公钥单一真源（ADR-0025：verify.go IndexPublicKeyHex ↔ 索引仓 validate-index.sh PUB_HEX）"; \
 	if ! bash scripts/pubkey-sync-check.sh; then fail=1; fi; \
 	echo ""; \
-	echo "[RUN ] 17/17 交叉编译（G-16 阻断级：五目标「全仓 go build ./...」+ kored 五产物真编译，windows/amd64 + darwin/arm64 为 G-16 明文判据；判据只验证文本=漏检；go build 不含 _test.go，测试包见 make cross-vet）"; \
+	echo "[RUN ] 17/18 交叉编译（G-16 阻断级：五目标「全仓 go build ./...」+ kored 五产物真编译，windows/amd64 + darwin/arm64 为 G-16 明文判据；判据只验证文本=漏检；go build 不含 _test.go，测试包见 make cross-vet）"; \
 	if ! $(MAKE) --no-print-directory cross-build; then fail=1; fi; \
+	echo ""; \
+	echo "[RUN ] 18/18 race 门禁（-race 只跑 ./tests/boundary/：跨仓接线静态核对 + 有边界用例的仓 make race 真跑；阻断级）"; \
+	if ! bash scripts/race-gate-check.sh; then fail=1; fi; \
 	echo ""; \
 	if [ "$$fail" -ne 0 ]; then echo "[FAIL] 门禁未通过 — 见上方明细"; exit 1; fi; \
 	echo "[OK] 门禁全部通过"
