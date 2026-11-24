@@ -70,3 +70,10 @@ keys/index-signing*
 .agents/verify/tmp/
 .agents/verify/**/chrome-profile/
 .agents/verify/**/profile/
+# 临时工作台（整仓 git archive 副本 / 隔离实例 runtime）禁止落在 .agents/verify/：
+# 它们会被 docs-check（find .agents/verify -name '*.md'）与本目录下任何明文凭据扫描当作证据扫到。
+# 注意：make docs-check / make secret-check 直接扫文件系统、**不读 .gitignore**，
+# 因此下列规则只防误入库，门禁要绿必须把临时工作台建在工作区外（/tmp 或 ~）。
+.agents/verify/.tmp-*/
+.agents/verify/*-tmp/
+.agents/verify/*tmp/
