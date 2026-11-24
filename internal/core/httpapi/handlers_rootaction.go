@@ -13,8 +13,13 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// maxRootActionBody 是 root-action 请求体上限（动作 payload 很小，64 KiB 足够）。
-const maxRootActionBody = 64 << 10
+// maxRootActionBody 是 root-action 请求体上限（ADR-0052 §3.1.3.2）。
+//
+// 64 KiB 装不下受控写的 256 KiB 正文：JSON 转义最坏把 1 个控制字节放大成 6 字节
+// （`\uXXXX`），256 KiB 正文最坏 ≈1.5 MiB。取 2 MiB 留余量；**解码后**正文仍按
+// 协议硬顶 256 KiB 判（pluginapi.MaxFileWriteContentBytes），body 上限只负责
+// 「不让进程被一个超大请求拖垮」，不是安全判据本身。
+const maxRootActionBody = 2 << 20
 
 // rootActionIDPattern 是 action_id 的协议语法（与 pluginapi/rootaction.go 同口径）。
 var rootActionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -23,8 +28,10 @@ var rootActionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 type rootActionBody struct {
 	// ActionID 是插件声明的动作 id（唯一入口；argv 由清单固定）。
 	ActionID string `json:"action_id"`
-	// Args 是追加参数（不能替换 argv[0]）。
+	// Args 是追加参数（不能替换 argv[0]）；file_write 动作只用 args[0]（单层文件名）。
 	Args []string `json:"args,omitempty"`
+	// Content 是 file_write 动作的正文（exec 动作不得携带）。
+	Content string `json:"content,omitempty"`
 	// Confirm 是不可回滚动作的一次性令牌。
 	Confirm string `json:"confirm,omitempty"`
 }
@@ -64,9 +71,14 @@ func (s *Server) handleRootAction(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, perr)
 		return
 	}
+	// 正文只属于受控写：exec 动作带 content 直接拒绝（不静默丢弃，不让两种语义混在一条请求里）。
+	if body.Content != "" && action.FileWrite == nil {
+		writeFailure(w, errCodeInvalid("content 仅用于 file_write 动作，exec 动作不得携带正文"))
+		return
+	}
 	result, err := s.privilege.Execute(r.Context(), privilege.Request{
 		Actor: actor, PluginID: pluginID, Action: action,
-		Args: body.Args, Confirm: body.Confirm,
+		Args: body.Args, Content: body.Content, Confirm: body.Confirm,
 	})
 	if err != nil {
 		writeFailure(w, err)

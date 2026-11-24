@@ -207,7 +207,23 @@
 
 **SDK 自检**：插件读自己的 `info.json`，逐条 `pluginapi.ValidateRootAction`，再把渲染出的每个 vhost 交给 `pluginapi.ValidateFileWriteRequest(pluginID, action, fileName, content, opts)`——正例必须覆盖 PHP 块、伪静态块、SSL 块，反例必须覆盖上面的无条件拒绝集。校验器是**安全关键代码**：改动必须过 fuzz（`FuzzValidateNginxVHostFragment`）与红队绕过集；新增 allowlist 指令须走 ADR-0052 §7#2 复审。**残余风险必须披露**：allowlist 内仍有副作用——`proxy_pass` 可反代到本机服务（产品功能，含 8787 已由形状拦直连、挡不住二次代理），`root` 指向的站点根内可能有敏感文件。
 
-**执行口径（ADR-0049）**：**`file_write` 动作不走 `os/exec`**：内核按 `prefix_class` 定位目录 → `ValidateFileWriteRequest` 复核文件名与正文 → 审计 begin → 写前备份 → 原子替换 → 审计 end → `changes.jsonl`（K3 接线）；`purge_op: file.restore` 用备份回滚。其余 exec 动作仍走：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
+**执行口径（K3 已接线，2026-11-24）**：**`file_write` 动作不走 `os/exec`**，在 `privilege.Execute` 内按声明分派到受控写：
+
+1. **schema**：`args` 必须恰为 1 个元素（单层文件名 `kore-<plugin>-<slug>.conf`）；`content` 只属于 file_write，exec 动作携带一律 `E_INVALID`（不静默丢弃）；声明仍走 `pluginapi.ValidateRootAction`（与 `argv` 互斥、必须 `writes_host`、`target` 必须等于类别目录）；
+2. **内容策略**：`pluginapi.ValidateFileWriteRequest`（K2 校验器）复核文件名形状/后缀/归属与正文；HTTP body 上限 `maxRootActionBody` 已提到 **2 MiB**（256 KiB 正文最坏 JSON 转义 ×6 + 余量），**解码后**仍按 256 KiB 硬顶判；
+3. **confirm → root → 账本**：`irreversible` 或「`writes_host` 且无 `purge_op`」仍需一次性 confirm 令牌；非 root 返回 `E_NEED_ROOT`；`changes.jsonl` 账本未装配即拒绝（不留「改了宿主却查无此事」）；
+4. **写**：审计 begin（写盘前、fail-closed，只记 `path/sha256/size/mode/copy_path`，**不记正文**）→ 写前备份到 `<state>/backups/<plugin>/<ts>/` → 同目录临时文件 + `rename` 原子替换 → **属主复核 `root:root 0644`**（`internal/platform.VerifyOwner`；失败**回滚**：有备份则恢复，新文件则删除，并以 `E_OWNER_MISMATCH` 拒绝）→ 审计 end；同一路径的并发写在进程内**按路径锁**串行（锁覆盖「检查 → 写」整段，防 TOCTOU 与备份链错乱）；
+5. **回滚账本**：`changes.jsonl` 的 `purge_op` 是**运行时**得到的结构化操作——有备份 → `file.restore`（备份路径, 目标路径），新文件 → `file.remove`（目标路径）；永不存 shell 字符串。
+
+**证书/口令目录白名单（运行时注入）**：`FileWriteOptions.Nginx.CertPrefixes` / `AuthFilePrefixes` 缺省为空 → `ssl_certificate*` / `auth_basic_user_file` 一律拒绝（错误信息明说「白名单为空」，不猜安装路径）。内核侧的注入点是 `privilege.FileWriteOptions.Policy`，K3 单测覆盖「空 → 拒绝 / 注入 → 放行」；**值**的注入（`<install>/data/ssl/` + 类别目录）必须由 `pkg/pluginapi` 产出（`nginx`/`ssl` 是薄壳门禁业务域词，不得进 `cmd`/`internal`），K3 未跨域修改 `pkg/pluginapi`，生产值注入待独立小卡（见 §3.1.3.2 末「真机验证」）。
+
+**真机 root e2e（未执行；本机非 root，`/etc/nginx/conf.d` 为开发假象）**：
+
+1. `make build` 后以系统服务形态运行（`User=root`），或在隔离实例里用 `KORE_HOME=/tmp/kore-e2e sudo -E ./bin/kored --config <隔离配置>`；
+2. 管理会话登录后 `POST /api/v1/plugins/site/root-action`，body `{"action_id":"<file_write 动作>","args":["kore-site-test.conf"],"content":"server { listen 8099; server_name e2e.test; root /var/www/e2e; }"}`（动作无 `purge_op` 时先签发 confirm 令牌）；
+3. `stat -c '%U:%G %a' /etc/nginx/conf.d/kore-site-test.conf` → `root:root 644`；`nginx -t`（宿主装 nginx 时）→ `syntax is ok`；
+4. 二次写同文件 → `<state>/backups/site/<ts>/kore-site-test.conf` 存在，`changes.jsonl` 末条 `purge_op.kind=file.restore`；按该 `purge_op` 回滚 → 恢复旧内容；删除目标后备份仍在；
+5. 反例：非 root 启动 → `E_NEED_ROOT`；文件名 `evil.conf` / 别的插件前缀 → `E_INVALID`；正文 >256 KiB → `E_INVALID`；含 `access_log` → `E_INVALID`。其余 exec 动作仍走：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
 
 **G-01 边界**：内核只校验 schema（id/argv/timeout/file_write）与**参数形状**（族/前缀/地址/端口、文件名/内容策略这些语法级约束），不判断「这是防火墙动作 / 这是建站动作」——业务语义留在插件自己的 `id` 与 `description`；nginx 片段的指令 allowlist 实现放在 `pkg/pluginapi`（协议策略层），不进 `internal/core`（业务词表会触发薄壳门禁）。
 

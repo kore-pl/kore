@@ -42,6 +42,22 @@ type Event struct {
 	DurMS    int64
 	// Phase 是 begin / end；deny 记录固定 deny。
 	Phase string
+	// FileWrite 是受控写的附加审计字段（仅 file_write 动作非 nil）。
+	FileWrite *FileWriteAudit
+}
+
+// FileWriteAudit 是受控写审计的元数据：只记哈希与属性，**不记正文**（ADR-0028 §4）。
+type FileWriteAudit struct {
+	// Path 是实际落盘路径。
+	Path string
+	// SHA256 是写入内容哈希。
+	SHA256 string
+	// Size 是写入字节数。
+	Size int
+	// Mode 是落盘权限位。
+	Mode uint32
+	// CopyPath 是写前备份路径（新文件为空）。
+	CopyPath string
 }
 
 // Result 把事件映射为 store 的三值结果（ok / denied / error）。
@@ -74,6 +90,15 @@ func (e Event) Detail() map[string]string {
 	}
 	if e.DenyReason != "" {
 		detail["deny_reason"] = trimAudit(e.DenyReason)
+	}
+	if e.FileWrite != nil {
+		detail["path"] = trimAudit(e.FileWrite.Path)
+		detail["sha256"] = e.FileWrite.SHA256
+		detail["size"] = strconv.Itoa(e.FileWrite.Size)
+		detail["mode"] = strconv.FormatUint(uint64(e.FileWrite.Mode), 8)
+		if e.FileWrite.CopyPath != "" {
+			detail["copy_path"] = trimAudit(e.FileWrite.CopyPath)
+		}
 	}
 	return detail
 }

@@ -25,6 +25,9 @@ type Options struct {
 	Auditor Auditor
 	// ChangeRecorder 是宿主变更账本出口；声明 writes_host 的动作在 nil 时 fail-closed。
 	ChangeRecorder ChangeRecorder
+	// FileWrite 是受控文件写执行面（file_write 动作走这里，不走 os/exec）；
+	// nil 时 file_write 动作一律 E_UNSUPPORTED（fail-closed）。
+	FileWrite *FileWriteOptions
 	// Runner 是 systemd-run 执行器；nil 用真实实现。
 	Runner Runner
 	// Root 报告 kored 是否 root；nil 用 os.Geteuid()==0。
@@ -75,6 +78,18 @@ func (s *Service) Confirm() *ConfirmStore { return s.confirm }
 //  5. 直接 exec 执行（不经 shell），超时 kill 整棵进程树，输出各截断 1 MiB；
 //  6. 执行后补一条 end 审计（带**真实** exit_code / dur_ms）。
 func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
+	// 两条互斥执行语义：file_write 声明 → 受控写（不 exec）；否则 → 固定 argv 执行。
+	// 互斥性由协议层 ValidateRootAction 保证（声明了 file_write 还带 argv 直接拒绝），
+	// 这里只按声明分派，不再二次推断。
+	if req.Action.FileWrite != nil {
+		return s.executeFileWrite(ctx, req)
+	}
+	if req.Content != "" {
+		// exec 动作不接受正文：允许它会让「同一请求一半走参数、一半走文件」的语义
+		// 无法审计。显式拒绝，不静默丢弃。
+		return Result{}, s.deny(ctx, req, "exec", "content_on_exec_action",
+			errCode(pluginapi.E_INVALID, "content 仅用于 file_write 动作，exec 动作不得携带正文", ""))
+	}
 	argv := append([]string(nil), req.Action.Argv...)
 	argv = append(argv, req.Args...)
 	argvText := RedactArgv(argv)

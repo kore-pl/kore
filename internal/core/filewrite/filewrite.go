@@ -21,7 +21,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 const (
@@ -33,12 +36,46 @@ const (
 	Mode0640 os.FileMode = 0o640
 )
 
+// CopyRootDirName 是写前备份根目录名（<install>/data/backups）——由本原语自己定义，
+// 装配层只拼 <stateDir>/CopyRootDirName，不在别处再抄一份目录名。
+const CopyRootDirName = "backups"
+
 // AllowedPrefixesV1 是 ADR-0028 一期白名单（只允许 drop-in 片段目录）。
 var AllowedPrefixesV1 = []string{
 	"/etc/ssh/sshd_config.d/",
 	"/etc/sysctl.d/",
 	"/etc/security/limits.d/",
 	"/etc/logrotate.d/",
+}
+
+// AllowedPrefixes 是默认白名单 = ADR-0028 一期目录 + ADR-0052 受控写类别目录。
+//
+// 类别目录**从协议类别派生**（`pluginapi.FileWritePrefixClasses`），不在内核里抄第二份
+// 目录清单——否则新增/调整类别时内核白名单会与协议静默漂移，而白名单本身是安全边界。
+// 目录字面量留在协议层（与 RootCommandPolicies 同层），内核只消费。
+var AllowedPrefixes = buildAllowedPrefixes()
+
+// buildAllowedPrefixes 组装默认白名单（V1 + 协议类别目录，去重保序）。
+func buildAllowedPrefixes() []string {
+	prefixes := make([]string, 0, len(AllowedPrefixesV1)+len(pluginapi.FileWritePrefixClasses))
+	seen := make(map[string]struct{}, cap(prefixes))
+	add := func(prefix string) {
+		if prefix == "" {
+			return
+		}
+		if _, dup := seen[prefix]; dup {
+			return
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
+	}
+	for _, prefix := range AllowedPrefixesV1 {
+		add(prefix)
+	}
+	for _, class := range pluginapi.FileWritePrefixClasses {
+		add(class.Dir)
+	}
+	return prefixes
 }
 
 // 错误码（与 ADR-0028 §2 失败模式一致，HTTP 层可原样映射）。
@@ -51,6 +88,8 @@ const (
 	CodeBadContent   = "E_BAD_CONTENT"
 	CodeCopyFailed   = "E_BACKUP_FAILED"
 	CodeAuditDenied  = "E_AUDIT_DENIED"
+	CodeOwnerDenied  = "E_OWNER_MISMATCH"
+	CodeBadDecl      = "E_BAD_DECL"
 	CodeIO           = "E_IO"
 )
 
@@ -93,8 +132,12 @@ type Options struct {
 	Mode            os.FileMode
 	CopyRoot        string
 	Auditor         Auditor
-	AllowedPrefixes []string // 默认 AllowedPrefixesV1；测试可注入临时前缀
-	Now             func() time.Time
+	AllowedPrefixes []string // 默认 AllowedPrefixes；测试可注入临时前缀
+	// OwnerCheck 在原子替换后复核属主/属组/权限位（K3 的 root:root 0644）。
+	// nil 表示调用方未装配：本原语不做属主校验（ADR-0028 一期口径保持兼容），
+	// 但按协议声明的写入口 WriteDeclared 强制要求非 nil（fail-closed）。
+	OwnerCheck func(path string, mode os.FileMode) error
+	Now        func() time.Time
 }
 
 // Result 是成功写入的观测结果。
@@ -127,7 +170,7 @@ func ValidatePath(path string, prefixes []string) (string, *Error) {
 		return "", newErr(CodeDeniedPath, "只允许写 .conf 片段，拒绝扩展名 %q（如 .sh 可执行脚本）", ext)
 	}
 	if len(prefixes) == 0 {
-		prefixes = AllowedPrefixesV1
+		prefixes = AllowedPrefixes
 	}
 	matched := false
 	for _, prefix := range prefixes {
@@ -235,6 +278,11 @@ func Write(opts Options) (Result, *Error) {
 	if perr != nil {
 		return Result{}, perr
 	}
+	// 同一路径的并发写必须串行：否则两次「备份 → 原子替换」交错时，
+	// 后一次可能备份到前一次的中间态，回滚链与审计的 previous_sha256 都会错。
+	// 锁在 checkNoSymlink 之前获取，把「检查 → 写」整段纳入同一临界区（TOCTOU）。
+	unlock := lockPath(clean)
+	defer unlock()
 	if perr := ValidateContent(opts.Content); perr != nil {
 		return Result{}, perr
 	}
@@ -256,7 +304,9 @@ func Write(opts Options) (Result, *Error) {
 	// 写前备份（失败即中止）。
 	copyPath := ""
 	previousSHA := ""
+	var previousMode os.FileMode
 	if info, err := os.Lstat(clean); err == nil {
+		previousMode = info.Mode().Perm()
 		previousSHA, perr = fileSHA256(clean)
 		if perr != nil {
 			return Result{}, perr
@@ -289,6 +339,17 @@ func Write(opts Options) (Result, *Error) {
 
 	if err := atomicWrite(clean, opts.Content, opts.Mode); err != nil {
 		return Result{}, newErr(CodeIO, "原子写失败：%v", err)
+	}
+	// 写入后属主/权限复核：setgid 目录、umask、挂载选项都可能让实际落盘属性偏离声明。
+	// 复核失败必须回滚——把一份属性不对的 root 配置文件留在宿主上比不写更危险。
+	if opts.OwnerCheck != nil {
+		if err := opts.OwnerCheck(clean, opts.Mode); err != nil {
+			rollbackErr := revertWrite(clean, copyPath, previousMode)
+			if rollbackErr != nil {
+				return Result{}, newErr(CodeOwnerDenied, "写入后属主/权限复核失败（%v），且回滚失败：%v", err, rollbackErr)
+			}
+			return Result{}, newErr(CodeOwnerDenied, "写入后属主/权限复核失败，已回滚：%v", err)
+		}
 	}
 	return Result{Path: clean, Size: len(opts.Content), Mode: uint32(opts.Mode), SHA256: digest, CopyPath: copyPath}, nil
 }
@@ -367,4 +428,79 @@ func copyFile(source, target string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// pathLocks 是进程内按绝对路径的互斥表（引用计数，无人使用即回收）。
+//
+// 为什么不是文件锁：kored 是单进程多 goroutine 模型，同一路径的并发写只可能来自
+// 同一进程；进程退出锁自然消失，不会留 .lock 文件污染 conf.d。
+var pathLocks = struct {
+	sync.Mutex
+	entries map[string]*pathLock
+}{entries: map[string]*pathLock{}}
+
+// pathLock 是一条路径的互斥量 + 使用者计数。
+type pathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockPath 获取路径锁并返回解锁函数；调用方必须 defer 调用返回值。
+func lockPath(path string) func() {
+	pathLocks.Lock()
+	entry, ok := pathLocks.entries[path]
+	if !ok {
+		entry = &pathLock{}
+		pathLocks.entries[path] = entry
+	}
+	entry.refs++
+	pathLocks.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		pathLocks.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(pathLocks.entries, path)
+		}
+		pathLocks.Unlock()
+	}
+}
+
+// revertWrite 在属主复核失败后把目标恢复原状：有备份则覆盖回去，新文件则删除。
+//
+// 回滚本身也可能失败（只读挂载、磁盘满），错误必须向上抛——不能把「回滚失败」
+// 吞成「写入被拒绝」，否则宿主上会留一份属性不对的文件而调用方以为已撤销。
+func revertWrite(target, copyPath string, mode os.FileMode) error {
+	if copyPath == "" {
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除新写入的文件失败：%w", err)
+		}
+		return syncDir(filepath.Dir(target))
+	}
+	content, err := os.ReadFile(copyPath)
+	if err != nil {
+		return fmt.Errorf("读取备份失败：%w", err)
+	}
+	if mode == 0 {
+		mode = Mode0644
+	}
+	if err := atomicWrite(target, content, mode); err != nil {
+		return fmt.Errorf("用备份覆盖目标失败：%w", err)
+	}
+	return nil
+}
+
+// syncDir 对目录做一次 fsync（rename/remove 之后落盘顺序的保证）。
+func syncDir(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	if err := handle.Sync(); err != nil {
+		return err
+	}
+	return nil
 }

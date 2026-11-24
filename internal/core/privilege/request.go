@@ -20,7 +20,10 @@ type Request struct {
 	// Action 是清单里的动作（argv 固定）。
 	Action Action
 	// Args 是追加参数（可为空）；长度与字符集在 Execute 内校验。
+	// file_write 动作只允许一个元素：单层文件名（目录由类别定义，插件不能给）。
 	Args []string
+	// Content 是 file_write 动作的正文（UTF-8；exec 动作必须为空）。
+	Content string
 	// Confirm 是不可回滚动作的一次性令牌。
 	Confirm string
 }
@@ -44,6 +47,22 @@ type Result struct {
 	Truncated bool `json:"truncated,omitempty"`
 	// HostChangeRecorded 表示写宿主动作已追加到 changes.jsonl（仅 writes_host 成功时可能为 true）。
 	HostChangeRecorded bool `json:"host_change_recorded,omitempty"`
+	// FileWrite 是受控写的观测结果（仅 file_write 动作非 nil）。
+	FileWrite *FileWriteResult `json:"file_write,omitempty"`
+}
+
+// FileWriteResult 是一次受控写的观测结果（不记全文，只记哈希与元数据）。
+type FileWriteResult struct {
+	// Path 是实际落盘的绝对路径。
+	Path string `json:"path"`
+	// Size 是写入字节数。
+	Size int `json:"size"`
+	// Mode 是落盘权限位（0644 的十进制值）。
+	Mode uint32 `json:"mode"`
+	// SHA256 是写入内容的哈希。
+	SHA256 string `json:"sha256"`
+	// CopyPath 是写前备份路径；新文件为空。
+	CopyPath string `json:"copy_path,omitempty"`
 }
 
 // Auditor 是审计出口，由装配层注入（写 store.PutAudit）；nil 表示不审计，
