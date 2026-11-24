@@ -3,7 +3,9 @@
    方法段一律写完整限定名 ssl.*，裸动词只是插件侧兼容，不得依赖。
    window.KoreSsl.render(container) 调 ssl 插件：ssl.list / ssl.selfsign / ssl.import /
    ssl.renew / ssl.verify / ssl.expiring / ssl.renew.set / ssl.acme.status / ssl.acme.issue /
-   ssl.acme.builtin.status / ssl.acme.builtin.issue / ssl.acme.auto（内置 ACME，0.5.0 起默认主推）。
+   ssl.acme.builtin.status / ssl.acme.builtin.issue / ssl.acme.auto（内置 ACME，0.5.0 起默认主推）；
+   另含 ssl.bind.list / ssl.bind.set / ssl.bind.remove（证书→站点归属登记，只登记不写站点配置）
+   与 ssl.config.get / set（经 KoreShell.openConfig 通用配置面板）。
    自动续期不在插件里创建任务：前端把 ssl.renew.set / ssl.acme.auto 给的 task 原样
    POST 到内核 ADR-0019 的 /api/v1/scheduler/tasks（插件无权调内核 API）。
    ACME 两条路线并存、互不互斥：①内置（默认，标准库 RFC8555，零外部依赖）；
@@ -29,7 +31,9 @@
       autoEnabled: null, autoDays: null, autoCA: null, autoWebroot: null, autoEmail: null,
       autoConfirm: null, autoSubmit: null, autoResultHost: null, autoResult: null,
       httpsDomain: null, httpsAutoNote: null, httpsStatus: null, httpsStatusHost: null,
-      httpsCheckBtn: null, httpsBtnOn: null, httpsBtnOff: null, httpsUserEdited: false };
+      httpsCheckBtn: null, httpsBtnOn: null, httpsBtnOff: null, httpsUserEdited: false,
+      bindings: null, bindCert: null, bindSite: null, bindNote: null, bindSubmit: null,
+      bindHost: null, bindResult: null, bindResultHost: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -178,6 +182,129 @@
       st.title = '创建内核任务：每天 03:00 检查，到期前 30 天才重签';
       on(st, function () { setupRenew(cert.domain, st); });
     });
+  }
+  // ---- 证书归属登记（ssl.bind.list / bind.set / bind.remove）----
+  // 后端 0.4.0 已实现但前端此前无入口：本插件只登记「证书 → 站点」归属并给出
+  // site.bindSSL 载荷，不写 web 服务器配置；真正绑定证书/开启跳转由 site 插件完成（G-13）。
+  function fillBindCertOptions() {
+    if (!S.bindCert) return;
+    var current = S.bindCert.value;
+    S.bindCert.textContent = '';
+    var placeholder = el('option', null, '选择一张已有证书');
+    placeholder.value = ''; S.bindCert.appendChild(placeholder);
+    (S.certs || []).forEach(function (cert) {
+      if (!cert.domain) return;
+      var opt = el('option', null, cert.domain + (cert.error ? '（解析失败）' : ''));
+      opt.value = cert.domain; S.bindCert.appendChild(opt);
+    });
+    if (current && (S.certs || []).some(function (c) { return c.domain === current; })) S.bindCert.value = current;
+  }
+  function loadBindings() {
+    return invoke('ssl.bind.list', {}).then(function (data) {
+      if (S.destroyed) return;
+      S.bindings = data || {}; paintBindings();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.bindings = { __error: errText(err) }; paintBindings();
+    });
+  }
+  function paintBindings() {
+    if (!S.bindHost) return;
+    var host = S.bindHost; host.textContent = '';
+    var data = S.bindings;
+    if (!data) { add(host, el('span', 'muted', '正在读取证书归属登记…')); return; }
+    if (data.__error) {
+      add(host, el('div', 'row-note-fail', '读取归属失败：' + data.__error +
+        '。请点刷新重试；若反复失败，确认 ssl 插件版本 ≥0.4.0。'));
+      return;
+    }
+    var rows = data.bindings || [];
+    if (!rows.length) {
+      var empty = add(host, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-text',
+        '还没有证书与站点的归属登记。先在下方创建自签证书或导入已有证书，再登记它属于哪个站点。'));
+      return;
+    }
+    var scroll = add(host, el('div', 'ssl-table-host'));
+    var table = add(scroll, el('table', 'ssl-table'));
+    table.setAttribute('aria-label', '证书归属登记');
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['证书', '站点', '证书 / 私钥路径', '备注', '登记时间', '操作'].forEach(function (label) {
+      add(htr, el('th', null, label));
+    });
+    var body = add(table, el('tbody'));
+    rows.forEach(function (b) {
+      var tr = add(body, el('tr'));
+      var certCell = add(tr, el('td', 'ssl-domain')); certCell.dataset.label = '证书';
+      add(certCell, el('span', 'ssl-domain-name', b.cert || '—'));
+      if (b.cert_exists === false) add(certCell, el('span', 'ssl-expired', '证书已不在目录'));
+      var siteCell = add(tr, el('td')); siteCell.dataset.label = '站点';
+      add(siteCell, el('code', 'ssl-verify-host', b.site || '—'));
+      var pathCell = add(tr, el('td')); pathCell.dataset.label = '证书 / 私钥路径';
+      var pc = add(pathCell, el('code', 'ssl-fp', b.cert_path || '—')); pc.title = b.cert_path || '';
+      var pk = add(pathCell, el('code', 'ssl-fp', b.key_path || '—')); pk.title = b.key_path || '';
+      var noteCell = add(tr, el('td', null, b.note || '—')); noteCell.dataset.label = '备注';
+      var timeCell = add(tr, el('td', null, fmtTime(b.updated_at || b.created_at))); timeCell.dataset.label = '登记时间';
+      var ops = add(tr, el('td', 'cell-ops ssl-ops')); ops.dataset.label = '操作';
+      var rm = add(ops, el('button', 'btn btn-ghost', '解除归属')); rm.type = 'button';
+      rm.style.minHeight = 'var(--kore-touch)';
+      on(rm, function () { removeBind(b.cert, b.site, rm); });
+    });
+    add(host, el('p', 'field-hint', (data.hint || '') + '（共 ' + (data.count || rows.length) + ' 条）'));
+  }
+  function paintBindResult() {
+    if (!S.bindResultHost) return;
+    var host = S.bindResultHost; host.textContent = '';
+    var r = S.bindResult;
+    if (!r) return;
+    var b = r.binding || {}, sa = r.site_bind || {}, sp = sa.params || {};
+    var line = add(host, el('div', 'ssl-verify-line'));
+    line.appendChild(chip('ok', r.created ? '已登记' : '已存在（备注已更新）'));
+    add(line, el('span', null, '证书 ' + (b.cert || '—') + ' → 站点 ' + (b.site || '—')));
+    add(host, el('div', 'field-hint',
+      '下一步：到网站页执行 ' + (sa.plugin || 'site') + '.' + (sa.method || 'bindSSL') +
+      '，参数 domain=' + (sp.domain || '—') + '、cert_path=' + (sp.cert_path || '—') +
+      '、key_path=' + (sp.key_path || '—') + '，force_https=true 会同时开启 80→443 跳转。'));
+    if (r.hint) add(host, el('div', 'field-hint', r.hint));
+    if (r.https) add(host, el('div', 'muted', 'HTTPS 判定：' + (r.https.verdict || '—')));
+  }
+  function submitBind(ev) {
+    ev.preventDefault();
+    var cert = (S.bindCert.value || '').trim().toLowerCase();
+    var site = S.bindSite.value.trim().toLowerCase();
+    if (!cert) { setStatus('请选择要登记的证书；没有证书时先创建自签证书或导入', 'fail'); return; }
+    if (!site) { setStatus('请填写站点域名（这张证书要挂在哪个站点）', 'fail'); return; }
+    var params = { cert: cert, site: site };
+    var note = S.bindNote.value.trim();
+    if (note) params.note = note;
+    S.bindSubmit.disabled = true;
+    setStatus('正在登记 ' + cert + ' → ' + site + ' 的归属（只写本插件，不改站点配置）…');
+    invoke('ssl.bind.set', params).then(function (r) {
+      if (S.destroyed) return;
+      S.bindResult = r; paintBindResult();
+      setStatus('已登记 ' + cert + ' → ' + site + '；下一步请到网站页完成实际绑定', 'ok');
+      S.bindNote.value = '';
+      return loadBindings();
+    }, function (err) {
+      if (!S.destroyed) setStatus('登记失败：' + errText(err) +
+        '。一张证书只能属于一个站点；若已有归属，先解除再登记。', 'fail');
+    }).then(function () {
+      if (S.bindSubmit && !S.destroyed) S.bindSubmit.disabled = false;
+    });
+  }
+  function removeBind(cert, site, btn) {
+    if (!cert || !site) return;
+    if (btn) btn.disabled = true;
+    setStatus('正在解除 ' + cert + ' → ' + site + ' 的归属…');
+    invoke('ssl.bind.remove', { cert: cert, site: site }).then(function (r) {
+      if (S.destroyed) return;
+      setStatus('已解除 ' + (r.removed || 0) + ' 条归属；站点侧绑定请到网站页用 site.unbindSSL 解除' +
+        (r.hint ? '｜' + r.hint : ''), 'ok');
+      S.bindResult = null; paintBindResult();
+      return loadBindings();
+    }, function (err) {
+      if (!S.destroyed) setStatus('解除失败：' + errText(err), 'fail');
+    }).then(function () { if (btn && !S.destroyed) btn.disabled = false; });
   }
   function paintVerify() {
     if (!S.verifyOutHost) return;
@@ -608,11 +735,11 @@
     if (!quiet) setStatus('正在读取证书列表…');
     return invoke('ssl.list', {}).then(function (data) {
       if (S.destroyed) return;
-      S.certs = data.certs || []; paintCerts(); fillHTTPSFromCerts();
+      S.certs = data.certs || []; paintCerts(); fillHTTPSFromCerts(); fillBindCertOptions();
       if (!quiet) setStatus('共 ' + S.certs.length + ' 张证书；验证只做真实 TLS 握手，不改任何文件', 'ok');
     }, function (err) {
       if (S.destroyed) return;
-      setStatus('读取失败：' + errText(err), 'fail'); S.certs = []; paintCerts();
+      setStatus('读取失败：' + errText(err), 'fail'); S.certs = []; paintCerts(); fillBindCertOptions();
     });
   }
   function verify() {
@@ -685,12 +812,23 @@
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', 'SSL 证书'));
     add(head, el('p', 'view-sub', '到期告警、自签 / 导入 / 自动续期与真实 TLS 握手验证；ACME 有内置（默认推荐，零外部依赖）与外部客户端两条路线，均需手动确认。'));
+    // 统一配置面板入口（ssl.config.get / set，0.8.0 后端已实现）：与 waf 页同口径。
+    var headOps = add(head, el('div', 'actions'));
+    var cfgBtn = add(headOps, el('button', 'btn btn-ghost', '插件设置')); cfgBtn.type = 'button';
+    cfgBtn.style.minHeight = 'var(--kore-touch)'; cfgBtn.style.minWidth = 'var(--kore-touch)';
+    on(cfgBtn, function () {
+      if (window.KoreShell && typeof window.KoreShell.openConfig === 'function') {
+        window.KoreShell.openConfig(root, 'ssl', { title: 'SSL 与 ACME 设置', onSaved: function () {
+          loadBuiltinStatus(); loadACME(); load(true); loadExpiry();
+        } });
+      } else { setStatus('配置面板未加载，请刷新页面后重试', 'fail'); }
+    });
     var bar = add(root, el('div', 'ssl-toolbar')), vbox = add(bar, el('div', 'ssl-verify-box'));
     S.verifyHost = add(vbox, input('text', 'ssl-verify-input', 'host 或 host:port（如 127.0.0.1:443）'));
     S.verifyHost.setAttribute('aria-label', '验证目标 host 或 host:port');
     var vbtn = add(vbox, el('button', 'btn btn-primary', '验证')); vbtn.type = 'button'; on(vbtn, verify);
     var refresh = add(bar, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
-    on(refresh, function () { load(false); loadExpiry(); loadBuiltinStatus(); loadACME(); loadHTTPS(true); });
+    on(refresh, function () { load(false); loadExpiry(); loadBindings(); loadBuiltinStatus(); loadACME(); loadHTTPS(true); });
     S.status = add(root, el('div', 'ssl-status muted')); S.status.setAttribute('role', 'status');
     S.expiryHost = add(root, el('div', 'ssl-expiry-host'));
     S.expiryActions = add(root, el('div', 'ssl-expiry-actions')); S.expiryActions.hidden = true;
@@ -698,6 +836,27 @@
     var list = panel(root, '证书列表');
     S.count = list.querySelector('.panel-head').appendChild(el('span', 'panel-meta', ''));
     S.certHost = add(list, el('div', 'ssl-certs'));
+
+    // 证书归属登记（0.4.0 后端已实现、此前前端无入口）：证书 → 站点一对一，
+    // 只在本插件登记并给出 site.bindSSL 载荷；实际绑定由网站页完成。
+    var bind = panel(root, '证书归属（站点绑定）', '登记后到网站页完成实际绑定');
+    S.bindHost = add(bind, el('div', 'ssl-certs'));
+    var bindForm = add(bind, el('form', 'ssl-form'));
+    S.bindCert = el('select', 'field-input span2');
+    S.bindCert.setAttribute('aria-label', '要登记的证书域名');
+    field(bindForm, '证书', S.bindCert, 'span2');
+    S.bindSite = input('text', 'span2', 'www.example.com');
+    S.bindSite.setAttribute('aria-label', '站点域名');
+    field(bindForm, '站点域名', S.bindSite, 'span2');
+    S.bindNote = input('text', 'span2', '可选：用途备注（最多 200 字）');
+    field(bindForm, '备注（可选）', S.bindNote, 'span2');
+    S.bindSubmit = add(bindForm, el('button', 'btn btn-primary ssl-submit span2', '登记归属'));
+    S.bindSubmit.type = 'submit';
+    S.bindSubmit.style.minHeight = 'var(--kore-touch)'; S.bindSubmit.style.minWidth = 'var(--kore-touch)';
+    add(bindForm, el('p', 'field-hint span2',
+      '一张证书只能属于一个站点。这里只在本插件登记归属，不改站点配置；实际绑定请在网站页用给出的 site.bindSSL 载荷操作。'));
+    bindForm.addEventListener('submit', submitBind);
+    S.bindResultHost = add(bind, el('div', 'ssl-verifyresult'));
 
     // 强制 HTTPS 卡片：域名自动填第一张证书，按钮/触摸目标内联 44px 不依赖样式文件（写域约束）。
     var enforce = panel(root, '强制 HTTPS', '让网站自动从 http 跳到 https');
@@ -836,7 +995,7 @@
     if (!container) return null;
     S = fresh(); container.textContent = '';
     var root = add(container, el('section', 'ssl'));
-    build(root); load(false); loadExpiry(); loadBuiltinStatus(); loadACME();
+    build(root); load(false); loadExpiry(); loadBuiltinStatus(); loadACME(); loadBindings();
     return { destroy: function () { S.destroyed = true; S.keyPEM = ''; } };
   }
   window.KoreSsl = { render: render };
