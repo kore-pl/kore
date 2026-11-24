@@ -53,6 +53,10 @@ type Options struct {
 	AuditCleanInterval time.Duration
 	// AuditCleanBatch 对应配置 audit.clean_batch：单次删除上限（默认 1000）。
 	AuditCleanBatch int
+	// LogsMaintainInterval 是日志自动维护（切割+清理）周期：0 取默认 6h（默认启用），
+	// 负值表示不注册该任务。默认启用是产品决策：日志无界增长是真实运维问题，
+	// 装完不配就该有人负责切割与清理（G-19：周期仍只来自本调度器的单 ticker）。
+	LogsMaintainInterval time.Duration
 }
 
 // Service 是内核唯一的周期执行器：单实例、单 ticker、任务表在 state.db。
@@ -72,6 +76,8 @@ type Service struct {
 	auditRetention time.Duration
 	auditInterval  time.Duration
 	auditBatch     int
+	// logsMaintainInterval 是日志自动维护任务周期；<0 表示禁用。
+	logsMaintainInterval time.Duration
 	// baseCtx 是调度循环的生命周期根：不能绑定请求 ctx（响应写完即取消，ticker 会秒退）。
 	baseCtx context.Context
 
@@ -92,11 +98,12 @@ func New(opts Options) (*Service, error) {
 		store: opts.Store, invoker: opts.Invoker, builtin: opts.Builtin,
 		log: opts.Logger, now: opts.Now, tick: opts.Tick,
 		certEnabled: opts.CertRenewEnabled, certInterval: opts.CertRenewInterval,
-		auditEnabled:   opts.AuditCleanEnabled && opts.AuditRetention > 0,
-		auditRetention: opts.AuditRetention,
-		auditInterval:  opts.AuditCleanInterval,
-		auditBatch:     opts.AuditCleanBatch,
-		baseCtx:        context.Background(), running: map[string]bool{},
+		auditEnabled:         opts.AuditCleanEnabled && opts.AuditRetention > 0,
+		auditRetention:       opts.AuditRetention,
+		auditInterval:        opts.AuditCleanInterval,
+		auditBatch:           opts.AuditCleanBatch,
+		logsMaintainInterval: opts.LogsMaintainInterval,
+		baseCtx:              context.Background(), running: map[string]bool{},
 	}
 	if service.log == nil {
 		service.log = slog.Default()
@@ -115,6 +122,10 @@ func New(opts Options) (*Service, error) {
 	}
 	if service.auditBatch <= 0 {
 		service.auditBatch = 1000
+	}
+	// 0 = 未配置 → 默认 6h（默认启用）；只有显式负值才表示禁用。
+	if service.logsMaintainInterval == 0 {
+		service.logsMaintainInterval = defaultLogsMaintainInterval * time.Second
 	}
 	return service, nil
 }
@@ -182,6 +193,9 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	if err := s.syncAuditCleanTask(); err != nil {
+		return err
+	}
+	if err := s.syncLogsMaintainTask(); err != nil {
 		return err
 	}
 	tasks, err := s.loadTasks()

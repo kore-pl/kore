@@ -316,6 +316,8 @@ curl -fsS http://127.0.0.1:8787/-/healthz    # 期望 {"status":"ok"}
 
 **取舍如实记录**：原设计意图是「启动时 + 写路径惰性触发、零后台定时器」。改为 scheduler 内置任务后，默认配置（`audit.clean_enabled: true`）下调度器会常驻一个 ticker——这是为解决审计无界增长刻意接受的代价，仍在 ADR-0019 的单 ticker 白名单内；要严格零 ticker 可设 `audit.clean_enabled: false`（代价是审计重新无界增长）。
 
+**日志切割与清理（插件任务，默认启用）**：日志文件的切割与清理是**插件业务**，内核只负责"到点调一次"。scheduler 注册一条**插件任务** `builtin-logs-maintain`（`plugin=logs`、`method=logs.maintain`、`interval_s=21600` 即 6h，默认启用），到点经插件调用面调用 `logs.maintain`，由 `kore-plugin-logs` 按出厂预设执行「按天/按大小切割 → 按策略清理」。默认值：按天切割、单文件 100 MiB 切割、保留 30 天 / 30 份 / 1024 MiB（依据：宝塔站点日志默认 30 天、1Panel logrotate 模板 `maxsize 100M` + `daily`）。切割用 copytruncate（写方无需重载）。**不新增 ticker**：复用同一单 ticker；插件内部没有任何 `time.NewTicker` / `time.AfterFunc` / 周期 goroutine（G-19）。插件未安装时任务照样保留，到点执行落一条 `failed` 的 `scheduler_runs`（`E_NOTFOUND`），不静默跳过。要禁用：把该任务 `enabled=false`（或装配期给 `scheduler.Options.LogsMaintainInterval` 传负值），代价是日志重新无界增长。
+
 **单次上限与失败隔离**：单次最多删 `audit.clean_batch` 条（默认 1000，硬顶 10000）；未删完时结果 `more=true`，下个周期继续，避免一次长事务。删除只走 `Store.CleanAudit` 的单个写事务（游标升序，遇到第一条未过期记录即停）；键无法解析出年龄的坏键**不删**（不猜）。清理失败（参数非法 / 事务失败）只落一条 `failed` 的 `scheduler_runs` 记录 + WARN 日志，不阻塞调度、不影响其他任务；读取路径（`GET /api/v1/audit`、`kored audit`）不受影响。
 
 **可观测**：每次清理写一条审计 `action=audit.clean`（`subject=system`、`target=audit`、`result=ok|error`，detail=`{deleted,more,batch,retention_seconds[,error]}`）+ 一条 INFO 日志（deleted / more / retention_seconds / batch / cutoff）。审计写入失败只 WARN，不反向破坏清理。
