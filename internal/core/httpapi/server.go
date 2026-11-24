@@ -305,6 +305,8 @@ type Server struct {
 	alerts AlertSink
 	// webhooks 是用户配置的通知通道注册表；默认空表 = 零出站。
 	webhooks *webhookRegistry
+	// logAlerts 是日志关键字告警规则注册表；默认空表 = 零规则、零扫描（G-19）。
+	logAlerts *logAlertRegistry
 	// channelServer 是独立通道 socket 的服务端；nil 表示未启用通道。
 	channelServer *http.Server
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
@@ -336,11 +338,17 @@ func New(opts Options, transport platform.Transport) *Server {
 	if server.webhooks == nil {
 		server.webhooks = newWebhookRegistry()
 	}
+	if server.logAlerts == nil {
+		server.logAlerts = newLogAlertRegistry()
+	}
 	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {
 		server.capResolver = defaultCapabilityResolver
 	}
 	server.routes()
+	// 日志告警路由（R23）：不写 handlers.go 的 routes()（并行写域），在此独立注册；
+	// Go 1.22 ServeMux 按最长前缀匹配，与注册顺序无关，"/" 兜底不会吞掉更具体的路径。
+	server.registerLogAlertRoutes()
 	// 主壳静态三件套：精确路径注册，优先于 routes() 里的 "/" 404 兜底。
 	// 面板壳无敏感数据，走鉴权白名单（middleware.isPublicPath）；API 仍全量鉴权。
 	server.staticRoutes()
