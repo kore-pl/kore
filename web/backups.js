@@ -2,7 +2,7 @@
    调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/backup/backup.list）；
    方法段一律写完整限定名 backup.*，裸动词只是插件侧兼容，不得依赖。
    window.KoreBackup.render(container) 调 backup 插件：
-   backup.create / .list / .verify / .restore / .delete / .retention / .stats。
+   backup.create / .presets / .list / .verify / .restore / .delete / .retention / .stats。
    定时备份不在插件里实现：前端直接调内核 ADR-0019 的 /api/v1/scheduler/tasks，
    创建 backup.create（打包）+ backup.retention（1 分钟后清理）两条任务。
    恢复/删除/清理与任务删除一律走页面内二次确认面板（不用 window.confirm）。 */
@@ -29,6 +29,8 @@
     return { root: null, backups: [], destroyed: false, status: null, result: null, resultHost: null,
       confirm: null, confirmHost: null, confirmMsg: null, busy: false, name: null, paths: null,
       exclude: null, compression: null, submit: null, dims: null,
+      presetList: [], presetDefault: '', presetSelected: '', presetHost: null, presetMsg: null,
+      presetDb: null, presetDbField: null,
       jobs: [], jobsHost: null, jobsMsg: null,
       progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       stats: null, summaryHost: null, listHost: null, count: null,
@@ -318,6 +320,111 @@
     if (!box) return out;
     box.querySelectorAll('input[type=checkbox]').forEach(function (cb) { if (cb.checked) out.push(cb.value); });
     return out;
+  }
+
+  // ---- 备份预设（backup.presets；产品原则①：预设优先，自定义兜底） ----
+  // 契约（读自 ../kore-plugin-backup/internal/backupop/preset.go:143-167，不猜）：
+  //   入参 {}；出参 { default_preset, presets:[{ id, label, description,
+  //   fields:[{key,label,type,required,help}],
+  //   expanded:{name,dimensions,paths,exclude,compression,requires_database} }],
+  //   retention_presets:[{id,label,keep,schedule,rationale}], hint }。
+  // 选中预设 → 把 expanded 填进新建表单；填完仍可手改（后端 create 只补空字段）。
+  // db 预设需要 db.database：条件显示库名输入，提交时按 createParams.db={database} 传。
+  function findPreset(id) {
+    var found = null;
+    S.presetList.forEach(function (p) { if (p && p.id === id) found = p; });
+    return found;
+  }
+  function loadPresets() {
+    if (!S.presetHost) return;
+    S.presetHost.textContent = '正在读取备份预设…';
+    S.presetHost.className = 'bak-presets loading muted';
+    invoke('backup.presets', {}).then(function (data) {
+      if (S.destroyed) return;
+      S.presetList = Array.isArray(data.presets) ? data.presets : [];
+      S.presetDefault = data.default_preset || '';
+      paintPresets();
+      // 默认预设自动套用：用户零点击也能拿到一份可提交的参数（预设优先）。
+      var initial = findPreset(S.presetDefault) || S.presetList[0];
+      if (initial) applyPreset(initial, true);
+    }, function (err) {
+      if (S.destroyed) return;
+      S.presetList = [];
+      paintPresets(err);
+    });
+  }
+  function setPresetMsg(text, tone) {
+    if (!S.presetMsg) return;
+    S.presetMsg.textContent = text || '';
+    S.presetMsg.className = 'bak-preset-msg ' + (tone === 'fail' ? 'row-note-fail' : tone === 'ok' ? 'row-note-ok' : 'muted');
+  }
+  function paintPresets(err) {
+    if (!S.presetHost) return;
+    S.presetHost.textContent = '';
+    S.presetHost.className = 'bak-presets';
+    if (err) {
+      if (window.KoreUI && typeof window.KoreUI.errorBlock === 'function') {
+        S.presetHost.appendChild(window.KoreUI.errorBlock(err, {
+          title: '预设没能读出来',
+          action: '刷新页面重试，或直接跳过预设在下方手动填写备份参数',
+          onRetry: loadPresets, retryLabel: '重新读取预设'
+        }));
+      } else {
+        add(S.presetHost, el('p', 'row-note-fail', '预设读取失败。怎么办：刷新页面重试，或在下方手动填写备份参数。'));
+      }
+      return;
+    }
+    if (!S.presetList.length) {
+      add(S.presetHost, el('p', 'empty-state-text', '当前没有可用的备份预设。怎么办：在下方手动填写参数也能正常创建备份。'));
+      return;
+    }
+    var row = add(S.presetHost, el('div', 'bak-preset-row'));
+    row.setAttribute('role', 'group'); row.setAttribute('aria-label', '备份预设');
+    S.presetList.forEach(function (p) {
+      var b = add(row, el('button', 'btn btn-ghost bak-preset', p.label || p.id));
+      b.type = 'button';
+      b.dataset.id = p.id || '';
+      b.title = p.description || '';
+      b.setAttribute('aria-pressed', S.presetSelected === p.id ? 'true' : 'false');
+      if (S.presetSelected === p.id) b.classList.add('bak-preset-active');
+      on(b, function () { applyPreset(p, false); });
+    });
+  }
+  // applyPreset 把预设展开结果填进新建表单；silent=true 是默认预设自动套用，不抢焦点。
+  function applyPreset(p, silent) {
+    if (!p) return;
+    var expanded = p.expanded || {};
+    S.presetSelected = p.id || '';
+    if (S.name) S.name.value = expanded.name || S.presetSelected;
+    if (S.compression) S.compression.value = expanded.compression || 'gzip';
+    if (S.paths) S.paths.value = (expanded.paths || []).join('\n');
+    if (S.exclude) S.exclude.value = (expanded.exclude || []).join(', ');
+    if (S.dims) {
+      var wanted = expanded.dimensions || [];
+      S.dims.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+        cb.checked = wanted.indexOf(cb.value) >= 0;
+      });
+    }
+    var needsDb = !!(expanded.requires_database || (p.fields || []).some(function (f) { return f && f.required && f.key === 'db.database'; }));
+    if (S.presetDbField) S.presetDbField.hidden = !needsDb;
+    paintPresets();
+    var dimsNow = expanded.dimensions || [];
+    var noPaths = dimsNow.indexOf('site') >= 0 && !(expanded.paths || []).length;
+    var desc = p.description ? p.description + '。' : '';
+    var msg, tone;
+    if (needsDb) {
+      msg = desc + '还需填写数据库名。'; tone = null;
+    } else if (noPaths) {
+      // callPresets 在本机没找到可备份目录时仍列出预设、但 paths 留空（preset.go:367-370）。
+      // 必须给出可操作下一步，不能让用户以为"填好了"就点创建然后撞校验错误。
+      msg = desc + '本预设要备份的目录在本机没找到，请在下方「路径列表」手动填写实际路径（可到「设置 → 允许的根路径」加入目录）。';
+      tone = 'fail';
+    } else {
+      msg = desc + '参数已自动填好，仍可自行修改。'; tone = 'ok';
+    }
+    if (!silent) msg += ' 已选用「' + (p.label || p.id) + '」。';
+    setPresetMsg(msg, tone);
+    if (!silent && S.presetDbField && needsDb && S.presetDb) S.presetDb.focus();
   }
 
   // ---- 下载（download 分块 → Blob，同 logs/files 通道） ----
@@ -758,10 +865,22 @@
     if (!name) { setStatus('请填写备份名称', 'fail'); return; }
     if (!dims.length) { setStatus('请至少选择一个备份对象（站点目录 / MySQL 数据库）', 'fail'); return; }
     if (!paths.length && dims.indexOf('site') >= 0) { setStatus('选择了站点目录时请至少填写一个路径（每行一个）', 'fail'); return; }
+    var params = { name: name, dimensions: dims, paths: paths, exclude: exclude, compression: S.compression.value };
+    // 预设 id 随参数回传（后端 create 只补未填字段）；若用户把 db 预设的库维度改掉了，
+    // 视为自定义兜底覆盖预设，不再传 preset，避免后端按预设强校验 db.database 而卡住。
+    var chosen = findPreset(S.presetSelected), presetId = S.presetSelected;
+    if (chosen && chosen.expanded && chosen.expanded.requires_database && dims.indexOf('db') < 0) presetId = '';
+    if (presetId) params.preset = presetId;
+    // db 维度（含 db 预设）：库名来自预设选择区旁的库名输入；连接信息由插件配置提供。
+    if (dims.indexOf('db') >= 0) {
+      var database = S.presetDb ? S.presetDb.value.trim() : '';
+      if (!database) { setStatus('选择了数据库备份时请填写数据库名（在上方预设区旁的输入框）', 'fail'); return; }
+      params.db = { database: database };
+    }
     S.busy = true; S.submit.disabled = true;
     setStatus('正在打包 ' + name + '（' + dims.join(' + ') + '，' + S.compression.value + '）…');
     startProgress(name);
-    invoke('backup.create', { name: name, dimensions: dims, paths: paths, exclude: exclude, compression: S.compression.value })
+    invoke('backup.create', params)
       .then(function (data) {
         S.busy = false; S.submit.disabled = false; stopProgress();
         setProgress('ok', '备份完成 · ' + fmtSize(data.size_bytes) + ' · ' + data.entries + ' 条目', '校验值 ' + String(data.sha256 || '').slice(0, 12) + '');
@@ -807,6 +926,16 @@
       '.bak-ret-note{margin:var(--kore-space-2) 0 0;color:var(--kore-text-3);}',
       '.bak-dims{display:flex;flex-wrap:wrap;gap:var(--kore-space-3);padding:var(--kore-space-2) 0;}',
       '.bak-dim{display:inline-flex;align-items:center;gap:6px;min-height:44px;font-size:var(--kore-font-13);}',
+      '.bak-preset-box{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-3);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-container);}',
+      '.bak-preset-box .field-label{margin:0;font-weight:600;}',
+      '.bak-preset-box .field-hint{margin:0;}',
+      '.bak-presets{font-size:var(--kore-font-12);}',
+      '.bak-presets.loading{padding:var(--kore-space-2) 0;}',
+      '.bak-preset-row{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);}',
+      '.bak-preset{min-height:44px;padding:8px 14px;touch-action:manipulation;}',
+      '.bak-preset-active{background:var(--kore-info);color:var(--kore-bg-1);border-color:var(--kore-info);}',
+      '.bak-preset-msg{min-height:18px;margin:0;font-size:var(--kore-font-12);word-break:break-word;}',
+      '.bak-preset-box .bak-preset-msg[hidden],.bak-preset-box [hidden]{display:none;}',
       '.bak-progress{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4);border-bottom:1px solid var(--kore-border-2);background:var(--kore-bg-1);font-size:var(--kore-font-12);}',
       '.bak-progress[hidden]{display:none;}',
       '.bak-progress-phase{font-weight:600;color:var(--kore-text-1);flex:1 1 220px;}',
@@ -838,7 +967,16 @@
     S.status = add(root, el('div', 'bak-status muted')); S.status.setAttribute('role', 'status');
     ensureProgress();
     S.confirmHost = add(root, el('div', 'bak-confirm-host'));
-    var create = panel(root, '新建备份', 'gzip 或无压缩 tar'), form = add(create, el('form', 'bak-form'));
+    var create = panel(root, '新建备份', '选预设一键填好，或手动填写'), form = add(create, el('form', 'bak-form'));
+    // 预设选择区（预设优先）：列出 backup.presets；选中后自动填参数，下面字段仍可改（自定义兜底）。
+    var presetBox = add(form, el('div', 'bak-preset-box span2'));
+    add(presetBox, el('p', 'field-label', '从预设开始（可选）'));
+    add(presetBox, el('p', 'field-hint', '选一个预设会自动填好下面的参数；想要别的范围，直接改就行。'));
+    S.presetHost = add(presetBox, el('div', 'bak-presets loading muted', '正在读取备份预设…'));
+    S.presetMsg = add(presetBox, el('p', 'bak-preset-msg muted'));
+    S.presetDb = input('text', null, '例：wordpress');
+    S.presetDbField = field(presetBox, '数据库名（数据库备份时必填）', S.presetDb);
+    S.presetDbField.hidden = true;
     S.name = input('text', 'span2', 'site-20261122'); field(form, '名称', S.name, 'span2');
     S.paths = textarea(4, '/var/www/site\n/etc/kore'); field(form, '路径列表（每行一个）', S.paths, 'span2');
     S.exclude = input('text', 'span2', '*.log, node_modules（可选，glob）'); field(form, '排除 glob（可选）', S.exclude, 'span2');
@@ -914,6 +1052,7 @@
     var root = add(container, el('section', 'backups'));
     build(root);
     loadVerifySupport();
+    loadPresets();
     loadList(false); loadStats(); loadTasks(true); loadJobs(true);
     return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
