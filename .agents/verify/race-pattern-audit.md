@@ -64,7 +64,7 @@ grep -rE 'Flock|LOCK_EX|sync\.Mutex|\.Lock\(\)' kore-plugin-dns --include='*.go'
 | dns | `internal/dnsop/write_engine.go:354-371`（核心 `:359`） | 固定临时名 + RMW | **无**（全仓零锁原语） | **P2** | 以旁路 flock 包住 read→apply→write 为主（锁挂旁路 `.lock`，不挂片段本身，否则 rename 后 inode 更替锁失效）；唯一临时名 + fsync + rename 为辅，只解决半写、不解决 lost update；设计层备选：每次追加独立小文件 + 读时聚合，从根消除 RMW | lead（无 owner，待裁决） |
 | app-deploy | `internal/apop/artifact.go:682-696` | 快照目录按秒命名 | 旁路锁只护 JSON，不护目录 | **P2** | 快照目录名加唯一后缀（job id/随机），`MkdirAll` 改原子建目录+撞名重试 | r6-appdeploy |
 | logs | `internal/logic/download.go:357-370` | check-then-act（导出目标名） | writeFilePrivate 临时名唯一，但**目标路径非 O_EXCL** | **P3** | 唯一后缀直接进最终文件名，或对目标用 `O_CREATE\|O_EXCL` 占位 | r6-logs |
-| logs | `internal/logic/rotate.go:130-146` | check-then-act + 秒级命名 | **无** | **P2** | `Lstat+rename` 包进 state 锁，或唯一名 + `renameat2(RENAME_NOREPLACE)` | r6-logs |
+| logs | `internal/logic/rotate.go:130-146` | check-then-act + 秒级命名 | **无** | **P3（已澄清，不构成覆盖）** | 已澄清不构成覆盖：src 恒为同一活跃文件 target，A rename 成功后 target 消失，B 因 ENOENT 失败（输家失败而非覆盖丢数据）；反证依据 `TestBoundaryConcurrentRotateSingleSource`（成功恰好 1 次，10/10 FAIL→PASS）；认同 r6-logs P3 挂账，不扩大改动 | r6-logs |
 | site | `apply.go:55-62,71` | 快照跨锁 | 快照在 `withManifestLock` 外拍，回滚用旧快照 | **P2** | 快照拍摄移进锁内，或回滚前锁内重读当前态做差异回滚 | r6-site |
 | backup | `internal/backupop/restore.go:130-156` | check-then-act（恢复目标） | **无** | **P3** | 目标目录用 O_EXCL 占位或 state 锁包住检查+落盘 | r6-filebackup |
 | file | `internal/fileop/rename_noreplace.go:18-24` | check-then-act（降级路径） | Linux `renameat2(RENAME_NOREPLACE)` 收口；非 Linux/非 amd64/arm64 有窗口 | **P3（已显式披露）** | 保持披露；若需跨平台收口，降级路径补进程内互斥（非跨进程） | r6-filebackup（仅确认，非新坑） |
