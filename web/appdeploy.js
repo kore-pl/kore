@@ -23,6 +23,12 @@
       upDeploy: null,
       upgSel: '', upgFile: null, upgBusy: false, upgProgress: -1, upgResult: null, upgError: '',
       pluginVersion: '', versionProbed: false,
+      // ① 从模板部署：目录 / 表单 / 结果（模板字段形状来自后端 types.go，见下方 loadTemplates）
+      tpls: [], tplError: '', tplLoading: false,
+      tplSel: '', tplName: '', tplHostPorts: {}, tplEnvVals: {},
+      tplBusy: false, tplMsg: '', tplResult: null,
+      // ② 移除部署：页内二次确认（不可逆，输入部署名解锁），后端强制 confirm:true
+      rmConfirm: null,
       progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       destroyed: false };
   }
@@ -305,10 +311,272 @@
       on(up, function () { S.upgSel = d.name || d.id; if (S.upgSelSel) S.upgSelSel.value = S.upgSel; paintUpgrade(); focusEl('adp-upg-file'); });
       var jb = add(op, el('button', 'btn btn-ghost', '看任务')); jb.type = 'button';
       on(jb, function () { loadJobs(); });
+      // 移除是危险且不可逆操作（删容器 + 命名卷，含数据库数据）：页内二次确认 + 后端 confirm:true。
+      var rm = add(op, el('button', 'btn btn-ghost adp-rm', '移除')); rm.type = 'button';
+      var appName = d.name || d.id;
+      on(rm, function () { openRemove(appName); });
+    });
+  }
+
+  // ---- 移除部署：页内二次确认（输入名字解锁），契约 removeParams{name,confirm}（remove.go:15）----
+  function openRemove(name) {
+    S.rmConfirm = { name: name, typed: '', msg: '', busy: false };
+    paintRemove();
+    if (S.rmHost && S.rmHost.scrollIntoView) S.rmHost.scrollIntoView({ block: 'nearest' });
+  }
+  function closeRemove() { S.rmConfirm = null; paintRemove(); }
+  function paintRemove() {
+    if (!S.rmHost) return;
+    S.rmHost.textContent = '';
+    var c = S.rmConfirm;
+    if (!c) return;
+    var p = add(S.rmHost, el('section', 'panel adp-rm-confirm'));
+    var h = add(p, el('div', 'panel-head'));
+    add(h, el('span', 'panel-title', '移除部署确认'));
+    add(h, el('span', 'panel-meta', '二次确认 · 页面内'));
+    add(p, el('p', 'adp-rm-warn', '将停止并删除「' + c.name + '」的全部容器与数据卷（数据库内容一并删除，不可恢复）。普通应用文件会保留。'));
+    var form = add(p, el('form', 'adp-rm-form'));
+    var w = add(form, el('label', 'field adp-field'));
+    add(w, el('span', 'field-label', '请输入上面的部署名（完全一致才解锁确认按钮，防误删）'));
+    var inp = add(w, el('input', 'field-input'));
+    inp.placeholder = c.name; inp.autocomplete = 'off';
+    inp.setAttribute('aria-label', '输入部署名以确认移除');
+    on(inp, function () {
+      c.typed = inp.value;
+      if (ok) ok.disabled = c.typed !== c.name || c.busy;
+    }, 'input');
+    var ops = add(form, el('div', 'adp-actions'));
+    var cancel = add(ops, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button'; on(cancel, closeRemove);
+    var ok = add(ops, el('button', 'btn btn-primary adp-rm-ok', '确认移除')); ok.type = 'submit';
+    ok.disabled = true;
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); doRemove(c, ok); });
+    S.rmMsg = add(p, el('div', 'adp-rm-msg'));
+    if (c.msg) S.rmMsg.textContent = c.msg;
+  }
+  function doRemove(c, btn) {
+    if (c.busy || c.typed !== c.name) return;
+    c.busy = true; c.msg = ''; btn.disabled = true;
+    if (S.rmMsg) S.rmMsg.textContent = '正在移除 ' + c.name + '…';
+    // remove.go:15 契约：只认 name + confirm:true，没有 id 字段（不按任务卡字面猜）。
+    invoke('remove', { name: c.name, confirm: true }).then(function (d) {
+      if (S.destroyed) return;
+      S.rmConfirm = null; paintRemove();
+      var warn = (d && d.warnings && d.warnings.length) ? '（注意：' + d.warnings.join('；') + '）' : '';
+      startProgress('移除「' + c.name + '」');
+      stopProgress(); setProgress('ok', '已移除「' + c.name + '」', '相关容器与数据卷已清理' + warn);
+      load(); loadJobs();
+    }, function (err) {
+      if (S.destroyed) return;
+      c.busy = false; btn.disabled = false;
+      c.msg = humanError('移除', err);
+      if (S.rmMsg) S.rmMsg.textContent = c.msg;
+      progressFail('移除', err);
     });
   }
   function statusText(s) {
     return s === 'running' ? '运行中' : s === 'missing' ? '未启动容器（制品已就位）' : s === 'stopped' ? '已停止' : (s || '未知');
+  }
+
+  // ---- ① 从内置模板一键部署 ----
+  // 契约读自插件源码（kore-plugin-app-deploy/internal/apop/）：
+  //   call.go:49  app-deploy.templates → TemplatesResult{templates,count}（入参空对象）
+  //   call.go:51  app-deploy.deploy    → deployParams{template,name,ports,env,volumes} → DeployResult
+  //   call.go:55  app-deploy.remove    → removeParams{name,confirm:true} → RemoveResult
+  //   types.go:174 注意字段是 template（不是 template_id）；name 必须以 kore-app- 开头
+  //   validate.go:15 name 须匹配 ^[a-z][a-z0-9-]{0,30}$，长度 ≤31（含前缀）
+  //   templates.go 端口默认 default_host_port、env 必填项 required=true
+  // 用户看不到内部术语：模板要求用人话展示（内存/端口/必填配置），不暴露镜像名与服务编排。
+  var TPL_PREFIX = 'kore-app-';
+  function templateRequirements(t) {
+    var parts = [];
+    if (typeof t.estimated_memory_mb === 'number' && t.estimated_memory_mb > 0) {
+      parts.push('内存约 ' + t.estimated_memory_mb + ' MiB');
+    }
+    var ports = t.ports || [];
+    ports.forEach(function (p) {
+      parts.push((p.label || '端口') + ' ' + (p.default_host_port || p.container_port || '—') +
+        (p.default_host_port ? '（推荐，可改）' : ''));
+    });
+    var req = (t.env || []).filter(function (e) { return e.required; });
+    if (req.length) {
+      parts.push('必填配置：' + req.map(function (e) { return e.label || e.key; }).join('、'));
+    }
+    if ((t.services || []).length > 1) parts.push('含数据库等 ' + t.services.length + ' 个组件');
+    return parts.length ? parts.join(' · ') : '开箱即用，无需额外配置';
+  }
+  function loadTemplates() {
+    if (S.tplLoading) return Promise.resolve();
+    S.tplLoading = true; S.tplError = ''; paintTemplates();
+    return invoke('templates', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.tpls = (d && d.templates) || [];
+      S.tplLoading = false;
+      if (!S.tplSel && S.tpls.length) S.tplSel = S.tpls[0].id; // 预设优先：默认选中第一个，点击 ≤3 次可部署
+      S.tplError = '';
+      paintTemplates();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.tplLoading = false;
+      S.tplError = humanError('读取模板目录', err);
+      paintTemplates();
+    });
+  }
+  // 人话错误 + 怎么办：按错误码分类给下一步动作，错误原文保留在括号里供排障。
+  function humanError(action, err) {
+    var code = (err && err.code) || '';
+    var raw = String((err && err.message) || err || '未知错误');
+    var kind = degrade(err);
+    if (kind === 'notinstalled') {
+      return action + '失败：应用部署插件还没安装好。怎么办：到软件商店安装并启用后刷新本页。';
+    }
+    if (kind === 'denied') {
+      return action + '失败：当前账号没有部署权限。怎么办：让管理员在插件设置里授权后重试。';
+    }
+    if (kind === 'unsupported') {
+      return action + '失败：插件版本太旧（已确认 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION +
+        '），没有这个方法。怎么办：到软件商店升级应用部署插件后刷新。';
+    }
+    if (code === 'E_CONFLICT' || /已被占用|已存在|端口.*占用/.test(raw)) {
+      return action + '失败：名称或端口被占用了。怎么办：换一个应用名 / 端口再试（' + raw + '）。';
+    }
+    if (code === 'E_INVALID' || /非法|缺少必填|未声明|必须在/.test(raw)) {
+      return action + '失败：填的内容不合要求。怎么办：按下面提示改好后重试（' + raw + '）。';
+    }
+    return action + '失败：' + raw + '。怎么办：先点表单里的重试；反复失败把这段原文交给维护者。';
+  }
+  function tplSelected() {
+    for (var i = 0; i < S.tpls.length; i++) { if (S.tpls[i].id === S.tplSel) return S.tpls[i]; }
+    return null;
+  }
+  // 部署名：帮用户自动加插件要求的前缀并收敛成合法形状（原则②自动发现，不让人填环境细节）。
+  function normalizedName(raw, tplId) {
+    var n = String(raw || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').replace(/--+/g, '-');
+    if (!n) n = String(tplId || 'app').toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+    if (n.indexOf(TPL_PREFIX) === 0) n = n.slice(TPL_PREFIX.length);
+    // 前缀 9 字符，后端总长上限 31 → 用户部分最多 22 字符
+    n = n.slice(0, 31 - TPL_PREFIX.length).replace(/-+$/g, '');
+    return TPL_PREFIX + (n || 'app');
+  }
+  function paintTemplates() {
+    if (!S.tplHost) return;
+    S.tplHost.textContent = '';
+    if (S.tplError) { S.tplHost.appendChild(notice(S.tplError)); return; }
+    if (S.tplLoading) { S.tplHost.appendChild(el('p', 'adp-hint', '正在读取内置模板目录…')); return; }
+    if (!S.tpls.length) {
+      S.tplHost.appendChild(emptyBlock('暂时没有可用的内置模板。怎么办：点刷新重试；也可用下面的「上传部署」上传自己的制品。',
+        '刷新模板', loadTemplates));
+      return;
+    }
+    // 模板卡片：选中态用按钮 aria-pressed，键盘/触摸都可操作（Tap 目标 ≥44px）。
+    var cards = add(S.tplHost, el('div', 'adp-tpl-cards'));
+    S.tpls.forEach(function (t) {
+      var b = add(cards, el('button', 'adp-tpl-card' + (t.id === S.tplSel ? ' active' : '')));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', t.id === S.tplSel ? 'true' : 'false');
+      add(b, el('span', 'adp-tpl-name', t.name || t.id));
+      add(b, el('span', 'adp-tpl-desc', t.description || ''));
+      add(b, el('span', 'adp-tpl-req', templateRequirements(t)));
+      on(b, function () {
+        S.tplSel = t.id; S.tplResult = null; S.tplMsg = '';
+        // 换模板时按新模板重置默认值；保留用户已改过的同名 env/端口键不丢。
+        S.tplName = normalizedName(t.id, t.id);
+        S.tplHostPorts = {}; S.tplEnvVals = {};
+        paintTemplates();
+      });
+    });
+    var tpl = tplSelected();
+    if (!tpl) return;
+    var form = add(S.tplHost, el('div', 'adp-tpl-form'));
+    var nameWrap = add(form, el('label', 'field adp-field'));
+    add(nameWrap, el('span', 'field-label', '应用名（自动加 kore-app- 前缀，只能用小写字母/数字/连字符）'));
+    var nameInp = add(nameWrap, el('input', 'field-input'));
+    nameInp.id = 'adp-tpl-name'; nameInp.placeholder = TPL_PREFIX + 'wordpress';
+    nameInp.value = S.tplName || normalizedName(tpl.id, tpl.id);
+    on(nameInp, function () { S.tplName = nameInp.value; }, 'input');
+
+    // 端口：模板声明了才显示；默认带推荐端口，用户可改（原则①预设优先，不填也能成功）。
+    var ports = tpl.ports || [];
+    ports.forEach(function (p) {
+      var w = add(form, el('label', 'field adp-field'));
+      add(w, el('span', 'field-label', (p.label || '端口') + '（宿主机端口，留空用推荐 ' +
+        (p.default_host_port || p.container_port || '自动') + '）'));
+      var inp = add(w, el('input', 'field-input'));
+      inp.type = 'number'; inp.min = '1024'; inp.max = '65535';
+      inp.placeholder = String(p.default_host_port || p.container_port || '');
+      inp.value = S.tplHostPorts[p.container_port] || '';
+      inp.setAttribute('aria-label', (p.label || '端口') + '宿主机端口');
+      on(inp, function () { S.tplHostPorts[p.container_port] = inp.value; }, 'input');
+    });
+
+    // 环境变量：按模板 env 字段生成；必填项标「必填」，口令项用 password 输入框，
+    // 帮助文案直接取自后端模板（原则④小白能看懂）。
+    (tpl.env || []).forEach(function (e) {
+      var w = add(form, el('label', 'field adp-field'));
+      add(w, el('span', 'field-label', (e.label || e.key) + (e.required ? '（必填）' : '') +
+        (e.secret ? ' · 留空自动生成' : '')));
+      var inp = add(w, el('input', 'field-input'));
+      inp.type = e.secret ? 'password' : 'text';
+      inp.autocomplete = 'off';
+      inp.placeholder = e.default || (e.required ? '请填写' : '自动生成/用默认值');
+      inp.value = S.tplEnvVals[e.key] || '';
+      if (e.help) inp.title = e.help;
+      add(w, el('span', 'field-hint', e.help || ''));
+      on(inp, function () { S.tplEnvVals[e.key] = inp.value; }, 'input');
+    });
+
+    var ops = add(form, el('div', 'adp-actions'));
+    var btn = add(ops, el('button', 'btn btn-primary', S.tplBusy ? '正在部署…' : '从模板一键部署'));
+    btn.type = 'button'; btn.disabled = S.tplBusy; btn.id = 'adp-tpl-submit';
+    on(btn, submitDeploy);
+    var rf = add(ops, el('button', 'btn btn-ghost', '刷新模板')); rf.type = 'button'; on(rf, loadTemplates);
+    add(form, el('p', 'adp-hint', '部署会启动真实容器；镜像由内置模板固定，不接受自定义镜像。'));
+    if (S.tplMsg) S.tplHost.appendChild(notice(S.tplMsg));
+    if (S.tplResult) {
+      var r = S.tplResult, box = add(S.tplHost, el('div', 'adp-result'));
+      box.appendChild(chip(r.deployed ? 'ok' : 'warn', r.deployed ? '已部署' : '部署未确认'));
+      add(box, el('span', 'mono', (r.name || '') + ' · ' + (r.template || '')));
+      if (r.access_url) add(box, el('p', 'adp-path', '访问地址：' + r.access_url));
+      if (r.id) add(box, el('p', 'adp-path mono', '部署 id：' + r.id));
+    }
+  }
+  function submitDeploy() {
+    if (S.tplBusy) return;
+    var tpl = tplSelected();
+    if (!tpl) { S.tplMsg = '请先选择一个模板。怎么办：点上面的模板卡片。'; paintTemplates(); return; }
+    var name = normalizedName(S.tplName, tpl.id);
+    if (name.length > 31) { S.tplMsg = '应用名太长（最多 31 个字符）。怎么办：缩短应用名再试。'; paintTemplates(); return; }
+    var ports = [], portBad = '';
+    (tpl.ports || []).forEach(function (p) {
+      if (portBad) return;
+      var raw = String(S.tplHostPorts[p.container_port] || '').trim();
+      if (!raw) return; // 留空 → 后端自动用推荐端口并向上找可用端口
+      var port = parseInt(raw, 10);
+      if (!isFinite(port) || port < 1024 || port > 65535) {
+        portBad = (p.label || '端口') + '填的不是 1024~65535 之间的数字。怎么办：改成合法端口或留空自动分配。';
+        return;
+      }
+      ports.push({ container_port: p.container_port, host_port: port });
+    });
+    if (portBad) { S.tplMsg = portBad; paintTemplates(); return; }
+    var env = {};
+    (tpl.env || []).forEach(function (e) {
+      var v = S.tplEnvVals[e.key];
+      if (v !== undefined && String(v) !== '') env[e.key] = String(v);
+    });
+    // 按后端契约 deployParams（types.go:174）：template / name / ports / env / volumes。
+    // volumes 不传覆盖项，交给模板默认（后端 prepareVolumes 用 spec.Name 作子目录）。
+    S.tplBusy = true; S.tplMsg = ''; S.tplResult = null; paintTemplates();
+    startProgress('部署「' + name + '」');
+    invoke('deploy', { template: tpl.id, name: name, ports: ports, env: env, volumes: [] }).then(function (d) {
+      if (S.destroyed) return;
+      S.tplBusy = false; S.tplResult = d; S.tplName = name; paintTemplates();
+      stopProgress(); setProgress('ok', '部署「' + name + '」完成', d && d.access_url ? '访问地址：' + d.access_url : '容器已启动');
+      load(); loadJobs();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.tplBusy = false; S.tplMsg = humanError('部署', err); paintTemplates();
+      progressFail('部署', err);
+    });
   }
 
   // ---- ② 上传部署 ----
@@ -532,9 +800,32 @@
     '.adp-step-arrow{color:var(--kore-text-3)}' +
     '.adp-job-error{margin:6px 0 0;font-size:var(--kore-font-12);color:var(--kore-danger,#f85149);word-break:break-all}' +
     '.adp-selhost select{width:100%}' +
+    // 从模板部署 + 移除确认：样式复用主壳变量，手机端 ≥44px 触摸目标（裁决41）。
+    '.adp-tpl-cards{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}' +
+    '.adp-tpl-card{flex:1 1 190px;min-width:170px;min-height:44px;display:flex;flex-direction:column;gap:4px;' +
+    'align-items:flex-start;text-align:left;padding:10px;border:1px solid var(--kore-border-1);' +
+    'border-radius:6px;background:var(--kore-bg-0);cursor:pointer}' +
+    '.adp-tpl-card.active{border-color:var(--kore-info,#58a6ff);background:var(--kore-bg-2)}' +
+    '.adp-tpl-name{font-weight:600;color:var(--kore-text-1)}' +
+    '.adp-tpl-desc{font-size:var(--kore-font-12);color:var(--kore-text-2);line-height:1.5}' +
+    '.adp-tpl-req{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5}' +
+    '.adp-tpl-form{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;' +
+    'padding:10px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-1)}' +
+    '.adp-tpl-form .adp-field{flex:1 1 180px}' +
+    '.adp-tpl-form .field-hint{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.4}' +
+    '.adp-rm{color:var(--kore-danger,#f85149)}' +
+    '.adp-rm-confirm{border-color:var(--kore-danger,#f85149)}' +
+    '.adp-rm-warn{margin:0 0 10px;font-size:var(--kore-font-13);color:var(--kore-danger,#f85149);line-height:1.6}' +
+    '.adp-rm-form{display:flex;flex-direction:column;gap:8px}' +
+    '.adp-rm-msg{font-size:var(--kore-font-12);color:var(--kore-text-2);word-break:break-word;min-height:16px}' +
     '@media (max-width:640px){.adp-opts{flex-direction:column;align-items:stretch}' +
     '.adp-field{min-width:0}.adp-actions{flex-direction:column;align-items:stretch}' +
-    '.adp-actions .btn{min-height:44px;width:100%}.adp-progress{width:100%}}';
+    '.adp-actions .btn{min-height:44px;width:100%}.adp-progress{width:100%}' +
+    '.adp-tpl-cards{flex-direction:column}.adp-tpl-card{width:100%;min-height:44px}' +
+    '.adp-tpl-form{flex-direction:column;align-items:stretch}' +
+    '.adp-tpl-form .adp-field{min-width:0}.adp-tpl-form .btn{min-height:44px;width:100%}' +
+    '.adp-rm-form .btn{min-height:44px;width:100%}' +
+    '.plugin-table .adp-rm{min-height:44px}}';
   function ensureCss() {
     if (document.getElementById('kore-appdeploy-css')) return;
     var st = el('style'); st.id = 'kore-appdeploy-css'; st.textContent = CSS;
@@ -553,6 +844,13 @@
     add(S.root, list.panel);
     S.listMeta = add(list.meta, el('span', null, ''));
     S.listHost = add(list.panel, el('div', 'adp-list'));
+
+    // ① 从内置模板部署（预设优先：选中模板即可一键部署，无需填镜像/编排细节）
+    var tplPanel = panel('从模板部署', '选内置模板，填个名字就能一键起 WordPress / nginx 等');
+    add(S.root, tplPanel.panel);
+    var tplOps = add(tplPanel.head, el('span', 'adp-jobs-ops'));
+    var trf = add(tplOps, el('button', 'btn btn-ghost', '刷新模板')); trf.type = 'button'; on(trf, loadTemplates);
+    S.tplHost = add(tplPanel.panel, el('div', 'adp-tpl-host'));
 
     // ② 上传部署
     var up = panel('上传部署', '选 tar.gz / zip 制品，上传后自动登记部署');
@@ -602,9 +900,12 @@
     on(jb, loadJobs);
     S.jobsHost = add(jobs.panel, el('div', 'adp-jobs'));
 
-    paintDenied(); paintList(); paintUpload(); paintUpgrade(); paintJobs();
+    // 移除确认宿主：挂在 root 上，列表重绘不影响它。
+    S.rmHost = add(S.root, el('div', 'adp-rm-host'));
+
+    paintDenied(); paintList(); paintTemplates(); paintUpload(); paintUpgrade(); paintJobs(); paintRemove();
     probePluginVersion();
-    load(); loadJobs();
+    load(); loadJobs(); loadTemplates();
     return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
   window.KoreAppDeploy = { render: render };
