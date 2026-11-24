@@ -102,8 +102,8 @@ func (s *Server) handleConfirmToken(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, perr)
 		return
 	}
-	if !action.Irreversible {
-		writeFailure(w, errCodeInvalid("该动作不是不可回滚动作，无需 confirm 令牌"))
+	if !privilege.NeedsConfirm(action) {
+		writeFailure(w, errCodeInvalid("该动作无需 confirm 令牌（既非不可回滚，也不缺回滚信息）"))
 		return
 	}
 	grant, err := s.privilege.Confirm().Issue(pluginID, actionID)

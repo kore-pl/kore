@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pengtang1024/kore/internal/core/privilege"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // TestAppendAndReadChanges 验证账本往返与 0600 权限。
@@ -96,5 +100,54 @@ func TestExecutePurgeOpRejectsUnknownAndUnsafe(t *testing.T) {
 		if err := executePurgeOp(op); err == nil {
 			t.Fatalf("应拒绝 %+v", op)
 		}
+	}
+}
+
+// TestRootChangeRecorderWritesEntry 验证 root 动作成功后的账本条目落盘且可回话：
+// summary / target / reversible / 结构化 purge_op 全在，且没有 shell 字符串字段。
+func TestRootChangeRecorderWritesEntry(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := newRootChangeRecorder(stateDir)
+	op := &pluginapi.PurgeOp{Kind: pluginapi.PurgeKindFileRemove, Args: []string{"/etc/nginx/conf.d/kore-a.conf"}}
+	if err := recorder.RecordHostChange(context.Background(), privilege.HostChange{
+		PluginID: "site", ActionID: "vhost-write", Summary: "写入站点 vhost",
+		Target: "/etc/nginx/conf.d/kore-a.conf", PurgeOp: op,
+	}); err != nil {
+		t.Fatalf("账本写入失败: %v", err)
+	}
+	path := changesPath(stateDir)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读账本失败: %v", err)
+	}
+	if !strings.Contains(string(raw), `"purge_op":{"kind":"file.remove"`) {
+		t.Fatalf("账本缺结构化 purge_op: %s", raw)
+	}
+	if strings.Contains(string(raw), `"cmd"`) {
+		t.Fatalf("账本不得出现 shell 命令字段: %s", raw)
+	}
+	entries, skipped, err := readChanges(path)
+	if err != nil || skipped != 0 || len(entries) != 1 {
+		t.Fatalf("读回 %d 条（跳过 %d）err=%v，期望 1 条", len(entries), skipped, err)
+	}
+	if entries[0].Summary != "写入站点 vhost" || !entries[0].Reversible || entries[0].TS == "" {
+		t.Fatalf("账本条目字段不完整: %+v", entries[0])
+	}
+}
+
+// TestRootChangeRecorderWithoutSummaryFallsBack 没有 description 时摘要退化为动作 id（不丢条目）。
+func TestRootChangeRecorderWithoutSummaryFallsBack(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := newRootChangeRecorder(stateDir).RecordHostChange(context.Background(), privilege.HostChange{
+		PluginID: "firewall", ActionID: "ufw-allow", Target: "22/tcp",
+	}); err != nil {
+		t.Fatalf("账本写入失败: %v", err)
+	}
+	entries, _, err := readChanges(changesPath(stateDir))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读回 %d 条 err=%v，期望 1 条", len(entries), err)
+	}
+	if entries[0].Summary != "ufw-allow" || entries[0].Reversible {
+		t.Fatalf("摘要回退或 reversible 判定不对: %+v", entries[0])
 	}
 }

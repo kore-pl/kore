@@ -132,7 +132,10 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	svc := &service{
 		catalog: catalog, manager: manager, bus: frameBus, states: states,
 		db: db, backend: newDaemon(catalog, manager, frameBus, states),
-		privilege:     privilege.New(privilege.Options{Auditor: &rootActionAuditor{db: db}}),
+		privilege: privilege.New(privilege.Options{
+			Auditor:        &rootActionAuditor{db: db},
+			ChangeRecorder: newRootChangeRecorder(cfg.StateDir),
+		}),
 		credential:    credentialSvc,
 		pluginRootDir: root,
 		channelSocket: channelSocket,

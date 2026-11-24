@@ -2,12 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pengtang1024/kore/internal/core/privilege"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // changesFileName 是宿主变更账本的文件名（ADR-0023 §3.4/§3.5 豁免 #3）。
@@ -15,25 +19,22 @@ const changesFileName = "changes.jsonl"
 
 // purgeOp 是结构化回滚操作——账本里**不存 shell 命令字符串**。
 //
-// 为什么：以 root 执行账本里的任意字符串等于把 RCE 面写进文件；结构化 op 只允许
-// 白名单 kind + 参数，由 executePurgeOp 分派，未知 kind 直接拒绝。
-type purgeOp struct {
-	// Kind 是白名单操作类型：file.remove / file.restore。
-	Kind string `json:"kind"`
-	// Args 是操作参数（file.remove: [path]；file.restore: [原文件, 目标]）。
-	Args []string `json:"args"`
-}
+// 类型与 kind 白名单的唯一真源在 pkg/pluginapi（协议的一部分），这里只做别名：
+// 插件声明与账本写入必须同一套结构，避免"声明一套、写账本另一套"。
+type purgeOp = pluginapi.PurgeOp
 
 const (
 	// purgeKindFileRemove 删除单个文件。
-	purgeKindFileRemove = "file.remove"
+	purgeKindFileRemove = pluginapi.PurgeKindFileRemove
 	// purgeKindFileRestore 用备份覆盖目标文件。
-	purgeKindFileRestore = "file.restore"
+	purgeKindFileRestore = pluginapi.PurgeKindFileRestore
 )
 
 // changeEntry 是一条"用户批准的宿主变更"。
 type changeEntry struct {
-	TS         string   `json:"ts"`
+	TS string `json:"ts"`
+	// Summary 是人话摘要（root 动作取 action.description），用户视图第一列。
+	Summary    string   `json:"summary,omitempty"`
 	Plugin     string   `json:"plugin"`
 	Action     string   `json:"action"`
 	Target     string   `json:"target"`
@@ -41,6 +42,37 @@ type changeEntry struct {
 	After      string   `json:"after,omitempty"`
 	Reversible bool     `json:"reversible"`
 	PurgeOp    *purgeOp `json:"purge_op,omitempty"`
+}
+
+// rootChangeRecorder 把 root-action 成功后的宿主变更追加进 changes.jsonl。
+//
+// 这是「软件替用户改了什么」的产品化落点：命令行执行 → 用户可见账本 → 可回滚。
+// 不改审计表结构（bbolt 只图追加/按龄清理），账本仍是 append-only + fsync，
+// 回滚只按结构化 purge_op 分派，永不执行字符串命令。
+type rootChangeRecorder struct {
+	path string
+}
+
+// newRootChangeRecorder 构造账本出口（路径 = <state>/changes.jsonl）。
+func newRootChangeRecorder(stateDir string) *rootChangeRecorder {
+	return &rootChangeRecorder{path: changesPath(stateDir)}
+}
+
+// RecordHostChange 实现 privilege.ChangeRecorder。
+func (r *rootChangeRecorder) RecordHostChange(_ context.Context, change privilege.HostChange) error {
+	summary := change.Summary
+	if strings.TrimSpace(summary) == "" {
+		// 没有 description 时退化为动作 id——宁可不好看，也不能丢条目。
+		summary = change.ActionID
+	}
+	return appendChange(r.path, changeEntry{
+		Summary:    summary,
+		Plugin:     change.PluginID,
+		Action:     change.ActionID,
+		Target:     change.Target,
+		Reversible: change.PurgeOp != nil,
+		PurgeOp:    change.PurgeOp,
+	})
 }
 
 // changesPath 返回账本路径：<state>/changes.jsonl。
@@ -164,6 +196,10 @@ func validatePurgePath(path string) error {
 	clean := filepath.Clean(path)
 	if clean == "/" || clean == "." {
 		return fmt.Errorf("拒绝操作根路径: %s", path)
+	}
+	// Clean 会折叠 `..`（`/etc/../passwd` → `/passwd`），故比对原串拒绝非规范路径。
+	if clean != path {
+		return fmt.Errorf("路径必须是规范化绝对路径（不得含 .. 或重复分隔符）: %s", path)
 	}
 	return nil
 }
