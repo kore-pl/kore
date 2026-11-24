@@ -164,12 +164,12 @@
       row('会话有效期', '随使用自动续期，默认 12 小时（以配置文件为准）')
     ];
     var actions = el('div', 'settings-actions');
-    var pw = el('button', 'btn', '修改口令');
+    var pw = el('button', 'btn', '修改管理员口令');
     pw.type = 'button';
-    pw.disabled = true;
-    pw.setAttribute('aria-describedby', 'kore-pw-missing');
+    pw.id = 'kore-pw-change';
+    pw.setAttribute('aria-describedby', 'kore-pw-note');
+    pw.addEventListener('click', function () { openPasswordDialog(pw); });
     actions.appendChild(pw);
-    actions.appendChild(el('span', 'tag tag-muted', '待支持'));
     var out = el('button', 'btn settings-logout', '退出登录');
     out.type = 'button';
     out.id = 'kore-settings-logout';
@@ -178,9 +178,11 @@
     actions.appendChild(out);
     actions.appendChild(el('span', 'settings-hint', '退出后会清除本机会话并回到登录页'));
     var pwNote = el('div', 'settings-hint');
-    pwNote.id = 'kore-pw-missing';
-    pwNote.textContent = '当前版本暂不支持在线修改口令；如需更换，请编辑配置文件后重启内核。';
-    return card('账户与安全', '会话 · CSRF', rows, [actions, pwNote]);
+    pwNote.id = 'kore-pw-note';
+    pwNote.textContent = PW_ENDPOINT
+      ? '修改成功后会退出当前登录，请用新口令重新登录。'
+      : '在线修改需要内核提供对应接口；当前版本请在服务器终端执行 kored admin-password --set 后重启 kored，改完需重新登录。';
+    return card('账户与安全', '会话 · 口令', rows, [actions, pwNote]);
   }
 
   /* ===== 运行参数：只读预算表 + 当前生效值 ===== */
@@ -214,7 +216,7 @@
     }
     table.appendChild(tbody);
     var box = card('运行参数', '只读 · 修改需改配置文件后重启', [], [
-      el('div', 'settings-hint', '当前版本未暴露运行参数（GOGC、内存上限、数据目录等）；如需调整，请编辑配置文件后重启内核。'),
+      el('div', 'settings-hint', '当前版本未暴露运行参数（GOGC、内存上限、数据目录等）；如需调整，请在服务器终端修改配置文件后重启 kored。'),
       el('div', 'settings-hint', '资源预算（硬红线 / 目标）：'), table,
       hint('当前主壳 ' + (info.version || '—') + ' · 常驻插件 ' + (sup.resident === undefined ? '—' : sup.resident) +
         ' · 重启计数 ' + (sup.restarts === undefined ? '—' : sup.restarts))
@@ -395,6 +397,138 @@
     ], null, true);
   }
 
+  /* ===== 修改管理员口令（R10-2）：完整交互骨架 + 诚实降级 =====
+     后端现状（internal/core/httpapi/handlers.go:87-90）：/api/v1/auth 只有
+     login / logout / session 三个端点，其余 /api/v1/auth/ 走 501；handlers_auth.go
+     全文无改口令 handler。因此本视图提供完整交互骨架（旧口令验证 + 新口令两次
+     确认 + 人话错误 + 成功清会话跳登录），但在端点就绪前明示降级，不伪造成功、
+     不发送注定 501 的请求。后端卡落地后只需给 PW_ENDPOINT 赋真实路径，成功路径
+     即刻启用，交互代码无需再改。
+     G-30：口令只活在两个 input.value 里——不 console.log、不写 localStorage、
+     不回显、不拼进 URL；关闭弹层立即清空输入值。 */
+  var PW_ENDPOINT = ''; // 后端就绪后填，如 '/api/v1/auth/password'；空串 = 降级
+  var PW_MIN_LEN = 12;  // 交互骨架下限：与 CLI --generate 的 24 位随机口令同口径，取保守值
+  var pwDialog = null;
+
+  function pwStatus(node, text, tone) {
+    node.textContent = text || '';
+    node.className = 'settings-hint' + (tone === 'err' ? ' settings-hint-error' : tone === 'ok' ? ' settings-hint-ok' : '');
+  }
+  function clearPwInputs(fields) {
+    for (var i = 0; i < fields.length; i++) fields[i].value = '';
+  }
+  function closePasswordDialog() {
+    if (!pwDialog) return;
+    if (pwDialog.esc) document.removeEventListener('keydown', pwDialog.esc);
+    clearPwInputs(pwDialog.fields); // G-30：关窗即清内存中的口令
+    if (pwDialog.wrap && pwDialog.wrap.parentNode) pwDialog.wrap.parentNode.removeChild(pwDialog.wrap);
+    if (pwDialog.trigger && pwDialog.trigger.isConnected) pwDialog.trigger.focus();
+    pwDialog = null;
+  }
+  // 改口令成功后的统一收口：先吊销会话并清 cookie，再无条件回登录页用新口令登录。
+  // 后端改口令应全局 RevokeAll（ADR-0041），这里的 logout 是幂等兜底（无 cookie 也 200）。
+  function afterPasswordChanged() {
+    cache.session = null;
+    var csrf = readCookie('kore_csrf');
+    var headers = { 'Content-Type': 'application/json' };
+    if (csrf) headers['X-Kore-CSRF'] = csrf;
+    request(EP.logout, { method: 'POST', headers: headers, body: '{}' }, 8000)
+      .then(backToLogin, backToLogin);
+  }
+  function openPasswordDialog(trigger) {
+    closePasswordDialog();
+    var wrap = el('div', 'settings-backdrop');
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.setAttribute('aria-label', '修改管理员口令');
+    var box = el('section', 'settings-dialog');
+    box.appendChild(el('h3', 'settings-dialog-title', '修改管理员口令'));
+    // 降级横幅：当前无后端端点，先说清楚再做样子，不用「待支持」糊弄人。
+    box.appendChild(el('div', 'settings-pw-banner',
+      '当前版本的内核还没有在线改口令接口，面板暂时无法替你完成修改。可在服务器终端执行 ' +
+      'kored admin-password --set（按提示输入新口令）后重启 kored；命令行改口令会吊销所有会话，' +
+      '重启后请用新口令重新登录。下方表单保留完整交互，端点就绪后即可直接启用。'));
+    var form = el('div', 'settings-pw-form');
+    var fields = [];
+    [['kore-pw-old', '当前口令', 'current-password'],
+      ['kore-pw-new', '新口令', 'new-password'],
+      ['kore-pw-confirm', '确认新口令', 'new-password']].forEach(function (spec) {
+      var label = el('label', null, spec[1]);
+      label.setAttribute('for', spec[0]);
+      var input = el('input');
+      input.id = spec[0]; input.type = 'password'; input.autocomplete = spec[2];
+      input.placeholder = spec[1];
+      label.appendChild(input);
+      form.appendChild(label);
+      fields.push(input);
+    });
+    box.appendChild(form);
+    var status = el('div', 'settings-hint');
+    status.id = 'kore-pw-status';
+    status.setAttribute('role', 'alert');
+    box.appendChild(status);
+    var ops = el('div', 'settings-dialog-ops');
+    var cancel = el('button', 'btn', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closePasswordDialog);
+    var ok = el('button', 'btn', '确认修改');
+    ok.type = 'button';
+    if (!PW_ENDPOINT) ok.classList.add('settings-pw-pending');
+    ops.appendChild(cancel); ops.appendChild(ok);
+    box.appendChild(ops);
+    wrap.appendChild(box);
+    wrap.addEventListener('click', function (ev) { if (ev.target === wrap) closePasswordDialog(); });
+
+    ok.addEventListener('click', function () {
+      var oldPw = fields[0].value, newPw = fields[1].value, confirmPw = fields[2].value;
+      // 人话错误：只讲规则、绝不回显或记录输入内容（G-30）。
+      if (!oldPw) { pwStatus(status, '请先填写当前口令。', 'err'); fields[0].focus(); return; }
+      if (!newPw) { pwStatus(status, '请填写新口令。', 'err'); fields[1].focus(); return; }
+      if (newPw.length < PW_MIN_LEN) {
+        pwStatus(status, '新口令至少 ' + PW_MIN_LEN + ' 位，建议更长或用密码管理器生成。', 'err');
+        fields[1].focus(); return;
+      }
+      if (newPw === oldPw) { pwStatus(status, '新口令不能和当前口令相同，请换一个。', 'err'); fields[1].focus(); return; }
+      if (newPw !== confirmPw) { pwStatus(status, '两次输入的新口令不一致，请再核对一次。', 'err'); fields[2].focus(); return; }
+      clearPwInputs(fields); // G-30：校验通过即刻清明文，后续只传内存局部量
+
+      if (!PW_ENDPOINT) {
+        pwStatus(status, '当前内核还没有在线改口令接口，请在服务器终端执行 kored admin-password --set 后重启 kored；改完所有会话都会失效，需要重新登录。', 'ok');
+        return;
+      }
+      var csrf = readCookie('kore_csrf');
+      if (!csrf) { pwStatus(status, '缺少页面令牌，请刷新页面后重试。', 'err'); return; }
+      ok.disabled = true;
+      pwStatus(status, '正在提交…', '');
+      request(PW_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Kore-CSRF': csrf },
+        body: JSON.stringify({ current_password: oldPw, new_password: newPw })
+      }, 15000).then(function (res) {
+        ok.disabled = false;
+        if (res.ok) {
+          pwStatus(status, '口令已修改，正在退出并跳转登录页…', 'ok');
+          closePasswordDialog();
+          afterPasswordChanged();
+          return;
+        }
+        var data = res.data || {};
+        // 只显示后端返回的面向用户文案；不回显任何口令值（G-30）。
+        var msg = data.message || '修改失败（HTTP ' + res.status + '），请稍后重试';
+        pwStatus(status, msg, 'err');
+      }, function (err) {
+        ok.disabled = false;
+        pwStatus(status, '网络不太顺畅：' + (err && err.message ? err.message : '请稍后重试'), 'err');
+      });
+    });
+    document.body.appendChild(wrap);
+    pwDialog = { wrap: wrap, trigger: trigger, fields: fields, esc: function (ev) {
+      if (ev.key === 'Escape') closePasswordDialog();
+    } };
+    document.addEventListener('keydown', pwDialog.esc);
+    fields[0].focus();
+  }
+
   /* ===== 退出登录：先确认（弹层「确定退出 Kore 控制台？」），成功后回登录页，
      失败也不把用户困在面板里。Esc / 点遮罩 / 取消都只关弹层，不退出。 ===== */
   var logoutDialog = null;
@@ -494,7 +628,17 @@
     '.settings-upgrade-form{display:flex;flex-direction:column;gap:4px}' +
     '.settings-upgrade-form .settings-select{width:100%;box-sizing:border-box}' +
     '.settings-upgrade-form input[type=checkbox]{width:20px;height:20px;accent-color:var(--kore-info)}' +
-    '.settings-hint-ok{color:var(--kore-success)}';
+    '.settings-hint-ok{color:var(--kore-success)}' +
+    // 修改口令弹层：口令框 + 降级横幅；手机下输入框与按钮触摸目标 ≥44px。
+    '.settings-pw-banner{padding:10px 12px;margin:0 0 12px;line-height:1.6;font-size:var(--kore-font-13);' +
+    'color:var(--kore-text-2);background:var(--kore-bg-2);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control)}' +
+    '.settings-pw-form{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;color:var(--kore-text-2);font-size:var(--kore-font-13)}' +
+    '.settings-pw-form input{display:block;width:100%;box-sizing:border-box;min-height:var(--kore-touch);margin-top:4px;' +
+    'padding:0 var(--kore-space-2);font:inherit;color:var(--kore-text-1);background:var(--kore-bg-0);' +
+    'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control)}' +
+    '.settings-pw-form input:focus{border-color:var(--kore-info);outline:none}' +
+    '.settings-pw-pending{opacity:.75}' +
+    '@media (max-width:639px){.settings-pw-form input{min-height:var(--kore-touch);font-size:16px}}';
   function ensureTabCss() {
     if (document.getElementById('kore-settings-tabs-css')) return;
     var s = el('style'); s.id = 'kore-settings-tabs-css'; s.textContent = TAB_CSS; document.head.appendChild(s);
@@ -582,7 +726,7 @@
     host = container || host;
     if (!host) return;
     ensureTabCss();
-    releaseAudit(); releaseCredentials();
+    releaseAudit(); releaseCredentials(); closePasswordDialog();
     var page = el('div', 'settings-page');
     page.appendChild(buildTabs());
     var body = el('div', 'settings-tab-body');
