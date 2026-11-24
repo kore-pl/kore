@@ -236,7 +236,7 @@
     }
     var host = add(S.tableHost, el('div', 'kcl-table-host'));
     var table = add(host, el('table', 'kcl-table'));
-    table.setAttribute('aria-label', '证书生命周期列表，按到期时间从早到晚排序');
+    table.setAttribute('aria-label', '证书列表，按到期时间从早到晚排序');
     var htr = add(add(table, el('thead')), el('tr'));
     ['域名', '颁发者', '过期倒计时', '绑定站点', '自动续期', '快捷操作'].forEach(function (label) {
       add(htr, el('th', null, label));
