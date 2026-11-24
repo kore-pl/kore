@@ -44,41 +44,12 @@ if [ -z "$BIN" ] || [ -z "$INSTALL_ROOT" ]; then
   exit 1
 fi
 
-# resolve_allow_dirs / validate_allow_dirs 与 scripts/install-root-once.sh 的同名函数
-# **口径逐字一致**（那里是单真源，改语义必须两边同时改；提取成公共库需要新增
-# scripts/lib/*.sh，超出本脚本的写域，已在交付回报里记为后续收敛项）。
-resolve_allow_dirs() {
-  if [ -n "$ALLOW_DIRS_OVERRIDE" ]; then
-    FILE_WRITE_ALLOW_DIRS="$ALLOW_DIRS_OVERRIDE"
-  else
-    FILE_WRITE_ALLOW_DIRS="$INSTALL_ROOT/data/ssl/"
-  fi
-}
-
-# validate_allow_dirs 在写 unit 前做**最小但必要**的形状校验：写进去的值必须能被内核的
-# 注入 helper 接受，否则会出现"unit 看着有注入、实际全被逐条丢弃"的静默 fail-open 假象。
-# 规则与 helper 同口径（绝对路径 / 无 .. 段 / 无空白引号反斜杠），另外拒绝空列表——
-# 显式清空等于关掉白名单，那是安全边界调整，不该由安装脚本顺手做。
-validate_allow_dirs() {
-  local list="$1" entry
-  if [ -z "$list" ]; then
-    echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 不能为空（显式清空等于关闭受控写证书白名单）" >&2
-    return 1
-  fi
-  case "$list" in
-    *[\"\\[:space:]]*) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 含空白/引号/反斜杠（unit Environment= 会被截断）: $list" >&2; return 1 ;;
-  esac
-  # 用 here-doc + tr 切分（不用未引用的 $list 展开）：目录名里的 * ? [ 不该被 shell 当通配
-  # 展开成别的路径，否则校验看的是另一组条目。
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || { echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 含空条目（连续的 : ）: $list" >&2; return 1; }
-    case "$entry" in /*) ;; *) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 条目必须是绝对路径: $entry" >&2; return 1 ;; esac
-    case "/$entry/" in */../*) echo "[FAIL] KORE_FILE_WRITE_ALLOW_DIRS 条目不得含 .. 段: $entry" >&2; return 1 ;; esac
-  done <<EOF
-$(printf '%s' "$list" | tr ':' '\n')
-EOF
-  return 0
-}
+# 受控写白名单的解析/校验是**单一真源** scripts/lib/allow-dirs.sh：本脚本与
+# install-root-once.sh / install-system-service.sh 共用同一份实现，改库 = 三个同时生效。
+# 不要在本脚本重新定义同名函数——重定义会遮蔽公共库，又退回「副本靠注释对齐」。
+KORE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/allow-dirs.sh
+. "$KORE_SCRIPT_DIR/lib/allow-dirs.sh"
 
 render_unit() {
   cat <<UNIT
@@ -110,7 +81,7 @@ UNIT
 
 UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
 
-resolve_allow_dirs
+resolve_allow_dirs "$INSTALL_ROOT"
 # 白名单先校验再谈写 unit / dry-run 打印：非法值必须在这里就 exit 1。
 validate_allow_dirs "$FILE_WRITE_ALLOW_DIRS" || exit 1
 

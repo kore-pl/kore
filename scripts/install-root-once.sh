@@ -116,46 +116,15 @@ BIN_DST="$HOME_DIR/bin/kored"
 path_ok() { case "$1" in /*) ;; *) return 1 ;; esac; case "$1" in *[\"\\[:space:]]*) return 1 ;; esac; return 0; }
 
 # ---------- 受控写白名单（ADR-0052；默认 fail-closed） ----------
-
-# resolve_allow_dirs 解析最终写进 unit 的白名单：用户显式值优先，否则 <install>/data/ssl/。
 #
-# 为什么默认必须注入：受控文件写（file_write）的证书/口令目录前缀白名单**缺省为空 =
-# ssl_certificate* / auth_basic_user_file 一律拒绝**（内核不猜安装布局）。不注入的后果
-# 不是"少一个可选配置"，而是**装完启用 SSL 的站点全部配置失败**——安装器必须替用户把
-# 安装目录内的证书目录写进去。`/etc/nginx/conf.d/` 不在此列：它由协议类别派生
-# （pluginapi.FileWritePrefixClasses），重复注入只是冗余，不是必需。
-resolve_allow_dirs() {
-  if [ -n "$ALLOW_DIRS_OVERRIDE" ]; then
-    FILE_WRITE_ALLOW_DIRS="$ALLOW_DIRS_OVERRIDE"
-  else
-    FILE_WRITE_ALLOW_DIRS="$HOME_DIR/data/ssl/"
-  fi
-}
+# resolve_allow_dirs / validate_allow_dirs 的**单一真源**是 scripts/lib/allow-dirs.sh：
+# 三个安装器（本脚本 / install-service.sh / install-system-service.sh）共用同一份实现，
+# 改库 = 三个同时生效。这里只负责把本脚本的安装根（HOME_DIR）交给库，不再重复定义校验
+# 语义——重定义会遮蔽公共库，又退回「三份副本靠注释对齐」的静默漂移。
 
-# validate_allow_dirs 在写 unit 前做**最小但必要**的形状校验：写进去的值必须能被内核的
-# 注入 helper 接受，否则会出现"unit 看着有注入、实际全被逐条丢弃"的静默 fail-open 假象。
-# 规则与 helper 同口径（绝对路径 / 无 .. 段 / 无空白引号反斜杠），另外拒绝空列表——
-# 显式清空等于关掉白名单，那是安全边界调整，不该由安装脚本顺手做。
-validate_allow_dirs() {
-  local list="$1" entry
-  if [ -z "$list" ]; then
-    err "KORE_FILE_WRITE_ALLOW_DIRS 不能为空（显式清空等于关闭受控写证书白名单）"
-    return 1
-  fi
-  case "$list" in
-    *[\"\\[:space:]]*) err "KORE_FILE_WRITE_ALLOW_DIRS 含空白/引号/反斜杠（unit Environment= 会被截断）: $list"; return 1 ;;
-  esac
-  # 用 here-doc + tr 切分（不用未引用的 $list 展开）：目录名里的 * ? [ 不该被 shell 当通配
-  # 展开成别的路径，否则校验看的是另一组条目。
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || { err "KORE_FILE_WRITE_ALLOW_DIRS 含空条目（连续的 : ）: $list"; return 1; }
-    case "$entry" in /*) ;; *) err "KORE_FILE_WRITE_ALLOW_DIRS 条目必须是绝对路径: $entry"; return 1 ;; esac
-    case "/$entry/" in */../*) err "KORE_FILE_WRITE_ALLOW_DIRS 条目不得含 .. 段: $entry"; return 1 ;; esac
-  done <<EOF
-$(printf '%s' "$list" | tr ':' '\n')
-EOF
-  return 0
-}
+KORE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/allow-dirs.sh
+. "$KORE_SCRIPT_DIR/lib/allow-dirs.sh"
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -581,7 +550,7 @@ self_test() {
 
   # T1 默认值 = <install>/data/ssl/（用户没显式设时的唯一正确默认）
   ALLOW_DIRS_OVERRIDE=""
-  resolve_allow_dirs
+  resolve_allow_dirs "$HOME_DIR"
   [ "$FILE_WRITE_ALLOW_DIRS" = "$HOME_DIR/data/ssl/" ]     && st_ok "T1 默认白名单 = $HOME_DIR/data/ssl/"     || st_bad "T1 默认白名单错误：$FILE_WRITE_ALLOW_DIRS"
 
   # T2 默认渲染：注入行存在且恰好 1 条（重复注入 = 幂等失效）
@@ -596,7 +565,7 @@ self_test() {
 
   # T4 显式覆盖优先，且默认值不再出现
   ALLOW_DIRS_OVERRIDE="/srv/kore/certs:/srv/kore/auth"
-  resolve_allow_dirs
+  resolve_allow_dirs "$HOME_DIR"
   before="$(render_unit)"
   printf '%s\n' "$before" | grep -qF 'Environment=KORE_FILE_WRITE_ALLOW_DIRS=/srv/kore/certs:/srv/kore/auth'     && st_ok "T4 显式值原样写入 unit"     || st_bad "T4 显式值未生效"
   printf '%s\n' "$before" | grep -qF "$HOME_DIR/data/ssl/"     && st_bad "T4b 显式覆盖后仍出现默认值（会被误认为两者都注入）"     || st_ok "T4b 显式覆盖后不再追加默认值"
@@ -613,7 +582,7 @@ self_test() {
   validate_allow_dirs "/srv/kore/certs:/srv/kore/auth" 2>/dev/null     && st_ok "T5b 合法多目录列表通过" || st_bad "T5b 合法列表被误拒"
 
   ALLOW_DIRS_OVERRIDE=""
-  resolve_allow_dirs
+  resolve_allow_dirs "$HOME_DIR"
   echo
   echo "自测汇总：PASS $((use-fail)) / FAIL $fail"
   [ "$fail" -eq 0 ] || echo "结论：有 FAIL——注入契约被破坏，修好再装。"
@@ -624,7 +593,7 @@ self_test() {
 # ---------- 主流程 ----------
 do_install() {
   preflight || exit 1
-  resolve_allow_dirs
+  resolve_allow_dirs "$HOME_DIR"
   validate_allow_dirs "$FILE_WRITE_ALLOW_DIRS" || exit 1
   [ "$DRY_RUN" -eq 0 ] && require_root install
   log "安装计划：home=$HOME_DIR unit=$UNIT_PATH user=root profile=portable"
