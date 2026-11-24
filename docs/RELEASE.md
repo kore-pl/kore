@@ -41,6 +41,32 @@ sha256sum dist/<id>-<version>.tar.gz          # 与索引同版本 sha 比对
 
 打包后固定核对：`git diff --stat` 只应包含本次发版该有的 `info.json`（版本 + `size_bytes`）；纯验证性打包留下、且不在发版检查点内的改动，用 `git checkout -- info.json` 还原后再继续。
 
+### 1.3 `size_bytes` 两套口径（自指悖论，不是 bug，别互相怀疑）
+
+同一个插件在两个位置各有一个 `size_bytes`，**它们本来就不该相等**：
+
+| 位置 | 含义 | 权威性 |
+| --- | --- | --- |
+| `kore-plugins/index/plugins.json` 的 `size_bytes` | release 资产**实测**字节数 | **权威**：下载校验、安装体积预检、商店展示一律以它为准 |
+| 插件仓 `info.json` 的 `size_bytes` | `make dist` 回填的**自指估算值** | 仅预检参考，**不作判定依据** |
+
+**为什么不可能恒等**：`info.json` 本身被打进 `dist/<id>-<ver>.tar.gz`，改这个数字就改了包体——数字位变化会移动 deflate 块边界，并改变包内 `SHA256SUMS` 里 `info.json` 的摘要行，于是"声明值"追不上"含声明值的包体长度"，只能逼近不动点。实测 `包体 − 声明` 在 **−29..+32** 区间呈稀疏混沌映射，**不是 ±1/±2 的微抖**。
+
+**核实过的校验口径**（`kore-plugins/scripts/validate-index.sh`）：脚本**只校验它是非负整数**，不与包体比对，**也不存在任何 ±32 容差判定**——`−29..+32` 是脚本头注释记录的实测观测区间，**不是门禁阈值**，别拿它当"允许偏差"用。
+
+**对不上时怎么判**（按序执行，不要先怀疑对方）：
+
+```bash
+stat -c%s dist/<id>-<ver>.tar.gz                 # 或 curl -sSL <download_url> | wc -c
+```
+
+1. 上面这条量出的是**权威值**。索引 == 权威值 → 正常，结束。
+2. 索引 ≠ 权威值 → **真错**：把索引改成实测值，同轮重签（§2 第 7 步）。
+3. 索引 == 权威值、`info.json` 落在 −29..+32 内 → **自指偏差，不是缺陷**。禁止改 `info.json` 去"对齐"——那会让包体变一次、索引再漂一次。
+4. `info.json` 偏差超出 −29..+32 → 大概率是 `make dist` 之后又改了源码却没收新包（回填值过期），按 §1 重新打包/bump，不要只改数字。
+
+**已有实证**：`file@0.3.4` 索引 `1697251`（= 资产实测，sha `d72346a6…` 与索引逐字一致）、`info.json` `1697250`，差 −1，属第 3 条；`ssh-guard@0.3.0` 实测 2840608 vs 声明 2840609 同理；`container@0.5.1` 用「±64 窗口精确优先搜索」拿到过不动点 1527626（声明 == 实测）——**精确点存在但不保证**。
+
 ## 2. 发版清单（插件，顺序不可跳）
 
 1. **bump**：`info.json` 与 `manifest.json` 的 `version` 同步 +1；`CHANGELOG.md` 顶部加新版本条目（摘要从 `git log <上版本tag>..HEAD` 提取）。
@@ -90,9 +116,17 @@ git rev-parse v<ver>^{}               # 与"该版本 dist 是从哪棵树打出
 - release tag 版本 == `kore-plugins/index/plugins.json` 的 `version` == `GET /api/v1/store/plugins` 返回版本；
 - 索引更新/重签/主实例回切未完成前，不得宣布发版完成；索引侧延迟不是"已发布"。
 
+### 2.4 改索引必须同轮重建 `market/plugins.js`（否则商店页与索引各说各话）
+
+`market/index.html` 的数据源是 `market/plugins.js`（`window.KORE_PLUGINS`），由 `scripts/build-market.sh` 从 `index/plugins.json` **生成后落盘为静态文件**；页面运行期**不再读索引**。所以索引改了，商店页**不会自己跟着变**。
+
+- **规则**：凡改动 `index/plugins.json`（哪怕只改一个 `version`），**同一提交**必须跑 `bash scripts/build-market.sh`，把 `market/plugins.js` 一起提交。
+- **不重建的后果**：`market/index.html` 显示旧版本、索引是新版本——商店页与索引各说各话。2026-11-24 `backup-release-050` 标出的正是这个坑：当时 `market/plugins.js` 是「顺带对齐了 `file` 的版本」才没暴露，而它本该由 `file` 轨道自己重建。
+- **门禁**：`kore-plugins/scripts/validate-index.sh` 第 1c 步已内置一致性校验（调用 `build-market.sh --check` 做 byte 级比对，失败时直接列出 market 与 index 的版本差异）；`cd kore-plugins && make check` 即覆盖。**不要再靠人记**。
+
 ## 3. 门禁
 
-- `kore-plugins/scripts/validate-index.sh`：schema、`id@version` 唯一、版本单调递增、同版本 sha 锁定、签名。
+- `kore-plugins/scripts/validate-index.sh`：schema、`id@version` 唯一、版本单调递增、同版本 sha 锁定、**`market/plugins.js` 与索引 byte 级一致（§2.4）**、签名。
 - `index/versions.lock.json` 是发版账本（非信任源）：索引版本/sha 必须等于账本最新记录；改包不 bump 直接 FAIL。
 - 漏 bump 的修复只能「新版本 + 新 release」，**禁止**覆盖同版本 release 资产。
 
