@@ -1,10 +1,12 @@
 /* kore 主壳 · 全局搜索命令面板（web/search.js，懒加载）
-   四源：页面（16 视图 + 别名，本地常量）、已装插件、商店未装插件、常用操作（本地常量）。
-   交互：200ms 防抖、分组各 ≤5、↑↓/Enter/Esc；插件与商店数据首次打开拉一次并缓存。
+   六源：页面（16 视图 + 别名，本地常量）、站点（site.list 真实数据）、文件（file.search 按词实时查）、
+        已装插件、商店未装插件、常用操作。
+   交互：200ms 防抖、分组各 ≤5、↑↓/Enter/Esc；站点首次打开拉一次缓存，文件按输入词防抖查询并按词缓存。
    对外只暴露 window.KoreSearch = { open, close }；首屏只由 shell.js 放入口。 */
 (function () {
   'use strict';
-  var EP = { installed: '/api/v1/plugins', store: '/api/v1/store/plugins' };
+  var EP = { installed: '/api/v1/plugins', store: '/api/v1/store/plugins',
+    invoke: '/api/v1/invoke/' };
   var PAGES = [
     ['dashboard', '概览', '主页 首页 控制台 总览 dashboard home overview'],
     ['monitor', '监控', '性能 资源 cpu 内存 monitor'],
@@ -38,7 +40,8 @@
     ['安装插件', '插件 商店 安装 store', 'store', null, null]
   ];
   var S = { open: false, sel: 0, items: [], nodes: [], timer: 0, root: null, input: null, list: null };
-  var data = { installed: null, store: null, error: '', promise: null };
+  var data = { installed: null, store: null, error: '', promise: null,
+    sites: null, sitesError: '', fileCache: {}, fileError: '', fileLoading: false, fileQuery: '', fileToken: 0 };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -96,23 +99,125 @@
         });
       });
   }
+  function cookie(name) {
+    var parts = document.cookie ? document.cookie.split(';') : [];
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].trim();
+      if (kv.indexOf(name + '=') === 0) return decodeURIComponent(kv.slice(name.length + 1));
+    }
+    return '';
+  }
+  // 插件业务调用统一走 invoke POST + CSRF 双提交（与 sites.js / files.js 同口径）。
+  function invoke(method, params) {
+    var token = cookie('kore_csrf');
+    if (!token) return Promise.reject(new Error('缺少安全令牌，请刷新页面或重新登录'));
+    return fetch(EP.invoke + method, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token },
+      body: JSON.stringify(params || {})
+    }).then(function (res) {
+      return res.text().then(function (raw) {
+        var body = {};
+        if (raw) { try { body = JSON.parse(raw); } catch (e) { body = {}; } }
+        if (!res.ok) throw new Error(body.message || ('请求失败（HTTP ' + res.status + '）'));
+        return body;
+      });
+    });
+  }
   function mapPlugins(b) { return (Array.isArray(b.plugins) ? b.plugins : []).map(function (p) { return { id: p.id, name: p.name || p.id }; }); }
+  function mapSites(b) {
+    return (Array.isArray(b.sites) ? b.sites : []).map(function (s) {
+      return { domain: s.domain || '', enabled: !!s.enabled };
+    }).filter(function (s) { return !!s.domain; });
+  }
   function loadData() {
-    if (data.installed && data.store) return Promise.resolve();
+    if (data.installed && data.store && data.sites) return Promise.resolve();
     if (data.promise) return data.promise;
     data.promise = Promise.all([
       data.installed ? Promise.resolve(data.installed) : fetchJSON(EP.installed).then(mapPlugins,
         function () { data.error = '插件列表读取失败'; return []; }),
       data.store ? Promise.resolve(data.store) : fetchJSON(EP.store).then(mapPlugins,
-        function () { data.error = '商店数据读取失败'; return []; })
-    ]).then(function (out) { data.installed = out[0]; data.store = out[1]; });
+        function () { data.error = '商店数据读取失败'; return []; }),
+      data.sites ? Promise.resolve(data.sites) : invoke('site/site.list', {}).then(mapSites,
+        function () { data.sitesError = '站点列表没读到（站点插件可能还没装或没启用）：请到「软件商店」确认 site 插件已安装并启用，再重新搜索。'; return []; })
+    ]).then(function (out) { data.installed = out[0]; data.store = out[1]; data.sites = out[2]; });
     return data.promise;
+  }
+  // 文件源按输入词实时查：裸词包 *…*（与 files.js 的 searchParams 同口径），按 query 缓存。
+  function loadFiles(q) {
+    var key = q.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(data.fileCache, key)) return Promise.resolve();
+    var token = ++data.fileToken;
+    data.fileQuery = key; data.fileLoading = true; data.fileError = '';
+    var pattern = (/[*?]/.test(q) || q.indexOf('[') >= 0) ? q : '*' + q + '*';
+    return invoke('file/file.search', { path: '.', pattern: pattern, max_results: 50 }).then(function (b) {
+      if (token !== data.fileToken) return;
+      data.fileCache[key] = (Array.isArray(b.entries) ? b.entries : []).slice(0, 20);
+      data.fileLoading = false;
+      if (S.open) paint();
+    }, function (err) {
+      if (token !== data.fileToken) return;
+      data.fileLoading = false;
+      data.fileError = '文件搜索没成功（' + (err && err.message ? err.message : '未知原因') +
+        '）：请到「软件商店」确认「文件管理」插件已安装并启用，或换个关键词再试。';
+      if (S.open) paint();
+    });
+  }
+  function openSite(domain) {
+    go('sites');
+    waitFor(function () {
+      var links = document.querySelectorAll('button.site-link[data-site]');
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].getAttribute('data-site') !== domain) continue;
+        scrollTo(links[i]); links[i].click(); return true;
+      }
+      return false;
+    });
+  }
+  function openFile(entry) {
+    go('files');
+    waitFor(function () {
+      var input = document.querySelector('.files-search-input');
+      var btn = document.querySelector('[data-action="search"]');
+      if (!input || !btn) return false;
+      var name = String(entry.path || '').split('/').pop() || entry.path;
+      input.value = name;
+      btn.click();
+      return true;
+    });
+    waitFor(function () {
+      // 搜索结果视图行是 tr[data-path]，目录视图行是 tr[data-entry-path]（files.js 两种都渲染）。
+      var rows = document.querySelectorAll('tr[data-path], tr[data-entry-path]');
+      for (var i = 0; i < rows.length; i++) {
+        var rowPath = rows[i].getAttribute('data-path') || rows[i].getAttribute('data-entry-path');
+        if (rowPath !== entry.path) continue;
+        scrollTo(rows[i]);
+        rows[i].style.outline = '2px solid var(--kore-info)';
+        setTimeout(function () { rows[i].style.outline = ''; }, 2400);
+        return true;
+      }
+      return false;
+    }, 7000);
   }
   // 结果对象只带 title/sub/run：分组只影响展示顺序，执行逻辑与来源解耦。
   function buildGroups(q) {
     var n = q.toLowerCase(), installed = data.installed || [], storeList = data.store || [], ids = {};
-    var pages = [], plugins = [], store = [], acts = [];
+    var pages = [], sites = [], files = [], plugins = [], store = [], acts = [];
     function hit(s) { return String(s || '').toLowerCase().indexOf(n) >= 0; }
+    (data.sites || []).forEach(function (s) {
+      if (!hit(s.domain)) return;
+      sites.push({ title: '站点 · ' + s.domain,
+        sub: '站点 · ' + (s.enabled ? '已启用' : '已停用') + ' · ' + s.domain,
+        run: function () { openSite(s.domain); } });
+    });
+    var cached = Object.prototype.hasOwnProperty.call(data.fileCache, n) ? data.fileCache[n] : null;
+    (cached || []).forEach(function (entry) {
+      var path = String(entry.path || '');
+      if (!hit(path)) return;
+      files.push({ title: (entry.is_dir ? '目录' : '文件') + ' · ' + path.split('/').pop(),
+        sub: '文件 · /' + path.replace(/^\/+/, ''),
+        run: function () { openFile(entry); } });
+    });
     PAGES.forEach(function (p) {
       if (hit(p[1] + ' ' + p[2])) pages.push({ title: '跳转到 ' + p[1], sub: '页面 · ' + p[1],
         run: function () { go(p[0]); } });
@@ -135,7 +240,8 @@
         if (a[3]) a[3](); go(a[2]); if (a[4]) a[4]();
       } });
     });
-    return [['页面', pages.slice(0, 5)], ['插件', plugins.slice(0, 5)],
+    return [['站点', sites.slice(0, 5)], ['文件', files.slice(0, 5)],
+      ['页面', pages.slice(0, 5)], ['插件', plugins.slice(0, 5)],
       ['商店', store.slice(0, 5)], ['操作', acts.slice(0, 5)]];
   }
   function select(i) {
@@ -149,9 +255,11 @@
   }
   function paint() {
     var q = S.input.value.trim();
+    var fk = q.toLowerCase();
+    if (q && !Object.prototype.hasOwnProperty.call(data.fileCache, fk) && data.fileQuery !== fk) loadFiles(q);
     S.list.textContent = ''; S.items = []; S.nodes = []; S.sel = 0;
     if (!q) {
-      S.list.appendChild(el('div', 'kore-search-note', '输入关键词：页面名、插件 id/名称、动作（如 数据库 / 备份 / 新建）'));
+      S.list.appendChild(el('div', 'kore-search-note', '输入关键词：站点域名、文件名、页面名、插件 id/名称、动作（如 数据库 / 备份 / 新建）'));
       return;
     }
     buildGroups(q).forEach(function (grp) {
@@ -169,6 +277,19 @@
     });
     if (!S.items.length) S.list.appendChild(el('div', 'kore-search-empty', '没找到「' + q + '」，试试：数据库 / 站点 / 备份'));
     else select(0);
+    if (q) {
+      var fk2 = q.toLowerCase(), hasFile = Object.prototype.hasOwnProperty.call(data.fileCache, fk2);
+      if (data.fileLoading && data.fileQuery === fk2 && !hasFile) {
+        S.list.appendChild(el('div', 'kore-search-note', '正在按文件名搜索「' + q + '」…'));
+      } else if (data.fileError && !hasFile) {
+        S.list.appendChild(el('div', 'kore-search-note', data.fileError));
+      }
+    }
+    if (!data.sites && !data.sitesError) {
+      S.list.appendChild(el('div', 'kore-search-note', '站点列表加载中…'));
+    } else if (data.sitesError) {
+      S.list.appendChild(el('div', 'kore-search-note', data.sitesError));
+    }
     if ((!data.installed || !data.store) && !data.error) {
       S.list.appendChild(el('div', 'kore-search-note', '插件与商店数据加载中…'));
     } else if (data.error && (!data.installed || !data.store)) {
@@ -191,9 +312,9 @@
     '.kore-search-input{flex:1 1 auto;min-width:0;background:transparent;border:0;outline:none;color:var(--kore-text-1);font-size:var(--kore-font-16)}.kore-search-kbd{font-size:11px;color:var(--kore-text-3);border:1px solid var(--kore-border-1);border-radius:4px;padding:1px 5px}' +
     '.kore-search-list{overflow-y:auto;padding:4px 0;min-height:80px}.kore-search-group{padding:8px 12px 4px;font-size:11px;color:var(--kore-text-3);letter-spacing:.04em}' +
     '.kore-search-item{display:block;width:100%;text-align:left;background:transparent;border:0;padding:7px 12px;cursor:pointer;color:var(--kore-text-1)}.kore-search-item.is-active{background:var(--kore-bg-2);box-shadow:inset 2px 0 0 var(--kore-info)}' +
-    '.kore-search-item-title{display:block;font-size:var(--kore-font-14)}.kore-search-item-sub{display:block;font-size:11px;color:var(--kore-text-3);margin-top:2px}' +
+    '.kore-search-item-title{display:block;font-size:var(--kore-font-14);word-break:break-word}.kore-search-item-sub{display:block;font-size:11px;color:var(--kore-text-3);margin-top:2px;word-break:break-word}' +
     '.kore-search-note,.kore-search-empty{padding:12px;color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.6}.kore-search-foot{padding:6px 12px;border-top:1px solid var(--kore-border-2);font-size:11px;color:var(--kore-text-3)}' +
-    '.kore-search-lock{overflow:hidden}@media (max-width:639px){.kore-search-backdrop{padding:6vh 8px 8px}.kore-search-modal{max-height:80vh}.kore-search-kbd{display:none}.kore-search-item{padding:10px 12px}}';
+    '.kore-search-lock{overflow:hidden}@media (max-width:639px){.kore-search-backdrop{padding:6vh 8px 8px}.kore-search-modal{max-height:80vh}.kore-search-kbd{display:none}.kore-search-item{padding:10px 12px;min-height:44px}}';
   function ensureDom() {
     if (S.root) return;
     var style = el('style'); style.id = 'kore-search-css'; style.textContent = CSS;
@@ -211,7 +332,7 @@
     var p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', 'M12.5 12.5 17 17');
     svg.appendChild(c); svg.appendChild(p);
     var input = el('input', 'kore-search-input');
-    input.type = 'search'; input.placeholder = '搜索页面、插件、商店与操作…';
+    input.type = 'search'; input.placeholder = '搜索站点、文件、页面、插件与操作…';
     input.setAttribute('aria-label', '全局搜索关键词'); input.setAttribute('autocomplete', 'off');
     input.addEventListener('input', function () { clearTimeout(S.timer); S.timer = setTimeout(paint, 200); });
     input.addEventListener('keydown', onKey);
