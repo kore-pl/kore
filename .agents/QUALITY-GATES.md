@@ -4,7 +4,7 @@
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32）
+## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race））
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -59,17 +59,42 @@
 **G-20 判据①②内容校验（2026-11-24 接入，G-18 命令内）**：`depth_level=production` 此前只核对「索引 ↔ 仓库一致」，两条升级判据在脚本里**都没有执行面**——`tests/fault/` 只写在文档与模板里，判据①（边界用例）从未被任何门禁打开，于是「索引写 production + 建个 `tests/fault/`」就能一路绿灯（[production-claim-audit.md](verify/production-claim-audit.md) 实证：15/15 无 `tests/boundary/`、`t.Parallel` 0/15）。现补两层，判据只收紧不放宽：
 
 - **判据②（硬判据，待裁决清单不豁免）**：`../kore-plugin-<id>/tests/fault/` 存在且含 `func Test` 的 `*_test.go`；缺失/空目录 → `[FAIL]`。仅静态核对存在性，**不重复跑 `go test`**（各仓 CI / `make check` 负责实跑），门禁不联网、不改文件。
-- **判据①（分层上线，避免 15 条存量一次打红）**：`tests/boundary/` 存在 + 含 `func Test` 的 `*_test.go` + 并发证据 ≥1（`t.Parallel` / `go func` / `sync.` 命中）+ 四类代表性覆盖（异常输入 / 并发 / 权限 / 资源耗尽；取证面 = 文件名 + 注释行，不拿可执行代码凑关键词；「并发」由真实并发证据判定，比关键词可靠）。登记在 `scripts/boundary-pending.txt` → `[WARN]` 不阻断；**未登记（新增 production 声明）→ `[FAIL]` 阻断**；条目已满足判据①② / 已非 production / 已不在索引 → `[WARN]` 陈旧条目提示移除。
+- **判据①（分层上线，避免 15 条存量一次打红）**：`tests/boundary/` 存在 + 含 `func Test` 的 `*_test.go` + 并发证据 ≥1（`t.Parallel` / `go func` / `sync.` 命中）+ 四类代表性覆盖（异常输入 / 并发 / 权限 / 资源耗尽；取证面 = 文件名 + 注释行，不拿可执行代码凑关键词；「并发」由真实并发证据判定，比关键词可靠）。登记在 `scripts/boundary-pending.txt` → `[WARN]` 不阻断；**未登记（新增 production 声明）→ `[FAIL]` 阻断**；条目已满足判据①② / 已非 production / 已不在索引 → `[WARN]` 陈旧条目提示移除。**2026-11-24 清单已清空**：10 条陈旧条目逐条经 `go test ./tests/boundary/ -count=1` 与 `go test -race` 复核 PASS 后移除，15 个 production 全部转为硬判据；强化验证 `BOUNDARY_PENDING_FILE=/dev/null` 实跑同样 15/15 PASS、0 FAIL。
 - **收口**：每补齐一仓的 `tests/boundary/` 就从清单删对应 id，**移出清单 = 转硬判据**；清单清空即判据①全硬。清单是存量补测试的登记处，不是放行名单。
 
 **严重级别裁决（当前接入态，2026-11-23）**：
 
 | 门禁 | `make check` 段位 | 级别 | 理由 | 转阻断条件 |
 | --- | --- | --- | --- | --- |
-| `store-check` | 14/17 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状**以实跑为准**（warn 数随插件仓收敛/回退而变动、不恒为 0：2026-11-24 快照见过 `24 pass / 0 fail / 1 warn` = `README_VERSION_DRIFT logs`，收敛后为 `24 pass / 0 fail / 0 warn`）。`DIST 检查(按 dist 文件计)` 汇总行分账「N 一致 / D 漂移 / M 缺件跳过 / K 索引未收录跳过」，缺件只 `[SKIP]` 不加 warn。判据已与 G-17 / 协议 §3.1 对账：`description` 不在必填 9 字段内，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判、全缺只 WARN——原先「23 仓缺同一个 `description`」的阻断理由已消失，但**是否转阻断级需单独裁决**（本段不擅自升级） | 转阻断级条件：单独裁决确认后续插件仓变更不会大面积打红后切换 |
-| `presets-check` | 15/17 | **阻断** | 现状 **8 pass / 15 warn / 0 fail**：15 warn = G-20 判据① 存量 `scripts/boundary-pending.txt` 登记（补齐 `tests/boundary/` 的条目会转 `[WARN] 陈旧条目` 提示移除，不阻断）；判据②（`tests/fault/`）为硬判据、清单不豁免；新增 production 声明未登记且判据①不满足 → FAIL。判据先把「新增空口声明」钉死为 FAIL；且 preset 是用户可见的装配入口，版本区间解析失败 / 深度等级错标 / 空口 production 都会直接误导安装 | 清单清空（15 仓补齐边界用例）后判据①全硬，`presets-check` 回到 0 warn；在此之前维持阻断级 |
+| `store-check` | 14/18 | **WARN**（判据本身未放宽，单跑仍 exit 1） | 现状**以实跑为准**（warn 数随插件仓收敛/回退而变动、不恒为 0：2026-11-24 快照见过 `24 pass / 0 fail / 1 warn` = `README_VERSION_DRIFT logs`，收敛后为 `24 pass / 0 fail / 0 warn`）。`DIST 检查(按 dist 文件计)` 汇总行分账「N 一致 / D 漂移 / M 缺件跳过 / K 索引未收录跳过」，缺件只 `[SKIP]` 不加 warn。判据已与 G-17 / 协议 §3.1 对账：`description` 不在必填 9 字段内，改按描述类字段四选一（`description`/`title`/`summary`/`name`）判、全缺只 WARN——原先「23 仓缺同一个 `description`」的阻断理由已消失，但**是否转阻断级需单独裁决**（本段不擅自升级） | 转阻断级条件：单独裁决确认后续插件仓变更不会大面积打红后切换 |
+| `presets-check` | 15/18 | **阻断** | 现状 **8 pass / 0 warn / 0 fail**：2026-11-24 清空 `scripts/boundary-pending.txt`（10 条陈旧条目逐条经 `go test ./tests/boundary/ -count=1` + `go test -race` 复核 PASS 后移除），判据①已全硬——15 个 production 全部真跑 PASS；强化验证 `BOUNDARY_PENDING_FILE=/dev/null`（模拟清单外）同样 15/15 PASS、0 FAIL；判据②（`tests/fault/`）本就为硬判据、清单不豁免；新增 production 声明判据①不满足 → FAIL。判据先把「新增空口声明」钉死为 FAIL；且 preset 是用户可见的装配入口，版本区间解析失败 / 深度等级错标 / 空口 production 都会直接误导安装 | 已达成：清单清空即判据①全硬，`presets-check` 回到 0 warn；维持阻断级 |
 
 > 前提：G1 / G8 的 `bin/kored` 由 `Makefile` 的 `BIN ?= ./bin/kored` 产出（2026-11-21 已对齐：`APP ?= kored`、`BIN ?= ./bin/kored`）。若后续 `BIN` 再被改动导致路径不符，G1 / G8 记「阻塞」而不是 PASS，由 implementer 按 G-06 先对齐 Makefile。
+
+### 1.2 第 18 段 · race 门禁（跨仓，阻断级，2026-11-24 接入）
+
+**防的事故**：在此之前 kore 与 24 个插件仓的 `Makefile` / CI 都只跑 `go test ./...`，**全链没有 `-race`**。并发边界用例（`tests/boundary/`）写着「必须过 `-race`」，但没有任何门禁真的以 `-race` 跑过——等于**写了并发断言却从没验过数据竞争**，下一次改动引入竞争不会被任何一层发现。这是「只写不跑」的第二种形态：不是判据文本写错，而是**判据根本没有执行面**（对照 G13 的 2026-11-23 教训：只 grep 目标名、从不编译）。
+
+**执行方式**（`bash scripts/race-gate-check.sh`，`make check` 第 18/18 段，阻断级；不联网、不调用 git、不写状态）：
+
+1. **本仓**：`make race` → `CGO_ENABLED=1 go test -race -count=1 -timeout 300s ./tests/boundary/...`；无 `tests/boundary/` 目录时 `[SKIP]` 退出 0（kore 当前即此态：`tests/` 尚未建立）。缺 `race` 目标 → `[FAIL]`。
+2. **兄弟仓静态接线核对**（只对**有** `tests/boundary/*_test.go` 的仓，三条全须通过，缺任一条 `[FAIL]`）：
+   - `Makefile` 有行首 `^race:` 目标；
+   - `Makefile` 的 `check` 目标体内把 `race` 作为**独立段**调用（`^\t@\$(MAKE) --no-print-directory race$`）——挂在别处或和别的命令串在一行不算；
+   - `.github/workflows/ci.yml` 显式 `- name: ...race` 或 `run: make race`（**CI 里看不到 `-race` 就等于没跑**）。
+3. **兄弟仓真跑**：对每个有边界用例的仓执行 `make -C <repo> race`，**真编译真执行** `-race`；任一 FAIL / 超时 / 编译不过即本段阻断。
+
+**降级与边界**：
+
+- 无兄弟仓（GitHub CI 只 checkout kore）→ `[N/A]`，**不阻断**；跨仓接线与真跑由各插件仓自己的 CI 兜底。
+- 无 `tests/boundary/*_test.go` 的仓 → `[SKIP] <仓>：无 tests/boundary/*_test.go`，**不假装通过**；`race` 目标已存在，**新增边界用例后自动生效，不需要再改 Makefile**。
+- `-race` 需要 cgo（linux/amd64 用 gcc）；缺编译器时 `go test` 会原文报 `-race requires cgo`，门禁不静默降级、不吞错。
+
+**为什么 `-race` 只跑 `tests/boundary/` 而不是全仓**：并发断言集中在边界面；`-race` 通常让测试慢 2–10 倍，全仓 `-race` 会把每个仓的 `make check` 拖长数倍，日常反馈不可接受。判据不放宽——race 段与 `check` 同属阻断级，只是**范围**限定在「数据竞争必须被抓」的那一面。实测取舍见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 2026-11-24 裁决（含全仓 `-race` 在 `cmd/kored` 抓到真实竞争、52.6s + FAIL 的实现卡实测）。
+
+**跨仓为什么必须一次铺满 25 仓**：race 门禁的价值来自**每仓都有**——25 仓里漏一仓，那一仓的并发断言就退回「只写不跑」；而各插件仓 CI 只看到自己的仓，无法替别人兜底。因此本段的**接线核对**是本段的主体之一，不是附带的自检：`scripts/plugin-templates/plugin-repo/Makefile.race.mk` 是唯一真源，`scripts/race-gate-sync.sh` 幂等渲染进 24 份（**禁手改 24 份**，手改必然漂移），`scripts/race-gate-check.sh` 反向核对是否漂移。
+
+**2026-11-24 首跑实测**（`bash scripts/race-gate-check.sh`）：`EXIT=0` / 44s / `有边界用例 15 仓 · -race 真跑通过 15 仓` / `[OK] race 门禁通过（接线完整 + -race 真跑全绿）`；24/24 仓三条接线（`^race:` / `check` 独立调 `race` / `ci.yml` 显式 `make race`）全中。本仓 `make race` → `[SKIP] 本仓无 tests/boundary`。
 
 ## 2. 三层组合
 
@@ -176,7 +201,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **17 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **18 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段，阻断级，见 §1.2）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -194,7 +219,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 17 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 18 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
