@@ -1,8 +1,8 @@
 /* kore 主壳 · DNS 解析（web/dns.js）——零框架 / 零 CDN / 无外链。
    调用形态（硬约束，docs/FRONTEND.md §业务方法调用形态）：POST /api/v1/invoke/dns/dns.<action>，
    方法名必须带域前缀。读：dns.status / dns.zones / dns.records / dns.query；
-   写：dns.record.add|update|delete（bind9 RFC 2136 动态更新，需要先在插件设置里配 TSIG 密钥——
-   本页只读，不提供编辑入口，避免"点了才发现没配密钥"）。
+   写：dns.record.add / record.update / record.delete（bind9 RFC 2136 动态更新，零 root；
+   需一次性配好 TSIG 密钥），dns.reload（手工改过 zone 文件后重载，非记录写入所需）。
    三种降级：没有 DNS 服务（E_NO_ENGINE）/ 区域文件读不到（E_NEED_ROOT）/ 插件未安装（E_NOTFOUND）。
    本页不轮询：状态与列表都是用户触发或进页时各查一次。 */
 (function () {
@@ -11,9 +11,19 @@
   var RUNBOOK_PRIV = 'docs/RUNBOOK.md';
   // 类型预设：覆盖日常 90% 的查询，不让人记类型表。
   var TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'];
+  // 可写类型比可查询类型少 NS（区域结构记录，改错会破坏整个区域）；SRV 可写但不常查。
+  var WRITE_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV'];
   var TYPE_HINT = {
     A: 'IPv4 地址', AAAA: 'IPv6 地址', CNAME: '别名指向', MX: '邮件服务器',
-    TXT: '文本记录（SPF / 校验）', NS: '权威域名服务器'
+    TXT: '文本记录（SPF / 校验）', NS: '权威域名服务器', SRV: '服务定位'
+  };
+  var WRITE_VALUE_HINT = {
+    A: '例如 192.0.2.10（IPv4 地址）',
+    AAAA: '例如 2001:db8::10（IPv6 地址）',
+    CNAME: '例如 target.example.com（域名）',
+    MX: '例如 10 mail.example.com（优先级 空格 域名）',
+    TXT: '例如 v=spf1 -all（文本内容）',
+    SRV: '例如 0 5 443 srv.example.com（优先级 权重 端口 目标）'
   };
 
   function fresh() {
@@ -21,6 +31,8 @@
       zones: [], zonesLoaded: false, zonesError: '', zonesCode: '', zonesHint: '', zonesWarnings: [],
       activeZone: '', records: [], recordsMeta: null, recordsLoaded: false, recordsError: '', recordsTruncated: false,
       qName: '', qType: 'A', qBusy: false, qResult: null, qError: '', qMsg: '',
+      wMode: 'add', wOldValue: '', wBusy: false, wMsg: '', wTone: '', wConfirm: null,
+      reloadBusy: false, reloadMsg: '', reloadTone: '',
       notInstalled: false, busy: false, destroyed: false };
   }
   var S = fresh();
@@ -110,8 +122,17 @@
     dot.classList.add(tone); c.appendChild(dot); c.appendChild(el('span', null, text)); return c;
   }
   function notice(text, tone) {
-    var cls = 'notice' + (tone === 'ok' ? ' redis-notice-ok' : '');
+    var cls = 'notice' + (tone === 'ok' ? ' dns-notice-ok' : '');
     var n = el('div', cls, text); n.setAttribute('role', 'alert'); return n;
+  }
+  // 写操作失败：后端 E_UNSUPPORTED / E_NEED_ROOT 自带「怎么办」hint，优先展示给用户。
+  function writeFailure(err, verb) {
+    if (!err) return verb + '失败，请点「刷新」后重试';
+    var f = errorView(err);
+    if (f.mapped) return f.title + (f.action ? '：' + f.action : '');
+    var detailHint = (err.detail && typeof err.detail === 'object' && err.detail.hint) ? err.detail.hint : '';
+    var h = (err.hint || '') + (detailHint ? ' ' + detailHint : '');
+    return verb + '失败：' + (err.message || '原因未知') + (h ? '。' + h : '') + '。修好后点「刷新」核对记录';
   }
   function panel(title, metaText) {
     var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
@@ -216,7 +237,7 @@
   }
   function hidePanels(hidden) {
     var flag = hidden === undefined ? true : !!hidden;
-    [S.queryPanel, S.zonesPanel, S.recordsPanel].forEach(function (p) { if (p) p.hidden = flag; });
+    [S.queryPanel, S.zonesPanel, S.recordsPanel, S.writePanel].forEach(function (p) { if (p) p.hidden = flag; });
   }
 
   // ---- ② 即时查询 ----
@@ -314,7 +335,10 @@
     });
   }
   function selectZone(name) {
-    S.activeZone = name; paintZones(); loadRecords(name);
+    S.activeZone = name;
+    if (S.wZoneInput) S.wZoneInput.value = name;
+    if (S.wZoneAuto) S.wZoneAuto.textContent = '已从上方区域自动填入';
+    paintZones(); loadRecords(name); paintWriteMsg();
   }
 
   // ---- ④ 区域记录（只读）----
@@ -323,7 +347,7 @@
     S.recordsHost.textContent = '';
     if (!S.activeZone) {
       S.recordsMeta.textContent = '';
-      S.recordsHost.appendChild(emptyBlock('先在上面「区域」表里点「查看记录」，这里会列出该区域的记录（只读）。'));
+      S.recordsHost.appendChild(emptyBlock('先在上面「区域」表里点「查看记录」，这里会列出该区域的记录；点每条记录的按钮可改值或删除。'));
       return;
     }
     S.recordsMeta.textContent = S.activeZone + (S.recordsMeta0 ? ' · ' + S.recordsMeta0 : '');
@@ -348,9 +372,126 @@
       add(tr, el('td', 'dns-num', (r.ttl || 0) + ' 秒')).setAttribute('data-label', 'TTL');
       add(tr, el('td', 'dns-value', r.value || '—')).setAttribute('data-label', '值');
     });
-    var hint = add(S.recordsHost, el('p', 'field-hint',
-      '只读视图：增删改记录走 BIND9 动态更新，需要先在「DNS 设置」里配好 TSIG 密钥，本页不提供编辑入口。'));
-    hint.setAttribute('role', 'note');
+    // 每条记录提供「改值 / 删除」快捷入口：点一下把下方表单填好，减少手抄出错。
+    var ops = add(S.recordsHost, el('div', 'dns-record-ops'));
+    add(ops, el('span', 'field-hint', '点记录上的按钮可把下方表单自动填好；写入走 BIND9 动态更新，立即生效、无需 reload。'));
+    S.records.forEach(function (r) {
+      if (r.type === 'NS' || r.type === 'SOA') return; // 区域结构记录不可写，不给按钮误导
+      var bar = add(ops, el('div', 'dns-record-bar'));
+      add(bar, el('span', 'dns-mono', r.type + ' ' + (r.name || '—') + ' → ' + (r.value || '—')));
+      var eb = add(bar, el('button', 'btn btn-ghost', '改值')); eb.type = 'button';
+      on(eb, function () { fillWriteForm('update', r); });
+      var db = add(bar, el('button', 'btn btn-ghost', '删除')); db.type = 'button';
+      on(db, function () { fillWriteForm('delete', r); });
+    });
+  }
+
+  // ---- ⑤ 记录写入（BIND9 动态更新，零 root）----
+  function paintWriteMsg() {
+    if (!S.wMsgHost) return;
+    S.wMsgHost.textContent = S.wMsg || '';
+    S.wMsgHost.className = 'dns-msg' + (S.wTone === 'ok' ? ' dns-msg-ok' : (S.wTone === 'fail' ? ' dns-msg-fail' : ''));
+    var box = S.wConfirmHost;
+    if (!box) return;
+    box.textContent = '';
+    if (!S.wConfirm) return;
+    var p = add(box, el('p', 'dns-callout-text',
+      '确认' + (S.wConfirm.op === 'delete' ? '删除' : (S.wConfirm.op === 'update' ? '修改' : '新增')) +
+      '记录：' + S.wConfirm.type + ' ' + S.wConfirm.name + (S.wConfirm.op === 'delete' ? '' : ' → ' + S.wConfirm.value) +
+      '（区域 ' + S.wConfirm.zone + '）。删除/覆盖已有值不可直接撤销，确认无误后再点。'));
+    var yes = add(p, el('button', 'btn btn-primary', '确认写入')); yes.type = 'button'; on(yes, function () { doWrite(S.wConfirm); });
+    var no = add(p, el('button', 'btn btn-ghost', '取消')); no.type = 'button'; on(no, function () { S.wConfirm = null; paintWriteMsg(); });
+  }
+  function fillWriteForm(op, r) {
+    if (!S.wNameInput) return;
+    S.wMode = op; S.wTypeSel.value = WRITE_TYPES.indexOf(r.type) >= 0 ? r.type : 'A';
+    S.wNameInput.value = r.name || ''; S.wValueInput.value = r.value || '';
+    S.wOldInput.value = r.value || ''; S.wTtlInput.value = r.ttl || '';
+    S.wZoneInput.value = S.activeZone || '';
+    syncWriteMode();
+    S.wConfirm = null; S.wMsg = '已填入 ' + (r.name || '') + ' 的记录，核对后点「' +
+      (op === 'delete' ? '删除记录' : '保存修改') + '」'; S.wTone = ''; paintWriteMsg();
+    if (S.writePanel && S.writePanel.scrollIntoView) S.writePanel.scrollIntoView({ block: 'nearest' });
+  }
+  function syncWriteMode() {
+    var op = S.wMode;
+    var isDel = op === 'delete';
+    if (S.wOpSel) S.wOpSel.value = op;
+    if (S.wValueField) S.wValueField.hidden = isDel;
+    if (S.wOldField) S.wOldField.hidden = op !== 'update';
+    if (S.wSaveBtn) S.wSaveBtn.textContent = isDel ? '删除记录' : (op === 'update' ? '保存修改' : '新增记录');
+    if (S.wValueHint) S.wValueHint.textContent = WRITE_VALUE_HINT[S.wTypeSel.value] || '请按所选类型填写记录值';
+  }
+  function submitWrite() {
+    if (S.wBusy) return;
+    var zone = (S.wZoneInput.value || '').trim().replace(/^\.+/, '').toLowerCase();
+    var name = (S.wNameInput.value || '').trim().replace(/^\.+/, '').toLowerCase();
+    var type = S.wTypeSel.value;
+    var value = (S.wValueInput.value || '').trim();
+    var oldValue = (S.wOldInput.value || '').trim();
+    var ttl = parseInt(S.wTtlInput.value, 10); if (!isFinite(ttl) || ttl < 0) ttl = 0;
+    if (!zone || !/^[a-z0-9._-]+$/.test(zone)) { S.wMsg = '请填区域名（例如 example.com，可在上方「区域」表点「查看记录」自动填入）'; S.wTone = 'fail'; S.wZoneInput.focus(); paintWriteMsg(); return; }
+    if (!name || !/^[a-z0-9._*-]+$/.test(name)) { S.wMsg = '请填完整记录名（例如 www.example.com，只能含小写字母、数字、点、连字符、星号）'; S.wTone = 'fail'; S.wNameInput.focus(); paintWriteMsg(); return; }
+    if (name !== zone && name.slice(-(zone.length + 1)) !== '.' + zone) { S.wMsg = '记录名必须属于区域 ' + zone + '：请以 .' + zone + ' 结尾，或等于区域名本身'; S.wTone = 'fail'; S.wNameInput.focus(); paintWriteMsg(); return; }
+    if (S.wMode !== 'delete' && !value) { S.wMsg = '请填记录值：' + (WRITE_VALUE_HINT[type] || '按所选类型填写'); S.wTone = 'fail'; S.wValueInput.focus(); paintWriteMsg(); return; }
+    S.wConfirm = { op: S.wMode, zone: zone, name: name, type: type, value: value, old_value: oldValue, ttl: ttl };
+    S.wMsg = ''; S.wTone = ''; paintWriteMsg();
+  }
+  function doWrite(p) {
+    if (S.wBusy) return;
+    var method = p.op === 'add' ? 'dns.record.add' : (p.op === 'update' ? 'dns.record.update' : 'dns.record.delete');
+    var params = { zone: p.zone, name: p.name, type: p.type };
+    if (p.op !== 'delete') params.value = p.value;
+    if (p.op === 'update' && p.old_value) params.old_value = p.old_value;
+    if (p.op !== 'delete' && p.ttl) params.ttl = p.ttl;
+    S.wBusy = true; S.wSaveBtn.disabled = true; S.dBtn.disabled = true;
+    S.wConfirm = null; S.wMsg = '正在' + (p.op === 'delete' ? '删除' : '写入') + ' ' + p.type + ' ' + p.name + '…'; S.wTone = ''; paintWriteMsg();
+    invoke(method, params).then(function (d) {
+      if (S.destroyed) return;
+      S.wBusy = false; S.wSaveBtn.disabled = false; S.dBtn.disabled = false;
+      var extra = [];
+      if (d && d.changed === false) extra.push('目标已是该值（未重复写入）');
+      if (d && d.verified) extra.push('已回读确认生效');
+      if (d && d.rolled_back) extra.push('校验失败已自动回滚，请点「刷新」核对');
+      if (d && d.reload_required) extra.push('需要重载服务才生效');
+      S.wMsg = '已' + (p.op === 'delete' ? '删除' : '写入') + '记录 ' + p.type + ' ' + p.name +
+        (extra.length ? '（' + extra.join('；') + '）' : '') + '。';
+      S.wTone = (d && d.rolled_back) ? 'fail' : 'ok';
+      paintWriteMsg(); loadRecords(p.zone);
+    }, function (err) {
+      if (S.destroyed) return;
+      S.wBusy = false; S.wSaveBtn.disabled = false; S.dBtn.disabled = false;
+      S.wMsg = writeFailure(err, p.op === 'delete' ? '删除' : '写入'); S.wTone = 'fail'; paintWriteMsg();
+    });
+  }
+  function paintReload() {
+    if (!S.reloadMsgHost) return;
+    S.reloadMsgHost.textContent = S.reloadMsg || '';
+    S.reloadMsgHost.className = 'dns-msg' + (S.reloadTone === 'ok' ? ' dns-msg-ok' : (S.reloadTone === 'fail' ? ' dns-msg-fail' : ''));
+  }
+  function submitReload() {
+    if (S.reloadBusy) return;
+    var zone = (S.reloadZoneInput.value || '').trim().replace(/^\.+/, '').toLowerCase();
+    var params = zone ? { zone: zone } : {};
+    S.reloadBusy = true; S.reloadBtn.disabled = true;
+    S.reloadMsg = zone ? '正在重载区域 ' + zone + '…' : '正在重载 DNS 服务…'; S.reloadTone = ''; paintReload();
+    invoke('dns.reload', params).then(function (d) {
+      if (S.destroyed) return;
+      S.reloadBusy = false; S.reloadBtn.disabled = false;
+      if (d && d.reload_required) {
+        S.reloadMsg = '插件不启停宿主服务：请在服务器上执行 ' + (d.command || '对应服务的重载命令') + ' 后点「刷新」';
+        S.reloadTone = 'warn';
+      } else {
+        S.reloadMsg = '已重载' + (d && d.engine ? '（' + engineText(d.engine) + '）' : '') +
+          (d && d.command ? '：' + d.command : '') + '。记录写入不需要这一步，只有手工改过区域文件才需要。';
+        S.reloadTone = 'ok';
+      }
+      paintReload();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.reloadBusy = false; S.reloadBtn.disabled = false;
+      S.reloadMsg = writeFailure(err, '重载'); S.reloadTone = 'fail'; paintReload();
+    });
   }
 
   // ---- 加载 ----
@@ -378,7 +519,8 @@
     });
   }
   function loadRecords(zone) {
-    S.records = []; S.recordsLoaded = false; S.recordsError = ''; S.recordsTruncated = false; paintRecords();
+    S.records = []; S.recordsLoaded = false; S.recordsError = ''; S.recordsTruncated = false;
+    S.wConfirm = null; paintRecords();
     invoke('dns.records', { zone: zone }).then(function (d) {
       if (S.destroyed) return;
       S.records = (d && d.records) || [];
@@ -413,6 +555,19 @@
       '.dns-form{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
       '.dns-form-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
       '.dns-msg{min-height:18px;color:var(--kore-text-3);font-size:var(--kore-font-12);}',
+      '.dns-msg-ok{color:var(--kore-success);}',
+      '.dns-msg-fail{color:var(--kore-danger);}',
+      '.dns-notice-ok{color:var(--kore-success);}',
+      '.dns-record-ops{display:flex;flex-direction:column;gap:var(--kore-space-1);padding:0 var(--kore-space-4) var(--kore-space-3);}',
+      '.dns-record-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
+      '.dns-record-bar .dns-mono{flex:1 1 260px;color:var(--kore-text-2);}',
+      '.dns-write-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.dns-write-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
+      '.dns-confirm{margin:0 var(--kore-space-4) var(--kore-space-3);padding:var(--kore-space-3);border:1px solid var(--kore-warning);border-left:3px solid var(--kore-warning);border-radius:var(--kore-radius-control);background:var(--kore-warning-bg);}',
+      '.dns-confirm p{margin:0 0 var(--kore-space-2);color:var(--kore-text-1);font-size:var(--kore-font-13);}',
+      '.dns-write-note{margin:var(--kore-space-2) var(--kore-space-4) var(--kore-space-3);}',
+      '.dns-reload-form{display:flex;flex-wrap:wrap;align-items:end;gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.dns-reload-form .field{flex:1 1 240px;}',
       '.dns-q-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
       '.dns-table-wrap{overflow-x:auto;}',
       '.dns-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-13);}',
@@ -427,7 +582,7 @@
       '.dns-empty{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-4);color:var(--kore-text-3);font-size:var(--kore-font-13);}',
       '.dns-empty span{flex:1 1 260px;}',
       '@media (max-width:639px){',
-      '.dns-grid,.dns-form{grid-template-columns:1fr;}',
+      '.dns-grid,.dns-form,.dns-write-form{grid-template-columns:1fr;}',
       '.dns .panel-head{flex-wrap:wrap;row-gap:var(--kore-space-1);}',
       '.dns .panel-meta{white-space:normal;}',
       '.dns-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}',
@@ -488,13 +643,78 @@
     S.zonesHost = add(zones.panel, el('div', 'dns-zones'));
 
     // ④ 记录
-    var records = panel('区域记录（只读）', '');
+    var records = panel('区域记录', '点击记录可把下方表单自动填好');
     add(S.root, records.panel); S.recordsPanel = records.panel;
     S.recordsMeta = add(records.meta, el('span', null, ''));
     S.recordsHost = add(records.panel, el('div', 'dns-records'));
 
-    S.qType = 'A';
-    paintStatus(); paintZones(); paintRecords(); paintQuery(); paintQueryMsg();
+    // ⑤ 写记录（bind9 动态更新）
+    var write = panel('增删记录', 'BIND9 动态更新 · 立即生效 · 无需 reload');
+    add(S.root, write.panel); S.writePanel = write.panel;
+    var wform = add(write.panel, el('div', 'dns-write-form'));
+    S.wZoneInput = el('input', 'field-input'); S.wZoneInput.type = 'text';
+    S.wZoneInput.placeholder = 'example.com'; S.wZoneInput.setAttribute('autocomplete', 'off');
+    var zoneField = add(wform, el('label', 'field'));
+    add(zoneField, el('span', 'field-label', '区域')); add(zoneField, S.wZoneInput);
+    S.wZoneAuto = add(zoneField, el('span', 'field-hint', '选择区域后自动填入，可手改'));
+    S.wNameInput = el('input', 'field-input'); S.wNameInput.type = 'text';
+    S.wNameInput.placeholder = 'www.example.com'; S.wNameInput.setAttribute('autocomplete', 'off');
+    var nameField = add(wform, el('label', 'field'));
+    add(nameField, el('span', 'field-label', '记录名')); add(nameField, S.wNameInput);
+    S.wTypeSel = el('select', 'field-input');
+    WRITE_TYPES.forEach(function (t) {
+      var o = el('option', null, t + ' · ' + (TYPE_HINT[t] || t)); o.value = t; S.wTypeSel.appendChild(o);
+    });
+    S.wTypeSel.value = 'A';
+    var typeField = add(wform, el('label', 'field'));
+    add(typeField, el('span', 'field-label', '类型')); add(typeField, S.wTypeSel);
+    S.wValueInput = el('input', 'field-input'); S.wValueInput.type = 'text';
+    S.wValueInput.setAttribute('autocomplete', 'off');
+    S.wValueField = add(wform, el('label', 'field'));
+    add(S.wValueField, el('span', 'field-label', '记录值')); add(S.wValueField, S.wValueInput);
+    S.wValueHint = add(S.wValueField, el('span', 'field-hint', WRITE_VALUE_HINT.A));
+    S.wOldInput = el('input', 'field-input'); S.wOldInput.type = 'text';
+    S.wOldInput.placeholder = '留空则用快照旧值作前置条件';
+    S.wOldField = add(wform, el('label', 'field'));
+    add(S.wOldField, el('span', 'field-label', '旧值（改记录时可选）')); add(S.wOldField, S.wOldInput);
+    S.wTtlInput = el('input', 'field-input'); S.wTtlInput.type = 'number';
+    S.wTtlInput.min = '0'; S.wTtlInput.max = '86400'; S.wTtlInput.value = '300';
+    var ttlField = add(wform, el('label', 'field'));
+    add(ttlField, el('span', 'field-label', 'TTL（秒，0=默认）')); add(ttlField, S.wTtlInput);
+    S.wOpSel = el('select', 'field-input');
+    [['add', '新增记录'], ['update', '修改记录'], ['delete', '删除记录']].forEach(function (pair) {
+      var o = el('option', null, pair[1]); o.value = pair[0]; S.wOpSel.appendChild(o);
+    });
+    var opField = add(wform, el('label', 'field'));
+    add(opField, el('span', 'field-label', '操作')); add(opField, S.wOpSel);
+    on(S.wOpSel, function () { S.wMode = S.wOpSel.value; syncWriteMode(); }, 'change');
+    on(S.wTypeSel, function () { syncWriteMode(); }, 'change');
+    var wOps = add(wform, el('div', 'dns-write-ops'));
+    S.wSaveBtn = add(wOps, el('button', 'btn btn-primary', '新增记录')); S.wSaveBtn.type = 'button'; on(S.wSaveBtn, submitWrite);
+    S.dBtn = add(wOps, el('button', 'btn btn-ghost', '删除记录')); S.dBtn.type = 'button';
+    on(S.dBtn, function () { S.wMode = 'delete'; syncWriteMode(); submitWrite(); });
+    S.wMsgHost = add(wOps, el('span', 'dns-msg', ''));
+    S.wConfirmHost = add(write.panel, el('div', ''));
+    on(S.wNameInput, function (e) { if (e.key === 'Enter') submitWrite(); }, 'keydown');
+    var wPrereq = add(write.panel, el('p', 'field-hint dns-write-note',
+      '首次使用需一次性配置：bind9 区域开启 allow-update，生成 TSIG 密钥并让 kore 用户可读，' +
+      '在「DNS 设置」填上密钥路径与权威服务器。写入不经 root、不改区域文件；失败会自动回滚。'));
+    wPrereq.setAttribute('role', 'note');
+
+    // ⑥ 重载（手工改 zone 文件后才需要；记录写入不走这里）
+    var reload = panel('重新加载 DNS 服务', '只用于手工改过区域文件 / 配置之后');
+    add(S.root, reload.panel);
+    var rform = add(reload.panel, el('div', 'dns-reload-form'));
+    S.reloadZoneInput = el('input', 'field-input'); S.reloadZoneInput.type = 'text';
+    S.reloadZoneInput.placeholder = '留空 = 重载整个引擎'; S.reloadZoneInput.setAttribute('autocomplete', 'off');
+    var rzField = add(rform, el('label', 'field'));
+    add(rzField, el('span', 'field-label', '区域（可选）')); add(rzField, S.reloadZoneInput);
+    S.reloadBtn = add(rform, el('button', 'btn btn-ghost', '重新加载')); S.reloadBtn.type = 'button'; on(S.reloadBtn, submitReload);
+    S.reloadMsgHost = add(rform, el('span', 'dns-msg', ''));
+    add(reload.panel, el('p', 'field-hint', '记录增删改立即生效，不需要重新加载。此按钮仅在你手工编辑过区域文件后使用。'));
+
+    S.qType = 'A'; S.wMode = 'add';
+    paintStatus(); paintZones(); paintRecords(); paintQuery(); paintQueryMsg(); paintWriteMsg(); paintReload();
     refreshAll();
     return { destroy: function () { S.destroyed = true; } };
   }
