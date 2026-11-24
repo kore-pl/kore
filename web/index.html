@@ -18,6 +18,8 @@
        在用户切到英文时懒加载（不进首屏）。两文件合计 gzip ≤ 3 KiB，见 ADR-0021。 -->
   <script src="/assets/i18n-zh-CN.js" defer></script>
   <script src="/assets/i18n.js" defer></script>
+  <!-- shell.js 内置顶栏「帮助」入口（新用户求助）与未知 hash 的友好 404 页（页面不存在提示 +
+       返回概览 / 去搜索下一步按钮），二者随首屏壳脚本就绪，不增请求、不破坏 Ctrl+K 全局搜索。 -->
   <script src="/assets/shell.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>

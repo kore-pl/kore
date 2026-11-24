@@ -11,6 +11,9 @@
   'use strict';
 
   var DEFAULT_ID = 'dashboard';
+  // 未知 hash 的兜底路由 id：只进 byId 供路由查找，永远不进导航菜单。
+  // 用固定 id 而非每次回概览，是为了让 app.js 的 navigate(current()) 刷新不弹走 404 页（G-33）。
+  var NOT_FOUND_ID = '404';
   var SVG_NS = 'http://www.w3.org/2000/svg';
   // 导航图标只用内联 SVG path（20×20，currentColor，stroke-width 1.5）：
   // 不依赖 emoji 字体、不引图标库、不发额外请求，避免部分环境把 emoji 渲染成色块。
@@ -224,7 +227,9 @@
   }
 
   function onDrawerKey(ev) {
-    if (ev.key === 'Escape' && drawerOpen) setDrawer(false, true);
+    if (ev.key !== 'Escape') return;
+    if (helpMask && !helpMask.hidden) { closeHelp(); return; }
+    if (drawerOpen) setDrawer(false, true);
   }
 
   // 模块渲染可返回 handle；handle.destroy() 是清理钩子（定时器 / 监听器）。
@@ -235,11 +240,61 @@
     handle = null;
   }
 
+  /* ===== 友好 404（G-33 错误边界）=====
+     未知 hash 不再是空白页/静默回概览：给白话说明 + 两个下一步按钮（返回概览 / 去搜索）。
+     样式内联注入一次（不进首屏 CSS 预算）；触摸目标 ≥44px；按钮只走既有 navigate/openSearch，
+     不新增路由逻辑、不碰 Ctrl+K。文案人话，不出现 hash/route 等内部术语。 */
+  var NOT_FOUND_CSS = '.kore-notfound{max-width:560px;margin:clamp(24px,8vh,80px) auto;padding:24px 20px;' +
+    'text-align:center;color:var(--kore-text-1)}' +
+    '.kore-notfound-code{font-size:clamp(48px,12vw,88px);line-height:1;font-weight:700;' +
+    'color:var(--kore-primary,#2563eb);margin:0 0 12px}' +
+    '.kore-notfound h2{font-size:var(--kore-font-18,18px);margin:0 0 10px}' +
+    '.kore-notfound p{font-size:var(--kore-font-14,14px);line-height:1.7;color:var(--kore-text-2);' +
+    'margin:0 0 24px;overflow-wrap:anywhere}' +
+    '.kore-notfound-path{color:var(--kore-text-3);font-size:var(--kore-font-12,12px)}' +
+    '.kore-notfound-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}' +
+    '.kore-notfound-actions button{display:inline-flex;align-items:center;justify-content:center;' +
+    'min-width:132px;min-height:44px;padding:0 18px;border-radius:6px;font:inherit;font-size:14px;' +
+    'cursor:pointer;border:1px solid var(--kore-border-1)}' +
+    '.kore-notfound-home{background:var(--kore-primary,#2563eb);color:#fff;border-color:var(--kore-primary,#2563eb)}' +
+    '.kore-notfound-search{background:var(--kore-bg-2);color:var(--kore-text-1)}';
+  function ensureNotFoundCss() {
+    if (document.getElementById('kore-notfound-css')) return;
+    var s = el('style'); s.id = 'kore-notfound-css'; s.textContent = NOT_FOUND_CSS;
+    document.head.appendChild(s);
+  }
+  function renderNotFound(box) {
+    ensureNotFoundCss();
+    var wrap = el('div', 'kore-notfound');
+    wrap.setAttribute('role', 'alert');
+    wrap.appendChild(el('div', 'kore-notfound-code', '404'));
+    wrap.appendChild(el('h2', null, tr('common.notFoundTitle', '这个页面不存在')));
+    var desc = el('p', null,
+      tr('common.notFoundDesc', '地址可能输错了，或者页面已经搬走了。别急，用下面的按钮回到正轨。'));
+    var path = el('span', 'kore-notfound-path', window.location.hash || '');
+    desc.appendChild(el('br'));
+    desc.appendChild(path);
+    wrap.appendChild(desc);
+    var actions = el('div', 'kore-notfound-actions');
+    var home = el('button', 'kore-notfound-home', tr('common.notFoundHome', '返回概览'));
+    home.type = 'button';
+    home.addEventListener('click', function () { navigate(DEFAULT_ID); });
+    var search = el('button', 'kore-notfound-search', tr('common.notFoundSearch', '去搜索'));
+    search.type = 'button';
+    search.addEventListener('click', openSearch);
+    actions.appendChild(home);
+    actions.appendChild(search);
+    wrap.appendChild(actions);
+    box.appendChild(wrap);
+    return null;
+  }
+
   function paint(key) {
     var k = String(key === undefined || key === null ? '' : key);
     var cut = k.indexOf('/');
     var parentId = cut >= 0 ? k.slice(0, cut) : k;
-    var route = byId[parentId] || byId[DEFAULT_ID];
+    // 未知一级 id 落到 404（而不是静默回概览）；二级子路由失效仍由 hub 自己兜默认 tab。
+    var route = byId[parentId] || byId[NOT_FOUND_ID] || byId[DEFAULT_ID];
     if (!route || !viewBox) return null;
     releaseHandle();
     for (var key in navButtons) {
@@ -298,7 +353,8 @@
     setDrawer(false, false);
     if (isRoot(raw)) { rootIntent(); return; }
     var key = routeKey(raw);
-    if (!byId[normalize(key)]) key = byId[DEFAULT_ID] ? DEFAULT_ID : '';
+    // 未知路由不再改写成概览：保留原 hash 交给 paint 落 404 页（用户能看到自己输错了什么）。
+    if (!byId[normalize(key)] && !byId[NOT_FOUND_ID]) key = byId[DEFAULT_ID] ? DEFAULT_ID : '';
     if (!key) return;
     if (key === currentId) return;
     paint(key);
@@ -620,6 +676,127 @@
     var btn = buildSearchTrigger();
     if (btn.parentNode !== conn) conn.insertBefore(btn, conn.firstChild);
   }
+  /* ===== 帮助入口（R8-3）=====
+     新用户遇到问题有处求助：顶栏「帮助」按钮打开内置小面板，列常用操作入口 + 下一步。
+     不臆造文档站外链——只链仓库里真实存在的文档地址（settings.js 已在用的 repo）；
+     面板自包含、首屏不加载（首次点开才建 DOM + 注入样式），手机触摸目标 ≥44px。
+     入口复用 .conn 挂点与同一个 MutationObserver，不新增观察器、不碰 Ctrl+K。 */
+  var HELP_CSS = '#kore-help-trigger{display:inline-flex;align-items:center;justify-content:center;' +
+    'min-width:32px;min-height:32px;padding:0 8px;border:1px solid var(--kore-border-1);border-radius:4px;' +
+    'background:var(--kore-bg-2);color:var(--kore-text-2);font:inherit;font-size:12px;cursor:pointer;' +
+    'white-space:nowrap}' +
+    '#kore-help-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+    '#kore-help-trigger svg{width:16px;height:16px;flex:0 0 auto}' +
+    '.kore-help-mask{position:fixed;inset:0;z-index:var(--z-modal,1000);background:rgba(0,0,0,.42);' +
+    'display:flex;align-items:center;justify-content:center;padding:16px}' +
+    '.kore-help-mask[hidden]{display:none}' +
+    '.kore-help-panel{width:min(480px,100%);max-height:min(80vh,640px);overflow:auto;' +
+    'background:var(--kore-bg-1);color:var(--kore-text-1);border:1px solid var(--kore-border-1);' +
+    'border-radius:10px;padding:22px 24px;box-shadow:0 12px 40px rgba(0,0,0,.25)}' +
+    '.kore-help-panel h2{font-size:var(--kore-font-18,18px);margin:0 0 16px}' +
+    '.kore-help-panel ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}' +
+    '.kore-help-panel li button,.kore-help-panel li a{display:flex;align-items:center;justify-content:space-between;' +
+    'width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--kore-border-1);border-radius:6px;' +
+    'background:var(--kore-bg-2);color:var(--kore-text-1);font:inherit;font-size:14px;text-align:left;' +
+    'text-decoration:none;cursor:pointer}' +
+    '.kore-help-panel li button:hover,.kore-help-panel li a:hover{border-color:var(--kore-primary,#2563eb)}' +
+    '.kore-help-panel li span{color:var(--kore-text-3);font-size:12px}' +
+    '.kore-help-foot{margin:18px 0 0;font-size:12px;color:var(--kore-text-3);line-height:1.6}' +
+    '@media (max-width:639px){#kore-help-trigger{min-width:44px;min-height:44px}}';
+  var helpTrigger = null;
+  var helpMask = null;
+  function ensureHelpCss() {
+    if (document.getElementById('kore-help-css')) return;
+    var s = el('style'); s.id = 'kore-help-css'; s.textContent = HELP_CSS;
+    document.head.appendChild(s);
+  }
+  function closeHelp() {
+    if (helpMask) helpMask.hidden = true;
+    if (helpTrigger) helpTrigger.setAttribute('aria-expanded', 'false');
+  }
+  function buildHelpPanel() {
+    if (helpMask) return;
+    ensureHelpCss();
+    helpMask = el('div', 'kore-help-mask');
+    helpMask.id = 'kore-help-mask';
+    helpMask.hidden = true;
+    var panel = el('div', 'kore-help-panel');
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', tr('common.helpTitle', '帮助与常用操作'));
+    panel.appendChild(el('h2', null, tr('common.helpTitle', '帮助与常用操作')));
+    var list = el('ul');
+    var items = [
+      [tr('common.helpOverview', '回到概览'), tr('common.helpOverviewHint', '看本机整体状态'), function () { closeHelp(); navigate(DEFAULT_ID); }],
+      [tr('common.helpSearch', '搜索功能或设置'), tr('common.helpSearchHint', '快捷键 Ctrl+K'), function () { closeHelp(); openSearch(); }],
+      [tr('common.helpNav', '查看所有功能'), tr('common.helpNavHint', '左侧导航 / 手机「更多」'), function () { closeHelp(); var m = document.querySelector('.kore-nav-more'); if (m) m.click(); }]
+    ];
+    for (var i = 0; i < items.length; i++) {
+      var li = el('li');
+      var btn = el('button', null, items[i][0]);
+      btn.type = 'button';
+      btn.appendChild(el('span', null, items[i][1]));
+      btn.addEventListener('click', items[i][2]);
+      li.appendChild(btn);
+      list.appendChild(li);
+    }
+    // 外链只用仓库里真实存在的文档地址（与 settings.js 的 repo 一致），不臆造文档站。
+    var docLi = el('li');
+    var doc = el('a', null, tr('common.helpDocs', '查看项目文档'));
+    doc.href = 'https://github.com/pengtang1024/kore';
+    doc.target = '_blank';
+    doc.rel = 'noopener noreferrer';
+    doc.appendChild(el('span', null, 'GitHub'));
+    docLi.appendChild(doc);
+    list.appendChild(docLi);
+    panel.appendChild(list);
+    panel.appendChild(el('p', 'kore-help-foot',
+      tr('common.helpFoot', '找不到想要的功能？试试搜索，或到概览页查看本机状态。')));
+    helpMask.appendChild(panel);
+    helpMask.addEventListener('click', function (ev) { if (ev.target === helpMask) closeHelp(); });
+    document.body.appendChild(helpMask);
+  }
+  function openHelp() {
+    ensureHelpCss();
+    buildHelpPanel();
+    if (helpMask) helpMask.hidden = false;
+    if (helpTrigger) helpTrigger.setAttribute('aria-expanded', 'true');
+  }
+  function buildHelpTrigger() {
+    if (helpTrigger) return helpTrigger;
+    ensureHelpCss();
+    helpTrigger = el('button', 'kore-help-trigger');
+    helpTrigger.type = 'button';
+    helpTrigger.id = 'kore-help-trigger';
+    helpTrigger.setAttribute('aria-label', tr('common.helpTitle', '帮助与常用操作'));
+    helpTrigger.setAttribute('aria-haspopup', 'dialog');
+    helpTrigger.setAttribute('aria-expanded', 'false');
+    helpTrigger.title = tr('common.helpTitle', '帮助与常用操作');
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20'); svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6');
+    var c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', '10'); c.setAttribute('cy', '10'); c.setAttribute('r', '7.2');
+    var q = document.createElementNS(SVG_NS, 'path');
+    q.setAttribute('d', 'M8.2 8a1.9 1.9 0 1 1 2.6 1.8c-.8.4-1 1-1 1.8');
+    var dot = document.createElementNS(SVG_NS, 'path');
+    dot.setAttribute('d', 'M9.8 14h.01');
+    svg.appendChild(c); svg.appendChild(q); svg.appendChild(dot);
+    helpTrigger.appendChild(svg);
+    helpTrigger.appendChild(bindLabel(el('span', null), 'common.help', '帮助'));
+    helpTrigger.addEventListener('click', openHelp);
+    return helpTrigger;
+  }
+  function placeHelpTrigger() {
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    var conn = top.querySelector('.conn');
+    if (!conn) { setTimeout(placeHelpTrigger, 60); return; }
+    var btn = buildHelpTrigger();
+    // 紧跟体验入口之后（连接器组末尾），手机端宽度不足时由 .conn 横向滚动兜住。
+    if (btn.parentNode !== conn) conn.appendChild(btn);
+  }
+
   /* ===== 个性化体验入口：主题三选一 / 快捷键帮助 / 新手引导（R6-4/5/6 接线）=====
      三组件懒加载、不进首屏六件套。主壳首屏渲染后按 theme → shortcuts → onboarding 顺序注入
      （文件头对齐结论：onboarding 外观步骤调 KoreTheme.toggle()、shortcuts 帮助面板引用
@@ -774,11 +951,14 @@
     placeSearchTrigger();
     placeAlertTrigger();
     placeExperienceEntries();
+    placeHelpTrigger();
     if (!window.MutationObserver) return;
     if (searchObserver) searchObserver.disconnect();
     var top = document.getElementById('kore-topbar');
     if (!top) return;
-    searchObserver = new MutationObserver(function () { placeSearchTrigger(); placeAlertTrigger(); placeExperienceEntries(); });
+    searchObserver = new MutationObserver(function () {
+      placeSearchTrigger(); placeAlertTrigger(); placeExperienceEntries(); placeHelpTrigger();
+    });
     searchObserver.observe(top, { childList: true, subtree: true });
   }
   function onGlobalKey(ev) {
@@ -841,6 +1021,10 @@
       navButtons[route.id] = [btn];
       nav.appendChild(btn);
     }
+    // 友好 404：隐藏路由（不在 items、不进导航），专收未知一级视图；render 每次重画错误页。
+    // 关键：注册后 byId['404'] 存在，app.js 的 navigate(current()) 刷新会留在 404 而非弹回概览。
+    byId[NOT_FOUND_ID] = { id: NOT_FOUND_ID, label: '页面不存在', render: renderNotFound, extra: false };
+
     var extras = items.slice(5);
     if (extras.length) {
       moreBtn = el('button', 'kore-nav-item kore-nav-more');
