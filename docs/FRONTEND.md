@@ -359,7 +359,7 @@ var Dist embed.FS
 
 **定调**：图表实现**不锁定具体库**——**ECharts5 按需 ESM 是首选默认方案，不是硬指标**。任何实现（自研 Canvas/SVG、其他轻量库、或 ECharts）只要逐条满足下列判据即可合入；换方案须在 [ADR-0027](./DECISIONS/0027-echarts-chart-standard.md)（或新 ADR）记录选型理由与体积 / 实例证据。图表是**非首屏能力**：任何方案都不得进首屏，`d(首屏)/d(图表数)=0`。
 
-**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**（`9468f05 [agent:monitor-canvas]`），未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；实测锚点：`web/monitor.js` 的 `lttbSample`（约 :259）、`devicePixelRatio` 缩放（约 :302）、验收钩子 `window.__koreMonitorChart`（约 :702），行号以 `grep -n` 为准；另有 1000 点尾部截断与单片 `RESIZE_DEBOUNCE_MS=100` 单监听。**未使用任何图表库**。ECharts 基础设施曾随 `cc47bac` 落地并按当时门禁通过，随后被并发会话 `c9a5336` 整体回退（`da5b88f` 同轮回退了 §13 校准）；**当前 HEAD 无该实现**——无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行，也**无页面消费者**（见 ADR-0027）。ECharts 仍是首选方案但当前不在树；恢复**不是一条命令**（`git revert c9a5336` 会因 `web/embed.go` 冲突，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh` 并与并发会话协调），不重新设计。以 `git log -- web/charts.js` 与 `git cat-file -e HEAD:web/charts.js` 的实际状态为准；判据对两种实现同等适用。
+**当前状态（2026-11-23 用户裁决）**：主壳唯一的图表场景——监控页历史曲线——的实现是**自研 Canvas + LTTB**（`9468f05 [agent:monitor-canvas]`），未使用 ECharts，作为「非 ECharts 实现同样合规」的实证；实测锚点：`web/monitor.js` 的 `lttbSample`（约 :259）、`devicePixelRatio` 缩放（约 :302）、验收钩子 `window.__koreMonitorChart`（约 :702），行号以 `grep -n` 为准；另有 1000 点尾部截断与单片 `RESIZE_DEBOUNCE_MS=100` 单监听。三条折线均带 hover 与手机 tap 读数面板（`bindTip` / `showTipAt` / `indexAt`，2026-11-24 落地），点数 < 12 时直接在点上标数值；`web/sshguard.js` 的 24h 失败柱状图同样有 tap 面板（替换原生 `<title>`，后者在手机上不显示）。**这三条折线此前显式 `tooltip:{show:false}`（旧第 8 条要求）——用户 2026-11-24 反馈「没有鼠标移入面板，看不出具体点位」即由此而来，本条为纠偏后的判据。****未使用任何图表库**。ECharts 基础设施曾随 `cc47bac` 落地并按当时门禁通过，随后被并发会话 `c9a5336` 整体回退（`da5b88f` 同轮回退了 §13 校准）；**当前 HEAD 无该实现**——无 `web/charts.js` / `web/charts/` / `scripts/build-charts.sh` / `make charts` / `web/embed.go` 两行，也**无页面消费者**（见 ADR-0027）。ECharts 仍是首选方案但当前不在树；恢复**不是一条命令**（`git revert c9a5336` 会因 `web/embed.go` 冲突，须手工并回 `Makefile` / `web/embed.go` / `scripts/frontend-check.sh` 并与并发会话协调），不重新设计。以 `git log -- web/charts.js` 与 `git cat-file -e HEAD:web/charts.js` 的实际状态为准；判据对两种实现同等适用。
 
 **首选默认方案（ECharts）的契约文件**——选其它方案时这些文件可以不存在，但 §13 判据不变：
 
@@ -370,7 +370,7 @@ var Dist embed.FS
 | `scripts/build-charts.sh` + `make charts` | 构建 | 产出 `web/dist/charts.js` 与 `web/dist/charts-echarts.js` |
 | `web/dist/charts*.js` | 产物 | **平铺**（静态路由 `/assets/{file}` 只接受单段文件名）；禁 `*.map`；不进首屏预算 |
 
-十条细则为**验收条文**，**实现无关**，判据可复跑 / 可回读，**违反即返工**。表中出现的 ECharts 配置 / 字段（`setOption`、`lazyUpdate`、`E_CHART_LIMIT`、`count()` 等）只是首选方案的示例，标注为「（ECharts 为例；其它实现按同一判据）」，**其它实现按同一判据执行**：
+十一条细则为**验收条文**，**实现无关**，判据可复跑 / 可回读，**违反即返工**。表中出现的 ECharts 配置 / 字段（`setOption`、`lazyUpdate`、`E_CHART_LIMIT`、`count()` 等）只是首选方案的示例，标注为「（ECharts 为例；其它实现按同一判据）」，**其它实现按同一判据执行**：
 
 | # | 条文 | 可判定判据（违反即返工） |
 | --- | --- | --- |
@@ -381,9 +381,10 @@ var Dist embed.FS
 | 5 | **渲染器选择（实现无关）**：时序 / 大数据量用 **Canvas 或等效位图**；静态、无交互、切片少的占比图优先 SVG。不绑定具体库，也不以「用了 SVG / 用了 Canvas」本身判合规 | 统一判定看：实例数 ≤12、单图 ≤1000 点、100ms 单监听防抖、切走 dispose 后计数归零、无动画 / 无悬停 / 无标记点、首屏不变；任一不满足即返工 |
 | 6 | **销毁**：组件卸载、切 Tab 必须销毁图表实例并置空引用；禁只移除 DOM 不销毁 | 视图 teardown 路径可见 `disposeChart` / `disposeAll` 或等效销毁调用且实例计数回落；只 `removeChild` / `innerHTML=''` / 仅置 `display:none` 即返工 |
 | 7 | **resize 统一 100ms 防抖**：由封装层单点绑定，不逐图各自绑定 | 图表容器的唯一全局 resize 监听在封装层（默认方案为 `web/charts.js`，实例表空即解绑）；图表页视图内不得再绑 `window` resize 或对图表容器 `ResizeObserver`。非图表模块的既有绑定（如 `terminal.js` 的 `visualViewport`）不属本条判定范围，但**不得借此放宽**图表侧 |
-| 8 | **精简配置**：不需要的坐标轴、`tooltip`、高亮（`emphasis`）、标记点（`markPoint`）等按所选库的等效项全部显式关闭 | 每份图表配置里上述项为 `show: false` 或不存在（时序图只保留必要坐标轴）；保留默认开启项即返工 |
+| 8 | **精简配置**：不需要的坐标轴、**装饰性提示**（没有数据点可读需求的默认 tooltip）、高亮（`emphasis`）、标记点（`markPoint`）等按所选库的等效项全部显式关闭——**数据点读数面板不在精简范围内，见第 11 条** | 每份图表配置里「非读数类」上述项为 `show: false` 或不存在（时序图只保留必要坐标轴）；保留默认开启项即返工；把 `tooltip` 一刀切关掉（连第 11 条要求的读数面板一起关）同判返工 |
 | 9 | **单图数据 ≤ 1000 点**：超出由后端预聚合，前端只做兜底截断 / 抽样 | 后端返回点数 ≤ 1000（或显式声明已聚合）；前端 `series.data.length > 1000` 仍未采样即返工 |
 | 10 | **验收口径（短窗口多轮）**：满载 = 单页实例达上限 12 且按秒级（≤1s 间隔）刷新；**连续刷新 60s 计 1 轮、重复 3 轮**（总时长约 3 分钟即为上限，**不要求 10 分钟级 continuous soak**） | 每轮用 CDP / `performance.memory` **每 5s 采样** `JSHeapUsedSize` 与实例计数（ECharts 为例：`count()`；自研实现用其验收钩子，如监控页的 `window.__koreMonitorChart.count()`），记录「前 10s 均值 vs 后 10s 均值」。通过判据：① 3 轮内实例数始终 ≤12 且不随刷新增长；② 每轮后 10s 均值 ≤ 前 10s 均值 ×1.05（不单调增长）；③ 切走监控视图后实例计数 `===0`、heap 相对轮内峰值回落 ≥20%；④ longtask（>50ms）条目不呈累积增长。另须给 PC + 手机截图（G-28）。缺任一项即返工 |
+| 11 | **每个数据点必须可读**：折线 / 柱状图 hover 与手机 **tap 都必须出读数面板**，显示**准确数值 + 单位**（如 `12.3 MiB`，不是 `12.3`）；多序列图用轴触发（同一 x 位置全部系列），饼图 / 占比图用 item 触发并给「名称 + 值 + 百分比」；**数据点 < 20 时可直接标注**（label / 画布文本），标注与面板可并存；图注与 `aria-label` 仍保留区间与最近值作无脚本兜底 | 逐图在真实浏览器复核（**不接受「库默认支持 tooltip」当证据**）：① 桌面把指针移到曲线上，面板出现在指针附近，数值与单位同后端一致（不得只显示取整值）；② 手机 `390×844` 用 `Input.dispatchTouchEvent` 或真机 tap 复现同一面板，且 tap 后面板保持可见（不能只在鼠标悬停时可见）；③ `< 20` 点的图可见逐点数值标注；④ 面板不得遮挡被读点、不得拦截手势（`pointer-events:none`）；缺任一项即返工 |
 
 **为什么是短窗口多轮**：短窗口 + 多轮是「不用长跑也能看出泄漏趋势」的口径，**不是降低要求**——判据看的是 3 分钟内的趋势斜率（后段均值 vs 前段均值）、第 13 个实例是否被硬拒、以及切走后实例计数归零与 heap 回落比例；连续 10 分钟级 soak 只作为定位手段，不作为验收前置条件。该口径对自研实现与 ECharts 实现**同等适用**。
 

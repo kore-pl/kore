@@ -6,8 +6,9 @@
    唯一的 setTimeout 是 100ms 的 resize 防抖，唯一的时间驱动是单帧 requestAnimationFrame。
    渲染构件在 web/monitor-cards.js，进入本视图时才注入，不进首屏。
    window.KoreMonitor.render(container) → {destroy}。
-   图表：自研 Canvas 折线（零图表库 / 零动画 / 零 tooltip），生命周期统一走本文件的
-   charts 注册表，验收断言入口 window.__koreMonitorChart = {count, dispose}。 */
+   图表：自研 Canvas 折线（零图表库 / 零动画），hover 与手机 tap 都出读数面板（时间 +
+   数值 + 单位）；生命周期统一走本文件的 charts 注册表，验收断言入口
+   window.__koreMonitorChart = {count, dispose}。 */
 (function () {
   'use strict';
 
@@ -30,6 +31,8 @@
   ];
   /* 单序列点数硬上限；超出尾部截断（保留最近 MAX_POINTS 点），后端预聚合待办。 */
   var MAX_POINTS = 1000;
+  /* 少于该点数时直接在点上标数值（G-32 §13 第 11 条：数据点少时标注比 tooltip 更直观）。 */
+  var SMALL_POINTS = 12;
   var CHART_PAD = 22;
   var RESIZE_DEBOUNCE_MS = 100;
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
@@ -44,6 +47,8 @@
   var legendTextEl = null;
   var resizeBound = false;
   var resizeTimer = 0;
+  /* 读数面板的「点外部收起」监听全模块只绑一次。 */
+  var tipOutsideBound = false;
 
   /* 本视图样式随模块注入（不修改 style.css）：卡片网格复用 .monitor-*，表格独立命名。 */
   var CSS = [
@@ -73,8 +78,16 @@
     '.mon-sort[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
     '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}',
     '.mon-chart-body{padding:8px 16px 12px}',
-    '.mon-chart-box{display:block;padding-top:6px}',
-    '.mon-chart{display:block;width:100%;height:132px}',
+    '.mon-chart-box{position:relative;display:block;padding-top:6px}',
+    '.mon-chart{display:block;width:100%;height:132px;touch-action:pan-y}',
+    '.mon-chart:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}',
+    /* 读数面板（tooltip）：hover / tap 显示该 x 位置的时间与数值，pointer-events:none 不挡手势 */
+    '.mon-tip{position:absolute;z-index:2;min-width:88px;padding:6px 8px;border-radius:6px;border:1px solid var(--kore-border-2);background:var(--kore-bg-1);box-shadow:0 4px 14px rgba(0,0,0,.28);font-size:12px;line-height:1.5;color:var(--kore-text-1);pointer-events:none;font-variant-numeric:tabular-nums;white-space:nowrap}',
+    '.mon-tip[hidden]{display:none}',
+    '.mon-tip-time{color:var(--kore-text-3);font-size:11px}',
+    '.mon-tip-row{display:flex;align-items:center;gap:6px}',
+    '.mon-tip-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}',
+    '.mon-tip-val{color:var(--kore-text-1)}',
     '.mon-mini{padding:10px 16px 4px}',
     '.mon-mini-head{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--kore-text-2)}',
     '.mon-mini-val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
@@ -308,6 +321,7 @@
     c.ink = cssVar(cs, c.series.ink, '#4c8dff');
     c.gridInk = cssVar(cs, '--kore-border-2', 'rgba(148,163,184,.35)');
     c.refInk = cssVar(cs, '--kore-danger', '#e5484d');
+    c.crossInk = cssVar(cs, '--kore-text-3', 'rgba(148,163,184,.75)');
     c.grid = document.createElement('canvas');
     c.grid.width = c.canvas.width;
     c.grid.height = c.canvas.height;
@@ -359,6 +373,30 @@
       if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
     }
     g.stroke();
+    /* 少点图直接把数值标在点上：不用悬停也能读出每个点（G-32 §13 第 11 条）。 */
+    if (!picks && n > 0 && n <= SMALL_POINTS) {
+      g.font = '10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+      g.textAlign = 'center';
+      g.textBaseline = 'bottom';
+      g.fillStyle = c.ink;
+      for (i = 0; i < n; i++) {
+        var lx = CHART_PAD + (c.w - 2 * CHART_PAD) * i / Math.max(1, n - 1);
+        var ly = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[i])) / c.max;
+        g.fillText(c.ys[i].toFixed(1) + (c.series.unit || ''), lx, Math.max(8, ly - 4));
+      }
+    }
+    /* 悬停 / 点按读数：竖向准线 + 命中点实心圆；数值面板由 showTipAt 同步更新。 */
+    if (c.hover !== null && c.hover >= 0 && c.hover < n) {
+      var hx = CHART_PAD + (c.w - 2 * CHART_PAD) * c.hover / Math.max(1, n - 1);
+      var hy = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, c.ys[c.hover])) / c.max;
+      g.strokeStyle = c.crossInk;
+      g.lineWidth = 1;
+      g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(hx, CHART_PAD); g.lineTo(hx, c.h - CHART_PAD); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = c.ink;
+      g.beginPath(); g.arc(hx, hy, 3.2, 0, Math.PI * 2); g.fill();
+    }
   }
 
   /* 单帧调度：同一实例同时最多一个待绘制帧，避免刷新连点时堆帧。 */
@@ -368,7 +406,93 @@
     c.raf = window.requestAnimationFrame(function () { drawChart(c); });
   }
 
-  /* 读数走图注文本 + aria-label 摘要（无 tooltip / 无 hover 高亮）。 */
+  /* 时间戳 → HH:MM:SS；非数字回退空串，避免面板出现 "NaN"。 */
+  function clockText(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return '';
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return '';
+    function p2(v) { return v < 10 ? '0' + v : String(v); }
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  }
+
+  /* 指针 x → 最近数据点下标（按绘制区映射，边界夹取）。 */
+  function indexAt(c, clientX) {
+    var n = c.ys.length;
+    if (!n) return -1;
+    var rect = c.canvas.getBoundingClientRect();
+    var plot = Math.max(1, c.w - 2 * CHART_PAD);
+    var t = (clientX - rect.left - CHART_PAD) / plot;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return Math.round(t * (n - 1));
+  }
+
+  /* 显示读数面板：时间 + 系列名 + 数值 + 单位（单位来自 SERIES，如 %）。 */
+  function showTipAt(c, idx, clientX) {
+    if (!c.tip || idx < 0 || idx >= c.ys.length) return;
+    c.hover = idx;
+    var v = c.ys[idx];
+    c.tipTime.textContent = clockText(c.xs[idx]);
+    c.tipVal.textContent = v.toFixed(1) + (c.series.unit || '');
+    c.tip.hidden = false;
+    var plot = Math.max(10, c.h - 2 * CHART_PAD);
+    var py = c.h - CHART_PAD - plot * Math.max(0, Math.min(c.max, v)) / c.max;
+    var bw = c.box.clientWidth || c.w, tw = c.tip.offsetWidth || 96, th = c.tip.offsetHeight || 34;
+    var x = clientX - c.canvas.getBoundingClientRect().left;
+    var left = x + 14;
+    if (left + tw > bw) left = Math.max(0, x - tw - 14);
+    c.tip.style.left = Math.round(left) + 'px';
+    c.tip.style.top = Math.round(Math.max(0, Math.min(c.h - th, py - th - 8))) + 'px';
+    scheduleChart(c);
+  }
+
+  function hideTip(c) {
+    c.pinned = false;
+    c.hover = null;
+    if (c.tip) c.tip.hidden = true;
+    scheduleChart(c);
+  }
+
+  /* pointermove = 鼠标悬停；pointerdown = 手机 tap（tap 后钉住，点别处才收起）。 */
+  function tipMove(c, ev, pin) {
+    if (!c.ys.length) return;
+    if (pin) c.pinned = true;
+    showTipAt(c, indexAt(c, ev.clientX), ev.clientX);
+  }
+
+  /* 点在图表外 → 收起所有钉住的面板（每实例不各绑一份，模块级唯一监听）。 */
+  function onOutsidePointer(ev) {
+    for (var i = 0; i < charts.length; i++) {
+      if (charts[i].canvas !== ev.target && charts[i].pinned) hideTip(charts[i]);
+    }
+  }
+
+  function bindTip(c) {
+    if (!c.tip || !c.canvas) return;
+    c.canvas.addEventListener('pointermove', function (ev) { tipMove(c, ev, false); });
+    c.canvas.addEventListener('pointerdown', function (ev) { tipMove(c, ev, true); });
+    c.canvas.addEventListener('pointerleave', function () { if (!c.pinned) hideTip(c); });
+    c.canvas.addEventListener('pointercancel', function () { if (!c.pinned) hideTip(c); });
+    c.canvas.addEventListener('blur', function () { hideTip(c); });
+    c.canvas.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+      var n = c.ys.length;
+      if (!n) return;
+      ev.preventDefault();
+      var idx = c.hover === null ? n - 1 : c.hover + (ev.key === 'ArrowRight' ? 1 : -1);
+      idx = Math.max(0, Math.min(n - 1, idx));
+      c.pinned = true;
+      var rect = c.canvas.getBoundingClientRect();
+      var plot = Math.max(1, c.w - 2 * CHART_PAD);
+      showTipAt(c, idx, rect.left + CHART_PAD + plot * idx / Math.max(1, n - 1));
+    });
+    if (!tipOutsideBound) {
+      document.addEventListener('pointerdown', onOutsidePointer, true);
+      tipOutsideBound = true;
+    }
+  }
+
+  /* 读数三条通道：图注文本、aria-label 摘要、hover/tap 读数面板（缺一不可，G-32 §13-11）。 */
   function chartSummary(c, latest, intervalS) {
     var n = c.ys.length, lo = null, hi = null, i;
     for (i = 0; i < n; i++) {
@@ -380,7 +504,7 @@
     return c.series.label + ' 历史曲线：' + n + ' 个点，区间 ' + span + '，最近 ' +
       (latest === null ? '—' : latest.toFixed(1) + c.series.unit) +
       (num(intervalS) === null ? '' : '，采样间隔 ' + intervalS + ' 秒') +
-      '；无动画、无悬停读数，数值见上方图注';
+      '；悬停或点按曲线可读出该点时间与数值';
   }
 
   /* 刷新路径：只换数据 + 更新图注/aria，然后一帧内重绘数据层；不重建 canvas/DOM。 */
@@ -403,7 +527,14 @@
     c.valEl.textContent = latest === null ? '—' : latest.toFixed(1) + c.series.unit;
     c.noteEl.textContent = c.ref === null ? ''
       : (c.series.pct ? '阈值 ' + c.ref + '%' : '阈值 ' + c.ref + '（' + cores + ' 核）');
-    c.box.setAttribute('aria-label', chartSummary(c, latest, intervalS));
+    c.canvas.setAttribute('aria-label', chartSummary(c, latest, intervalS));
+    if (c.hover !== null && c.hover >= c.ys.length) {
+      hideTip(c);
+    } else if (c.hover !== null && c.tip && !c.tip.hidden) {
+      /* 刷新时面板留在同一指针位置，只更新读数，不跳位。 */
+      c.tipTime.textContent = clockText(c.xs[c.hover]);
+      c.tipVal.textContent = c.ys[c.hover].toFixed(1) + (c.series.unit || '');
+    }
     scheduleChart(c);
   }
 
@@ -414,13 +545,27 @@
     var noteEl = add(head, el('span', 'muted'));
     var valEl = add(head, el('span', 'mon-mini-val', '—'));
     var box = add(wrap, el('div', 'mon-chart-box'));
-    box.setAttribute('role', 'img');
-    box.setAttribute('aria-label', series.label + ' 历史曲线：等待数据');
+    box.setAttribute('role', 'group');
+    box.setAttribute('aria-label', series.label + ' 历史曲线');
     var canvas = add(box, el('canvas', 'mon-chart'));
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('tabindex', '0');
+    canvas.setAttribute('aria-label', series.label + ' 历史曲线：等待数据');
+    /* 读数面板：时间 + 该点数值（带单位）。appended 在 canvas 之后，不参与画布尺寸。 */
+    var tip = add(box, el('div', 'mon-tip'));
+    tip.hidden = true;
+    var tipTime = add(tip, el('div', 'mon-tip-time'));
+    var tipRow = add(tip, el('div', 'mon-tip-row'));
+    var tipDot = add(tipRow, el('i', 'mon-tip-dot'));
+    tipDot.style.background = 'var(' + series.ink + ')';
+    add(tipRow, el('span', 'muted', series.label));
+    var tipVal = add(tipRow, el('span', 'mon-tip-val', '—'));
     var inst = { series: series, wrap: wrap, box: box, canvas: canvas,
       ctx: canvas.getContext('2d'), grid: null, w: 0, h: 0, dpr: 0,
-      ink: '', gridInk: '', refInk: '', xs: [], ys: [], max: 1, ref: null,
-      raf: 0, noteEl: noteEl, valEl: valEl };
+      ink: '', gridInk: '', refInk: '', crossInk: '', xs: [], ys: [], max: 1, ref: null,
+      raf: 0, noteEl: noteEl, valEl: valEl,
+      hover: null, pinned: false, tip: tip, tipTime: tipTime, tipVal: tipVal };
+    bindTip(inst);
     charts.push(inst);
     return inst;
   }
@@ -443,7 +588,7 @@
     var n = Array.isArray(history.timestamps) ? history.timestamps.length : 0;
     var iv = num(history.interval_s);
     return '共 ' + n + ' 点 · 间隔 ' + (iv === null ? '—' : iv) + 's · 单序列上限 ' +
-      MAX_POINTS + ' 点（后端预聚合待办）· 无动画 / 无悬停读数';
+      MAX_POINTS + ' 点（后端预聚合待办）· 悬停/点按读数 · 无动画';
   }
 
   /* 视图切走 / 卸载：取消待绘制帧 + 清引用 + 解绑唯一 resize 监听。幂等。 */
@@ -457,9 +602,16 @@
       c.grid = null;
       c.xs = [];
       c.ys = [];
+      c.hover = null;
+      c.pinned = false;
+      if (c.tip) c.tip.hidden = true;
       if (c.canvas) { c.canvas.width = 0; c.canvas.height = 0; }
     });
     charts.length = 0;
+    if (tipOutsideBound) {
+      document.removeEventListener('pointerdown', onOutsidePointer, true);
+      tipOutsideBound = false;
+    }
     chartPanelEl = null;
     legendTextEl = null;
     unbindResize();

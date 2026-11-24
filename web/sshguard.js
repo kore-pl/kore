@@ -281,12 +281,30 @@
     var label = add(box, el('span', 'sg-cell-label', '每小时失败次数（最高 ' + max + ' 次）'));
     label.className = 'sg-chart-label';
     var NS = 'http://www.w3.org/2000/svg';
+    /* 读数面板：原生 <title> 只在桌面悬停后延迟出现、手机 tap 不显示，故改为 DOM 面板。 */
+    var tip = add(box, el('div', 'sg-tip'));
+    tip.hidden = true;
+    var tipTime = add(tip, el('div', 'sg-tip-time'));
+    var tipVal = add(tip, el('div', 'sg-tip-val'));
+    var pinned = false;
+    function showTip(rect, item) {
+      var br = box.getBoundingClientRect();
+      var rr = rect.getBoundingClientRect();
+      var tw = tip.offsetWidth || 96, th = tip.offsetHeight || 34;
+      tipTime.textContent = item.hour || '';
+      tipVal.textContent = (item.failed || 0) + ' 次失败';
+      tip.hidden = false;
+      var left = rr.left - br.left + rr.width / 2 - tw / 2;
+      left = Math.max(0, Math.min(Math.max(0, br.width - tw), left));
+      tip.style.left = Math.round(left) + 'px';
+      tip.style.top = Math.round(Math.max(0, rr.top - br.top - th - 6)) + 'px';
+    }
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', '0 0 ' + w + ' ' + hgt);
     svg.setAttribute('width', '100%');
     svg.setAttribute('height', String(hgt));
     svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', '按小时统计的登录失败次数');
+    svg.setAttribute('aria-label', '按小时统计的登录失败次数：悬停或点按柱子读出每格数值');
     hours.forEach(function (item, i) {
       var v = item.failed || 0;
       var bh = Math.round((v / max) * (hgt - 8));
@@ -296,11 +314,13 @@
       rect.setAttribute('width', String(Math.max(1, Math.round(bw) - 2)));
       rect.setAttribute('height', String(bh));
       rect.setAttribute('fill', 'var(--kore-warning)');
-      var title = document.createElementNS(NS, 'title');
-      title.textContent = (item.hour || '') + '：' + v + ' 次失败';
-      rect.appendChild(title);
+      rect.setAttribute('role', 'img');
+      rect.setAttribute('aria-label', (item.hour || '') + '：' + v + ' 次失败');
+      rect.addEventListener('pointerenter', function () { showTip(rect, item); });
+      rect.addEventListener('pointerdown', function () { pinned = true; showTip(rect, item); });
       svg.appendChild(rect);
     });
+    svg.addEventListener('pointerleave', function () { if (!pinned) tip.hidden = true; });
     box.appendChild(svg);
     return box;
   }
@@ -627,8 +647,13 @@
       '.sg-form-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
       '.sg-preset-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4) 0;}',
       '.sg-preset{display:inline-flex;align-items:center;min-height:28px;padding:2px var(--kore-space-2);color:var(--kore-text-3);background:var(--kore-bg-0);border:1px dashed var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);}',
-      '.sg-chart{margin:0 var(--kore-space-4) var(--kore-space-3);}',
-      '.sg-chart svg{display:block;margin-top:var(--kore-space-1);background:var(--kore-bg-0);border-radius:var(--kore-radius-control);}',
+      '.sg-chart{position:relative;margin:0 var(--kore-space-4) var(--kore-space-3);}',
+      '.sg-chart svg{display:block;margin-top:var(--kore-space-1);background:var(--kore-bg-0);border-radius:var(--kore-radius-control);touch-action:pan-y;}',
+      /* 读数面板：hover / tap 时显示「小时 + 失败次数」，数值带单位，pointer-events:none 不挡手势 */
+      '.sg-tip{position:absolute;z-index:2;min-width:96px;padding:6px 8px;border-radius:6px;border:1px solid var(--kore-border-2);background:var(--kore-bg-1);box-shadow:0 4px 14px rgba(0,0,0,.28);font-size:var(--kore-font-12);line-height:1.5;color:var(--kore-text-1);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums;}',
+      '.sg-tip[hidden]{display:none;}',
+      '.sg-tip-time{color:var(--kore-text-3);font-size:var(--kore-font-12);}',
+      '.sg-tip-val{color:var(--kore-text-1);}',
       '.sg-chart-label{display:block;color:var(--kore-text-3);font-size:var(--kore-font-12);}',
       '.sg-msg{min-height:18px;color:var(--kore-text-3);font-size:var(--kore-font-12);}',
       '.sg-msg.is-fail{color:var(--kore-danger);}',
