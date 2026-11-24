@@ -38,16 +38,16 @@ func (r *failRunner) Run(context.Context, []string, string, string) (int, error)
 
 const dispatchVHost = "server {\n    listen 80;\n    server_name example.com;\n    root /var/www/example;\n}\n"
 
-// fileWriteAction 构造一条合法的 file_write 动作声明（带 purge_op → 无需 confirm）。
+// fileWriteAction 构造一条**干净**的 file_write 动作声明：无静态 purge_op、无 irreversible。
+//
+// 这必须是默认形态：file_write 的回滚信息由内核在运行时生成（备份 → file.restore /
+// 新文件 → file.remove），声明里不可能有静态 purge_op；若执行面仍按通用 NeedsConfirm
+// 判「writes_host 且无 purge_op → confirm」，插件 bearer 拿不到管理员令牌就会永远写不了。
 func fileWriteAction() pluginapi.RootAction {
 	return pluginapi.RootAction{
 		ID: "site-write-vhost", WritesHost: true,
 		Target:      pluginapi.FileWritePrefixClasses["nginx.conf.d"].Dir,
 		Description: "写站点 nginx 片段",
-		PurgeOp: &pluginapi.PurgeOp{
-			Kind: pluginapi.PurgeKindFileRemove,
-			Args: []string{"/etc/nginx/conf.d/kore-site-x.conf"},
-		},
 		FileWrite: &pluginapi.FileWrite{
 			PrefixClass:   "nginx.conf.d",
 			Mode:          pluginapi.FileWriteModeRoot0644,
@@ -195,6 +195,55 @@ func TestExecuteFileWriteBadNameDeny(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dir + "evil.conf"); !os.IsNotExist(statErr) {
 		t.Fatalf("拒绝路径不得落盘：%v", statErr)
+	}
+}
+
+// TestExecuteFileWriteIrreversibleNeedsConfirm 覆盖显式不可逆仍要 confirm（判据没被放宽）。
+func TestExecuteFileWriteIrreversibleNeedsConfirm(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "conf.d") + "/"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("建临时目录失败：%v", err)
+	}
+	svc, audit, changes, _ := newFileWriteService(t, dir)
+	action := fileWriteAction()
+	action.Irreversible = true
+	_, err := svc.Execute(context.Background(), Request{
+		Actor: "admin", PluginID: "site", Action: action,
+		Args: []string{"kore-site-x.conf"}, Content: dispatchVHost,
+	})
+	var perr *pluginapi.Error
+	if !errors.As(err, &perr) || perr.Code != pluginapi.E_UNAUTHORIZED {
+		t.Fatalf("显式 irreversible 的 file_write 缺 confirm 应 E_UNAUTHORIZED，实际 %v", err)
+	}
+	if len(changes.changes) != 0 {
+		t.Fatalf("拒绝路径不得写账本：%+v", changes.changes)
+	}
+	if _, statErr := os.Stat(dir + "kore-site-x.conf"); !os.IsNotExist(statErr) {
+		t.Fatalf("拒绝路径不得落盘：%v", statErr)
+	}
+	if len(audit.events) != 1 || audit.events[0].Decision != DecisionDeny {
+		t.Fatalf("拒绝必须留 deny 审计：%+v", audit.events)
+	}
+}
+
+// TestNeedsConfirmFileWriteSemantics 锁死 file_write 的 confirm 判据：
+// 干净声明（无静态 purge_op）不需要 confirm，只有显式 irreversible 才需要；
+// exec 的「writes_host 且无 purge_op」判据保持原样（不放宽）。
+func TestNeedsConfirmFileWriteSemantics(t *testing.T) {
+	clean := fileWriteAction()
+	if NeedsConfirmFileWrite(clean) {
+		t.Fatalf("干净的 file_write（运行时 purge_op）不应要求 confirm")
+	}
+	// 对照：通用判据对「writes_host 且无 purge_op」仍要求 confirm——这正是
+	// file_write 必须特判的原因；但特判只作用于 file_write，exec 判据不变（见下）。
+	irreversible := clean
+	irreversible.Irreversible = true
+	if !NeedsConfirmFileWrite(irreversible) {
+		t.Fatalf("显式 irreversible 的 file_write 必须要求 confirm")
+	}
+	exec := pluginapi.RootAction{ID: "x-exec", Argv: []string{"/bin/true"}, TimeoutS: 5, WritesHost: true}
+	if !NeedsConfirm(exec) {
+		t.Fatalf("exec 的「writes_host 且无 purge_op」判据不得被放宽")
 	}
 }
 

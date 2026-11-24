@@ -43,7 +43,7 @@ func (s *Service) executeFileWrite(ctx context.Context, req Request) (Result, er
 	if perr := s.validateFileWriteRequest(req); perr != nil {
 		return Result{}, s.deny(ctx, req, argvText, "schema: "+perr.Message, perr)
 	}
-	if NeedsConfirm(req.Action) {
+	if NeedsConfirmFileWrite(req.Action) {
 		if err := s.confirm.Consume(req.Confirm, req.PluginID, req.Action.ID); err != nil {
 			return Result{}, s.deny(ctx, req, argvText, "confirm 校验失败", asProtocolError(err))
 		}

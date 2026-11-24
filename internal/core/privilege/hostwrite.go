@@ -41,6 +41,20 @@ func NeedsConfirm(action Action) bool {
 	return action.WritesHost && action.PurgeOp == nil
 }
 
+// NeedsConfirmFileWrite 报告 file_write 动作是否需要一次性 confirm 令牌。
+//
+// 为什么不复用 NeedsConfirm：那条规定「writes_host 且无静态 purge_op → 必须 confirm」，
+// 而 file_write 的回滚信息**只能在运行时得到**（有备份 → file.restore；新文件 →
+// file.remove，见 fileWritePurgeOp）。声明里写不出静态 purge_op，于是所有 file_write
+// 都会命中 confirm；但 confirm 令牌只由**管理员会话**签发（handlers_rootaction.go），
+// 插件 bearer 拿不到 → 插件永远写不了文件（K4 实测阻断级）。
+//
+// 因此 file_write 只在插件显式声明 irreversible 时才要 confirm：可回滚性由内核的
+// 写前备份 + changes.jsonl 的运行时 purge_op 保证，不依赖声明里的静态回滚信息。
+func NeedsConfirmFileWrite(action Action) bool {
+	return action.Irreversible
+}
+
 // HostChangeOf 把动作声明映射为账本条目（执行成功后由 Execute 调用）。
 func HostChangeOf(pluginID string, action Action) HostChange {
 	return HostChange{
