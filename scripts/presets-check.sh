@@ -31,13 +31,19 @@
 #        判据① 边界用例：<插件仓>/tests/boundary/ 存在 + 含 `func Test` 的 *_test.go
 #                + 并发证据 ≥1（`t.Parallel` / `go func` / `sync.`）
 #                + 四类代表性覆盖各 ≥1（异常输入 / 并发 / 权限 / 资源耗尽；取文件名 + 注释行）
-#      分层上线（存量 15 条 tests/boundary 全缺，不能一次打红）：
+#                + **真跑**：静态核对通过后执行 `GOWORK=off go test ./tests/boundary/ -count=1`
+#                  （单仓上限 BOUNDARY_TEST_TIMEOUT=120s，超时杀进程组）：PASS 才算满足；
+#                  FAIL / 编译失败 / 超时 → 判据①不满足（清单内 WARN / 清单外 FAIL）。
+#                  静态已不满足的仓不跑——结论已定，跑了也不改变，这是性能上的省。
+#      分层上线（存量 tests/boundary 全缺，不能一次打红）：
 #        · id 登记在 scripts/boundary-pending.txt → [WARN]，不阻断
 #        · 未登记（新增 production 声明）→ [FAIL]，阻断
-#        · 清单条目已满足判据①② / 已非 production / 已不在索引 → [WARN] 提示移除
+#        · 清单条目**实跑**已满足判据①② / 已非 production / 已不在索引 → [WARN] 提示移除
 #      清单是「存量补测试的登记处」，不是放行名单：移出清单即转硬判据。
+#      「陈旧条目」提示只认实跑 PASS——静态看着齐、编译却不过的文件不再被误报为已满足。
 #
-# 不联网、不调用 git、不修改任何文件。退出码 0 无 FAIL；1 有 FAIL；2 参数错误。
+# 不主动联网、不调用 git、不修改仓库文件（go test 只写 GOCACHE 与 t.TempDir()）。
+# 退出码 0 无 FAIL；1 有 FAIL；2 参数错误。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,6 +54,9 @@ PLUGIN_REPOS_DIR="${PLUGIN_REPOS_DIR:-$ROOT/..}"
 DEPTH_PENDING_FILE="${DEPTH_PENDING_FILE:-$ROOT/scripts/depth-level-pending.txt}"
 # 判据① 边界用例已知待裁决清单（G-20）：存量补测试的登记处，新增声明缺失即 FAIL
 BOUNDARY_PENDING_FILE="${BOUNDARY_PENDING_FILE:-$ROOT/scripts/boundary-pending.txt}"
+# 判据① 真跑单仓上限（秒）：超过即杀进程组并按「不满足」处理，门禁不无限等
+BOUNDARY_TEST_TIMEOUT="${BOUNDARY_TEST_TIMEOUT:-120}"
+export BOUNDARY_TEST_TIMEOUT
 
 usage() {
   cat <<'USAGE'
@@ -57,9 +66,10 @@ usage() {
   preset.json   指定要校验的预设文件，可多个（默认扫描 presets 目录）
   --help        打印本帮助
 
-环境变量: INDEX_FILE / PRESETS_DIR / PLUGIN_REPOS_DIR / DEPTH_PENDING_FILE / BOUNDARY_PENDING_FILE
+环境变量: INDEX_FILE / PRESETS_DIR / PLUGIN_REPOS_DIR / DEPTH_PENDING_FILE / BOUNDARY_PENDING_FILE / BOUNDARY_TEST_TIMEOUT
   DEPTH_PENDING_FILE    指向 depth_level 已知待裁决清单（默认 scripts/depth-level-pending.txt）
   BOUNDARY_PENDING_FILE 指向判据① 边界用例已知待裁决清单（默认 scripts/boundary-pending.txt）
+  BOUNDARY_TEST_TIMEOUT 判据① go test 单仓上限秒数（默认 120；超时按不满足处理）
 
 退出码: 0 无 FAIL；1 有 FAIL；2 参数错误。
 USAGE
@@ -212,7 +222,11 @@ import glob
 import json
 import os
 import re
+import shutil
+import signal
+import subprocess
 import sys
+import time
 
 index_file = sys.argv[1]
 repos_dir = sys.argv[2]
@@ -466,10 +480,70 @@ def missing_categories(paths, concurrency_ok):
     return missing
 
 
+BOUNDARY_TEST_TIMEOUT = float(os.environ.get("BOUNDARY_TEST_TIMEOUT", "120"))
+
+
+def summarize_go_test_failure(output):
+    """把 go test 失败输出压成一行证据：编译错误 > 进程被杀/panic/超时 > 测试失败行。"""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    for line in lines:
+        if re.search(r"\.go:\d+:\d+:", line):
+            return line
+    for key in ("signal: terminated", "panic:", "timed out", "timeout"):
+        for line in lines:
+            if key in line:
+                return line
+    for line in lines:
+        if line.startswith("--- FAIL") or line.startswith("FAIL"):
+            return line
+    return lines[-1] if lines else "(go test 无输出)"
+
+
+def run_boundary_tests(repo_dir):
+    """真跑 `go test ./tests/boundary/ -count=1`，返回 (ok, detail, elapsed_s)。
+
+    插件仓是独立 module，必须 GOWORK=off（否则被上级 go.work 串味）。
+    子进程独立会话 + 超时杀进程组：边界用例会自起假 mysqld 等子进程，
+    只杀 `go` 会留下孤儿进程，门禁必须收干净。
+    """
+    go_bin = shutil.which("go")
+    if not go_bin:
+        return False, "无法实跑 go test：PATH 中没有 go（门禁不降级为静态猜测）", 0.0
+    env = dict(os.environ)
+    env["GOWORK"] = "off"
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        [go_bin, "test", "./tests/boundary/", "-count=1"],
+        cwd=repo_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, start_new_session=True,
+        # close_fds=False：像 shell 直接执行一样继承父进程已打开的 fd。默认 close_fds=True
+        # 会把继承 fd 全关掉，改变 `ulimit -n` 类边界用例的实际 fd 预算（site 的 FD 耗尽
+        # 用例实测会因此翻转），让门禁判的不是仓库自己 `go test` 的结果。
+        close_fds=False,
+    )
+    try:
+        output, _ = proc.communicate(timeout=BOUNDARY_TEST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return (False, f"go test 超时（>{BOUNDARY_TEST_TIMEOUT:g}s，已杀进程组）",
+                time.monotonic() - started)
+    elapsed = time.monotonic() - started
+    if proc.returncode == 0:
+        return True, "", elapsed
+    return False, summarize_go_test_failure(output), elapsed
+
+
 boundary_pending_ids, boundary_pending_order = load_pending(boundary_pending_file)
 print("生产级声明内容（G-20 判据①②）：production 的 tests/fault + tests/boundary")
 n_prod = 0
 n_prod_ok = 0
+n_boundary_run = 0
+n_boundary_pass = 0
+n_boundary_time = 0.0
 for pid in sorted(by_id):
     entry = by_id[pid]
     idx_level = entry.get("depth_level")
@@ -505,6 +579,18 @@ for pid in sorted(by_id):
             missing = missing_categories(boundary_files, concurrency_ok)
             if missing:
                 boundary_issues.append("判据①不满足：tests/boundary/ 四类覆盖缺 " + "、".join(missing))
+            if not boundary_issues:
+                # 判据① 真跑：静态看着齐不算数——编译失败 / 测试 FAIL / 超时一律不满足。
+                # 静态已不满足的仓不跑：结论已定，跑了也不改变，性能上直接省掉。
+                n_boundary_run += 1
+                run_ok, run_detail, run_elapsed = run_boundary_tests(repo_dir)
+                n_boundary_time += run_elapsed
+                if run_ok:
+                    n_boundary_pass += 1
+                else:
+                    boundary_issues.append(
+                        "判据①不满足：go test ./tests/boundary/ -count=1 未通过"
+                        f"（{run_elapsed:.1f}s）：{run_detail}")
 
     if fault_issues:
         for issue in fault_issues:
@@ -514,7 +600,8 @@ for pid in sorted(by_id):
             n_warn += 1
             print(f"[WARN] production 判据①待裁决（已知存量，不阻断）: {pid}: "
                   + "；".join(boundary_issues)
-                  + f"（已登记 {os.path.basename(boundary_pending_file)}，补边界用例见后续卡）")
+                  + f"（已登记 {os.path.basename(boundary_pending_file)}，"
+                    "静态/实跑未过，补边界用例见后续卡）")
         else:
             for issue in boundary_issues:
                 print(f"[FAIL] production 判据①不满足（未登记待裁决清单，阻断）: {pid}: {issue}")
@@ -524,7 +611,7 @@ for pid in sorted(by_id):
         n_prod_ok += 1
         if pid in boundary_pending_ids:
             n_warn += 1
-            print(f"[WARN] 判据①待裁决清单陈旧条目: {pid} 已满足判据①② —— "
+            print(f"[WARN] 判据①待裁决清单陈旧条目: {pid} 静态核对与 go test 实跑均已满足判据①② —— "
                   f"请从 {os.path.basename(boundary_pending_file)} 移除（移除后转硬判据）")
 
 for pid in boundary_pending_order:
@@ -538,6 +625,10 @@ for pid in boundary_pending_order:
 
 print(f"[INFO] production 声明核对: {n_prod} 条 · 判据①②全满足 {n_prod_ok} 条"
       f"（其余为待裁决 WARN 或已 FAIL）")
+print(f"[INFO] 判据① 实跑: 静态核对通过 {n_boundary_run} 个仓 → "
+      f"go test PASS {n_boundary_pass} / 不通过 {n_boundary_run - n_boundary_pass} · "
+      f"累计 {n_boundary_time:.1f}s（单仓上限 {BOUNDARY_TEST_TIMEOUT:g}s；"
+      "静态已不满足的仓不跑）")
 print("")
 
 for path in preset_files:
@@ -684,7 +775,8 @@ print("检查范围: id 可在索引解析 + 版本区间被实际版本满足�
       " + 常驻 RSS 红线与目标 + 同时常驻数 + 单插件包体积"
       " + 索引↔仓库 depth_level 一致性（G-20：新增不一致 FAIL / 已知待裁决 WARN）"
       " + out_of_box 预设不得引用 non-production 插件（G-20）"
-      " + production 判据② tests/fault/ 与判据① tests/boundary/（用例/并发/四类；"
+      " + production 判据② tests/fault/ 与判据① tests/boundary/（用例/并发/四类静态核对"
+      " + 静态通过后 GOWORK=off go test ./tests/boundary/ -count=1 真跑；"
       "清单内 WARN / 清单外 FAIL）")
 print(f"presets-check: {n_pass} pass, {n_warn} warn, {n_fail} fail")
 sys.exit(1 if n_fail else 0)
