@@ -8,7 +8,7 @@
   var EP = '/api/v1/audit', SNAP = 1000, PAGE = 50;
   var S = { rows: [], actions: [], action: '', result: '', range: '7d', shown: PAGE,
     error: '', note: '', loading: false, container: null,
-    exporting: false, exportMsg: '', exportErr: false };
+    exporting: false, exportMsg: '', exportErr: false, exportEmpty: false };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -144,9 +144,11 @@
     var rows = filtered();
     if (!rows.length) {
       S.exportMsg = '当前筛选下无记录可导出'; S.exportErr = true;
+      S.exportEmpty = !!(S.action || S.result); // 有筛选条件才给「清除筛选」下一步
       paint(); return;
     }
     S.exporting = true; S.exportMsg = '正在生成 CSV…'; S.exportErr = false;
+    S.exportEmpty = false;
     paint();
     // 让浏览器先把 loading 态绘制出来，再做同步的 CSV 拼装与下载。
     setTimeout(function () {
@@ -208,7 +210,20 @@
     head.appendChild(el('span', 'panel-meta', '匹配 ' + f.length + ' 条 · 显示 ' + Math.min(S.shown, f.length) + ' 条'));
     panel.appendChild(head);
     panel.appendChild(toolbar());
-    if (S.exportMsg) panel.appendChild(el('div', S.exportErr ? 'audit-export-msg audit-export-err' : 'audit-export-msg', S.exportMsg));
+    if (S.exportMsg) {
+      var em = el('div', S.exportErr ? 'audit-export-msg audit-export-err' : 'audit-export-msg');
+      em.appendChild(el('span', null, S.exportMsg));
+      if (S.exportEmpty) {
+        var clearBtn = el('button', 'btn btn-ghost audit-export-clear', '清除筛选');
+        clearBtn.type = 'button'; clearBtn.style.minHeight = '44px';
+        clearBtn.addEventListener('click', function () {
+          S.action = ''; S.result = ''; S.exportMsg = ''; S.exportEmpty = false;
+          S.shown = PAGE; paint();
+        });
+        em.appendChild(clearBtn);
+      }
+      panel.appendChild(em);
+    }
     if (S.note) panel.appendChild(el('div', 'audit-hint', S.note));
     if (S.error) {
       var err = el('div', 'panel-empty empty-state');
@@ -247,7 +262,8 @@
   var CSS = '.audit-toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-bottom:1px solid var(--kore-border-2)}' +
     '.audit-select{background:var(--kore-bg-2);color:var(--kore-text-1);border:1px solid var(--kore-border-1);border-radius:4px;padding:6px 8px;font-size:var(--kore-font-12)}' +
     '.audit-hint{padding:8px 16px;color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
-    '.audit-export-msg{padding:8px 16px;font-size:var(--kore-font-12);color:var(--kore-success)}' +
+    '.audit-export-msg{padding:8px 16px;font-size:var(--kore-font-12);color:var(--kore-success);display:flex;align-items:center;gap:12px;flex-wrap:wrap}' +
+    '.audit-export-clear{padding:4px 12px;font-size:var(--kore-font-12)}' +
     '.audit-export-msg.audit-export-err{color:var(--kore-danger)}' +
     '.audit-panel .empty-state-title{margin:0;font-size:var(--kore-font-14);font-weight:600}' +
     '.audit-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-12)}' +
