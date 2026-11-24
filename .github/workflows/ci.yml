@@ -2,7 +2,7 @@ name: CI
 
 # 触发（2026-11-23 用户要求：CI 要少执行，见 .agents/QUALITY-GATES.md §6）：
 #   push main / tag（v*、pkg/pluginapi/v*）/ PR / 手动；日常 feature 分支 push 不跑。
-#   本地 `make check`（13 段，含第 13 段 plugin-oss-check 扫 25 个兄弟仓九件套）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
+#   本地 `make check`（19 段，含第 13 段 plugin-oss-check 扫 25 个兄弟仓九件套）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
 on:
   push:
     branches: [main]
@@ -16,7 +16,7 @@ on:
 
 jobs:
   check:
-    name: Build + check (13 segments)
+    name: Build + check (19 segments)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,7 +31,12 @@ jobs:
       - name: Build (CGO off)
         run: make build
 
-      - name: make check
+      # 第 19 段（全仓 -race）在 make check 内执行：
+      #   GOWORK=off CGO_ENABLED=1 go test -race -count=1 ./...
+      # ubuntu-latest 自带 gcc，cgo 可用；cgo 不可用时 scripts/race-full-check.sh 直接 [FAIL]，
+      # 不会静默跳过（跳过等于不检查数据竞争）。此处不重复执行同一条命令：
+      # 门禁判据只允许一份定义，重复跑只是把 CI 时间翻倍。
+      - name: make check（含第 19 段全仓 -race：go test -race ./...）
         run: make check
 
       - name: make canonical-check

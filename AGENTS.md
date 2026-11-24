@@ -116,11 +116,12 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（18 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + **race 门禁（第 18 段，阻断级：-race 只跑 `tests/boundary/`，跨仓接线核对 + 有边界用例的仓 `make race` 真跑）** | 可用：真跑 |
+| `make check` | 聚合门禁（19 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 19 段约 162s（+52s） |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
-| `make race` | 并发边界用例 `-race`：只跑 `./tests/boundary/...`（无该目录时 SKIP，新增用例后自动生效）；插件仓同源目标由 `scripts/race-gate-sync.sh` 模板渲染（禁手改 24 份） | 可用：本仓当前无 boundary → SKIP；15 仓 `-race` 真跑全绿（44s） |
+| `make race` | 并发边界用例 `-race`：只跑 `./tests/boundary/...`（无该目录时 SKIP，新增用例后自动生效）；插件仓同源目标由 `scripts/race-gate-sync.sh` 模板渲染（禁手改 24 份） | 可用：本仓当前无 boundary → **恒 SKIP，所以本仓竞争检查看下一行**；15 仓 `-race` 真跑全绿（44s） |
+| `make race-full` | **全仓 `-race`（第 19 段判据本体，阻断级）**：`GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`；`WARNING: DATA RACE` / 测试失败 / 编译失败一律 FAIL，缺 cgo 直接 FAIL（不静默跳过），干净树上自动补 `web-dist`（embed 依赖） | 可用：实测 exit 0 / 52.16s / 16 包 / 零 DATA RACE；`make check` 第 19/19 段 |
 | `make vet` / `make test` | `go vet ./...` / `go test -timeout 200s ./...` | 可用：真跑（`go.mod` + `cmd/` + `internal/` 已就绪，SKIP 条件不再成立；`make vet` 已验证 `[OK]`，exit 0） |
 | `make mem` | 采样 RSS + `smaps_rollup`/`status` 拆分，按新证据口径出中位数（G6 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时出实数 |
 | `make frontend` | 构建 `web/dist` 并用 gzip 核对首屏体积 | SKIP：无 `web/package.json`，M2 起生效 |
@@ -129,11 +130,11 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make cross-build` | 交叉编译门禁（G-16，`make check` 第 17 段，**阻断级**）：复用 `make cross` 五目标**全仓** `go build ./...` + `kored` 五产物；失败贴首个编译错误原文并 exit 1 | 可用：五目标全过时 `[OK]`；实测热 1.61–1.88s / 冷 19.67s（全仓口径） |
 | `make cross-vet` | 测试包跨平台类型检查（**信息入口，不阻断，不入第 17 段**）：`GOOS=windows/darwin go vet ./...`，`go vet` 会类型检查 `_test.go`——`go build` 不编译测试包，这是唯一补位手段 | 可用：实测热 +1.7s / 冷 +4.0s，故不进 `make check`；改测试包时显式跑 |
 | `make store-check` | 插件仓规范（G-17）：24 个 `../kore-plugin-*` 逐仓校验三件套（`info.json` / `Makefile` 的 `dist` 目标 / `CHANGELOG.md`）+ `info.json` 必填 14 字段（**清单以 [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md) §3.1 为唯一真源**：协议 9 项 ∪ G-17 4 项 ∪ G-20 `depth_level`；缺失指名到仓+文件+字段）+ 描述类字段四选一（`description`/`title`/`summary`/`name`，全缺只 WARN）+ `id` 正则与目录名一致（G-27）+ `info.json.version` == `manifest.json.version` + `go.mod` 跨仓/绝对路径 `replace` 拦截 | 可用（G-17 出口）：`bash scripts/store-check.sh` **24 pass / 0 fail / 0 warn**（以实跑为准，warn 数随插件仓收敛变动；`DIST 检查` 汇总行分账「一致 / 缺件跳过 / 索引未收录跳过」）；`make check` 14/17 段 WARN 级。判据已收敛到协议 §3.1 单一真源，未制造 24 次插件版本抖动；转阻断级需单独裁决 |
-| `make presets-check` | 预设一致性（G-18）：`../kore-plugins/presets/*.json` 的插件 id 可在 `index/plugins.json` 解析 + 版本区间被实际版本满足（精确 / `^` / `~` / 比较器集合，其余写法报错）+ 常驻 RSS ≤48 MiB 红线（目标 ≤24 MiB WARN）+ 同时常驻 ≤3 + 单插件包体积 ≤25 MiB + **G-20：索引↔仓库 `depth_level` 一致（新增不一致 FAIL；已知待裁决清单 WARN）+ `out_of_box` 预设不含 non-production 插件 + 判据①②（`tests/fault/` 硬判据、`tests/boundary/` 清单内 WARN / 外 FAIL）** | 可用（G-18 出口）：`bash scripts/presets-check.sh` **8 pass / 0 warn / 0 fail**（2026-11-24 清空 `scripts/boundary-pending.txt`，判据①已全硬：15 个 production 的 `tests/boundary/` 逐条 `go test` + `-race` 复核 PASS）；`make check` 15/18 段阻断级 |
+| `make presets-check` | 预设一致性（G-18）：`../kore-plugins/presets/*.json` 的插件 id 可在 `index/plugins.json` 解析 + 版本区间被实际版本满足（精确 / `^` / `~` / 比较器集合，其余写法报错）+ 常驻 RSS ≤48 MiB 红线（目标 ≤24 MiB WARN）+ 同时常驻 ≤3 + 单插件包体积 ≤25 MiB + **G-20：索引↔仓库 `depth_level` 一致（新增不一致 FAIL；已知待裁决清单 WARN）+ `out_of_box` 预设不含 non-production 插件 + 判据①②（`tests/fault/` 硬判据、`tests/boundary/` 清单内 WARN / 外 FAIL）** | 可用（G-18 出口）：`bash scripts/presets-check.sh` **8 pass / 0 warn / 0 fail**（2026-11-24 清空 `scripts/boundary-pending.txt`，判据①已全硬：15 个 production 的 `tests/boundary/` 逐条 `go test` + `-race` 复核 PASS）；`make check` 15/19 段阻断级 |
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
-> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（18 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
+> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（19 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
 
 ## 6. 细则索引
 

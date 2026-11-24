@@ -75,7 +75,7 @@
 
 **防的事故**：在此之前 kore 与 24 个插件仓的 `Makefile` / CI 都只跑 `go test ./...`，**全链没有 `-race`**。并发边界用例（`tests/boundary/`）写着「必须过 `-race`」，但没有任何门禁真的以 `-race` 跑过——等于**写了并发断言却从没验过数据竞争**，下一次改动引入竞争不会被任何一层发现。这是「只写不跑」的第二种形态：不是判据文本写错，而是**判据根本没有执行面**（对照 G13 的 2026-11-23 教训：只 grep 目标名、从不编译）。
 
-**执行方式**（`bash scripts/race-gate-check.sh`，`make check` 第 18/18 段，阻断级；不联网、不调用 git、不写状态）：
+**执行方式**（`bash scripts/race-gate-check.sh`，`make check` 第 18/19 段，阻断级；不联网、不调用 git、不写状态）：
 
 1. **本仓**：`make race` → `CGO_ENABLED=1 go test -race -count=1 -timeout 300s ./tests/boundary/...`；无 `tests/boundary/` 目录时 `[SKIP]` 退出 0（kore 当前即此态：`tests/` 尚未建立）。缺 `race` 目标 → `[FAIL]`。
 2. **兄弟仓静态接线核对**（只对**有** `tests/boundary/*_test.go` 的仓，三条全须通过，缺任一条 `[FAIL]`）：
@@ -90,11 +90,41 @@
 - 无 `tests/boundary/*_test.go` 的仓 → `[SKIP] <仓>：无 tests/boundary/*_test.go`，**不假装通过**；`race` 目标已存在，**新增边界用例后自动生效，不需要再改 Makefile**。
 - `-race` 需要 cgo（linux/amd64 用 gcc）；缺编译器时 `go test` 会原文报 `-race requires cgo`，门禁不静默降级、不吞错。
 
-**为什么 `-race` 只跑 `tests/boundary/` 而不是全仓**：并发断言集中在边界面；`-race` 通常让测试慢 2–10 倍，全仓 `-race` 会把每个仓的 `make check` 拖长数倍，日常反馈不可接受。判据不放宽——race 段与 `check` 同属阻断级，只是**范围**限定在「数据竞争必须被抓」的那一面。实测取舍见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 2026-11-24 裁决（含全仓 `-race` 在 `cmd/kored` 抓到真实竞争、52.6s + FAIL 的实现卡实测）。
+**为什么插件仓的 `-race` 只跑 `tests/boundary/` 而不是全仓**：并发断言集中在边界面；`-race` 通常让测试慢 2–10 倍，24 个插件仓若各自全仓 `-race`，每个仓的 `make check` 都会被拖长，日常反馈不可接受。判据不放宽——race 段与 `check` 同属阻断级，只是**范围**限定在「数据竞争必须被抓」的那一面。实测取舍见 [LOG/DECISIONS.md](LOG/DECISIONS.md) 2026-11-24 裁决。
+
+> **本仓（kore）口径已升级**：上述「全仓不划算」只适用于插件仓。kore 本仓没有 `tests/boundary/`（`make race` 恒 `[SKIP]`），所以本仓的竞争检查单列为**第 19 段全仓 `-race`**——见 §1.3。
 
 **跨仓为什么必须一次铺满 25 仓**：race 门禁的价值来自**每仓都有**——25 仓里漏一仓，那一仓的并发断言就退回「只写不跑」；而各插件仓 CI 只看到自己的仓，无法替别人兜底。因此本段的**接线核对**是本段的主体之一，不是附带的自检：`scripts/plugin-templates/plugin-repo/Makefile.race.mk` 是唯一真源，`scripts/race-gate-sync.sh` 幂等渲染进 24 份（**禁手改 24 份**，手改必然漂移），`scripts/race-gate-check.sh` 反向核对是否漂移。
 
 **2026-11-24 首跑实测**（`bash scripts/race-gate-check.sh`）：`EXIT=0` / 44s / `有边界用例 15 仓 · -race 真跑通过 15 仓` / `[OK] race 门禁通过（接线完整 + -race 真跑全绿）`；24/24 仓三条接线（`^race:` / `check` 独立调 `race` / `ci.yml` 显式 `make race`）全中。本仓 `make race` → `[SKIP] 本仓无 tests/boundary`。
+
+### 1.3 第 19 段 · 全仓 `-race` 门禁（本仓，阻断级，2026-11-24 接入）
+
+**防的事故**：第 18 段的 `-race` 固定面是 `./tests/boundary/`，而 kore 本仓**没有该目录** → 本仓 `make race` 恒 `[SKIP]`。也就是说第 18 段保护的是 15 个插件仓，**kore 自己的代码在 race detector 面前是零覆盖**。`bd3ac83` 证明这不是理论风险：`cmd/kored` 升级链路有两处真实数据竞争（结果审计晚于终态发布 / `launch` 把 map 内 `*SelfUpdateJob` 交出、调用方在锁外解引用），当时 `go test ./...` **全绿、断言全过**，**只有 `-race` 能抓**。
+
+**执行方式**（`bash scripts/race-full-check.sh`，`make check` 第 19/19 段，`make race-full` 可单跑；阻断级；不联网、不调用 git、不写状态）：
+
+- `GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`——固定面 `./...`，**不按 diff 推断「改动包」**（算错即静默放行，见 2026-11-24 裁决选项 C 被否的理由）。
+- `exit != 0` → `[FAIL]`（数据竞争 / 测试失败 / 编译失败一律阻断）；输出含 `WARNING: DATA RACE` 时先单独打红再阻断（长输出里便于定位）。
+- `-race` 需要 cgo：**缺 C 编译器 → `[FAIL]` 并给原文，不静默降级成跳过**（跳过等于不检查数据竞争）。
+- 无 `go.mod`（M0 骨架态）→ `[SKIP]` 退出 0，不假装通过。
+
+**实测（2026-11-24，`8011a53` + 本段）**：`EXIT=0` / `WALL=52.16s` / `MAXRSS=185780KB` / **零 DATA RACE**；16 个包 `ok`，`cmd/kored` 单包 51.687s。
+
+**为什么否掉「只跑 `./internal/...` + `./cmd/kored`」（`bd3ac83` 提的折中）**：实测 `./internal/... ./cmd/kored` = **51.84s**，`./...` = **52.16s**，只差 **0.32s**。`go test` 包级并行，`cmd/kored` 51.3s 独占墙钟，其余 internal 包并进去几乎不占时间——「10s + 51s = 61s」的算法不成立。省不下时间，却把固定面从 `./...` 缩成手写包清单（新增包 / 新目录要人记得加，漏了就是静默放行）。
+
+**代价与取舍（实测）**：本地 `make check` 18 段 **110.31s** → 19 段 **162s 量级**（+52s，+47%）。选择「进 `make check`」而不是「只进 CI」的理由：本仓日常反馈的权威入口是本地 `make check`（§6：CI 只在 `push main` / tag / PR 跑），把唯一能抓数据竞争的检查只放 CI，等于让它退回「合入时才第一次执行」；而同一判据在 Makefile 与 ci.yml 各写一份必然漂移，**写一份、两处跑**才是闭环。CI 的 `make check` 因此自动带上第 19 段（`ubuntu-latest` 自带 gcc，cgo 可用），不重复执行同一条命令。
+
+**接线防漂移**：第 18 段 `scripts/race-gate-check.sh` 增加本仓 1b 接线核对——`Makefile` 必须有 `^race-full:` 目标、`check` 目标必须独立调用 `scripts/race-full-check.sh`、`ci.yml` 必须 `run: make check`；缺任一条 `[FAIL]`（有目标但 check 不调 = 本地不跑；check 调了但 CI 看不到 = 合入前不跑）。
+
+**正反例自证**：`/tmp` 的 `git archive HEAD` 副本里回退 `bd3ac83` 的「锁内快照」修复（`launch` 重新返回 map 内指针），`race-full-check.sh` 必须 `[FAIL]` + `WARNING: DATA RACE`；不注入时同一条命令必须 `[OK]`。见下表。
+
+| 场景 | 命令 | 结果 |
+| --- | --- | --- |
+| 正例（`8011a53` 工作树） | `bash scripts/race-full-check.sh` | `[OK] 全仓 -race 通过（16 个包，52s，零 DATA RACE）` / exit 0 |
+| 反例（副本回退锁内快照） | 同上（`/tmp` 副本） | `[FAIL]` + `WARNING: DATA RACE` / exit 1 |
+
+**跳过规则**：只有「无 `go.mod`」才 `[SKIP]`；缺 cgo、缺编译器一律 `[FAIL]`，不提供「本机跳过」开关——第 19 段存在的唯一意义就是不让数据竞争没人看。
 
 ## 2. 三层组合
 
@@ -201,7 +231,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **18 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段，阻断级，见 §1.2）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **19 段门禁**（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -219,7 +249,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 18 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 19 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 
