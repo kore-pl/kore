@@ -85,6 +85,7 @@ func TestNginxStructuralRejects(t *testing.T) {
 		{"location 嵌套 location", "server {\n    location / {\n        location /x {\n        }\n    }\n}\n", "只能出现在 server 内"},
 		{"if 在 server 内", "server {\n    if (!-e $request_filename) {\n    }\n}\n", "只允许出现在 location 内"},
 		{"if 条件不受支持", "server {\n    location / {\n        if ($request_method = POST) {\n        }\n    }\n}\n", "if 条件只允许"},
+		{"if 条件整体加引号", "server {\n    location / {\n        if \"(!-e $request_filename)\" {\n        }\n    }\n}\n", "if 条件只允许"},
 		{"server 带参数", "server default {\n}\n", "server 不允许参数"},
 		{"指令缺分号", "server {\n    listen 80\n}\n", "缺少 ;"},
 		{"多余右花括号", valid + "}\n", "多余的 }"},
@@ -105,6 +106,59 @@ func TestNginxStructuralRejects(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("错误信息 %q 不含 %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestNginxIfConditionTokenBoundary 锁定 `if` 条件的判据是**原始 token 序列**而不是
+// Join 后的字符串（ADR-0052 §8.6）：校验器放行的形态必须能被 `nginx -t` 接受。
+//
+// 分界的成因：tokenizer 剥掉引号后，`if "(!-e $request_filename)"` 只剩 1 个 token，
+// 其值与规范的 `(!-e` + `$request_filename)` 两 token Join 结果**完全相同**；旧实现
+// 只比 Join 结果，于是把 nginx 会拒绝的引号形态放行。nginx 实测（docker nginx:alpine，
+// 2026-11-24）：1 token 形态 `[emerg] invalid condition "!-e $request_filename"`。
+//
+// nginx 列记录实测结论，用于锁死契约方向：wantErr=false 的形态必须 nginx "ok"；
+// wantErr=true 且 nginx "ok" 的两条是**故意更严**（只放行规范形态，不是契约缺口）。
+func TestNginxIfConditionTokenBoundary(t *testing.T) {
+	policy := testNginxPolicy()
+	wrap := func(cond string) string {
+		return "server {\n    listen 80;\n    location / {\n        " + cond +
+			" {\n            rewrite ^(.*)$ /index.php?s=$1 last;\n        }\n    }\n}\n"
+	}
+	tests := []struct {
+		name    string
+		cond    string
+		wantErr bool
+		// nginx 是 `nginx -t` 的实测结论：ok = syntax is ok，fail = invalid condition。
+		nginx string
+	}{
+		{"标准形态", "if (!-e $request_filename)", false, "ok"},
+		{"tab 分隔", "if\t(!-e\t$request_filename)", false, "ok"},
+		{"变量与右括号整体加引号（2 token，边界不变）", `if (!-e "$request_filename)"`, false, "ok"},
+		{"右括号在引号外（3 token）", `if (!-e "$request_filename")`, true, "ok"},
+		{"整体双引号", `if "(!-e $request_filename)"`, true, "fail"},
+		{"整体单引号", `if '(!-e $request_filename)'`, true, "fail"},
+		{"双括号", "if ((!-e $request_filename))", true, "fail"},
+		{"括号内多余空格", "if ( !-e $request_filename )", true, "ok"},
+		{"右括号前空格", "if (!-e $request_filename )", true, "ok"},
+		{"条件后多余参数", "if (!-e $request_filename) x", true, "fail"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pluginapi.ValidateNginxVHostFragment([]byte(wrap(tc.cond)), policy)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("期望拒绝（nginx -t 实测 %s），实际通过", tc.nginx)
+				}
+				if !strings.Contains(err.Error(), "if 条件只允许") {
+					t.Fatalf("错误信息 %q 未指向 if 条件", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("期望通过（nginx -t 实测 %s），实际报错：%v", tc.nginx, err)
 			}
 		})
 	}

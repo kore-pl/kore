@@ -262,12 +262,12 @@ location / {
 | 维度 | 允许值 | 代码位置 |
 | --- | --- | --- |
 | 层级 | **只允许直接位于 `location{}` 内**；`server{}` 内、顶层、`if` 内嵌套一律拒绝 | `nginxconf.go:433-436` |
-| 条件 | token 序列归一后**必须逐字等于** `(!-e $request_filename)`；多一个参数、换变量（`$request_uri`）、换运算符（`-f`/`=`/`~`）都拒绝 | `:437-440` |
+| 条件 | **原始 token 序列必须恰为 2 个 token**：`(!-e` + `$request_filename)`（逐 token 精确匹配，不做 Join）；整体加引号（折叠成 1 个 token）、多一个参数、换变量（`$request_uri`）、换运算符（`-f`/`=`/`~`）都拒绝 | `:433-450`（判据在 `:446`） |
 | 体内指令 | **只允许 `rewrite`**；`return`/`proxy_pass`/`root`/`alias`/`try_files`/`fastcgi_pass`/`auth_basic*`/`proxy_set_header` 等按上下文位掩码全部拒绝 | `:499`（`nginxInIf` 位）+ `:515`（唯一带该位的规则） |
 | `rewrite` 形状 | 与 `location` 内**同一个** `checkRewrite`，无 if 专用放宽：`<regex> <replacement> [flag]`，正则 ≤512 字符，replacement 以 `/`、`$`、`http(s)://` 开头，flag ∈ {`last`,`break`,`redirect`,`permanent`} | `:752-778` |
 | 深度 | `server`(1) > `location`(2) > `if`(3)，上限 4 | `:49-50` |
 
-**条件比较的是 token 序列，不是原始字节**：tokenizer 已剥掉引号、把连续空白折叠（`:437` 的 `strings.Join(args, " ")`），因此双空格 / tab 分隔 / 整体加引号都会通过；`if(...)` 紧贴括号会被当未知块名拒绝，`(!-e $request_filename) x` 会因多一个参数被拒。空白差异在 nginx 侧语义相同，不构成绕过（引号形态的例外见 §8.6）。
+**条件比较的是原始 token 序列，不是 Join 后的字符串**：tokenizer 把连续空白折叠、剥掉引号，`if (!-e $request_filename)` 在实现里是 2 个 token（`(!-e` + `$request_filename)`），判据逐 token 精确匹配（`:446`）。因此双空格 / tab 分隔仍通过（nginx 语义相同）；但**整体加引号会折叠成 1 个 token，必须拒绝**——旧实现 `strings.Join(args, " ")` 会把两种形态归一成同一字符串，正是 §8.6 已修的 G-06 缺口。`if(...)` 紧贴括号会被当未知块名拒绝，`(!-e $request_filename) x` 会因多一个参数被拒。
 
 ### 8.3 为什么这个极窄 `if` 不引入新攻击面
 
@@ -294,11 +294,28 @@ location / {
 - 反例：`:86`（`if` 在 `server` 内 → 拒绝）、`:87`（条件换 `$request_method = POST` → 拒绝）。
 - 本次实测（临时程序逐条调 `ValidateNginxVHostFragment`，未改仓库）：`if` 在顶层 / `if` 嵌套 `if` / 条件换 `$request_uri` / 条件换 `-f` / 条件后多余参数 → 全部拒绝；体内 `return`、`proxy_pass`、`root` → 「指令 X 不允许出现在 if 内」；体内 `access_log` → 无条件拒绝；体内 `rewrite` 四个 flag 全接受、非法 flag 拒绝。
 - nginx 侧（`docker run nginx:alpine nginx -t`）：§8.1 那段标准形状 `syntax is ok`；空体 `if` 同样通过。
-- 门禁：`bash scripts/docs-check.sh` exit 0。
+- 2026-11-24 收紧（本轮，G-06 闭环）：`TestNginxIfConditionTokenBoundary`（`pkg/pluginapi/nginxconf_test.go:124`）逐形态断言「校验器 ACCEPT ⇒ `nginx -t` ok」；`TestNginxStructuralRejects` 的「if 条件整体加引号」（`:88`）锁死反例。反例自证：临时回退到 `06d7bd6` 的 Join 实现后，该组 3 条用例 FAIL（引号形态被放行），恢复后全 PASS。
+- 门禁：`bash scripts/docs-check.sh` exit 0；`make check` 20 段 exit 0。
 
 ### 8.6 未改变的与边界披露
 
 - §3.3 第 2 条其余约束不变：顶层只允许 `server{}`、`location` 只在 `server` 内、`location` 不嵌套、深度 ≤4、指令数 ≤2048。
 - `if` **不是**一般性能力：`location` 之外没有、体内除 `rewrite` 没有、条件除这一条没有。新增第二种 `if` 形状 = 扩内容安全边界，须走 §7#2 复审并在本节追加修订。
 - **空体 `if`（`if (...) { }`）通过校验**，nginx 实测也接受，按 no-op 处理，不构成风险。
-- **已知边界（可用性，非提权）**：校验器会把**引号包裹**的条件 `if "(!-e $request_filename)"` 归一为同一 token 序列并通过，但 nginx 实测**拒绝**该形态（`invalid condition "!-e $request_filename"`）——若插件这样渲染，写入后 `nginx -t` 会失败，而校验器的立意正是「保证写入片段能过 nginx 语法」。site 渲染器不产出该形态；本卡按约束不改 `nginxconf.go`，需闭环时另开卡收紧（判据：`if` 分支要求 `args` 原始 token 数为 2，不以引号起始）。
+- **已修（2026-11-24，G-06 闭环；缺口由 `06d7bd6` 披露）**：旧实现把 `if` 条件 `strings.Join(args, " ")` 后与固定串比较，`if "(!-e $request_filename)"` 与规范形态归一结果相同而被放行，但 nginx 实测拒绝（整体是 1 个参数 → `[emerg] invalid condition "!-e $request_filename"`）。现判据改为**原始 token 序列**：必须恰为 `(!-e` + `$request_filename)` 两个 token（`nginxconf.go:446`）。契约方向是单向的：**校验器 ACCEPT ⇒ `nginx -t` ok**；比 nginx 更严的拒绝（括号内多余空格、右括号前空格、右括号在引号外）保留，不影响契约成立。
+- **nginx 实测对照（docker `nginx:alpine`，2026-11-24，逐条 `nginx -t`）**：
+
+| 形态 | token 数 | 校验器 | `nginx -t` |
+| --- | --- | --- | --- |
+| `if (!-e $request_filename)`（规范） | 2 | ACCEPT | `syntax is ok` |
+| tab 分隔 | 2 | ACCEPT | `syntax is ok` |
+| `if (!-e "$request_filename)"`（引号只包「变量+右括号」） | 2 | ACCEPT | `syntax is ok` |
+| `if "(!-e $request_filename)"`（整体双引号） | 1 | **REJECT** | **fail**：`invalid condition "!-e $request_filename"` |
+| `if '(!-e $request_filename)'`（整体单引号） | 1 | REJECT | fail：同上 |
+| `if ((!-e $request_filename))`（双括号） | 2 | REJECT | fail：`invalid condition "(!-e"` |
+| `if ( !-e $request_filename )`（括号内多余空格） | 4 | REJECT（更严） | `syntax is ok` |
+| `if (!-e $request_filename )`（右括号前空格） | 3 | REJECT（更严） | `syntax is ok` |
+| `if (!-e "$request_filename")`（右括号在引号外） | 3 | REJECT（更严） | `syntax is ok` |
+| `if (!-e $request_filename) x`（条件后多余参数） | 3 | REJECT | fail：`invalid condition "x"` |
+
+  结论：所有 ACCEPT 形态 nginx 均 `syntax is ok`；nginx 拒绝的形态全部 REJECT。空体 `if` 仍通过且 nginx 接受（见上一条）。

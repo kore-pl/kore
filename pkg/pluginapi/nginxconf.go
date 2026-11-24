@@ -434,9 +434,18 @@ func (v *nginxValidator) blockContext(context nginxContext, name string, args []
 		if context != nginxContextLocation {
 			return context, fmt.Errorf("nginx 片段第 %d 行：if 只允许出现在 location 内（当前在 %s 内）", line, contextName(context))
 		}
-		condition := strings.Join(args, " ")
-		if condition != "(!-e $request_filename)" {
-			return context, fmt.Errorf("nginx 片段第 %d 行：if 条件只允许 (!-e $request_filename)（当前 %q）", line, condition)
+		// nginx 的条件解析按**空白分隔后的 token**工作，不按原始字节：`(!-e` 与
+		// `$request_filename)` 必须是两个独立参数。整体加引号会把它们粘成 1 个参数
+		// （tokenizer 剥引号后只剩 1 个 token，nginx 侧同样只有 1 个 arg），nginx 实测
+		// `if "(!-e $request_filename)"` → `invalid condition "!-e $request_filename"`。
+		// 旧实现 `strings.Join(args, " ")` 把这两种形态归一成同一字符串放行，于是
+		// 「过了校验」却「过不了 nginx -t」——ADR-0052 §8.6 的 G-06 缺口。
+		// 判据因此落在**原始 token 序列**上（2 个 token + 逐 token 精确匹配），不做 Join。
+		// 形状更宽松但 nginx 合法的写法（`( !-e $request_filename )`、右括号前多空格）
+		// 这里仍拒绝：只放行规范形态，比 nginx 更严不破坏「过校验 ⇒ 过 -t」。
+		if len(args) != 2 || args[0] != "(!-e" || args[1] != "$request_filename)" {
+			return context, fmt.Errorf("nginx 片段第 %d 行：if 条件只允许未加引号的两个 token %q + %q（当前 %d 个 token：%q）",
+				line, "(!-e", "$request_filename)", len(args), args)
 		}
 		v.directives++
 		if v.directives > v.policy.MaxDirectives {
