@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,6 +119,54 @@ func TestSelfUpdaterApplyChain(t *testing.T) {
 	}
 	if audits[0].Detail["to_sha256"] != sha256Hex(newData) || audits[0].Target != oldBin {
 		t.Fatalf("发起审计缺少 from/to sha 或目标: %+v", audits[0])
+	}
+}
+
+// TestSelfUpdaterResultAuditPrecedesCompletion 固化顺序契约：任务终态可见时，
+// 结果审计必须已经写过（不依赖 -race 的时序巧合，纯断言即可判定）。
+//
+// 为什么这是硬契约而不是实现细节：升级链以 `systemctl --no-block` 提交重启
+// （upgrade.go 的 submitUpgradeRestart），完成状态一旦可见，本进程随时可能被
+// SIGTERM；晚于完成状态写的结果审计会永久丢失，升级审计链就断在"已成功"那一刻。
+func TestSelfUpdaterResultAuditPrecedesCompletion(t *testing.T) {
+	_, oldBin, newBin, stateDir := newUpgradeTestFixture(t)
+	newData, _ := os.ReadFile(newBin)
+
+	var mu sync.Mutex
+	auditCount := 0
+	resultAuditSawTerminal := false
+	u := newUpgradeTestUpdater(oldBin, stateDir, func(string) error { return nil })
+	u.audit = func(rec store.AuditRecord) error {
+		mu.Lock()
+		defer mu.Unlock()
+		auditCount++
+		if rec.Action != upgradeAuditResult {
+			return nil
+		}
+		// 写结果审计的当口，任务必须仍是 running（尚未发布终态）。
+		if job, ok := u.UpgradeJob(rec.Detail["job_id"]); ok && job.State != upgradeJobRunning {
+			resultAuditSawTerminal = true
+		}
+		return nil
+	}
+
+	job, err := u.StartUpgrade(context.Background(), "admin", httpapi.SelfUpdateRequest{
+		SourcePath: newBin, SHA256: sha256Hex(newData), Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("StartUpgrade 失败: %v", err)
+	}
+	if final := waitUpgradeJob(t, u, job.ID); final.State != upgradeJobSuccess {
+		t.Fatalf("任务未成功: %+v", final)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if resultAuditSawTerminal {
+		t.Fatalf("结果审计晚于完成状态发布：完成状态可见后进程可能被重启，审计记录会永久丢失")
+	}
+	if auditCount != 2 {
+		t.Fatalf("审计应含发起+结果两条，实际 %d 条", auditCount)
 	}
 }
 

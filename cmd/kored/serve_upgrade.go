@@ -132,7 +132,7 @@ func (u *selfUpdater) StartUpgrade(_ context.Context, actor string, req httpapi.
 	if err != nil {
 		return httpapi.SelfUpdateJob{}, err
 	}
-	return *job, nil
+	return job, nil
 }
 
 // StartRollback 实现 httpapi.SelfUpdater：用 `<bin>.prev` 回滚。
@@ -169,7 +169,7 @@ func (u *selfUpdater) StartRollback(_ context.Context, actor string, req httpapi
 	if err != nil {
 		return httpapi.SelfUpdateJob{}, err
 	}
-	return *job, nil
+	return job, nil
 }
 
 // UpgradeJob 实现 httpapi.SelfUpdater：返回任务快照。
@@ -214,12 +214,16 @@ func (u *selfUpdater) preflight(sourcePath, rawSHA string) (string, error) {
 }
 
 // launch 登记任务 → fail-closed 审计 → 异步执行 CLI。
-func (u *selfUpdater) launch(actor, kind, target, from, to string, args []string) (*httpapi.SelfUpdateJob, error) {
+//
+// 返回值是**锁内快照**：u.jobs 里的 *SelfUpdateJob 由 run goroutine 在 u.mu 下持续改写，
+// 返回该指针会让调用方在锁外读一个正在被写的结构体（-race 实测：StartUpgrade 的
+// `return *job` 与 run 的 `stored.State = running` 构成真实竞争，可能读到撕裂的 string 头）。
+func (u *selfUpdater) launch(actor, kind, target, from, to string, args []string) (httpapi.SelfUpdateJob, error) {
 	u.mu.Lock()
 	for _, existing := range u.jobs {
 		if existing.State == upgradeJobQueued || existing.State == upgradeJobRunning {
 			u.mu.Unlock()
-			return nil, fmt.Errorf("%w：任务 %s 尚未结束", httpapi.ErrUpgradeBusy, existing.ID)
+			return httpapi.SelfUpdateJob{}, fmt.Errorf("%w：任务 %s 尚未结束", httpapi.ErrUpgradeBusy, existing.ID)
 		}
 	}
 	u.seq++
@@ -229,6 +233,7 @@ func (u *selfUpdater) launch(actor, kind, target, from, to string, args []string
 		Message: "已受理，正在校验并替换", StartedAt: u.now().Format(time.RFC3339),
 	}
 	u.jobs[id] = job
+	snapshot := *job // 锁内快照：run 与调用方都只拿副本，不再触碰 map 内的结构体
 	u.mu.Unlock()
 
 	// 发起审计 fail-closed：写不进审计库就撤销任务、不触碰二进制。
@@ -241,11 +246,11 @@ func (u *selfUpdater) launch(actor, kind, target, from, to string, args []string
 		u.mu.Lock()
 		delete(u.jobs, id)
 		u.mu.Unlock()
-		return nil, fmt.Errorf("%w：%v", httpapi.ErrUpgradeAudit, err)
+		return httpapi.SelfUpdateJob{}, fmt.Errorf("%w：%v", httpapi.ErrUpgradeAudit, err)
 	}
 
-	go u.run(*job, target, from, to, args)
-	return job, nil
+	go u.run(snapshot, target, from, to, args)
+	return snapshot, nil
 }
 
 // run 执行 CLI 升级链并回填任务状态与结果审计。
@@ -287,6 +292,22 @@ func (u *selfUpdater) run(job httpapi.SelfUpdateJob, target, from, to string, ar
 		message = "升级链执行失败（详见 output）"
 	}
 
+	// 结果审计必须先于终态发布：升级链用 `systemctl --no-block` 提交重启
+	// （upgrade.go 的 submitUpgradeRestart），终态一旦可见，本进程随时可能被
+	// SIGTERM —— 晚写的结果审计会永久丢失，审计链就断在"已成功"那一刻。
+	// 这个顺序同时是可见性契约：读者经 u.mu 看到终态，即蕴含结果审计已尝试；
+	// 写失败仍只 WARN（与 HTTP 侧审计出口同口径，审计失败不翻转升级结果）。
+	if err := u.audit(store.AuditRecord{
+		Subject: "admin", Action: upgradeAuditResult, Target: target, Result: result,
+		Detail: map[string]string{
+			"kind": job.Kind, "from_sha256": from, "to_sha256": to,
+			"exit_code": fmt.Sprintf("%d", exit), "job_id": job.ID, "error_code": code,
+		},
+	}); err != nil {
+		slog.Warn("升级结果审计写入失败", "job", job.ID, "err", err)
+	}
+
+	// 终态发布放最后：在此之前的一切（结果审计）都对读到终态的读者可见。
 	u.mu.Lock()
 	if stored, ok := u.jobs[job.ID]; ok {
 		stored.State = state
@@ -297,17 +318,6 @@ func (u *selfUpdater) run(job httpapi.SelfUpdateJob, target, from, to string, ar
 		stored.Output = buf.String()
 	}
 	u.mu.Unlock()
-
-	// 结果审计：动作已完成，写失败只 WARN（与 HTTP 侧审计出口同口径）。
-	if err := u.audit(store.AuditRecord{
-		Subject: "admin", Action: upgradeAuditResult, Target: target, Result: result,
-		Detail: map[string]string{
-			"kind": job.Kind, "from_sha256": from, "to_sha256": to,
-			"exit_code": fmt.Sprintf("%d", exit), "job_id": job.ID, "error_code": code,
-		},
-	}); err != nil {
-		slog.Warn("升级结果审计写入失败", "job", job.ID, "err", err)
-	}
 }
 
 // auditStrict 写发起审计；db 未装配或写失败都返回错误（fail-closed）。
