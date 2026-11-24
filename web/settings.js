@@ -406,7 +406,7 @@
      即刻启用，交互代码无需再改。
      G-30：口令只活在两个 input.value 里——不 console.log、不写 localStorage、
      不回显、不拼进 URL；关闭弹层立即清空输入值。 */
-  var PW_ENDPOINT = ''; // 后端就绪后填，如 '/api/v1/auth/password'；空串 = 降级
+  var PW_ENDPOINT = '/api/v1/auth/password'; // 后端已就绪（r10-passwdapi），空串才是降级
   var PW_MIN_LEN = 12;  // 交互骨架下限：与 CLI --generate 的 24 位随机口令同口径，取保守值
   var pwDialog = null;
 
@@ -443,11 +443,12 @@
     wrap.setAttribute('aria-label', '修改管理员口令');
     var box = el('section', 'settings-dialog');
     box.appendChild(el('h3', 'settings-dialog-title', '修改管理员口令'));
-    // 降级横幅：当前无后端端点，先说清楚再做样子，不用「待支持」糊弄人。
-    box.appendChild(el('div', 'settings-pw-banner',
-      '当前版本的内核还没有在线改口令接口，面板暂时无法替你完成修改。可在服务器终端执行 ' +
-      'kored admin-password --set（按提示输入新口令）后重启 kored；命令行改口令会吊销所有会话，' +
-      '重启后请用新口令重新登录。下方表单保留完整交互，端点就绪后即可直接启用。'));
+    // 提示横幅：端点未接通时诚实降级；已接通时说明改口令的会话影响，避免文案自相矛盾。
+    box.appendChild(el('div', 'settings-pw-banner', PW_ENDPOINT
+      ? '修改成功后当前及其它设备的登录会全部失效，请使用新口令重新登录。'
+      : '当前版本的内核还没有在线改口令接口，面板暂时无法替你完成修改。可在服务器终端执行 ' +
+        'kored admin-password --set（按提示输入新口令）后重启 kored；命令行改口令会吊销所有会话，' +
+        '重启后请用新口令重新登录。下方表单保留完整交互，端点就绪后即可直接启用。'));
     var form = el('div', 'settings-pw-form');
     var fields = [];
     [['kore-pw-old', '当前口令', 'current-password'],

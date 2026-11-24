@@ -74,6 +74,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Addr:              cfg.Addr,
 		Backend:           svc.backend,
 		Auth:              svc.auth,
+		PasswordWriter:    passwordWriterFor(cfg),
 		LoginLimiter:      loginLimiter(cfg),
 		Market:            buildMarket(cfg, svc, events),
 		TaskEvents:        events,

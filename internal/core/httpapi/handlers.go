@@ -30,6 +30,15 @@ type systemInfo struct {
 // pluginsPath 是插件管理端点前缀。
 const pluginsPath = "/api/v1/plugins"
 
+// authPasswordPath 是在线改口令端点；前端 PW_ENDPOINT 与之逐字对齐。
+const authPasswordPath = "/api/v1/auth/password"
+
+// 改口令请求校验口径（与 web/settings.js 的 PW_MIN_LEN=12 对齐）。
+const (
+	// passwordMinLen 是新口令最小长度（人话下限，与 CLI 24 位随机口令同口径取保守值）。
+	passwordMinLen = 12
+)
+
 // errorBody 是统一错误体，字段固定为 {code,message,detail}；
 // requires_restart 是可选结构化提示（仅验签失败等需要重启内核的场景出现）。
 type errorBody struct {
@@ -87,6 +96,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/v1/auth/session", s.handleSession)
+	// 在线改口令（r10-passwdapi）：精确路由须在 /api/v1/auth/ 兜底之前，
+	// 否则会被 501 吞掉；不误伤上面三条已注册端点。
+	s.mux.HandleFunc("POST "+authPasswordPath, s.handleChangePassword)
 	s.mux.HandleFunc("/api/v1/auth/", s.handleUnsupported)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)

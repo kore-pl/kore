@@ -457,3 +457,22 @@ func upsertAuthKey(doc, key, value string) string {
 func quoteYAML(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 }
+
+// passwordWriterFor 构造在线改口令的配置写回回调（注入 httpapi.PasswordWriter）。
+//
+// 复用 CLI admin-password 的原子写 0600 口径，保证运行中改口令与命令行改口令
+// 落在同一个文件、同一套权限。不在这里改 snapshot：SIGHUP reload 会重读该
+// 文件拿到新 hash，而 auth.Manager 的内存基准由 handler 的 SetPasswordHash
+// 切换——配置、内存、reload 三者自然收敛，不引入手动改指针的竞态。
+func passwordWriterFor(cfg config) func(string) error {
+	path := ""
+	if cfg.snapshot != nil {
+		path = cfg.snapshot.Source
+	}
+	return func(hash string) error {
+		if path == "" {
+			return errors.New("未解析到配置文件路径，无法持久化新口令")
+		}
+		return writeAdminPasswordHash(path, hash)
+	}
+}

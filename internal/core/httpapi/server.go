@@ -73,6 +73,10 @@ type Options struct {
 	Backend Backend
 	// Auth 是鉴权管理器；nil 表示不启用鉴权（测试与 M0 探活骨架用）。
 	Auth *auth.Manager
+	// PasswordWriter 把新口令哈希持久化到 auth.admin_password_hash。
+	// 由 cmd/kored 注入（复用 admin_password.go 的原子写 0600 口径）；nil 时
+	// 改口令端点回 500，绝不"内存改了、配置没写"地伪造成功。
+	PasswordWriter PasswordWriter
 	// LoginLimiter 是登录失败限速器；nil 时跳过限速（测试与骨架兼容）。
 	// 生产必装配：cmd/kored 按 security.login_rate_limit 注入，缺装配等于
 	// 文档承诺的 429/Retry-After 不存在（见 docs/SECURITY §3.5）。
@@ -141,6 +145,10 @@ type RootActionExecutor interface {
 
 // PluginTokenAuth 由 token 解析插件身份与已授予能力；token 无效时 ok=false。
 type PluginTokenAuth func(token string) (pluginID string, granted []string, ok bool)
+
+// PasswordWriter 持久化新口令哈希（只收 PBKDF2 存储串，绝收明文）。
+// 由 cmd/kored 注入，本包不 import config / cmd（G-01 薄壳）。
+type PasswordWriter func(hash string) error
 
 // CapabilityResolver 由请求解析出调用方 subject 与已授予能力集。
 // subject 为空表示无凭证；granted 为 6 特权能力或 <plugin-id>:<action> 语法。
@@ -268,6 +276,7 @@ type Server struct {
 	mux            *http.ServeMux
 	httpServer     *http.Server
 	auth           *auth.Manager
+	passwordWriter PasswordWriter
 	loginLimiter   *auth.LoginLimiter
 	market         *market.Service
 	capResolver    CapabilityResolver
@@ -310,7 +319,8 @@ type Server struct {
 func New(opts Options, transport platform.Transport) *Server {
 	server := &Server{
 		opts: opts, transport: transport, mux: http.NewServeMux(),
-		auth: opts.Auth, loginLimiter: opts.LoginLimiter, market: opts.Market,
+		auth: opts.Auth, passwordWriter: opts.PasswordWriter,
+		loginLimiter: opts.LoginLimiter, market: opts.Market,
 		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,

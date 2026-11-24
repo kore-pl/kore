@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -49,7 +50,10 @@ type Session struct {
 
 // Manager 负责口令校验与会话签发、校验、滑动续期、吊销，只依赖 store。
 type Manager struct {
-	store        *store.Store
+	store *store.Store
+	// hashMu 保护 passwordHash 的运行期改写：改口令端点写、登录 Verify 读，
+	// 二者并发时不产生数据竞争（G-19/-race 门禁）。
+	hashMu       sync.RWMutex
 	passwordHash string
 	ttl          time.Duration
 	// cookiePolicy 取 auto / true / false（auth.cookie_secure 原值）。
@@ -158,10 +162,24 @@ func (m *Manager) TTL() time.Duration { return m.ttl }
 
 // Verify 校验明文口令是否匹配配置的 PBKDF2 哈希；hash 为空直接拒绝。
 func (m *Manager) Verify(password string) (bool, error) {
-	if m.passwordHash == "" {
+	m.hashMu.RLock()
+	hash := m.passwordHash
+	m.hashMu.RUnlock()
+	if hash == "" {
 		return false, nil
 	}
-	return VerifyPassword(m.passwordHash, password)
+	return VerifyPassword(hash, password)
+}
+
+// SetPasswordHash 在运行期替换口令哈希（在线改口令端点写回成功后调用）。
+//
+// 只更新内存中的校验基准；持久化 auth.admin_password_hash 由调用方（cmd 装配层
+// 注入的 PasswordWriter）负责，本包不 import config / cmd（G-01 薄壳）。
+// 调用方须先确认 hash 合法（auth.ValidateHash），避免把 Manager 锁进无法登录的状态。
+func (m *Manager) SetPasswordHash(hash string) {
+	m.hashMu.Lock()
+	m.passwordHash = hash
+	m.hashMu.Unlock()
 }
 
 // Issue 生成 32 字节随机 token（base64url），把 sha256(token) 与过期时刻写入 sessions。
