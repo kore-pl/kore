@@ -61,7 +61,7 @@ grep -rE 'Flock|LOCK_EX|sync\.Mutex|\.Lock\(\)' kore-plugin-dns --include='*.go'
 
 | 仓 | file:line | 模式类别 | 锁保护 | 风险 | 一句话修法 | 已通知 |
 | --- | --- | --- | --- | --- | --- | --- |
-| dns | `internal/dnsop/write_engine.go:354-371`（核心 `:359`） | 固定临时名 + RMW | **无**（全仓零锁原语） | **P2** | `path+".tmp"` 改 `os.CreateTemp` 唯一名 + fsync + rename；或对 dnsmasq 片段目录加旁路 flock | lead（无 owner，待裁决） |
+| dns | `internal/dnsop/write_engine.go:354-371`（核心 `:359`） | 固定临时名 + RMW | **无**（全仓零锁原语） | **P2** | 以旁路 flock 包住 read→apply→write 为主（锁挂旁路 `.lock`，不挂片段本身，否则 rename 后 inode 更替锁失效）；唯一临时名 + fsync + rename 为辅，只解决半写、不解决 lost update；设计层备选：每次追加独立小文件 + 读时聚合，从根消除 RMW | lead（无 owner，待裁决） |
 | app-deploy | `internal/apop/artifact.go:682-696` | 快照目录按秒命名 | 旁路锁只护 JSON，不护目录 | **P2** | 快照目录名加唯一后缀（job id/随机），`MkdirAll` 改原子建目录+撞名重试 | r6-appdeploy |
 | logs | `internal/logic/download.go:357-370` | check-then-act（导出目标名） | writeFilePrivate 临时名唯一，但**目标路径非 O_EXCL** | **P3** | 唯一后缀直接进最终文件名，或对目标用 `O_CREATE\|O_EXCL` 占位 | r6-logs |
 | logs | `internal/logic/rotate.go:130-146` | check-then-act + 秒级命名 | **无** | **P2** | `Lstat+rename` 包进 state 锁，或唯一名 + `renameat2(RENAME_NOREPLACE)` | r6-logs |
