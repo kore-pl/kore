@@ -62,9 +62,118 @@ if [ "${#SIBLINGS[@]}" -eq 0 ]; then
   exit 0
 fi
 
+
+# ---------------------------------------------------------------------------
+# 4) fd 预算门禁：tests/boundary 里禁止写死**绝对** nofile 预算
+#
+# 背景：同一类 bug 一晚出现 3 次——`ulimit -n 12` / `ulimit -n 8` / `Setrlimit{Cur:64}`
+# 这类绝对预算与「父进程继承了多少 fd」耦合：交互 shell 直跑时被继承 fd 吃掉预算，
+# 用例时红时绿；`close_fds=True` 拉起时又耗不尽，把正常行为判成 bug。
+# 合法写法只有两种：预算相对自身已开 fd（len(/proc/self/fd)+N、prlimit --nofile=<open+2>），
+# 且必须回读内核账本（/proc/*/limits 或 Getrlimit）确认生效。
+#
+# 规则（先剥注释再匹配，避免注释里写历史写法就误报）：
+#   A) FAIL  `ulimit ... -n <数字>`（含 --nofile=<数字>）
+#   B) FAIL  `RLIMIT_NOFILE` 同一行出现 `Cur: <数字>` 字面量
+#   C) WARN  文件用了 RLIMIT_NOFILE，但没有任何相对预算/回读证据
+#
+# 误报率：A/B 为静态字面量匹配，剥注释后零误报（字面量预算在这个语义下必错）；
+#         已知漏报：多行 `Rlimit{` 字面量（换行写 Cur: 64）——故意不做跨行匹配，
+#         否则会把 RLIMIT_FSIZE 的 Cur 数字误算到 NOFILE 头上（monitor 就是这种结构）。
+# ---------------------------------------------------------------------------
+fd_budget_scan() {
+  local label="$1"; shift
+  python3 - "$label" "$@" <<'PY'
+import os, re, sys
+
+label = sys.argv[1]
+dirs = [d for d in sys.argv[2:] if os.path.isdir(d)]
+
+UlimitLiteral = re.compile(r'ulimit[^\n]*?\s-[A-Za-z]*n\s+\d+')
+UlimitNofile = re.compile(r'ulimit[^\n]*?--nofile[= ]\s*\d+')
+CurLiteral = re.compile(r'Cur:\s*\d+')
+RelativeEvidence = ('/proc/self/fd', '/proc/%d/fd', 'prlimit', 'Getrlimit')
+
+def strip_comments(text, path):
+    if path.endswith('.go'):
+        text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+        return '\n'.join(line.split('//', 1)[0] for line in text.splitlines())
+    return '\n'.join(line.split('#', 1)[0] for line in text.splitlines())
+
+fails, warns, scanned = [], [], 0
+for root in dirs:
+    for cur, _dirs, files in os.walk(root):
+        for name in sorted(files):
+            if not name.endswith(('.go', '.sh', '.py', '.bats')):
+                continue
+            path = os.path.join(cur, name)
+            try:
+                raw = open(path, encoding='utf-8', errors='replace').read()
+            except OSError:
+                continue
+            scanned += 1
+            body = strip_comments(raw, path)
+            for lineno, line in enumerate(body.splitlines(), 1):
+                if UlimitLiteral.search(line) or UlimitNofile.search(line):
+                    fails.append((path, lineno, 'ulimit -n 字面量绝对预算', line.strip()))
+                if 'RLIMIT_NOFILE' in line and CurLiteral.search(line):
+                    fails.append((path, lineno, 'RLIMIT_NOFILE 字面量 Cur', line.strip()))
+            if 'RLIMIT_NOFILE' in body and not any(marker in body for marker in RelativeEvidence):
+                warns.append((path, 0, 'RLIMIT_NOFILE 无相对预算/回读证据', ''))
+
+for path, lineno, why, snippet in fails:
+    print(f"[FAIL] {label}: {path}:{lineno} {why} → {snippet[:130]}")
+for path, _lineno, why, _snippet in warns:
+    print(f"[WARN] {label}: {path} {why}（应有 len(/proc/self/fd)+N 与 Getrlimit//proc limits 回读）")
+
+print(f"[INFO] {label}: fd 预算扫描 {scanned} 个文件 · 绝对预算 {len(fails)} 命中 · 待查 {len(warns)}")
+sys.exit(1 if fails else 0)
+PY
+}
+
+if [ "${1:-}" = "--fd-budget-self-test" ]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  mkdir -p "$tmp/bad" "$tmp/good"
+  cat > "$tmp/bad/abs_test.go" <<'EOF'
+package boundary
+func t1() { script := `ulimit -n 12; exec bin` }
+func t2() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: 64, Max: 64}) }
+EOF
+  cat > "$tmp/good/rel_test.go" <<'EOF'
+package boundary
+// 历史写法 `ulimit -n 8` 已废弃，仅注释里出现不应误报。
+func t3() { ents, _ := os.ReadDir("/proc/self/fd"); _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: uint64(len(ents)) + 8, Max: orig.Max}) }
+EOF
+  rc=0
+  if fd_budget_scan "self-test/反例" "$tmp/bad" >/tmp/fd-budget-bad.log 2>&1; then rc=1; fi
+  if ! grep -q "绝对预算 2 命中" /tmp/fd-budget-bad.log; then rc=1; fi
+  if ! fd_budget_scan "self-test/正例" "$tmp/good" >/tmp/fd-budget-good.log 2>&1; then rc=1; fi
+  if ! grep -q "绝对预算 0 命中" /tmp/fd-budget-good.log; then rc=1; fi
+  if [ "$rc" -eq 0 ]; then
+    echo "[OK] fd 预算门禁自证：反例 2 命中（ulimit 字面量 + Rlimit{Cur:字面量}），正例 0 命中（含注释里的历史写法）"
+  else
+    echo "[FAIL] fd 预算门禁自证未通过"; cat /tmp/fd-budget-bad.log /tmp/fd-budget-good.log
+  fi
+  rm -f /tmp/fd-budget-bad.log /tmp/fd-budget-good.log
+  exit "$rc"
+fi
+
 FAIL=0
 CHECKED=0
 RACED=0
+
+# 4) fd 预算门禁先跑静态面：写死绝对 nofile 预算的仓直接阻断，不必等 -race 变红才发现。
+BOUNDARY_DIRS=()
+for repo in "${SIBLINGS[@]}"; do
+  [ -d "$repo/tests/boundary" ] && BOUNDARY_DIRS+=("$repo/tests/boundary")
+done
+if [ "${#BOUNDARY_DIRS[@]}" -gt 0 ]; then
+  if ! fd_budget_scan "跨仓 boundary" "${BOUNDARY_DIRS[@]}"; then
+    echo "[FAIL] fd 预算门禁：存在写死绝对 nofile 预算的边界用例（改为相对自身 fd + 回读 + 正控）"
+    FAIL=1
+  fi
+fi
 
 for repo in "${SIBLINGS[@]}"; do
   name="$(basename "$repo")"
