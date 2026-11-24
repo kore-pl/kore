@@ -708,6 +708,18 @@
     var ops = el('td', 'cell-ops');
     ops.setAttribute('data-label', '操作');
 
+    // 设置：复用统一配置面板（PLUGIN-CONFIG §9），不各自造表单。host 实时取插件面板容器，
+    // 以覆盖启停后 replaceRow 重建行的场景；面板由 openConfig 插在标题下方、列表上方。
+    var settingBtn = el('button', 'btn plugin-setting-btn', '设置');
+    settingBtn.type = 'button';
+    settingBtn.title = '打开「' + (plugin.name || id) + '」的设置，保存后立即生效';
+    settingBtn.addEventListener('click', function () {
+      var host = document.getElementById('kore-plugins-panel');
+      if (!host || !window.KoreShell || typeof window.KoreShell.openConfig !== 'function') return;
+      window.KoreShell.openConfig(host, id, { title: (plugin.name || id) + ' 设置' });
+    });
+    ops.appendChild(settingBtn);
+
     var enabled = plugin.enabled === true;
     var action = enabled ? 'disable' : 'enable';
     var actionBtn = el('button', 'btn', enabled ? '停用' : '启用');
