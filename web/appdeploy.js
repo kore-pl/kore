@@ -23,6 +23,7 @@
       upDeploy: null,
       upgSel: '', upgFile: null, upgBusy: false, upgProgress: -1, upgResult: null, upgError: '',
       pluginVersion: '', versionProbed: false,
+      progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       destroyed: false };
   }
   var S = fresh();
@@ -185,6 +186,81 @@
     return n || 'app';
   }
 
+  // ---- 长任务进度反馈层（进行中 / 成功 / 失败三态） ----
+  // 上传本身已有 XHR 真实进度（paintUpBar / paintUpgrade）；这里补的是"上传完成→服务端
+  // 解压/登记/快照"这段空窗。app-deploy 插件顺序处理请求，服务端忙时并发 jobs 会排队，
+  // 所以进行中用阶段文案推进，结束后回读 jobs 的真实步骤覆盖终态。所有 timer 随操作
+  // 结束 / 页面销毁立即清理，不做后台常驻轮询（G-19）。
+  var ADP_PHASES = [
+    { at: 1200, text: '正在解压并校验制品…' },
+    { at: 4500, text: '正在登记部署信息…' },
+    { at: 10000, text: '服务端仍在处理，请稍候…' }
+  ];
+  function ensureProgress() {
+    if (S.progHost || !S.root) return;
+    var host = add(S.root, el('div', 'adp-progress-panel'));
+    host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite');
+    S.progState = add(host, el('span', 'adp-progress-phase'));
+    var track = add(host, el('div', 'adp-progress-track'));
+    add(track, el('span', 'adp-progress-fill'));
+    S.progText = add(host, el('span', 'adp-progress-text'));
+    S.progHint = add(host, el('span', 'adp-progress-hint'));
+    S.progHost = host;
+    setProgress('idle', '', '');
+  }
+  function setProgress(tone, phase, hint) {
+    if (!S.progHost) return;
+    S.progHost.hidden = tone === 'idle';
+    S.progHost.className = 'adp-progress-panel adp-progress-' + tone;
+    if (S.progState) S.progState.textContent = phase || '';
+    if (S.progHint) S.progHint.textContent = hint || '';
+    if (S.progText) S.progText.textContent = tone === 'ok' ? '成功' : tone === 'fail' ? '失败' : tone === 'busy' ? '进行中' : '';
+    var fill = S.progHost.querySelector('.adp-progress-fill');
+    if (fill) fill.style.width = tone === 'ok' ? '100%' : tone === 'fail' ? '100%' : '35%';
+  }
+  function stopProgress() {
+    if (S.progWatch) {
+      for (var i = 0; i < S.progWatch.length; i++) clearTimeout(S.progWatch[i]);
+      S.progWatch = null;
+    }
+  }
+  // 服务端处理阶段：上传完成后调用，busy 态按阶段推进；done/fail 由调用方在结果回来时覆盖。
+  function startProgress(label) {
+    ensureProgress(); stopProgress();
+    S.progWatch = [];
+    setProgress('busy', label + ' · 正在提交到服务端…', '');
+    ADP_PHASES.forEach(function (p) {
+      S.progWatch.push(setTimeout(function () {
+        if (S.destroyed || !S.progWatch) return;
+        setProgress('busy', p.text, '');
+      }, p.at));
+    });
+  }
+  function progressSteps(jobs, name) {
+    // 从 jobs 里找本次任务的真实步骤（优先 name 匹配，否则取最近一条），拼成阶段文案。
+    var list = jobs || [], pick = null;
+    for (var i = 0; i < list.length; i++) { if (name && list[i].name === name) { pick = list[i]; break; } }
+    if (!pick && list.length) pick = list[0];
+    if (!pick) return '';
+    var parts = [];
+    (pick.steps || []).forEach(function (st) {
+      parts.push((st.name || '步骤') + (st.status === 'succeeded' ? ' ✓' : st.status === 'failed' ? ' ✗' : ' …'));
+    });
+    return parts.length ? parts.join(' → ') : jobStatusText(pick.status);
+  }
+  function progressFail(label, err) {
+    var kind = degrade(err);
+    var msg = String((err && err.message) || err || '未知错误');
+    var hint = kind === 'unsupported'
+      ? '当前插件版本较低，没有对应方法；请到软件商店升级应用部署插件后重试。'
+      : kind === 'notinstalled'
+        ? '应用部署插件未安装或未启用；请先到软件商店安装后重试。'
+        : kind === 'denied'
+          ? '当前账号没有部署权限；请让管理员在插件设置里授权后重试。'
+          : '请检查制品包格式（tar.gz / zip）与文件权限，或稍后重试；反复失败请把错误原文交给维护者。';
+    setProgress('fail', label + '失败', msg + '。怎么办：' + hint);
+  }
+
   // ---- ① 应用列表 ----
   function paintList() {
     if (!S.listHost) return;
@@ -271,11 +347,18 @@
       return invokeWithProgress('upload', { name: name, content_base64: b64 }, function (p) { S.upProgress = p; paintUpBar(); });
     }).then(function (up) {
       S.upResult = up; S.upProgress = 100; paintUpload();
+      startProgress('部署「' + name + '」');
       return invoke('deployFromArtifact', { name: name });
     }).then(function (dep) {
-      S.upDeploy = dep; paintUpload(); load(); loadJobs();
+      S.upDeploy = dep; paintUpload(); load();
+      // 回读 jobs 真实步骤覆盖终态；读不到也不影响成功结果，仅保留成功文案。
+      return loadJobs().then(function () {
+        stopProgress();
+        setProgress('ok', '部署「' + name + '」完成', progressSteps(S.jobs, name) || '已解压并登记部署');
+      });
     }).catch(function (err) {
-      S.upBusy = false; S.upProgress = -1;
+      S.upBusy = false; S.upProgress = -1; stopProgress();
+      progressFail('上传部署', err);
       S.upError = degrade(err) === 'unsupported'
         ? '当前插件版本较低，没有上传方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件后重试'
         : String(err && err.message || err);
@@ -328,9 +411,17 @@
       return invokeWithProgress('upgrade', { name: name, content_base64: b64 },
         function (p) { S.upgProgress = p; paintUpgrade(); });
     }).then(function (r) {
-      S.upgResult = r; S.upgProgress = 100; S.upgBusy = false; paintUpgrade(); load(); loadJobs();
+      S.upgResult = r; S.upgProgress = 100; S.upgBusy = false; paintUpgrade(); load();
+      startProgress('升级「' + name + '」');
+      return loadJobs().then(function () {
+        stopProgress();
+        var t = (r && r.rolled_back) ? '升级异常已自动回滚，原版本仍可用' : (r && r.upgraded ? '升级完成' : '升级未确认');
+        setProgress(r && r.rolled_back ? 'fail' : 'ok', '升级「' + name + '」· ' + t,
+          progressSteps(S.jobs, name) || (r && r.snapshot ? '已自动快照，可回滚' : ''));
+      });
     }).catch(function (err) {
-      S.upgBusy = false; S.upgProgress = -1;
+      S.upgBusy = false; S.upgProgress = -1; stopProgress();
+      progressFail('升级', err);
       S.upgError = degrade(err) === 'unsupported' ? '当前插件版本较低，没有升级方法（已确认版本 ' + S.pluginVersion + ' < ' + MIN_METHOD_VERSION + '）：请到软件商店升级应用部署插件后重试' : String(err && err.message || err);
       paintUpgrade();
     });
@@ -419,6 +510,17 @@
     '.adp-progress{flex:1;min-width:160px;height:8px;background:var(--kore-bg-2);border-radius:4px;overflow:hidden}' +
     '.adp-progress[hidden]{display:none}' +
     '.adp-progress-fill{display:block;height:100%;width:0;background:var(--kore-ok,#3fb950);transition:width .2s}' +
+    '.adp-progress-panel{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 10px;margin-bottom:10px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-0);font-size:var(--kore-font-12)}' +
+    '.adp-progress-panel[hidden]{display:none}' +
+    '.adp-progress-phase{flex:1 1 220px;font-weight:600;color:var(--kore-text-1)}' +
+    '.adp-progress-track{flex:1 1 100%;height:6px;background:var(--kore-bg-2);border-radius:3px;overflow:hidden}' +
+    '.adp-progress-track .adp-progress-fill{width:35%;background:var(--kore-warning,#d29922)}' +
+    '.adp-progress-ok .adp-progress-fill{background:var(--kore-ok,#3fb950)}' +
+    '.adp-progress-fail .adp-progress-fill{background:var(--kore-danger,#f85149)}' +
+    '.adp-progress-text{min-width:44px;text-align:center;padding:4px 8px;border-radius:4px;color:var(--kore-text-2);background:var(--kore-bg-2)}' +
+    '.adp-progress-ok .adp-progress-text{color:var(--kore-ok,#3fb950)}' +
+    '.adp-progress-fail .adp-progress-text{color:var(--kore-danger,#f85149)}' +
+    '.adp-progress-hint{flex:1 1 100%;color:var(--kore-text-3);word-break:break-word}' +
     '.adp-hint{margin:0 0 8px;font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.6}' +
     '.adp-path{margin:4px 0 0;font-size:var(--kore-font-12);color:var(--kore-text-2);word-break:break-all}' +
     '.adp-result{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 10px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-0);font-size:var(--kore-font-13)}' +
@@ -444,6 +546,7 @@
     add(container, S.root);
 
     S.bannerHost = add(S.root, el('div', 'adp-banner'));
+    ensureProgress();
 
     // ① 列表
     var list = panel('应用列表', '');
@@ -502,7 +605,7 @@
     paintDenied(); paintList(); paintUpload(); paintUpgrade(); paintJobs();
     probePluginVersion();
     load(); loadJobs();
-    return { destroy: function () { S.destroyed = true; } };
+    return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
   window.KoreAppDeploy = { render: render };
 })();

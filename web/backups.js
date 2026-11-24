@@ -30,6 +30,7 @@
       confirm: null, confirmHost: null, confirmMsg: null, busy: false, name: null, paths: null,
       exclude: null, compression: null, submit: null, dims: null,
       jobs: [], jobsHost: null, jobsMsg: null,
+      progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       stats: null, summaryHost: null, listHost: null, count: null,
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
       verify: { supported: null, version: '' } };
@@ -384,6 +385,59 @@
     });
   }
 
+  // ---- 长任务进度反馈层（进行中 / 成功 / 失败三态） ----
+  // backup 插件是单 socket 顺序循环（serve.go），create 阻塞期间并发的 jobs 请求会排队，
+  // 所以进行中用阶段文案推进，结束后用 create 的真实返回覆盖为终态并回读 jobs 落库记录确认。
+  // 不做高频轮询——排队中的旧快照只会误导用户；所有 timer 随操作结束 / 页面销毁立即清理。
+  var BAK_PHASES = [
+    { at: 1500, text: '正在压缩并写入归档…' },
+    { at: 5000, text: '正在计算校验值并落盘…' },
+    { at: 12000, text: '数据量较大，仍在打包中，请稍候…' }
+  ];
+  function ensureProgress() {
+    if (S.progHost || !S.root) return;
+    var host = add(S.root, el('div', 'bak-progress'));
+    host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite');
+    S.progState = add(host, el('span', 'bak-progress-phase'));
+    var track = add(host, el('div', 'bak-progress-track'));
+    add(track, el('span', 'bak-progress-fill'));
+    S.progText = add(host, el('span', 'bak-progress-text'));
+    S.progHint = add(host, el('span', 'bak-progress-hint'));
+    S.progHost = host;
+    setProgress('idle', '', '');
+  }
+  function setProgress(tone, phase, hint) {
+    if (!S.progHost) return;
+    S.progHost.hidden = tone === 'idle';
+    S.progHost.className = 'bak-progress bak-progress-' + tone;
+    if (S.progState) S.progState.textContent = phase || '';
+    if (S.progHint) S.progHint.textContent = hint || '';
+    if (S.progText) S.progText.textContent = tone === 'ok' ? '成功' : tone === 'fail' ? '失败' : tone === 'busy' ? '进行中' : '';
+    var fill = S.progHost.querySelector('.bak-progress-fill');
+    if (fill) fill.style.width = tone === 'busy' ? '35%' : tone === 'ok' ? '100%' : '100%';
+  }
+  function stopProgress() {
+    if (S.progWatch) {
+      for (var i = 0; i < S.progWatch.length; i++) clearTimeout(S.progWatch[i]);
+      S.progWatch = null;
+    }
+  }
+  function startProgress(name) {
+    ensureProgress(); stopProgress();
+    S.progWatch = [];
+    setProgress('busy', '正在准备备份「' + name + '」…', '');
+    BAK_PHASES.forEach(function (p) {
+      S.progWatch.push(setTimeout(function () {
+        if (S.destroyed || !S.progWatch) return;
+        setProgress('busy', p.text, '');
+      }, p.at));
+    });
+  }
+  function progressFail(err) {
+    var msg = String((err && err.message) || err || '未知错误');
+    setProgress('fail', '备份失败', msg + '。怎么办：请确认路径在允许的目录内、磁盘空间充足，再到「设置」核对备份目录权限后重试。');
+  }
+
   // ---- 保留信息 / 保留策略 ----
   function loadStats() {
     invoke('backup.stats', {}).then(function (data) {
@@ -706,16 +760,20 @@
     if (!paths.length && dims.indexOf('site') >= 0) { setStatus('选择了站点目录时请至少填写一个路径（每行一个）', 'fail'); return; }
     S.busy = true; S.submit.disabled = true;
     setStatus('正在打包 ' + name + '（' + dims.join(' + ') + '，' + S.compression.value + '）…');
+    startProgress(name);
     invoke('backup.create', { name: name, dimensions: dims, paths: paths, exclude: exclude, compression: S.compression.value })
       .then(function (data) {
-        S.busy = false; S.submit.disabled = false;
+        S.busy = false; S.submit.disabled = false; stopProgress();
+        setProgress('ok', '备份完成 · ' + fmtSize(data.size_bytes) + ' · ' + data.entries + ' 条目', '校验值 ' + String(data.sha256 || '').slice(0, 12) + '');
         S.result = { kind: 'create', id: data.id, data: data }; paintResult();
         setStatus('备份已创建：' + data.id + ' · ' + fmtSize(data.size_bytes) + ' · ' + data.entries +
           ' 条目 · sha ' + String(data.sha256 || '').slice(0, 12) + ' · ' + data.duration_ms + 'ms', 'ok');
-        S.paths.value = ''; loadList(true); loadStats();
+        S.paths.value = ''; loadList(true); loadStats(); loadJobs(true);
       }, function (err) {
-        S.busy = false; S.submit.disabled = false;
+        S.busy = false; S.submit.disabled = false; stopProgress();
+        progressFail(err);
         setStatus('创建失败：' + err.message, 'fail');
+        loadJobs(true);
       });
   }
   function openConfig() {
@@ -749,6 +807,18 @@
       '.bak-ret-note{margin:var(--kore-space-2) 0 0;color:var(--kore-text-3);}',
       '.bak-dims{display:flex;flex-wrap:wrap;gap:var(--kore-space-3);padding:var(--kore-space-2) 0;}',
       '.bak-dim{display:inline-flex;align-items:center;gap:6px;min-height:44px;font-size:var(--kore-font-13);}',
+      '.bak-progress{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4);border-bottom:1px solid var(--kore-border-2);background:var(--kore-bg-1);font-size:var(--kore-font-12);}',
+      '.bak-progress[hidden]{display:none;}',
+      '.bak-progress-phase{font-weight:600;color:var(--kore-text-1);flex:1 1 220px;}',
+      '.bak-progress-text{min-width:44px;text-align:center;padding:4px 8px;border-radius:4px;color:var(--kore-text-2);background:var(--kore-bg-2);}',
+      '.bak-progress-busy .bak-progress-text{color:var(--kore-warning,#d29922);}',
+      '.bak-progress-ok .bak-progress-text{color:var(--kore-success,#3fb950);}',
+      '.bak-progress-fail .bak-progress-text{color:var(--kore-danger,#f85149);}',
+      '.bak-progress-track{flex:1 1 100%;height:6px;background:var(--kore-bg-2);border-radius:3px;overflow:hidden;}',
+      '.bak-progress-fill{display:block;height:100%;width:0;background:var(--kore-warning,#d29922);transition:width .3s;}',
+      '.bak-progress-ok .bak-progress-fill{background:var(--kore-success,#3fb950);}',
+      '.bak-progress-fail .bak-progress-fill{background:var(--kore-danger,#f85149);}',
+      '.bak-progress-hint{flex:1 1 100%;color:var(--kore-text-3);word-break:break-word;}',
       '.bak-job-error{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--kore-text-3);}',
       '@media (min-width:640px){.bak-sched-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);} .bak-sched-grid .span2{grid-column:1 / -1;}}',
       '@media (max-width:639px){.bak-task-table{min-width:640px;}}'
@@ -766,6 +836,7 @@
     gear.setAttribute('aria-label', '备份设置');
     on(gear, openConfig);
     S.status = add(root, el('div', 'bak-status muted')); S.status.setAttribute('role', 'status');
+    ensureProgress();
     S.confirmHost = add(root, el('div', 'bak-confirm-host'));
     var create = panel(root, '新建备份', 'gzip 或无压缩 tar'), form = add(create, el('form', 'bak-form'));
     S.name = input('text', 'span2', 'site-20261122'); field(form, '名称', S.name, 'span2');
@@ -844,7 +915,7 @@
     build(root);
     loadVerifySupport();
     loadList(false); loadStats(); loadTasks(true); loadJobs(true);
-    return { destroy: function () { S.destroyed = true; } };
+    return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
   window.KoreBackup = { render: render };
 })();
