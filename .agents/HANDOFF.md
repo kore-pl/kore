@@ -420,6 +420,33 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
   - ④**SDK 八条命令自检（零依赖）**：`pkg/pluginapi` 公开 SDK 的八条命令自证，纯本地、不连主实例、不需凭据。
 - **两条写域不相交（G-08）**：①落 `.agents/verify/e2e-golden-curl.md`，④落 `.agents/verify/sdk-selfcheck.md`，互不改对方文件；主实例运行态一律不碰。
 
+### 0.0.11 R24 交付快照（2026-11-24，r24-docsync 归档）
+
+> 本节按用户三点诉求 + 两项用户反馈收敛本轮 R24 落地事实，所有 commit 号经 `git log` 逐条复核（5 个插件契约在各自插件仓，非本仓）。§0.0.1–§0.0.10 及更早历史全部保留不动；本轮写域仅本文件与根 `AGENTS.md`（G-32 判据数同步）。
+
+**1. 用户三点诉求与落地**
+
+- **①告警中心手机布局**：标题竖排 / 按钮挤压修复 `dd449ac`（`[agent:r24-alertlayout]`）；PC + 手机双端截图自证（`.agents/verify/screenshots/alerts-layout-fixed-{desktop,mobile}-1124.png`），报告 `.agents/verify/alerts-layout-fix.md`。
+- **②「商店每个软件都要有设置页」**：入口两卡——商店已装卡片 `a8e8e49`（`store.js`，含 G-28 双端截图）；已装插件列表每行 `e03178a` + 截图验收 `1d1dff9`（`app.js`）。两处**复用现成 config-panel**，不另造面板；无契约时友好降级空态 `7a65bfa` + 截图验收 `318e9c9`（`web/config-panel`，空态 / 失败态文案）。
+- **③5 插件补 `config.get/set` 契约**（均在各自插件仓，显式 schema + 热生效 + dist 两打 sha 一致 + 版本 bump）：cron `e2bf184` / ssl `e46010b` / firewall `381a8ed` / container `f5dd1a6` / monitor `e6eaa09`。
+
+**2. 图表 tip + 下标**（用户反馈「tip 被遮挡」+「没有下标」）
+
+- `3d206fa`（`[agent:r24-charttip]`）：全站盘点 8 类图，真风险仅拓扑 1 处已修——tip 挂 `document.body` + `position:fixed` + z-index 80 + 手机 tap 面板；监控 / 进程视图补 X 轴时间刻度与 Y 轴数值刻度（带单位）。同步在 [FRONTEND](../docs/FRONTEND.md) §13 落**第 12 条判据**（条文 `:373`「十二条细则」、判据行 `:388`），根 `AGENTS.md` G-32 已由「十一条」同步为「十二条」。证据 `.agents/verify/r24-chart-tip.md`。
+
+**3. 顶栏状态图标化**（用户早要求「图标 + 颜色 + tip」）
+
+- `c85f3ef`（`[agent:r24-topstatus]`）：健康检查 / 系统信息改心电脉冲 / 信息图标 + 四态色（**真实数据映射**，非占位）+ tip 挂 body、z-index 90；PC + 手机双端截图，报告 `.agents/verify/r24-top-status.md`。G-03 首屏 **79797 ≤ 307200** 字节（余量 227403，报告 `:29/:70`）。
+
+**4. A3 文案回归闭环**
+
+- monitor `e6eaa09` 自修 `process_sort` 的 `invalid` 文案；全量 usability 静态复核 **FAIL=0**（`.agents/verify/usability-audit-2026-11-24.md` `:205`，lead 只读复核确认）。
+
+**5. 挂账（按证据，勿当已完成）**
+
+- 本轮均为**本地 commit、未 push**；5 插件契约的 `dist` 重打产物未入索引，需攒批裁决后再同步 `versions.lock.json`。
+- `push` 仍待用户明确授权（本地多提交、少推送口径）；Gitea / Gitee token 与管理员口令仍为 **human gate**，本轮未触碰、未落明文（G-30）。
+
 ## 0. 当前交接快照（2026-11-24 10:20）
 
 > 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
