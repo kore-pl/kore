@@ -91,6 +91,8 @@ dirs = [d for d in sys.argv[2:] if os.path.isdir(d)]
 
 UlimitLiteral = re.compile(r'ulimit[^\n]*?\s-[A-Za-z]*n\s+\d+')
 UlimitNofile = re.compile(r'ulimit[^\n]*?--nofile[= ]\s*\d+')
+# prlimit 也可能被写成绝对预算：只拦字面量，`--nofile=<表达式>` 不拦。
+PrlimitLiteral = re.compile(r'prlimit[^\n]*?--nofile\s*=\s*\d+')
 CurLiteral = re.compile(r'Cur:\s*\d+')
 RelativeEvidence = ('/proc/self/fd', '/proc/%d/fd', 'prlimit', 'Getrlimit')
 
@@ -114,8 +116,8 @@ for root in dirs:
             scanned += 1
             body = strip_comments(raw, path)
             for lineno, line in enumerate(body.splitlines(), 1):
-                if UlimitLiteral.search(line) or UlimitNofile.search(line):
-                    fails.append((path, lineno, 'ulimit -n 字面量绝对预算', line.strip()))
+                if UlimitLiteral.search(line) or UlimitNofile.search(line) or PrlimitLiteral.search(line):
+                    fails.append((path, lineno, 'ulimit/prlimit 字面量绝对预算', line.strip()))
                 if 'RLIMIT_NOFILE' in line and CurLiteral.search(line):
                     fails.append((path, lineno, 'RLIMIT_NOFILE 字面量 Cur', line.strip()))
             if 'RLIMIT_NOFILE' in body and not any(marker in body for marker in RelativeEvidence):
@@ -137,6 +139,7 @@ if [ "${1:-}" = "--fd-budget-self-test" ]; then
   mkdir -p "$tmp/bad" "$tmp/good"
   cat > "$tmp/bad/abs_test.go" <<'EOF'
 package boundary
+func t0() { _ = exec.Command("prlimit", "--pid", "1", "--nofile=12:") }
 func t1() { script := `ulimit -n 12; exec bin` }
 func t2() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: 64, Max: 64}) }
 EOF
@@ -147,11 +150,11 @@ func t3() { ents, _ := os.ReadDir("/proc/self/fd"); _ = syscall.Setrlimit(syscal
 EOF
   rc=0
   if fd_budget_scan "self-test/反例" "$tmp/bad" >/tmp/fd-budget-bad.log 2>&1; then rc=1; fi
-  if ! grep -q "绝对预算 2 命中" /tmp/fd-budget-bad.log; then rc=1; fi
+  if ! grep -q "绝对预算 3 命中" /tmp/fd-budget-bad.log; then rc=1; fi
   if ! fd_budget_scan "self-test/正例" "$tmp/good" >/tmp/fd-budget-good.log 2>&1; then rc=1; fi
   if ! grep -q "绝对预算 0 命中" /tmp/fd-budget-good.log; then rc=1; fi
   if [ "$rc" -eq 0 ]; then
-    echo "[OK] fd 预算门禁自证：反例 2 命中（ulimit 字面量 + Rlimit{Cur:字面量}），正例 0 命中（含注释里的历史写法）"
+    echo "[OK] fd 预算门禁自证：反例 3 命中（ulimit / prlimit 字面量 + Rlimit{Cur:字面量}），正例 0 命中（含注释里的历史写法）"
   else
     echo "[FAIL] fd 预算门禁自证未通过"; cat /tmp/fd-budget-bad.log /tmp/fd-budget-good.log
   fi
