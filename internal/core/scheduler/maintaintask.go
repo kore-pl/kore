@@ -8,7 +8,7 @@ import (
 // syncLogsMaintainTask 把"日志自动切割与清理"映射为一条**插件任务**（默认启用）。
 //
 // 为什么必须落在这里（G-19）：内核里唯一的周期来源是 internal/core/scheduler/ 的单 ticker；
-// 日志插件（kore-plugin-logs）是 lazy 常驻插件，**不得**在插件内起 ticker/AfterFunc 续命，
+// 日志插件（id=logs）是 lazy 常驻插件，**不得**在插件内起 ticker/AfterFunc 续命，
 // 所以"按天切割 / 按天清理"的周期由本调度器提供，到点调用插件方法 logs.maintain。
 //
 // 与 cert_renew / audit.clean 的差别：
