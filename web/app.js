@@ -2178,6 +2178,17 @@
     snapshot: ['KoreSnapshot', '/assets/snapshot.js', 'nav.snapshot', '配置快照'],
     migrate: ['KoreMigrate', '/assets/migrate.js', 'nav.migrate', '配置迁移'],
     webhook: ['KoreWebhook', '/assets/webhook.js', 'nav.webhook', '通知通道'],
+    // R23 第二批 8 个新视图：统一登记懒加载 sub（一级菜单仍 10 项，G-33 A6）。
+    // 每项 = [全局名, 脚本, i18n 键, 中文兜底]；带连字符的键必须加引号（否则被解析成减法表达式）。
+    // 视图文件由各卡交付，懒加载不进首屏六件套、不计首屏 gzip 预算。
+    'alert-rules': ['KoreAlertRules', '/assets/alert-rules.js', 'nav.alertRules', '告警规则'],
+    'disk-analysis': ['KoreDiskAnalysis', '/assets/disk-analysis.js', 'nav.diskAnalysis', '磁盘分析'],
+    'fault-drill': ['KoreFaultDrill', '/assets/fault-drill.js', 'nav.faultdrill', '故障演练'],
+    macros: ['KoreMacros', '/assets/macros.js', 'nav.macros', '操作宏'],
+    'cert-lifecycle': ['KoreCertLifecycle', '/assets/cert-lifecycle.js', 'nav.certLifecycle', '证书看板'],
+    'config-drift': ['KoreConfigDrift', '/assets/config-drift.js', 'nav.configDrift', '配置漂移'],
+    slowquery: ['KoreSlowQuery', '/assets/slow-query.js', 'nav.slowquery', '慢查询分析'],
+    'log-alerts': ['KoreLogAlerts', '/assets/log-alerts.js', 'nav.logAlerts', '日志告警'],
     // settings / tasks 原为单视图，改为 hub 后在此保留原模块，避免把原「设置 / 计划任务」弄丢。
     settings: ['KoreSettings', '/assets/settings.js', 'nav.settings', '设置'],
     tasks: ['KoreTasks', '/assets/tasks.js', 'nav.tasks', '计划任务']
@@ -2195,12 +2206,13 @@
       ]
     },
     {
-      id: 'db', label: '数据库', views: [{ sub: 'db' }, { sub: 'redis' }]
+      id: 'db', label: '数据库', views: [{ sub: 'db' }, { sub: 'redis' }, { sub: 'slowquery' }]
     },
     {
       id: 'files', label: '文件', views: [
         { sub: 'files', label: '文件管理', labelKey: 'nav.files', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
-        { sub: 'backup' }
+        { sub: 'backup' },
+        { sub: 'disk-analysis' }
       ]
     },
     {
@@ -2218,24 +2230,31 @@
         { sub: 'report' },
         { sub: 'topology' },
         { sub: 'logs' },
-        { sub: 'process' }
+        { sub: 'process' },
+        { sub: 'alert-rules' },
+        { sub: 'fault-drill' },
+        { sub: 'log-alerts' }
       ]
     },
     // R22：计划任务从单视图改为 hub（原 KoreTasks 通过 SHELL_VIEWS.tasks 保留），新增运维日历 tab。
-    { id: 'tasks', label: '计划任务', views: [{ sub: 'tasks' }, { sub: 'calendar' }] },
+    // R23：操作宏挂计划任务（自动化/效率工具，与定时任务同一心智模型）。
+    { id: 'tasks', label: '计划任务', views: [{ sub: 'tasks' }, { sub: 'calendar' }, { sub: 'macros' }] },
     {
       // 「安全」收的是「对外暴露面的防守」：网络边界（防火墙/WAF/DNS/SSH）、信任链（证书）、
       // 资产完整性（完整性校验）、本机暴露面盘点（服务发现）。同一心智模型：
       // 谁在敲门、门锁没锁、锁还灵不灵——服务发现的产出正是「这台机器上有什么在监听」，是安全视图的输入。
       id: 'security', label: '安全', views: [
         { sub: 'firewall' }, { sub: 'waf' }, { sub: 'sshguard' }, { sub: 'dns' },
-        { sub: 'ssl' }, { sub: 'integrity' }, { sub: 'discover' }
+        { sub: 'ssl' }, { sub: 'integrity' }, { sub: 'discover' },
+        { sub: 'cert-lifecycle' }
       ]
     },
     { id: 'terminal', label: '终端', views: [{ sub: 'terminal' }] },
     // R22：设置从单视图改为 hub（原 KoreSettings 通过 SHELL_VIEWS.settings 保留），新增快照/迁移/通知三个 tab。
+    // R23：配置漂移挂设置（与快照/迁移同属配置治理闭环）。
     { id: 'settings', label: '设置', views: [
-      { sub: 'settings' }, { sub: 'snapshot' }, { sub: 'migrate' }, { sub: 'webhook' }
+      { sub: 'settings' }, { sub: 'snapshot' }, { sub: 'migrate' }, { sub: 'webhook' },
+      { sub: 'config-drift' }
     ] }
   ];
 
