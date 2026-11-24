@@ -271,6 +271,27 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 查询：`GET /api/v1/audit?since=<RFC3339>&limit=50&action=<动作>&order=desc`（`since` 必填、`limit` ≤1000、`order` 默认 `asc`）；HTTP 响应的 `at` 由键的纳秒段派生（RFC3339Nano，仅响应字段、不落库、不改存储结构），供前端展示时间与「最新优先」。CLI 用 `kored audit --since 2026-11-24T00:00:00+08:00 [--action <动作>] [--limit N] [--csv]` 读 bbolt 输出（**`--since` 必须是 RFC3339 时间戳**，`--since 24h` 这类相对写法会被拒并返回退出码 2）；前端列表见 `web/audit.js`。**保留策略**：`audit.retention`（默认 90 天）内的记录保留，超期记录由 scheduler 内置任务 `builtin-audit-clean` 按龄删除（周期 `audit.clean_interval` 默认 6h、单次上限 `audit.clean_batch` 默认 1000；`audit.clean_enabled=false` 可关，见 §11）。清理本身写一条 `audit.clean` 审计。
 
+### 9.1 宿主变更账本 `changes.jsonl`（root 动作的产品化记录）
+
+位置 `<state>/changes.jsonl`，`0600`、append-only、每行一条 JSON、写入后 `fsync`（ADR-0023 §3.5 豁免 #3）。**它不是审计（§9 的 bbolt `audit` bucket 回答"谁在什么时候调了什么"，账本回答"软件替用户改了什么、怎么退回去"）**，两者互不替代：审计仍 fail-closed 事前落账，账本只在动作**成功后**追加。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `ts` | string | RFC3339，写入时刻（缺省由 `appendChange` 填充） |
+| `summary` | string | **人话摘要**（root 动作取 `root_actions[].description`，缺省退化为动作 id）——用户视图第一列 |
+| `plugin` | string | 声明该动作的插件 id |
+| `action` | string | `root_actions[].id` |
+| `target` | string | **影响对象**（`root_actions[].target`，`writes_host=true` 时必填），如 `/etc/nginx/conf.d/kore-a.conf`、`22/tcp` |
+| `before` / `after` | string | 可选，安装期变更引用的前后值 |
+| `reversible` | bool | true 当且仅当带结构化 `purge_op` |
+| `purge_op` | object | **结构化回滚操作**：`{"kind":"file.remove"\|"file.restore","args":[...]}`；`args` 只接受绝对路径（拒根路径 / `..`）。**账本里永不出现 shell 命令字符串**——以 root 执行账本任意字符串等于把 RCE 面写进文件 |
+
+**写入规则（ADR-0049 §5.1 落地）**：`root_actions[].writes_host=true` 且执行成功（`exit_code=0`、未超时）→ privilege 经装配层注入的 `ChangeRecorder` 追加一条；账本未装配时写宿主动作 **fail-closed**（拒绝执行，`deny_reason=change_ledger_unavailable`）。
+
+**降级规则**：`writes_host=true` 但**没有 `purge_op`** 的动作按不可逆处理——必须携带一次性 `confirm` 令牌才能执行（`privilege.NeedsConfirm`），落账时 `reversible=false`、无 `purge_op`。做法依据：拿不出回滚方式的写宿主动作，不能被当成普通可重复动作。
+
+**读取方**：`kored uninstall` 打印清单（默认不自动回滚，仅按 `purge_op` 分派结构化回滚，未知 kind 拒绝）；`before`/`after` 供人工比对。schema 变更（新增字段或 kind）属数据形状变更，须同步本节与 ADR-0023。
+
 ## 10. 备份与恢复
 
 > **当前未实现**：`kored backup` / `kored restore` / `kored db dump` **都没有对应子命令**（唯一权威清单是 `kored help`）；下面是**停机手工流程**，可直接照敲，M2 由 backup 能力接管。离线核对需要 bbolt CLI，它不随 `kored` 分发，按 `go.mod` 的版本自行安装：`go install go.etcd.io/bbolt/cmd/bbolt@v1.3.11`。
