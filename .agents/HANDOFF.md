@@ -6,6 +6,87 @@
 **要做什么、怎么干、干到哪了、为什么这么定**。这份规范定义这四问分别由哪些文件回答，以及
 "什么才算落过文件"。
 
+### 0.0 本轮 R6+R7 交付快照（2026-11-24 12:45）
+
+> 本节记录 R6（12 路）+ R7（4 路 + 1 独立 verifier）两批并行交付的收口状态，供只读本文件的人接手。
+> 事实口径：commit / sha / 版本全部照任务卡抄录，**所有 commit 本地已提交、未 push**；tag / release 未建。
+> 下方 §0（10:20 快照）及更早内容为历史证据，保留不动。写域只有本文件。
+
+#### 0.0.1 本批总览
+
+- **规模**：R6 12 路 + R7 4 路 + 1 独立 verifier（`r7-shots-verify`）全部收口。
+- **目标**：把"简陋"往成熟产品推进，三条主线——**并发竞态修复**（旁路锁 / 唯一临时名 / O_EXCL / errno 人话）、
+  **三个用户可见 UI 组件**（onboarding / theme / shortcuts + 主壳接线 + G-28 双端截图）、**发版链重签**（dns 发版 + 第 52 把索引重签）。
+- **收口边界**：代码与本地提交已完成；**远端 push / tag / release 全部挂账待用户授权**（见 0.0.3）。
+
+#### 0.0.2 成果清单（按类别，每条带 commit）
+
+**A. 并发 / 竞态修复 5 项**
+
+| 项 | commit | 版本 / 状态 |
+| --- | --- | --- |
+| app-deploy 快照同秒占名 | `303fe3a` | v0.3.3 |
+| logs 导出 O_EXCL | `221e064` | v0.5.4 |
+| site 锁内定向回滚 | `f95325b` | 发版因 ADR-0052 在途，停在自洽点（未 bump/dist） |
+| dns 旁路 flock + 唯一名 | `f32b3d9` | 发版 `e2324e9`（v0.5.2） |
+| file + backup errno 人话 | `326e803` / `c31fd32` | file v0.3.5 / backup v0.5.1 |
+
+**B. UI 组件 3 项 + 接线 + 截图**
+
+| 项 | commit | 说明 |
+| --- | --- | --- |
+| onboarding 组件 | `fc05b18` | 用户可见组件 |
+| theme 组件 | `14ab8e5` | 用户可见组件 |
+| shortcuts 组件 | `f5dc584` | 用户可见组件 |
+| 主壳接线 | `e135820` | 三组件接入主壳 |
+| G-28 双端截图 | `2c89b60` | PC + 手机双端 |
+| 截图 md5 校准 | `6f085ba` | 独立 verifier `r7-shots-verify` **PASS 5/5** |
+
+**C. 审计与事故 4 项**
+
+| 项 | commit | 说明 |
+| --- | --- | --- |
+| 24 仓竞态审计报告 | `434bb47` | 主报告 |
+| dns 口径修订 | `3493b87` | 审计报告 dns 口径修订 |
+| rotate 反证 | `390c9fa` | 审计报告 rotate 反证 |
+| 提交事故独立核查裁决(B) | — | 独立核查结论 B（核查结论，无独立代码 commit） |
+| history 修补 | `12cc45a` | 临时索引补回 filewrite 三文件 |
+| site 跨 agent 写域冲突自救 | — | 写域冲突自救（无独立代码 commit） |
+
+**D. 发版链**
+
+- **dns 发版** `e2324e9`：v0.5.2 / sha `fce690…baa` / size `2973707`。
+- **第 52 把索引重签** `a91dd01`：5 仓入索引——app-deploy 0.3.3、file 0.3.5、logs 0.5.4、backup 0.5.1、dns 0.5.2；
+  `validate-index` 正例 exit 0 + 篡改反例 exit 1；公钥 `3e461a07` 无需轮换。
+- **所有 commit 均本地未 push。**
+
+#### 0.0.3 挂账（未闭环，按证据，供下一轮）
+
+1. **发布授权（最优先）**：本批 6+ 插件仓 + 索引仓全部本地 commit、未 push、tag/release 未建；
+   索引 `download_url` 在 release 落地前用户点下载会 404。push/tag/release 是远端不可逆操作，
+   按用户常设纪律需**用户明确授权**。dns tag `v0.5.2` **必须显式钉 `e2324e9`（不钉 HEAD）**。
+   本轮 lead 已向用户抛出该决策，**待用户回复**。
+2. **三处索引 DRIFT（`r7-resign` 发现，本批不改）**：
+   - `site` repo=0.7.0 vs 索引=0.4.4：外部 ADR-0052 vhost-write 在途、带半成品；工作区 `go test` 挂 3 条
+     `rootactions_test.go`（argv / writes_host）；暂存区重排 + `.tmp-k4/` 残留；**HEAD 内容完整正确**。
+   - `db-mysql` repo=0.5.2 vs 索引=0.4.1。
+   - `ssl` repo=0.7.1 vs 索引=0.6.0。
+3. **发版缺口**：site 回滚修复未 bump/dist（`info.json` 属外部 ADR-0052 写域，r6-site 一个字节未碰）；
+   `RELEASE-EVIDENCE.md` 多仓历史遗留未跟踪文件（非本轮产物、未提交，去留待裁决）。
+4. **提交事故留痕**：`434bb47` + `fc05b18` 两次 add→commit 两步卷入 filewrite 三文件暂存态，
+   `12cc45a` 临时索引补回（`434bb47`/`fc05b18` 仍是 HEAD 祖先、**历史未改写**）；
+   根因是共享工作区两步 commit 竞态。纪律：一律 **pathspec 一步到位**或 **GIT_INDEX_FILE 临时索引**。
+
+#### 0.0.4 下一轮建议（≤5 条，按优先级，每条含可执行动作 + 验收）
+
+| # | 优先级 | 可执行动作 | 验收 |
+| --- | --- | --- | --- |
+| ① | P0 | 用户授权后统一 push/tag/release，dns tag `v0.5.2` 显式钉 `e2324e9` | 三端 tag/release 齐备；`git rev-parse v0.5.2^{}` 等于 `e2324e9`；索引 `download_url` 实测可下载 |
+| ② | P1 | 处理 site 0.7.0 / db-mysql 0.5.2 / ssl 0.7.1 三处 DRIFT，先确认外部 agent 收敛 | 三仓 repo 版本与索引一致，或登记为新的在途 DRIFT 并注明外部 ADR |
+| ③ | P1 | site 回滚修复发版（待 ADR-0052 写域释放） | 写域释放后 bump + dist + 入索引，dist sha 与索引一致 |
+| ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 明确提交 / 删除 / 加忽略，结论落 `.agents/LOG/DECISIONS.md` 或对应 ADR |
+| ⑤ | P2 | 主实例 8787 重启到含接线的新构建后补生产态抽查（G-29） | `curl -s localhost:8787/api/v1/system/info` 的 `paths.index_dir` 正确、商店版本 == 索引版本、三组件生产态可见（当前主实例仍是 10:26 旧二进制） |
+
 ## 0. 当前交接快照（2026-11-24 10:20）
 
 > 本节是「今天真实状态」的增量快照，§1–§7 的规范与卡片模板不变。
