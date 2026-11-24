@@ -18,7 +18,14 @@
     '.cfg-auto{display:inline-flex;align-items:center;margin-left:6px;padding:0 7px;color:var(--kore-success);background:rgba(63,185,80,.12);border:1px solid var(--kore-success);border-radius:999px;font-size:11px;font-weight:500;vertical-align:1px}',
     '.cfg-note{margin:0 0 2px;padding:8px 10px;color:var(--kore-text-2);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12)}',
     '.cfg-auto-hint{color:var(--kore-success)}',
-    '.cfg-toast{position:fixed;top:12px;left:50%;z-index:900;transform:translateX(-50%);max-width:min(92vw,560px);padding:10px 16px;color:var(--kore-text-1);background:var(--kore-bg-2);border:1px solid var(--kore-success);border-radius:var(--kore-radius-control);box-shadow:var(--kore-shadow);font-size:var(--kore-font-13)}'
+    '.cfg-toast{position:fixed;top:12px;left:50%;z-index:900;transform:translateX(-50%);max-width:min(92vw,560px);padding:10px 16px;color:var(--kore-text-1);background:var(--kore-bg-2);border:1px solid var(--kore-success);border-radius:var(--kore-radius-control);box-shadow:var(--kore-shadow);font-size:var(--kore-font-13)}',
+    // 空态 / 失败态：白话标题 + 怎么办 + 下一步按钮；技术错误码只进折叠区（USABILITY §4）。
+    '.cfg-state{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:18px 14px;text-align:left}',
+    '.cfg-state-title{margin:0;color:var(--kore-text-1);font-size:var(--kore-font-14);font-weight:600;line-height:1.5}',
+    '.cfg-state-detail{margin:0;color:var(--kore-text-2);font-size:var(--kore-font-13);line-height:1.7;overflow-wrap:anywhere;white-space:normal}',
+    '.cfg-state-code{max-width:100%;color:var(--kore-text-3);font-size:var(--kore-font-12)}.cfg-state-code pre{margin:6px 0 0;padding:8px;color:var(--kore-text-3);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);overflow-wrap:anywhere;white-space:pre-wrap}',
+    '.cfg-state-actions{display:flex;flex-wrap:wrap;gap:8px;width:100%}.cfg-state-btn{min-height:var(--kore-touch);padding:8px 14px;white-space:normal;text-align:center}',
+    '@media(max-width:520px){.cfg-state{padding:14px 12px}.cfg-state-detail{line-height:1.8}.cfg-state-btn{flex:1 1 100%;min-height:var(--kore-touch)}}'
   ].join('');
   function el(tag, cls, text) {
     var node = document.createElement(tag); if (cls) node.className = cls;
@@ -51,8 +58,11 @@
         var data = {};
         if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { message: raw }; } }
         if (!res.ok) {
-          throw new Error((data.code ? data.code + '：' : '') +
+          var err = new Error((data.code ? data.code + '：' : '') +
             (data.message || ('请求失败（HTTP ' + res.status + '）')));
+          err.code = data.code || '';
+          err.httpStatus = res.status;
+          throw err;
         }
         return data;
       });
@@ -175,6 +185,42 @@
     }
     return { values: values };
   }
+  // 契约缺失 → 友好空态；其它错误 → 人话失败态。两者都给「怎么办」+ 下一步按钮，
+  // 不裸露错误码（错误码仅进折叠 details），符合 USABILITY §4 原则④。
+  function isNoContract(err) {
+    if (!err) return false;
+    if (err.code === 'E_NOTFOUND') return true;
+    var m = String(err.message || '');
+    return /未知方法|unknown method|not implemented|方法不存在|暂无此能力/i.test(m);
+  }
+  function renderState(body, actions, cfg) {
+    body.textContent = '';
+    actions.textContent = '';
+    var box = add(body, el('div', 'cfg-state'));
+    var icon = el('div', 'cfg-state-icon', cfg.icon || 'ⓘ');
+    icon.setAttribute('aria-hidden', 'true');
+    add(box, icon);
+    add(box, el('p', 'cfg-state-title', cfg.title));
+    add(box, el('p', 'cfg-state-detail', cfg.detail));
+    if (cfg.hint) add(box, el('p', 'cfg-state-detail', cfg.hint));
+    if (cfg.code) {
+      var det = el('details', 'cfg-state-code');
+      add(det, el('summary', null, '技术信息（点开查看）'));
+      add(det, el('pre', null, cfg.code));
+      add(box, det);
+    }
+    var row = add(box, el('div', 'cfg-state-actions'));
+    var buttons = cfg.buttons || [];
+    for (var i = 0; i < buttons.length; i++) {
+      (function (spec) {
+        var btn = el('button', 'btn ' + (spec.primary ? 'btn-primary' : 'btn-ghost') + ' cfg-state-btn', spec.label);
+        btn.type = 'button';
+        btn.addEventListener('click', spec.onClick);
+        add(row, btn);
+      })(buttons[i]);
+    }
+    return box;
+  }
   function open(host, pluginId, opts) {
     if (!host || !pluginId) return null;
     opts = opts || {};
@@ -207,6 +253,24 @@
     var prefill = opts.prefill || {}, autoKeys = opts.autoKeys || {}, focusEntry = null;
     invoke(pluginId, 'get', {}).then(function (data) {
       var schema = data.schema || {}, values = data.values || {}, fields = schema.fields || [], entries = [];
+      if (!fields.length) {
+        // 没有可配置项：给小白下一步按钮，不铺空白表单/保存按钮（USABILITY §4）。
+        renderState(body, actions, {
+          icon: '◇',
+          title: '该插件暂无可配置项',
+          detail: '这是新版配置能力，插件作者尚未接入设置项；如需调整，可到软件商店查看该插件是否有新版本。',
+          hint: '您可以先关闭本窗口继续使用插件，或前往软件商店查看更新。',
+          buttons: [
+            { label: '关闭', primary: true, onClick: close },
+            { label: '去商店看看', onClick: function () {
+              if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
+              else window.location.hash = '#/store';
+              close();
+            } }
+          ]
+        });
+        return;
+      }
       body.textContent = '';
       if (opts.autoNote) add(body, el('p', 'cfg-note', opts.autoNote));
       for (var i = 0; i < fields.length; i++) {
@@ -254,8 +318,38 @@
         });
       });
     }, function (err) {
-      body.textContent = '';
-      add(body, el('p', 'cfg-status cfg-status-err', '读取配置失败：' + err.message));
+      var code = (err && err.code) || '';
+      var raw = (err && err.message) || '未知错误';
+      if (isNoContract(err)) {
+        // 插件未实现 config.get：与 fields 为空走同一套空态，文案一致不漂移。
+        renderState(body, actions, {
+          icon: '◇',
+          title: '该插件暂无可配置项',
+          detail: '这是新版配置能力，插件作者尚未接入设置项；如需调整，可到软件商店查看该插件是否有新版本。',
+          hint: '您可以先关闭本窗口继续使用插件，或前往软件商店查看更新。',
+          buttons: [
+            { label: '关闭', primary: true, onClick: close },
+            { label: '去商店看看', onClick: function () {
+              if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
+              else window.location.hash = '#/store';
+              close();
+            } }
+          ]
+        });
+        return;
+      }
+      // 其它错误：人话 + 怎么办 + 重试，错误码只进折叠区（不裸露、不甩锅用户）。
+      renderState(body, actions, {
+        icon: '⚠',
+        title: '设置暂时读不出来',
+        detail: '可能是插件还没启动好，或网络临时中断；请点「重试」再试一次，或回到列表刷新后重新打开。',
+        hint: '如果反复出现，可到软件商店检查该插件是否需要更新。',
+        code: (code ? code + '：' : '') + raw,
+        buttons: [
+          { label: '重试', primary: true, onClick: function () { close(); open(host, pluginId, opts); } },
+          { label: '关闭', onClick: close }
+        ]
+      });
     });
     return { close: close };
   }
