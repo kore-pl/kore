@@ -89,6 +89,21 @@ gitee   efb0989a56b70809768cdc96d0f91d30ee98fa0b  refs/tags/v0.5.0^{}
 [backup-0.5.0.tar.gz.sha256] http=200 size=86      sha=740415ac0c3a
 ```
 
+建后 API 回读（三端 release 元数据）：
+
+```text
+Gitee : tag=v0.5.0  target_commitish=efb0989a56b70809768cdc96d0f91d30ee98fa0b (len=40)
+        assets=[backup-0.5.0.tar.gz, backup-0.5.0.tar.gz.sha256, v0.5.0.zip, v0.5.0.tar.gz(自动源码包)]
+Gitea : tag=v0.5.0  assets=[('backup-0.5.0.tar.gz',1717615), ('backup-0.5.0.tar.gz.sha256',86)]
+GitHub: tag=v0.5.0  assets=[{backup-0.5.0.tar.gz,1717615}, {backup-0.5.0.tar.gz.sha256,86}]
+```
+
+`.sha256` 旁挂资产内容与本地逐字一致（网络下载回读）：
+
+```text
+f76a165a0b5b3684202a1b46e27fbb6a4a4c4669f3b3cbe8d8525b807645c1a9  backup-0.5.0.tar.gz
+```
+
 ## 4. 索引改前 → 改后
 
 `index/plugins.json` 的 backup 条目：
@@ -189,6 +204,14 @@ OK  backup@0.5.0 http=200 size=1717615 sha=f76a165a0b5b
 ```
 
 **唯一 BAD 属他人轨道，不在本卡写域**：`file@0.3.4` 由 `file-manager-rebuild` 于 10:39（`87e255a`）收录，但 GitHub 无 `v0.3.4` release（`gh release list` 最新为 `file v0.3.3`），故 404。已 `send_message` 横向通报该 agent 补建三端 release，并声明我不改它的索引条目。本卡交付物 `backup@0.5.0` 为 OK。
+
+通报后持续观察 2 分钟（6 次轮询，均在 10:49–10:51），该资产仍 404：
+
+```text
+poll 1..6: file@0.3.4 http=404   (10:49:56 / 10:50:19 / 10:50:40 / 10:51:01 / 10:51:23 / 10:51:45)
+```
+
+结论：本卡范围内 24 条中 23 条 OK、`backup@0.5.0` 实测 200+sha+size 三项全对；缺口在另一轨道，需其补建 release 后才能到 `BAD_COUNT=0`。我**没有**为凑数改它的条目或放宽校验（不放宽判据是本卡的底线）。
 
 ## 8. 公钥未变（不需重启 kored）
 
