@@ -1,4 +1,4 @@
-> 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5 · 关联: [0019-scheduler](./0019-scheduler.md)、[0016-resource-budget-final](./0016-resource-budget-final.md)、[DATA-MODEL](../DATA-MODEL.md) §11、[CORE](../CORE.md) §2.15
+> 状态: accepted · 归属: architect · 更新: 2026-11-24 · 里程碑: M5 · 关联: [0019-scheduler](./0019-scheduler.md)、[0016-resource-budget-final](./0016-resource-budget-final.md)、[DATA-MODEL](../DATA-MODEL.md) §11、[CORE](../CORE.md) §2.15
 
 # ADR-0044: 审计记录按龄清理落在 scheduler 内置任务（不新增定时器）
 
@@ -15,6 +15,7 @@
 5. **可观测**：每次清理写一条 `action=audit.clean` 审计 + 一条 INFO 日志；写审计失败只 WARN。清理失败只落 `failed` 的 `scheduler_runs` 记录 + WARN，不阻塞调度、不影响读路径。
 6. **`tasks` 不实现清理，改为撤销承诺**：该 bucket 无写入方，为它实现按龄删除没有意义；文档改为「预留 bucket，无写入方 → 不定义保留窗口」，等写入方落地时再定义规则。
 7. **不做在线 compaction**：删键只释放页供复用，文件大小停在高水位。在线压缩需关闭独占句柄再换文件，运行中做有丢写风险；真要缩文件走停服 + bbolt CLI 离线压缩，文档写明运维路径。
+8. **清理入口唯一化 + 内置任务身份约束**（P1 修复，`a0cd926`）：删除审计的参数不得来自调用方。`plugin="kore"` 是内核伪插件保留名，**API 不得创建**（`POST /api/v1/scheduler/tasks` 回 400 `E_INVALID`、任务不落库）；`audit.clean` 只允许固定 id `builtin-audit-clean` 执行，其他任务 id 一律拒绝。参数加硬下限 `retention_seconds ≥ 24h`（与 `audit.retention` 配置下限同口径）、`batch` 1–10000——任何一次清理都删不掉最近 24h 的审计，即使任务参数被伪造或残留旧值。被拒绝的清理尝试写 `audit.clean(result=error)`，detail 带被尝试的 `retention_seconds` / `batch`（可解析时）。
 
 ## 2. 被否决的选项
 
@@ -33,11 +34,13 @@
 - 审计库增长被封顶在「保留期 × 写入速率 + 高水位」；文件不会因清理变小，容量规划按高水位。
 - `audit.retention` / `clean_enabled` / `clean_interval` / `clean_batch` 属冷配置：SIGHUP 只提示 ignored，需重启重建内置任务。
 - `GET /scheduler/tasks` 可直接看到内置任务的参数与最近执行结果，排障不需要读代码。
+- **留痕是 best-effort，不是 fail-closed**（如实边界）：`audit.clean` 审计写入失败只 WARN，不阻止清理；这条 error 记录本身最终也按保留期被清理，但**同一次清理删不掉它**（记录晚于本次 `cutoff`，且保留期下限 24h）。真正「删不掉」需要归档 / WORM 存储，本轮未做。
 
 ## 4. 验证
 
 - `internal/core/store/audit_retention_test.go`：造 3 条过期 + 2 条未过期 → 只删过期；batch=2 分三次收敛且 `more` 正确；第二次执行幂等（deleted=0）；坏键不删；limit≤0 报错且不删任何记录。
 - `internal/core/scheduler/auditclean_test.go`：配置映射为内置任务（周期/参数/`next_run_at`）、重启不推迟；经 `execute` 执行只删过期并写 `audit.clean`；清理失败落 `failed` 且读路径仍可用。
+- `internal/core/scheduler/auditguard_test.go`：`retention_seconds=1`、非内置任务 id、API 创建 `plugin="kore"` 三类拒绝各有用例，并验证拒绝后旧记录不删、留一条 `audit.clean(result=error)`；去掉对应保护即 FAIL（反例自证）。
 - 门禁：`go vet ./...`、`go test ./...`、`make docs-check`、`make idle`（有 `kored` 时真跑）。
 
 ## 5. 复审条件

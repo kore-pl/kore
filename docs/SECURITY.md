@@ -283,7 +283,9 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ## 11. 审计与日志脱敏
 
-- 审计写 bbolt `audit` bucket，**保留目标 90 天**（与 [DATA-MODEL](./DATA-MODEL.md) §11 一致；截至 2026-11-23 **无自动清理实现**，超期需手工清理）：`login.success`、`login.failed`、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`invoke.<plugin>.<method>`（写/管理类；`audit.invoke_all=true` 时全量）、`invoke.burst`（同方法 1s 内超 10 次合并）、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。登录审计的 `ip` 保留前 3 段、`user_agent` 截断 100 字符，口令不落库。
+- 审计写 bbolt `audit` bucket，**保留目标 90 天**（与 [DATA-MODEL](./DATA-MODEL.md) §11 一致），**已实现自动按龄清理**：由 scheduler 内置任务 `builtin-audit-clean` 执行（ADR-0044），`audit.clean_enabled: false` 时退回手工清理：`login.success`、`login.failed`、`auth.logout`、`session.expired`、`plugin.install/enable/disable/upgrade/uninstall`、`plugin.ui_load_failed`、`capability.denied`、`invoke.<plugin>.<method>`（写/管理类；`audit.invoke_all=true` 时全量）、`invoke.burst`（同方法 1s 内超 10 次合并）、`config.change`、`signature.absent`、`signature.reject`、`ratelimit.hit`。登录审计的 `ip` 保留前 3 段、`user_agent` 截断 100 字符，口令不落库。
+- **清理入口唯一 + 内置任务身份约束**（P1 修复，`a0cd926`）：`audit.clean` 只允许内核固定内置任务 `builtin-audit-clean` 执行；`POST /api/v1/scheduler/tasks` 拒绝 `plugin="kore"`（400 `E_INVALID`，任务不落库），其他任务 id 调 `audit.clean` 一律拒绝。参数硬下限 `retention_seconds ≥ 24h`、`batch` 1–10000——任何一次清理都删不掉最近 24h 的审计，即使任务参数被伪造或残留旧值。**被拒绝的清理尝试**（冒用任务 id / 非法参数）写一条 `audit.clean(result=error)`，detail 带被尝试的 `retention_seconds` / `batch`（可解析时）；API 创建被拒在入口就 400，不产生该审计。
+- **留痕边界（如实）**：① 拒绝留痕是 **best-effort，不是 fail-closed**——`audit.clean` 审计写入失败只 WARN，不阻止清理；② 这条 error 记录本身最终也按保留期被清理，但**同一次清理删不掉它**（新记录晚于本次 `cutoff`）；③ 真正「删不掉」需要归档 / WORM 存储，**本轮未做**。
 - **日志字段白名单（M1-14 计划，当前未实现）**：目标字段集合为 `ts`、`level`、`event`、`req_id`、`plugin_id`、`method`、`code`、`dur_ms`、`bytes` 等，落地后按白名单重建、白名单外字段丢弃而非透传（fail-closed）。**现状**：`access_log` 中间件与白名单重建均未实现（`internal/core/httpapi/middleware.go:269` 标注归 M1-14），当前只有 `req_id` 注入；该集合**不含** `ua_hash` / `ip_hash`（全仓无此日志字段）。
 - 禁止记录：口令、token、cookie、secret、`Authorization`、完整请求体、签名原文；`ip`/`ua` 只存 sha256 前 16 字节。
 - 日志文件 `/var/log/kore/kore.log`（插件为 `/var/log/kore/plugins/<id>.log`）权限 `0640 root:kore`；轮转容量以 [DATA-MODEL](./DATA-MODEL.md) 为唯一真源（内核 10 MiB × 5、插件 10 MiB × 2），本文件不另立数字。
@@ -312,9 +314,9 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 | --- | --- | --- | --- |
 | HTTP 监听 | 关闭（仅 UDS） | `KORE_HTTP_ADDR` | 开启即把攻击面从本机扩到网络 |
 | 监听地址 | `127.0.0.1:8787`（开启时） | 配置 | 改 `0.0.0.0` 暴露到内网 |
-| `auth.cookie_secure` | `auto` | 配置 | 纯 HTTP 非回环时不设 `Secure` |
+| `auth.cookie_secure` | `auto` | 配置 | 逐请求判定（§3.4）：TLS 或本机反代 `X-Forwarded-Proto: https` 才加 `Secure`；纯 HTTP 不加 |
 | 会话 TTL | 168h（7d）滑动 / 30d 绝对 | `auth.session_ttl`（1m–720h） | 调大增加劫持窗口；阈值 `min(24h, ttl/2)` 决定写盘频率 |
-| 登录限速 | 60s 内 5 次失败锁 300s | 配置 | 调严易自锁，调松增爆破面 |
+| 登录限速 | 60s 内 5 次失败后按 1s→30s 递增延迟（无锁定期） | 配置 | 只惩罚错误口令，正确口令始终放行（§3.5）；`lock` 是惩罚记忆窗口 |
 | 插件签名 | `allow_unsigned=true`（M4 改 `false`） | 配置 | 未签名期无法证明来源 |
 | 插件包大小 | 以 [CORE](./CORE.md) `body_limit` 为真源 | 配置 | 调大增加解压炸弹面 |
 | 单插件内存 | 12 MiB | `resources.memory_mb`（取声明与上限较小值） | 超限被 cgroup OOM kill |
