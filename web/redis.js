@@ -2,7 +2,8 @@
    调用形态：POST /api/v1/invoke/redis/redis.<action>（插件 id 与业务域名一致，
    方法段写完整限定名；裸动词只是插件侧兼容，不得依赖）。
    数据：redis.instances / redis.info / redis.keys / redis.get / redis.delete
-        + 运维四方法 redis.persistence / redis.memory / redis.slowlog / redis.keyInfo。
+        + 运维四方法 redis.persistence / redis.memory / redis.slowlog / redis.keyInfo
+        + 键管理三方法 redis.rename / redis.move / redis.copy（本轮接入）。
    交互：键表行点开先看「键详情」（类型/编码/TTL/内存，keyInfo，O(1)），
    点「读取值」才真正 redis.get——不再对未知键盲目取值；连接配置复用通用面板。
    本视图新增样式（redis-ops-* / redis-detail-* / redis-slow-*）随视图注入，
@@ -23,7 +24,10 @@
       setKey: '', setType: 'string', setText: '', setTTL: 0, setBusy: false, setError: '', setNotice: '',
       setFormHost: null, setResultHost: null, writePanel: null,
       // 服务端配置（redis.serverConfig.get/set）：三个白名单参数。
-      cfg: null, cfgError: '', cfgBusy: false, cfgNotice: '', cfgHost: null, cfgPanel: null, bgBusy: false };
+      cfg: null, cfgError: '', cfgBusy: false, cfgNotice: '', cfgHost: null, cfgPanel: null, bgBusy: false,
+      // 键管理（redis.rename / redis.move / redis.copy）：目标键 / 目标库 / 覆盖确认由人显式给出。
+      keyMgrOp: 'rename', keyMgrTarget: '', keyMgrDB: 1, keyMgrReplace: false, keyMgrConfirm: false,
+      keyMgrBusy: false, keyMgrError: '', keyMgrNotice: '', keyMgrHost: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -617,6 +621,7 @@
     if (!S.selected) return;
     S.activeKey = entry; S.keyInfo = null; S.keyInfoError = '';
     S.value = null; S.valueError = ''; S.valueAsked = false;
+    S.keyMgrTarget = ''; S.keyMgrError = ''; S.keyMgrNotice = ''; S.keyMgrConfirm = false;
     paintKeys(); paintKeyDetail(); paintValue();
     var name = S.selected;
     invoke('redis.keyInfo', { instance: name, key: entry.key }).then(function (data) {
@@ -656,6 +661,138 @@
     });
     ttlOps.appendChild(btn('btn-ghost', tr('redis.ttl.persist', '永久（清除过期）'), runKeyPersist));
     add(S.detailHost, el('div', 'redis-detail-note', S.valueAsked ? '' : tr('redis.detail.valueNote', '读取值可能带来大对象传输，默认不自动执行。')));
+    paintKeyManage();
+  }
+  // 键管理：把后端 redis.rename / redis.move / redis.copy 三个方法接成用户能点的表单。
+  // 目标键 / 目标库 / 覆盖确认一律由人显式给出；覆盖与迁移默认禁止，confirm 复选框仅在需要时出现。
+  var KEY_MGR_OPS = [
+    { value: 'rename', label: tr('redis.mgr.rename', '重命名') },
+    { value: 'move', label: tr('redis.mgr.move', '迁移到其它库') },
+    { value: 'copy', label: tr('redis.mgr.copy', '复制') }
+  ];
+  function paintKeyManage() {
+    if (!S.keyMgrHost) return;
+    S.keyMgrHost.textContent = '';
+    S.keyMgrHost.hidden = !S.activeKey;
+    if (!S.activeKey) return;
+    var src = S.activeKey.key;
+    var box = add(S.keyMgrHost, el('div', 'redis-mgr'));
+    add(box, el('span', 'redis-detail-label', tr('redis.mgr.title', '键管理 · 重命名 / 迁移 / 复制')));
+    add(box, el('div', 'redis-mgr-src', tr('redis.mgr.src', '源键：') + src));
+    // 操作类型三选一：切换即清空错误与提示，避免上一操作的反馈误导。
+    var ops = add(box, el('div', 'redis-actions redis-mgr-ops'));
+    KEY_MGR_OPS.forEach(function (item) {
+      var active = S.keyMgrOp === item.value;
+      var b = btn(active ? 'btn-primary' : 'btn-ghost', item.label, function () {
+        S.keyMgrOp = item.value; S.keyMgrError = ''; S.keyMgrNotice = '';
+        S.keyMgrConfirm = false; S.keyMgrReplace = false; paintKeyManage();
+      });
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+      ops.appendChild(b);
+    });
+    var grid = add(box, el('div', 'redis-mgr-grid'));
+    if (S.keyMgrOp === 'move') {
+      var dbWrap = add(grid, el('label', 'redis-field'));
+      add(dbWrap, el('span', 'redis-label', tr('redis.mgr.dbLabel', '目标库编号')));
+      var dbInput = add(dbWrap, el('input', 'redis-input'));
+      dbInput.type = 'number'; dbInput.min = '0'; dbInput.max = '1024';
+      dbInput.value = String(S.keyMgrDB);
+      dbInput.setAttribute('aria-label', tr('redis.mgr.dbLabel', '目标库编号'));
+      dbInput.addEventListener('input', function () { S.keyMgrDB = parseInt(dbInput.value, 10); });
+    } else {
+      var targetWrap = add(grid, el('label', 'redis-field'));
+      add(targetWrap, el('span', 'redis-label', S.keyMgrOp === 'rename' ? tr('redis.mgr.newKey', '新键名') : tr('redis.mgr.destKey', '复制目标键名')));
+      var target = add(targetWrap, el('input', 'redis-input'));
+      target.value = S.keyMgrTarget;
+      target.placeholder = S.keyMgrOp === 'rename' ? tr('redis.mgr.newKeyPlaceholder', '例如 kore:demo:renamed') : tr('redis.mgr.destPlaceholder', '例如 kore:demo:copy');
+      target.spellcheck = false;
+      target.setAttribute('aria-label', S.keyMgrOp === 'rename' ? tr('redis.mgr.newKey', '新键名') : tr('redis.mgr.destKey', '复制目标键名'));
+      target.addEventListener('input', function () { S.keyMgrTarget = target.value; });
+      if (S.keyMgrOp === 'copy') {
+        var copyDB = add(grid, el('label', 'redis-field'));
+        add(copyDB, el('span', 'redis-label', tr('redis.mgr.copyDBLabel', '目标库（留空 = 同库）')));
+        var dbOpt = add(copyDB, el('input', 'redis-input'));
+        dbOpt.type = 'number'; dbOpt.min = '0'; dbOpt.max = '1024';
+        dbOpt.placeholder = tr('redis.mgr.copyDBPlaceholder', '例如 1');
+        dbOpt.setAttribute('aria-label', tr('redis.mgr.copyDBLabel', '目标库（留空 = 同库）'));
+        dbOpt.addEventListener('input', function () { S.keyMgrCopyDB = dbOpt.value; });
+      }
+      // 覆盖确认：默认不覆盖（安全）；勾选后 rename 传 nx:false，copy 传 replace:true，都强制带 confirm:true。
+      var chkWrap = add(box, el('label', 'redis-mgr-check'));
+      var chk = add(chkWrap, el('input', 'redis-check'));
+      chk.type = 'checkbox'; chk.checked = !!S.keyMgrConfirm;
+      chk.addEventListener('change', function () { S.keyMgrConfirm = chk.checked; paintKeyManage(); });
+      add(chkWrap, el('span', null, tr('redis.mgr.confirmOverwrite', '目标键已存在时允许覆盖（不可恢复，需再次确认）')));
+    }
+    // 大键（>8 MiB）后端会要求 confirm；本表单的“允许覆盖”复选框同时承担该确认（后端 gate 仍独立生效）。
+    var submit = btn('btn-primary', S.keyMgrBusy ? tr('redis.btn.loading', '处理中…') : tr('redis.mgr.submit', '执行'), runKeyManage);
+    submit.disabled = !!S.keyMgrBusy || !S.selected;
+    add(box, submit);
+    add(box, el('p', 'redis-set-note',
+      S.keyMgrOp === 'move'
+        ? tr('redis.mgr.moveNote', '把键从当前库移到目标库；目标库已有同名键时不会覆盖，只提示未迁移。')
+        : (S.keyMgrOp === 'rename'
+          ? tr('redis.mgr.renameNote', '默认不覆盖已有键；重命名是 O(1) 操作。')
+          : tr('redis.mgr.copyNote', '默认不覆盖已有键；复制整个键值，大键可能阻塞主线程，请谨慎。'))));
+    if (S.keyMgrError) box.appendChild(notice(tr('redis.mgr.fail', '操作失败：') + S.keyMgrError + '。怎么办：' + redisWriteHint(S.keyMgrError)));
+    if (S.keyMgrNotice) box.appendChild(notice(S.keyMgrNotice, true));
+  }
+  function runKeyManage() {
+    if (!S.selected || !S.activeKey || S.keyMgrBusy) return;
+    var key = S.activeKey.key, params = { instance: S.selected, key: key }, method;
+    if (S.keyMgrOp === 'move') {
+      var db = parseInt(S.keyMgrDB, 10);
+      if (!isFinite(db) || db < 0 || db > 1024) {
+        S.keyMgrError = tr('redis.mgr.dbInvalid', '目标库编号必须是 0–1024 的整数'); S.keyMgrNotice = ''; paintKeyManage(); return;
+      }
+      method = 'redis.move'; params.db = db;
+    } else {
+      var target = String(S.keyMgrTarget || '').trim();
+      if (!target) {
+        S.keyMgrError = tr('redis.mgr.targetEmpty', '目标键名不能为空'); S.keyMgrNotice = ''; paintKeyManage(); return;
+      }
+      if (target === key) {
+        S.keyMgrError = tr('redis.mgr.targetSame', '目标键不能与源键相同'); S.keyMgrNotice = ''; paintKeyManage(); return;
+      }
+      if (S.keyMgrOp === 'rename') {
+        method = 'redis.rename'; params.new_key = target;
+        if (S.keyMgrConfirm) { params.nx = false; params.confirm = true; }
+      } else {
+        method = 'redis.copy'; params.dest = target;
+        if (S.keyMgrCopyDB !== undefined && String(S.keyMgrCopyDB).trim() !== '') {
+          var destDB = parseInt(S.keyMgrCopyDB, 10);
+          if (!isFinite(destDB) || destDB < 0 || destDB > 1024) {
+            S.keyMgrError = tr('redis.mgr.dbInvalid', '目标库编号必须是 0–1024 的整数'); S.keyMgrNotice = ''; paintKeyManage(); return;
+          }
+          params.db = destDB;
+        }
+        if (S.keyMgrConfirm) { params.replace = true; params.confirm = true; }
+      }
+    }
+    S.keyMgrError = ''; S.keyMgrNotice = ''; S.keyMgrBusy = true; paintKeyManage();
+    var name = S.selected;
+    invoke(method, params).then(function (data) {
+      if (S.destroyed) return;
+      S.keyMgrBusy = false;
+      var done = data && (data.renamed || data.moved || data.copied);
+      var why = data && data.hint ? '（' + data.hint + '）' : '';
+      if (done) {
+        S.keyMgrNotice = tr('redis.mgr.done', '操作完成：') + method.replace('redis.', '') + ' ' + key + ' → ' +
+          (data.new_key || data.dest || ('db ' + data.db)) + why;
+        var nextKey = data.new_key || data.dest;
+        S.activeKey = nextKey ? { key: nextKey } : null;
+        S.keyMgrTarget = ''; S.keyMgrCopyDB = ''; S.keyMgrConfirm = false;
+        S.value = null; S.valueAsked = false; S.keyInfo = null;
+        loadKeys(); loadInfo();
+      } else {
+        S.keyMgrNotice = tr('redis.mgr.notDone', '未执行（目标已存在或源键不存在，未覆盖）：') + why;
+      }
+      paintKeys(); paintKeyDetail(); paintValue(); paintKeyManage();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.keyMgrBusy = false; S.keyMgrError = (err && err.message) || String(err);
+      paintKeyManage();
+    });
   }
   function valueTable(headers, rows) {
     var table = el('table', 'redis-value-table'), htr = add(add(table, el('thead')), el('tr'));
@@ -984,6 +1121,8 @@
     S.checked = Object.create(null);
     S.setKey = ''; S.setText = ''; S.setTTL = 0; S.setError = ''; S.setNotice = ''; S.setBusy = false;
     S.cfg = null; S.cfgError = ''; S.cfgNotice = ''; S.cfgBusy = false;
+    S.keyMgrOp = 'rename'; S.keyMgrTarget = ''; S.keyMgrDB = 1; S.keyMgrCopyDB = '';
+    S.keyMgrError = ''; S.keyMgrNotice = ''; S.keyMgrBusy = false; S.keyMgrConfirm = false;
     paintInstances(); paintNotice(); paintInfo(); paintKeys(); paintKeyDetail(); paintValue(); paintOpsCards(); paintSlowlog(); paintSetForm(); paintServerConfig();
     loadInfo(); loadKeys(); loadOps();
   }  function loadInstances(reset) {
@@ -1153,6 +1292,8 @@
     S.detailPanel = value.panel; S.detailPanel.hidden = true; add(columns, S.detailPanel);
     S.detailMeta = add(value.meta, el('span', null, ''));
     S.detailHost = add(S.detailPanel, el('div', 'redis-detail'));
+    S.keyMgrHost = add(S.detailPanel, el('div', 'redis-key-mgr'));
+    S.keyMgrHost.hidden = true;
     S.valueHost = add(S.detailPanel, el('div', 'redis-value'));
     var slow = panel(tr('redis.panel.slow', '慢查询'), 'SLOWLOG');
     S.slowPanel = slow.panel; S.slowPanel.hidden = true; add(S.root, slow.panel);
@@ -1200,6 +1341,15 @@
       '.redis-detail-hint{margin-top:var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}',
       '.redis-detail-note{margin-top:var(--kore-space-2);color:var(--kore-text-3);font-size:var(--kore-font-12)}',
       '.redis-detail .redis-actions{margin-top:var(--kore-space-2);display:flex;gap:var(--kore-space-2)}',
+      '.redis-key-mgr[hidden]{display:none}',
+      '.redis-key-mgr{padding:0 var(--kore-space-4) var(--kore-space-3)}',
+      '.redis-mgr{margin-top:var(--kore-space-2);padding:var(--kore-space-3);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}',
+      '.redis-mgr-src{margin:4px 0;color:var(--kore-text-2);font-size:var(--kore-font-12);word-break:break-all}',
+      '.redis-mgr-ops{flex-wrap:wrap;margin-top:var(--kore-space-2)}',
+      '.redis-mgr-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--kore-space-2);margin-top:var(--kore-space-2)}',
+      '.redis-mgr-check{display:flex;align-items:flex-start;gap:8px;margin-top:var(--kore-space-2);font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.redis-mgr .btn{margin-top:var(--kore-space-2)}',
+      '.redis-mgr .redis-mgr-grid .redis-input{min-height:44px}',
       '.redis-value{padding:var(--kore-space-3) var(--kore-space-4) var(--kore-space-4)}',
       '.redis-slow-note{margin:0;padding:var(--kore-space-3) var(--kore-space-4) 0;color:var(--kore-text-3);font-size:var(--kore-font-12)}',
       '.redis-slow-id{font-variant-numeric:tabular-nums}',
@@ -1222,6 +1372,8 @@
       '  .redis-columns{grid-template-columns:1fr}',
       '  .redis-columns > .panel:last-child{position:static}',
       '  .redis-slow-cmd{max-width:none}',
+      '  .redis-mgr-grid{grid-template-columns:1fr}',
+      '  .redis-mgr-ops .btn{min-height:var(--kore-touch,44px)}',
       '}'
     ].join('\n');
     var style = document.createElement('style');
