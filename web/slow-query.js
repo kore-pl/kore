@@ -1,5 +1,5 @@
 /* kore 主壳 · 慢查询分析看板（web/slow-query.js，R23 新功能6，纯增量懒加载视图）
-   跨 MySQL / PostgreSQL 实例聚合慢查询，按总耗时 / 执行次数 / 扫描行数排序（TopN），
+   跨 MySQL / PostgreSQL 数据库连接聚合慢查询，按总耗时 / 执行次数 / 扫描行数排序（TopN），
    展示 SQL 摘要 + 带单位指标 + 启发式优化建议，支持时间范围、执行计划入口与 CSV 导出。
    不新增后端、不改 db.js：全部复用已接的 db-mysql / db-postgres 方法。
 
@@ -177,7 +177,7 @@
     return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   var CSV_COLUMNS = [
-    ['实例', function (r) { return r.instance; }],
+    ['数据库', function (r) { return r.instance; }],
     ['引擎', function (r) { return r.engine === 'pg' ? 'PostgreSQL' : 'MySQL'; }],
     ['库', function (r) { return r.schema; }],
     ['SQL 摘要', function (r) { return r.sql; }],
@@ -266,10 +266,10 @@
     ensureCss();
     var wrap = add(host, el('div', 'sq-wrap'));
 
-    // 工具栏：实例多选 + 时间范围 + TopN + 阈值 + 操作
+    // 工具栏：数据库连接多选 + 时间范围 + TopN + 阈值 + 操作
     var bar = add(wrap, el('div', 'sq-toolbar'));
     var instGroup = add(bar, el('div', 'sq-group'));
-    add(instGroup, el('span', null, '选择数据库实例（可多选）'));
+    add(instGroup, el('span', null, '选择数据库连接（可多选）'));
     var instList = add(instGroup, el('div', 'sq-inst-list'));
     if (!S.instances.length) {
       add(instList, el('span', 'sq-note', '正在读取数据库连接…'));
@@ -330,7 +330,7 @@
 
     // 口径说明：时间范围对 PG 不生效，必须说清（诚实边界）
     add(wrap, el('p', 'sq-note',
-      '数据来自各实例的只读聚合视图：MySQL 为 performance_schema（需开启），PostgreSQL 为 pg_stat_statements（需安装并预加载）。' +
+      '数据来自各数据库的只读聚合视图：MySQL 为 performance_schema（需开启），PostgreSQL 为 pg_stat_statements（需安装并预加载）。' +
       '时间范围按 MySQL 的最近执行时间过滤；PostgreSQL 聚合视图不含时间列，时间范围对其不生效。' +
       '阈值与条数只影响读取量，分析过程不修改数据库。'));
 
@@ -346,7 +346,7 @@
     if (S.busy) {
       var busy = add(wrap, el('p', 'sq-empty'));
       add(busy, el('span', 'sq-spin'));
-      add(busy, el('span', null, '正在读取各实例的慢查询并聚合…'));
+      add(busy, el('span', null, '正在读取各数据库的慢查询并聚合…'));
     } else if (!S.loaded) {
       add(wrap, el('p', 'sq-empty',
         '勾选要分析的数据库连接（默认已选可达的连接），选好时间范围后点「开始分析」；' +
@@ -361,7 +361,7 @@
       var scroll = add(wrap, el('div', 'sq-table-scroll'));
       var table = add(scroll, el('table', 'sq-table'));
       var thead = add(table, el('thead')), hr = add(thead, el('tr'));
-      add(hr, el('th', null, '实例 / 库'));
+      add(hr, el('th', null, '数据库 / 库'));
       add(hr, el('th', null, 'SQL 摘要'));
       SORTS.forEach(function (s) {
         var th = add(hr, el('th', 'num'));
@@ -518,7 +518,7 @@
         }
         var d = r.data;
         if (inst.engine === 'pg' && d.available === false) {
-          failed.push({ name: 'PG · ' + inst.name, reason: 'pg_stat_statements 扩展未就绪（已安装并预加载后重启实例再试）' });
+          failed.push({ name: 'PG · ' + inst.name, reason: 'pg_stat_statements 扩展未就绪（已安装并预加载后重启数据库服务再试）' });
           return;
         }
         var qs = d.queries || [];
