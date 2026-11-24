@@ -519,7 +519,8 @@
           });
       },
       backups: function () {
-        return invoke(EP.backupJobs, { limit: 100 }).then(function (d) {
+        // backup.jobs 的 limit 上限为 50（读自 backupop/jobs.go MaxJobsLimit），不猜、不越界。
+        return invoke(EP.backupJobs, { limit: 50 }).then(function (d) {
           return { status: 'ok', data: summarizeBackups(d, since, until) };
         }, function (err) { return { status: 'fail', error: errText(err), data: summarizeBackups(null, since, until) }; });
       },
