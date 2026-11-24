@@ -117,13 +117,14 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | --- | --- | --- |
 | `make help` | 列出全部目标与说明 | 可用 |
 | `make docs-check` | 文档头元信息 + 相对链接可达 + 占位词检查 | 可用（M0 唯一真门禁） |
-| `make check` | 聚合门禁（20 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + 索引↔市场页派生一致（第 16 段·market 子检查：`make market-check` → 索引仓 `build-market.sh --check`；kore-plugins 缺失 SKIP / 存在但不一致 FAIL，阻断级）+ **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 18 段 110.31s → 加全仓 -race 后约 162s（+52s；第 20 段 usability WARN 级另计） |
+| `make check` | 聚合门禁（21 段）：docs-check + 明文凭据 + 依赖白名单 + 兼容基线（参数钉死）+ 交叉编译（G-16 五目标全仓真编译，阻断级）+ 薄壳边界 + 跨仓库边界 + 零侵入 + 插件仓九件套（CI）+ 插件仓规范（G-17，WARN 级）+ 预设一致性（G-18，阻断级）+ 公钥单一真源 + 索引↔市场页派生一致（第 16 段·market 子检查：`make market-check` → 索引仓 `build-market.sh --check`；kore-plugins 缺失 SKIP / 存在但不一致 FAIL，阻断级）+ **race 门禁（第 18 段 boundary 面：跨仓接线核对 + 有边界用例的仓 `make race` 真跑）+ 全仓 `-race`（第 19 段：`go test -race ./...` 固定面必绿，阻断级）+ 嵌套 module `pkg/pluginapi` 全量 `-race`（第 21 段：根 `./...` 不跨 module，`cd pkg/pluginapi && go test -race ./...` 固定面必绿，阻断级）** | 可用：真跑；实测 20 段 163.24s → 加第 21 段后约 165s（+1.3s，+0.8%；第 20 段 usability WARN 级另计） |
 | `make secret-check` | 明文凭据扫描（docs/ 与 `.agents/verify/`，G-30） | 可用 |
 | `make build` | 构建主壳 `bin/kored`（`CGO_ENABLED=0` + `-trimpath` + `-s -w`） | 可用：产出 `bin/kored` |
 | `make build` 后（换公钥） | **必须重启 kored**：公钥编入二进制，旧进程仍用旧公钥验新签名 → 商店全部 401 | 见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1 七步 |
 | `make race` | 并发边界用例 `-race`：只跑 `./tests/boundary/...`（无该目录时 SKIP，新增用例后自动生效）；插件仓同源目标由 `scripts/race-gate-sync.sh` 模板渲染（禁手改 24 份） | 可用：本仓当前无 boundary → **恒 SKIP，所以本仓竞争检查看下一行**；15 仓 `-race` 真跑全绿（44s） |
-| `make race-full` | **全仓 `-race`（第 19 段判据本体，阻断级）**：`GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`；`WARNING: DATA RACE` / 测试失败 / 编译失败一律 FAIL，缺 cgo 直接 FAIL（不静默跳过），干净树上自动补 `web-dist`（embed 依赖） | 可用：实测 exit 0 / 52.16s / 16 包 / 零 DATA RACE；`make check` 第 19/20 段 |
-| `make vet` / `make test` | `go vet ./...` / `go test -timeout 200s ./...` | 可用：真跑（`go.mod` + `cmd/` + `internal/` 已就绪，SKIP 条件不再成立；`make vet` 已验证 `[OK]`，exit 0） |
+| `make race-full` | **全仓 `-race`（第 19 段判据本体，阻断级）**：`GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`；`WARNING: DATA RACE` / 测试失败 / 编译失败一律 FAIL，缺 cgo 直接 FAIL（不静默跳过），干净树上自动补 `web-dist`（embed 依赖） | 可用：实测 exit 0 / 52.16s / 16 包 / 零 DATA RACE；`make check` 第 19/21 段 |
+| `make pluginapi-race` | **嵌套 module `pkg/pluginapi` 全量 `-race`（第 21 段判据本体，阻断级）**：`GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`（在 `pkg/pluginapi` 内跑）；根 module 的 `./...` **不跨 module 遍历**，故第 17/19 段都盖不到它的 12 个测试文件；测试失败 / 数据竞争 / 编译失败一律 FAIL，缺 cgo 直接 FAIL，一个包都没跑到也 FAIL | 可用：实测 exit 0 / 1.28–1.64s / 2 包 / 零 DATA RACE；`make check` 第 21/21 段；`make test` 同步包含该 module（非 -race） |
+| `make vet` / `make test` | `go vet ./...` / `go test -timeout 200s ./...` + 嵌套 module `pkg/pluginapi` 同一命令（根 `./...` 不遍历它；测试面非 `-race`，`-race` 判据在第 21 段） | 可用：真跑（`go.mod` + `cmd/` + `internal/` 已就绪，SKIP 条件不再成立；`make vet` 已验证 `[OK]`，exit 0；`make test` 末行 `[OK] go test 通过（根 module + 嵌套 module pkg/pluginapi）`） |
 | `make mem` | 采样 RSS + `smaps_rollup`/`status` 拆分，按新证据口径出中位数（G6 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时出实数 |
 | `make frontend` | 构建 `web/dist` 并用 gzip 核对首屏体积 | SKIP：无 `web/package.json`，M2 起生效 |
 | `make repo-check` | 跨仓库边界检查：无插件代码 / 无插件 import / 无旧 SDK 路径 / 无索引 / 无 submodule | 可用（G11 入口）：**5 pass / 0 fail**，M0 真跑 |
@@ -136,7 +137,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 | `make idle` | 空载 60s 取样：CPU 时间 / 线程数 / fd 数 / 出站连接 / 定时器来源（G-19、G14 入口） | 可用：M0 无进程时 SKIP；有 `kored` 时约 65s 采样 |
 | `make budget-check` | 资源预算聚合门禁：`mem` + `idle` + 进程数 + 二进制体积（G-03 出口） | 可用：M0 无进程/无产物时 SKIP + N/A（0 pass / 2 skip / 0 fail） |
 
-> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（20 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
+> **CI 触发策略（2026-11-23 用户要求：CI 要少执行）**：kore 与 25 个插件仓（24 插件 + 索引仓）**都配 CI**，但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；Gitea 侧不配 CI。日常反馈用本地 `make check`（21 段）。详见 [.agents/QUALITY-GATES.md](.agents/QUALITY-GATES.md) §6。
 
 ## 6. 细则索引
 

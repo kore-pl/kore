@@ -4,7 +4,7 @@
 
 门禁不是建议清单，是"能不能交付"的判定条件。命令必须原样执行——改参数、加跳过、换更宽松的选项，都视为伪造通过。
 
-## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race）、§1.3（第 19 段全仓 race）、§1.4（第 16 段·market 子检查）、§7（第 20 段 G-33））
+## 1. 门禁表（G1–G19 + G-28/G-29/G-30/G-31/G-32/G-33；`make check` 段内门禁另见 §1.1（G-17/G-18）与 §1.2（第 18 段 race）、§1.3（第 19 段全仓 race）、§1.4（第 16 段·market 子检查）、§1.5（第 21 段嵌套 module race）、§7（第 20 段 G-33））
 
 | ID | 名称 | 命令 | 期望 | 失败处理 | 执行者 | 层级 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -104,7 +104,7 @@
 
 **防的事故**：第 18 段的 `-race` 固定面是 `./tests/boundary/`，而 kore 本仓**没有该目录** → 本仓 `make race` 恒 `[SKIP]`。也就是说第 18 段保护的是 15 个插件仓，**kore 自己的代码在 race detector 面前是零覆盖**。`bd3ac83` 证明这不是理论风险：`cmd/kored` 升级链路有两处真实数据竞争（结果审计晚于终态发布 / `launch` 把 map 内 `*SelfUpdateJob` 交出、调用方在锁外解引用），当时 `go test ./...` **全绿、断言全过**，**只有 `-race` 能抓**。
 
-**执行方式**（`bash scripts/race-full-check.sh`，`make check` 第 19/19 段，`make race-full` 可单跑；阻断级；不联网、不调用 git、不写状态）：
+**执行方式**（`bash scripts/race-full-check.sh`，`make check` 第 19/21 段，`make race-full` 可单跑；阻断级；不联网、不调用 git、不写状态）：
 
 - `GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`——固定面 `./...`，**不按 diff 推断「改动包」**（算错即静默放行，见 2026-11-24 裁决选项 C 被否的理由）。
 - `exit != 0` → `[FAIL]`（数据竞争 / 测试失败 / 编译失败一律阻断）；输出含 `WARNING: DATA RACE` 时先单独打红再阻断（长输出里便于定位）。
@@ -155,6 +155,35 @@
 | 目录在但不是索引仓 | `make market-check KORE_PLUGINS_DIR=/tmp/kp-empty-dir` | `[FAIL] … 缺少 scripts/build-market.sh` / exit 2 |
 
 **跳过规则**：只有「`kore-plugins` 目录不存在」才 `[SKIP]`；「目录在但脚本缺失」「market 与索引不一致」一律 `[FAIL]`，不提供「本机跳过」开关。
+
+### 1.5 第 21 段 · 嵌套 module `pkg/pluginapi` 全量 `-race` 门禁（阻断级，2026-11-24 接入）
+
+**防的事故**：`pkg/pluginapi` 是**嵌套 module**（自带 `pkg/pluginapi/go.mod`，根 `go.mod` 用 `replace github.com/pengtang1024/kore/pkg/pluginapi => ./pkg/pluginapi` 指向它）。Go 的 `./...` 只匹配**当前 module 内**的包，**不跨 module 遍历**——实测（go1.26.8，`0c47c2a`）：根 `go list ./...` = **18 个包 / 0 个 pluginapi**；根 `go test ./... | grep pluginapi` = **0 行**；`cd pkg/pluginapi && go test ./...` = **2 个包**。因此第 17 段（`go build ./...`）与第 19 段（全仓 `-race ./...`）**都不覆盖它**：nginxconf 解析器（32 条禁用指令 + 4 个族 + 23 条叶子规则）、`file_write` 协议校验、`ValidateRootAction` / `ValidateRootAppendedArgv`（ADR-0022 三级形状）、`RootCommandPolicies`（13 条受控命令）的 **12 个测试文件**在 `make check` 里零执行。这是**既有覆盖缺口**（非某次改动引入）：一个改动把 `nginxconf` 的 allowlist 改坏，`make check` 照样全绿。
+
+**执行方式**（`bash scripts/pluginapi-race-check.sh`，`make check` 第 21/21 段，`make pluginapi-race` 可单跑；阻断级；不联网、不调用 git、不写状态）：
+
+- `cd pkg/pluginapi && GOWORK=off CGO_ENABLED=1 go test -race -count=1 -timeout 600s ./...`——固定面 `./...`，口径与第 19 段一致（不按 diff 推断改动包）。
+- `exit != 0` → `[FAIL]`（数据竞争 / 测试失败 / 编译失败，一律阻断）；输出含 `WARNING: DATA RACE` 时先单独打红再阻断。
+- **一个包都没跑到**（`ok`/`?` 行数为 0）→ `[FAIL]`：固定面为空也是假绿，不允许拿退出码 0 当通过。
+- `-race` 需要 cgo：缺 C 编译器 / `CGO_ENABLED` 置不上 1 → `[FAIL]`，**不静默降级成跳过**。
+- `pkg/pluginapi/go.mod` 不存在 → `[SKIP]` 退出 0（嵌套 module 被移除的骨架态）。
+- `make test`（非门禁的开发目标）同轮包含该 module 的普通测试，避免「本地 `make test` 绿、门禁第 21 段红」的假绿。
+
+**为什么新开第 21 段（选项 B），而不是塞进第 19 段（A）/ 改 `make test`·`race-full`（C）**：① **A 让失败原因二义**——第 19 段的判据是「根 module 的 `./...` 全绿」，把它扩成「再 `cd` 进一个嵌套 module」，同一段同时代表两个 module 面，排障时要先猜是哪个面红；② **C 不成立**——`make test` 不在 `make check` 内（无阻断力），`race-full` 就是第 19 段判据本体，把嵌套 module 并进去等于静默改判据语义；③ **B 有独立执行面**——独立 `[RUN ] 21/21` 行、独立 `make pluginapi-race`，可单跑、可独立读输出，段号重编号是机械改动（21 处 `N/20` → `N/21`），一次性成本换长期可读性。
+
+**耗时**：`cd pkg/pluginapi && go test -race ./...` 实测 **1.28–1.64s**（2 个包；cold 1.64s / warm 1.27s）。整段 `make check` 改前实测 **163.24s**（20 段，2026-11-24 本机）→ 改后约 **165s**（+1.3s，约 **+0.8%**）。嵌套 module 无第三方依赖、无 go.sum、包级并行，故增量与包体量无关地固定在 2s 内。
+
+**接线防漂移**：第 18 段 `scripts/race-gate-check.sh` 增加 **1c** 接线核对——`pkg/pluginapi/go.mod` 存在时，`Makefile` 必须有 `^pluginapi-race:` 目标、`check` 目标必须调用 `scripts/pluginapi-race-check.sh`，缺任一条 `[FAIL]`（有目标但 check 不调 = 本地不跑；CI 侧由既有 `run: make check` 自动带上，不重复写一份判据）。
+
+**正反例自证（2026-11-24 实测；反例在 `/tmp` 的副本上做，未触碰共享工作树与主实例）**：
+
+| 场景 | 命令 | 结果 |
+| --- | --- | --- |
+| 正例（当前工作树） | `bash scripts/pluginapi-race-check.sh` | `[OK] pkg/pluginapi 全量 -race 通过（2 个包，1s，零 DATA RACE）` / exit 0 |
+| 反例（副本删 allowlist 的 `root` 条目） | 同上（`/tmp` 副本） | `[FAIL]` / exit 1；6 个顶层用例失败（`TestNginxStructuralRejects`、`TestNginxRealSiteVHostsAccepted`、`TestValidateFileWriteRequest`、`TestNginxParameterShapes`、`TestFileWriteOptionsWithDirs*` ×2），原文 `nginx 片段第 4 行：指令 "root" 不在 allowlist 内` |
+| 还原后 | 同上 | `[OK]` / exit 0 |
+
+**已知局限（实测，必须披露）**：卡里建议的另一种反例——「把 `access_log` 从 `DeniedNginxDirectives` 删掉」——**实测不会 FAIL**（exit 0）。原因：`TestDeniedNginxDirectivesEachRejected` 遍历的是 `DeniedNginxDirectives` **表本体**，删条目等于同时删掉断言；且 `access_log` 不在 allowlist，行为上仍被拒（错误理由从「无条件拒绝」降级为「不在 allowlist 内」，无硬编码用例）。也就是说「每条禁用指令都有逐条断言」在**删除条目**这个动作上不成立——这是 `pkg/pluginapi` 测试设计面的缺口（禁用清单加条目自动被覆盖，减条目则静默失去覆盖）。本次按约束**未改其测试/代码**，仅登记待裁决。
 
 ## 2. 三层组合
 
@@ -263,7 +292,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **20 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / 索引↔市场页派生一致（第 16 段·market 子检查，`make market-check`：kore-plugins 缺失 SKIP、存在但不一致 FAIL，阻断级，见 §1.4）/ race 门禁（第 18 段 boundary 面 + 第 19 段全仓 `-race`，均阻断级，见 §1.2 / §1.3）），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **21 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / 索引↔市场页派生一致（第 16 段·market 子检查，`make market-check`：kore-plugins 缺失 SKIP、存在但不一致 FAIL，阻断级，见 §1.4）/ race 门禁（第 18 段 boundary 面，见 §1.2）+ 全仓 `-race`（第 19 段，见 §1.3）+ 嵌套 module `pkg/pluginapi` 全量 `-race`（第 21 段，阻断级，见 §1.5），均阻断级），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
 ### 触发规则（`kore`）
 
@@ -281,7 +310,7 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
 
-1. 本地门禁已是权威（`make check` 20 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），+ 各插件仓自己的 `make check`）；
+1. 本地门禁已是权威（`make check` 21 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），第 21 段嵌套 module `pkg/pluginapi` 全量 `-race`（实测 +1.3s），+ 各插件仓自己的 `make check`）；
 2. Gitea 是内网自建，跑 CI 会占用本机资源；
 3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
 

@@ -57,6 +57,23 @@ fi
 [ "$s" -ne 0 ] && exit 1
 echo "[OK] kore: 全仓 -race 接线完整（race-full 目标 / check 独立段 / ci.yml 跑 make check）"
 
+# 1c) 嵌套 module 接线（必须在第 18 段的静态面就红，不能等第 21 段被删才发现）：
+#     pkg/pluginapi 自带 go.mod → 根 module 的 ./... **不遍历**它。有嵌套 module 就必须有
+#     独立 target + check 独立段，否则它的测试在 make check 里零执行且没人看得出来。
+if [ -f "$ROOT/pkg/pluginapi/go.mod" ]; then
+  s=0
+  if ! grep -qE '^pluginapi-race:' "$ROOT/Makefile" 2>/dev/null; then
+    echo "[FAIL] kore: Makefile 缺 pluginapi-race 目标（pkg/pluginapi 是嵌套 module，根 ./... 不遍历它）"
+    s=1
+  fi
+  if ! grep -qE 'bash scripts/pluginapi-race-check\.sh' "$ROOT/Makefile" 2>/dev/null; then
+    echo "[FAIL] kore: check 目标未把嵌套 module 的全量 -race 作为独立段调用（scripts/pluginapi-race-check.sh）"
+    s=1
+  fi
+  [ "$s" -ne 0 ] && exit 1
+  echo "[OK] kore: 嵌套 module pkg/pluginapi 接线完整（pluginapi-race 目标 / check 独立段）"
+fi
+
 if [ "${#SIBLINGS[@]}" -eq 0 ]; then
   echo "[N/A] 无兄弟仓（CI 只 checkout kore）：跨仓接线与 -race 真跑由各插件仓 CI 兜底"
   exit 0
