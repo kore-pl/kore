@@ -47,6 +47,8 @@
 | 主壳接线 | `e135820` | 三组件接入主壳 |
 | G-28 双端截图 | `2c89b60` | PC + 手机双端 |
 | 截图 md5 校准 | `6f085ba` | 独立 verifier `r7-shots-verify` **PASS 5/5** |
+| R8 G-28 截图批次1 | `873409c` | 4 场景 × 双端 8 张（PC 1440×900 + 手机 390×844）+ 自评三问，`file`/md5 实测全过（`r8-ui-shots-batch1.md`） |
+| R8 G-28 截图批次2 | `204be96` | 4 场景 × 双端 8 张（PC 1440×900 + 手机 390×844）+ 自评三问，`file`/md5 实测全过（`r8-ui-shots-batch2.md`） |
 
 **C. 审计与事故 4 项**
 
@@ -103,13 +105,15 @@
     诚实边界：**未做归因分析、未做内存采样、未做优化、未重启服务**——本条只做判断留痕（G-23），
     不触碰运行态与代码。复审条件：**产品上线前必须回归 G-03 16.0 MiB 硬红线**（`make budget-check`
     / `make mem` 实测达标后方可上线）。裁决台账见 `.agents/LOG/DECISIONS.md`。
- 7. **`web/terminal.js` 无主在途实现（原 owner 待确认）**：r8-terminalui 开工自检发现该文件有他人**未提交**
-    的在途实现，约 **417 insertions / 84 deletions**——VT 引擎重写（备用屏 / 256 色 / 光标定位、复制、全屏、
-    F1–F12 / Alt / Ctrl 键位、软键盘、2000 行回看），其中含**字号调节半成品**（`S.fs` / `applyFont` / `A−A+`，
-    **无 localStorage 持久化**），**多标签未做**。近期 `git log` 找不到对应提交，归属为前序 agent 未提交实现、
-    原 owner 待确认。**r8-terminalui 已获 lead 批准在其之上增量做 R8-7（多标签 + 字号持久化）**：
-    用 GIT_INDEX_FILE 临时索引只提自己 hunk、commit 注明吸收来源（文件 / 行 / 原 owner 待确认）；
-    **未清理 / 未回滚这批在途改动**。后续若原 owner 出现，需协调收敛。
+ 7. ~~**`web/terminal.js` 无主在途实现（原 owner 待确认）**~~ **→ 已收敛（2026-11-24，commit `a7409cf`）**：
+    【历史快照，保留】r8-terminalui 开工自检发现该文件有他人**未提交**的在途实现，约 **417 insertions / 84 deletions**
+    ——VT 引擎重写（备用屏 / 256 色 / 光标定位、复制、全屏、F1–F12 / Alt / Ctrl 键位、软键盘、2000 行回看），
+    其中含**字号调节半成品**（`S.fs` / `applyFont` / `A−A+`，**无 localStorage 持久化**），**多标签未做**。
+    近期 `git log` 找不到对应提交，归属为前序 agent 未提交实现、原 owner 待确认。
+    **【最终态】已由 `a7409cf`（`[agent:r8-terminalui] feat(web/terminal): 终端页增量支持多标签与字号持久化`）
+    收敛：+640/−192，用 GIT_INDEX_FILE 临时索引只提自己 hunk、commit message 注明吸收来源（文件 / 行 /
+    原 owner），多标签 + 字号 localStorage 持久化已落地；`git status --short web/terminal.js` 干净，
+    **无主在途已消除**（§0.0.6 第 3/5 项同步更新）。
  8. **i18n 结构性现状（r8-i18nui 自检证据推翻 R8-5 任务卡前提，不必派迁移卡）**：
     **骨架完整**——真源码 `web/i18n/en-US.js`（任务卡写的 `i18n-en-US.js` 是 dist 名）；`en-US` 与 `zh-CN`
     各 **68 key**、双向 `comm` 差集空（无合法缺项）。**但页面视图未接 `tr()`**——`sites` / `files` / `db` /
@@ -126,6 +130,14 @@
     写域 `web/i18n/en-US.js`（真源码）+ 2–3 个高频视图样板，避开在途写域；**硬约束**：`zh-CN` 首屏 gzip
     增量 ≤3072（余量仅 150 字节）、中文态零裸键、英文态文案真生效。**第 8 条的结构发现证据保留有效**，
     本条只覆盖其「不在本轮范围」的处置定性（决策演进留痕，原文不删改）。
+    **决策已补录 `DECISIONS.md:148`（commit `25462fe`，`[agent:r9-decision]`）——G-23 留痕闭环。**
+
+ 10. **他人在途产物（r9-docssync 发现，§0.0 此前未提）——待收敛，不代填完成**：
+     - `M web/monitor-cards.js`（+271/−24，G-32 图表构件）——他人在途；注：r9-restart 重建时该文件随
+       `make build` 被编入新 dist，属构建必然行为、良性净增益，**不等于该在途改动已由本轮 owner 收敛**。
+     - `?? .agents/verify/db-runtime-architecture-audit.md`（他人在途验收报告，未提交）。
+     - `?? docs/DECISIONS/0050-db-and-runtime-aggregation.md`（ADR-0050 accepted，他人在途，未提交）。
+     以上三项均为**他人在途产物，注「待收敛」**；本轮 scribe 写域只含 HANDOFF.md，不代填完成、不改这些文件。
 
 #### 0.0.4 下一轮建议（≤5 条，按优先级，每条含可执行动作 + 验收）
 
@@ -198,10 +210,22 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 
 **1. 运行态生效（R8-0 / r8-restart）——已核实**
 
-- `make build` + 重启主实例 8787：PID **636777 → 1332165**，version **0.1.1**。
-- 三组件资源 **404 → 200**，九条运行态复核**全 PASS**，未触发回退。
+- `make build` + 重启主实例 8787：PID **636777 → 1332165**（R8-0 时点），version **0.1.1**。
+- **【R8 时点快照，保留】三组件资源 404 → 200，九条运行态复核全 PASS**——此结论**仅在 13:58 构建时点成立**，
+  后续 commit 后又滞后，完整时间线见下方「运行态时间线（r9-docssync 核查 + r9-restart 重建）」。
 - 备份双保险：`/tmp` + `bin/` 冗余备份；**禁改历史**（无 amend/reset/rebase）。
-- **G-29 声明：本轮未改主配置 / state / ssl**，运行态资产零改动（复核口径：`paths.index_dir` 指向 `kore-plugins/index`，商店版本 == 索引版本）。
+- **G-29 声明：R8 本轮未改主配置 / state / ssl**（复核口径：`paths.index_dir` 指向 `kore-plugins/index`，商店版本 == 索引版本）。
+
+ **运行态时间线（r9-docssync 核查 + r9-restart 重建——最终态，根治「源码有 commit」错当「运行态已生效」）**：
+ - **R8-0（13:58）**：三组件 404 → 200，九条复核全 PASS——但此时 dist 停在 **13:14**、二进制停在 **13:58**。
+ - **滞后窗口（14:24 后）**：本轮 **15 个 UI / 本地化 commit**（`091c251` / `956ce99` / `a7409cf` /
+   `ee1d606` / `64ae7d8` / `e3e13c0` / `300156e` 等）均在 13:58 构建之后落地，**未编入 13:58 构建**；
+   主实例运行态特征 **0 命中**。
+ - **R9 重建重启（15:18，r9-restart）**：`make build` 重建 `bin/kored`（sha256 `721a748d9d56b0ca…`，
+   `stat` 15:18:46）+ 重启主实例 8787，新 **PID 1533701**（`ps` 实测存活），**15 commit 全部生效**。
+ - **新增四项特征命中**：help **0→6** / ssl **0→2** / search **0→2** / 本地化 tr **0→26**（旧二进制全 0）。
+ - **独立 verifier `r9-runverify` 复核中——待 r9-runverify PASS**（以其回报为准；本写域不代填 PASS；
+   未鉴权 curl `/api/v1/system/info` 实测 `E_UNAUTHORIZED`，运行态特征复核需其独立口径）。
 
 **2. 商店态收口（R8-B1 + B2）——已核实（git log / 索引文件逐项比对）**
 
@@ -223,7 +247,7 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 | 审计 CSV | `cd11a7b` + `ea8d198` | CSV 导出（BOM + RFC4180）+ 空结果清除筛选下一步 |
 | 帮助入口 + 404 | `091c251` | 顶栏帮助入口 + 未知路由友好 404 页 |
 | 备份部署进度 | `f02e81d` | 长任务实时进度反馈 |
-| 终端多标签 | `a7409cf` | 多标签 + 字号持久化；**含他人 ~420 行在途 VT 实现**（备用屏/256 色/键位/回看，原 owner 待确认），commit message 已注明来源、**未覆盖**，用临时索引只提自己 hunk |
+| 终端多标签 | `a7409cf` | 多标签 + 字号持久化；**已收敛（+640/−192）**：他人 ~420 行在途 VT 实现（备用屏/256 色/键位/回看）已由本卡吸收，commit message 注明来源、临时索引只提自己 hunk；`git status web/terminal.js` 干净、无主在途已消除 |
 
 **4. 本地化全链（用户明确"i18n 要做，只做本地化"）**
 
@@ -238,7 +262,7 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 | # | 挂账 | 索引 |
 | --- | --- | --- |
 | ① | 内存 17.6 MiB > 16 MiB，用户裁决延至上线前优化 | §0.0.3 第 6 条 + `.agents/LOG/DECISIONS.md` |
-| ② | `web/terminal.js` ~420 行无主在途 VT 实现（原 owner 待确认） | §0.0.3 第 7 条 |
+| ② | `web/terminal.js` ~420 行无主在途 VT 实现 → **已由 `a7409cf` 收敛、无主在途已消除** | §0.0.3 第 7 条（最终态） |
 | ③ | i18n 决策更新（只做本地化，覆盖 #8 旧定性） | §0.0.3 第 9 条 |
 | ④ | Gitea/Gitee release 缺 token（human gate；GitHub `download_url` 不受影响） | §0.0.3 第 5 条 + §0.0.5 第 4 条 |
 | ⑤ | 登录态商店字面值复核待口令（BLOCKED，不触发重启） | 本卡第 2 项 |
@@ -246,18 +270,21 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 
 **6. G-28 双端截图**
 
-- 两批（r8-shots1 / r8-shots2）计划拍 **16 张** PC + 手机截图 + 产品定位自评。
-- **状态：进行中，完成后由截图 owner 另落报告**（写域 `.agents/verify/screenshots/` 与 `r8-ui-shots-batch*.md`，本轮 scribe 不碰）；本卡不代填"完成"。
+- ~~两批（r8-shots1 / r8-shots2）计划拍 **16 张** PC + 手机截图 + 产品定位自评。~~
+- **状态：两批已交付并回读 PASS**——`873409c`（batch1）/ `204be96`（batch2），
+  **16 张双端截图**（8×PC 1440×900 + 8×手机 390×844）+ 产品定位自评三问齐备；
+  `file` 实测宽高全合规、md5 全异（8/8 distinct）；自评原文与已证明/未证明两栏见
+  `.agents/verify/r8-ui-shots-batch1.md` / `r8-ui-shots-batch2.md`（截图 owner 已另落报告，本卡只索引不代填）。
 
 **7. 下一轮建议（≤5 条，按优先级）**
 
 | # | 优先级 | 可执行动作 | 验收 |
 | --- | --- | --- | --- |
 | ① | P1 | 这批 commit 攒批待用户授权后**统一 push**（多提交少推送，不逐个推） | 用户明确授权后一次性 push，_remote peeled sha 逐端一致 |
-| ② | P1 | G-28 截图收口验收（等截图 owner 报告） | 16 张双端截图 + 自评三问齐备，`file`/`identify` 校验宽高 |
+| ② | ~~P1~~ **已闭环（同上两笔 commit）** | G-28 截图收口验收：`873409c` / `204be96` 两批已交付并回读 PASS | 16 张双端截图 + 自评三问齐备，`file`/`identify` 校验宽高、md5 全异——全部命中 |
 | ③ | P2 | site 外部 ADR-0052 收敛后单独成批入索引 | 索引 site 版本与仓库一致，重签 + 公钥不变 |
 | ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 结论落 DECISIONS / ADR（§0.0.3 第 3 条） |
-| ⑤ | P3 | 主实例已是新构建，可抽查生产态三组件 | 8787 三组件资源 200、商店版本 == 索引版本（G-29） |
+| ⑤ | P3 | ~~主实例已是新构建，可抽查生产态三组件~~ → **R9 已重建重启到 15:18 新构建**（PID 1533701 / sha `721a748d`），本轮 UI / 本地化已生效；生产态抽查由 `r9-runverify` 复验（四项特征 > 0） | `r9-runverify` 复核 PASS（待其回报；本卡不代填） |
 
 ## 0. 当前交接快照（2026-11-24 10:20）
 
