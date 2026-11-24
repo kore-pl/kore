@@ -6,6 +6,8 @@
    自动续期不在插件里创建任务：前端把 ssl.renew.set 给的 recommended_task 原样
    POST 到内核 ADR-0019 的 /api/v1/scheduler/tasks（插件无权调内核 API）。
    ACME 会联网，必须用户勾选确认后才调用外部客户端（certbot / acme.sh）。
+   强制 HTTPS 走 ssl.https.status / ssl.https.enforce / ssl.https.unenforce：本插件只登记期望状态、
+   真正让浏览器自动跳转由网站页完成，故 UI 区分「已记录」与「已生效」，不把登记说成生效。
    私钥只经 password 输入框粘贴，内容留在内存变量、提交后清空；不回显、不写日志、不落 localStorage。 */
 (function () {
   'use strict';
@@ -18,7 +20,9 @@
       importChain: null, keyPEM: '', keyNote: null, busy: false,
       expiry: null, expiryHost: null, expiryActions: null, tasks: [], taskLoaded: false,
       acmeStatus: null, acmeStatusHost: null, acmeDomain: null, acmeEmail: null, acmeConfirm: null,
-      acmeSubmit: null, acmeNote: null, acmeResult: null, acmeResultHost: null };
+      acmeSubmit: null, acmeNote: null, acmeResult: null, acmeResultHost: null,
+      httpsDomain: null, httpsAutoNote: null, httpsStatus: null, httpsStatusHost: null,
+      httpsCheckBtn: null, httpsBtnOn: null, httpsBtnOff: null, httpsUserEdited: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -305,6 +309,81 @@
       throw err;
     });
   }
+  // ---- 强制 HTTPS（ssl.https.status / enforce / unenforce） ----
+  // 本插件只做"期望状态登记 + 只读判定"，真正的 80→443 跳转由网站页完成。
+  // 所以 UI 分两层说人话：已记录（本页操作）与已生效（站点侧已跳转）。
+  function paintHTTPS() {
+    if (!S.httpsStatusHost) return;
+    var host = S.httpsStatusHost; host.textContent = '';
+    var st = S.httpsStatus;
+    if (!st) { add(host, el('span', 'muted', '点「查看当前状态」后，这里会显示是否已开启强制 HTTPS。')); return; }
+    if (st.__error) {
+      add(host, el('div', 'row-note-fail', st.__error));
+      return;
+    }
+    var on = !!st.force_https;
+    host.appendChild(chip(on ? 'ok' : 'warn', on ? '浏览器会自动跳转到 HTTPS' : '目前不会自动跳转到 HTTPS'));
+    add(host, el('span', 'muted', st.enforced ? '本页已记录' : '本页暂无记录'));
+    var how = el('details', 'ssl-https-how');
+    add(how, el('summary', null, '展开看详情'));
+    add(how, el('div', 'muted',
+      '443 加密访问：' + (st.https && st.https.reachable ? '可用' : '不可用') +
+      '；80 跳转：' + (st.http && st.http.redirects_to_https ? '已开启' : '未开启') +
+      '；判定：' + (st.verdict || '—')));
+    if (st.hint) add(how, el('div', 'muted', st.hint));
+    add(host, how);
+    if (S.httpsBtnOn) S.httpsBtnOn.disabled = on;
+    if (S.httpsBtnOff) S.httpsBtnOff.disabled = !on;
+  }
+  function loadHTTPS(silent) {
+    var domain = (S.httpsDomain && S.httpsDomain.value.trim().toLowerCase()) || '';
+    if (!domain) { setStatus('请先填写要设置的域名', 'fail'); return Promise.reject(new Error('no-domain')); }
+    if (!silent) setStatus('正在查看「' + domain + '」的 HTTPS 状态…');
+    return invoke('ssl.https.status', { domain: domain }).then(function (data) {
+      if (S.destroyed) return;
+      S.httpsStatus = data || {};
+      paintHTTPS();
+      if (!silent) setStatus(data && data.force_https
+        ? '「' + domain + '」已开启强制 HTTPS：浏览器会自动跳转到加密地址'
+        : '「' + domain + '」尚未开启强制 HTTPS：可在下方点「开启」', data && data.force_https ? 'ok' : '');
+    }, function (err) {
+      if (S.destroyed) return;
+      S.httpsStatus = { __error: '查不到「' + domain + '」的 HTTPS 状态：' + errText(err) +
+        '。请确认域名填写正确、服务可访问后重试。' };
+      paintHTTPS();
+      if (!silent) setStatus('状态查询失败：' + errText(err), 'fail');
+    });
+  }
+  function changeHTTPS(enforce, btn) {
+    var domain = (S.httpsDomain && S.httpsDomain.value.trim().toLowerCase()) || '';
+    if (!domain) { setStatus('请先填写要设置的域名', 'fail'); return; }
+    var method = enforce ? 'ssl.https.enforce' : 'ssl.https.unenforce';
+    var label = enforce ? '开启' : '关闭';
+    if (btn) btn.disabled = true;
+    var old = btn ? btn.textContent : '';
+    if (btn) btn.textContent = label + '中…';
+    setStatus('正在' + label + '「' + domain + '」的强制 HTTPS…');
+    invoke(method, { domain: domain }).then(function (info) {
+      if (S.destroyed) return;
+      var hint = info && info.hint ? '｜' + info.hint : '';
+      setStatus('已' + label + '「' + domain + '」的强制 HTTPS 记录' + hint, 'ok');
+      return loadHTTPS(true);
+    }, function (err) {
+      if (!S.destroyed) setStatus(label + '失败：' + errText(err) +
+        '。请确认域名已绑证书、服务可访问后重试，或点「查看当前状态」复核。', 'fail');
+    }).then(function () {
+      if (btn && !S.destroyed) { btn.disabled = false; btn.textContent = old; paintHTTPS(); }
+    });
+  }
+  function fillHTTPSFromCerts() {
+    if (S.httpsUserEdited || !S.httpsDomain) return;
+    var first = S.certs && S.certs[0];
+    if (first && first.domain) {
+      S.httpsDomain.value = first.domain;
+      if (S.httpsAutoNote) S.httpsAutoNote.textContent = '已自动填入第一张证书的域名，可改成要设置的站点域名';
+      if (!S.httpsStatus && !S.destroyed) loadHTTPS(true);
+    }
+  }
   // ---- ACME（探测 + 显式调用外部客户端） ----
   function loadACME() {
     if (!S.acmeStatusHost) return;
@@ -372,7 +451,7 @@
     if (!quiet) setStatus('正在读取证书列表…');
     return invoke('ssl.list', {}).then(function (data) {
       if (S.destroyed) return;
-      S.certs = data.certs || []; paintCerts();
+      S.certs = data.certs || []; paintCerts(); fillHTTPSFromCerts();
       if (!quiet) setStatus('共 ' + S.certs.length + ' 张证书；验证只做真实 TLS 握手，不改任何文件', 'ok');
     }, function (err) {
       if (S.destroyed) return;
@@ -454,7 +533,7 @@
     S.verifyHost.setAttribute('aria-label', '验证目标 host 或 host:port');
     var vbtn = add(vbox, el('button', 'btn btn-primary', '验证')); vbtn.type = 'button'; on(vbtn, verify);
     var refresh = add(bar, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
-    on(refresh, function () { load(false); loadExpiry(); loadACME(); });
+    on(refresh, function () { load(false); loadExpiry(); loadACME(); loadHTTPS(true); });
     S.status = add(root, el('div', 'ssl-status muted')); S.status.setAttribute('role', 'status');
     S.expiryHost = add(root, el('div', 'ssl-expiry-host'));
     S.expiryActions = add(root, el('div', 'ssl-expiry-actions')); S.expiryActions.hidden = true;
@@ -462,6 +541,34 @@
     var list = panel(root, '证书列表');
     S.count = list.querySelector('.panel-head').appendChild(el('span', 'panel-meta', ''));
     S.certHost = add(list, el('div', 'ssl-certs'));
+
+    // 强制 HTTPS 卡片：域名自动填第一张证书，按钮/触摸目标内联 44px 不依赖样式文件（写域约束）。
+    var enforce = panel(root, '强制 HTTPS', '让网站自动从 http 跳到 https');
+    var ef = add(enforce, el('form', 'ssl-form'));
+    S.httpsDomain = input('text', 'span2', '要设置的站点域名（如 www.example.com）');
+    S.httpsDomain.setAttribute('aria-label', '要开启强制 HTTPS 的站点域名');
+    S.httpsDomain.addEventListener('input', function () { S.httpsUserEdited = true; });
+    field(ef, '站点域名', S.httpsDomain, 'span2');
+    S.httpsAutoNote = add(ef, el('p', 'field-hint span2', ''));
+    var eops = add(ef, el('div', 'span2 ssl-https-ops'));
+    eops.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
+    var checkBtn = add(eops, el('button', 'btn btn-ghost', '查看当前状态'));
+    checkBtn.type = 'button'; checkBtn.style.minHeight = 'var(--kore-touch)';
+    checkBtn.style.minWidth = 'var(--kore-touch)';
+    on(checkBtn, function () { loadHTTPS(false); });
+    S.httpsCheckBtn = checkBtn;
+    S.httpsBtnOn = add(eops, el('button', 'btn btn-primary', '开启强制 HTTPS'));
+    S.httpsBtnOn.type = 'button'; S.httpsBtnOn.style.minHeight = 'var(--kore-touch)';
+    S.httpsBtnOn.style.minWidth = 'var(--kore-touch)';
+    on(S.httpsBtnOn, function () { changeHTTPS(true, S.httpsBtnOn); });
+    S.httpsBtnOff = add(eops, el('button', 'btn btn-ghost', '关闭强制 HTTPS'));
+    S.httpsBtnOff.type = 'button'; S.httpsBtnOff.style.minHeight = 'var(--kore-touch)';
+    S.httpsBtnOff.style.minWidth = 'var(--kore-touch)';
+    on(S.httpsBtnOff, function () { changeHTTPS(false, S.httpsBtnOff); });
+    add(ef, el('p', 'field-hint span2',
+      '开启只是先在本页记下设置；真正让浏览器自动跳转，还需到网站页绑定证书并开启跳转。点「查看当前状态」可看是否已生效。'));
+    S.httpsStatusHost = add(enforce, el('div', 'ssl-https-status'));
+    paintHTTPS();
 
     var acme = panel(root, 'ACME 证书（外部客户端）', '需手动确认 · 会联网');
     S.acmeStatusHost = add(acme, el('div', 'ssl-acme-status'));
