@@ -20,8 +20,10 @@
    4. 插件重启   GET /api/v1/plugins → restarts 之和：0 → 绿；1-3 → 黄；>=4 → 红。
    5. 告警中心   GET /api/v1/alerts?limit=500 → severity=critical 计数：
                  0 → 绿；1-2 → 黄；>=3 → 红。
-   6. 定时任务   GET /api/v1/scheduler/tasks → 任务列表取数成功即绿（合规：内核不轮询、
-                 定时器仅 scheduler），取数失败 → 黄；任务存在 last_error 字段非空 → 黄。
+   6. 定时任务   GET /api/v1/scheduler/tasks → 取数成功即绿（合规：内核不轮询、定时器仅
+                 scheduler）。真实字段：last_result ∈ {ok,failed,timeout,skipped,missed}、
+                 missed_count。存在 last_result 非 ok（排除 skipped）或 missed_count>0 → 黄；
+                 取数失败 → 黄。
    7. 系统信息   GET /api/v1/system/info → supervisor.resident <= resident_max 且
                  demotion 段存在 → 绿；resident>=resident_max（槽位满）→ 黄；取数失败 → 红。
    8. 内核自升级 GET /api/v1/system/upgrade → 取数成功即绿（无进行中的失败升级），
@@ -162,10 +164,14 @@
   function checkScheduler(data) {
     if (!data) return result(50, '定时任务列表取数失败。', '刷新页面重试；此端点需要管理员权限，普通用户可忽略本项。');
     var tasks = Array.isArray(data.tasks) ? data.tasks : [];
-    var bad = tasks.filter(function (t) { return t.last_error || t.state === 'error'; });
+    // 真实字段（scheduler.Task）：last_result ∈ ok/failed/timeout/skipped/missed，missed_count。
+    var bad = tasks.filter(function (t) {
+      var r = t.last_result;
+      return (r && r !== 'ok' && r !== 'skipped') || (typeof t.missed_count === 'number' && t.missed_count > 0);
+    });
     if (bad.length)
-      return result(50, '有 ' + bad.length + ' 个定时任务带错误记录（共 ' + tasks.length + ' 个）。', '到「计划任务」查看失败的任务并修正；内核定时器合规（仅 scheduler 单 ticker）。');
-    return result(100, '定时任务端点正常（共 ' + tasks.length + ' 个任务，定时器合规）。', '无需处理。');
+      return result(50, '有 ' + bad.length + ' 个定时任务最近执行异常（共 ' + tasks.length + ' 个）。', '到「计划任务」查看这些任务的最近结果并修正；内核定时器合规（仅 scheduler 单 ticker）。');
+    return result(100, '定时任务端点正常（共 ' + tasks.length + ' 个任务，最近执行均正常，定时器合规）。', '无需处理。');
   }
   function checkInfo(data) {
     if (!data || !data.supervisor) return result(0, '系统信息取数失败，无法判断常驻槽位与降权状态。', '刷新页面重试；仍失败检查 kored 状态。');
