@@ -33,7 +33,10 @@
       trend: null, trendPid: 0, trendHint: '', trendSection: null,
       // R15-2：端口占用（process.ports）/ 守护建议（process.watchdog.suggest）抽屉内按需加载。
       portsOpen: false, ports: null, portsLoading: false, portsError: '', portsCode: '',
-      wdOpen: false, wd: null, wdLoading: false, wdError: '', wdCode: '' };
+      wdOpen: false, wd: null, wdLoading: false, wdError: '', wdCode: '',
+      // 全局工具面板：后端已实现但前端原无入口的全系统端口 / 全系统进程树（缺省 pid/root）。
+      gPortsOpen: false, gPorts: null, gPortsLoading: false, gPortsError: '', gPortsCode: '', gPortsQ: '',
+      gTreeOpen: false, gTree: null, gTreeLoading: false, gTreeError: '', gTreeCode: '' };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -117,6 +120,13 @@
       '.proc-wd-k{color:var(--kore-text-3)}',
       '.proc-wd-pre{margin:6px 0;max-height:180px;overflow:auto;padding:8px;background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all}',
       '.proc-wd-boundary{margin:8px 0 0;font-size:11px;color:var(--kore-text-3);line-height:1.6}',
+      // 全局工具面板（全系统端口 / 全系统进程树）：复用 proc-port-table 与 proc-tree-pre。
+      '.proc-global-actions{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px 0}',
+      '.proc-global-actions .btn{min-height:44px}',
+      '.proc-global-body{padding:10px 16px 14px}',
+      '.proc-global-filter{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}',
+      '.proc-global-filter .proc-input{flex:1 1 160px;min-height:44px}',
+      '.proc-global-meta{margin:8px 0 0;font-size:11px;color:var(--kore-text-3);line-height:1.6}',
       '@media (max-width:640px){',
       '.proc-port-table thead{display:none}',
       '.proc-port-table,.proc-port-table tbody,.proc-port-table tr,.proc-port-table td{display:block;width:100%}',
@@ -1008,6 +1018,141 @@
     if (w.boundary) add(card, el('p', 'proc-wd-boundary', w.boundary));
   }
 
+  /* ---------- 全系统工具：后端已实现但前端原无入口的两个只读入口 ---------- */
+  // process.ports 缺省/0 = 扫描全部进程的 LISTEN 端口（谁占了 8080）；process.tree 缺省 root = 全系统森林。
+  // 与详情抽屉内的按 pid 入口互补：点开才拉数据（零 ticker、不进首屏），复用同一后端方法。
+  function openGlobalPorts() {
+    if (S.gPortsOpen) { S.gPortsOpen = false; paintGlobalPorts(); return; }
+    S.gPortsOpen = true;
+    if (!S.gPorts && !S.gPortsLoading) loadGlobalPorts(); else paintGlobalPorts();
+  }
+  function loadGlobalPorts() {
+    S.gPortsLoading = true; S.gPortsError = ''; S.gPortsCode = ''; paintGlobalPorts();
+    invoke('process.ports', {}).then(function (r) {
+      if (S.destroyed) return;
+      S.gPortsLoading = false; S.gPorts = r; paintGlobalPorts();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.gPortsLoading = false; S.gPortsError = err.message || '读取失败'; S.gPortsCode = err.code || ''; paintGlobalPorts();
+    });
+  }
+  function paintGlobalPorts() {
+    if (!S.gPortsPanel) return;
+    S.gPortsPanel.body.hidden = !S.gPortsOpen;
+    S.gPortsToggle.textContent = S.gPortsOpen ? '收起端口' : '读取端口';
+    if (!S.gPortsOpen) return;
+    var body = S.gPortsPanel.body;
+    body.textContent = '';
+    var bar = add(body, el('div', 'proc-global-filter'));
+    var q = add(bar, el('input', 'proc-input')); q.type = 'search';
+    q.placeholder = '过滤端口 / 地址 / 进程名'; q.setAttribute('aria-label', '过滤监听端口');
+    q.value = S.gPortsQ;
+    q.addEventListener('input', function () { S.gPortsQ = q.value; paintGlobalPortsRows(); });
+    var refresh = add(bar, el('button', 'btn btn-ghost', '重新读取')); refresh.type = 'button';
+    on(refresh, loadGlobalPorts);
+    S.gPortsRows = add(body, el('div'));
+    paintGlobalPortsRows();
+  }
+  function paintGlobalPortsRows() {
+    var host = S.gPortsRows;
+    if (!host) return;
+    host.textContent = '';
+    if (S.gPortsLoading) { add(host, el('p', 'muted proc-tree-note', '正在扫描全系统监听端口…')); return; }
+    if (S.gPortsError) {
+      host.appendChild(window.KoreUI.errorBlock({ code: S.gPortsCode, message: S.gPortsError }, {
+        title: '全系统端口扫描失败',
+        action: '读取 /proc/<pid>/fd 需要足够权限；确认 kored 启动权限后点重新读取',
+        retryLabel: '重新读取', onRetry: loadGlobalPorts
+      }));
+      return;
+    }
+    if (!S.gPorts) { add(host, el('p', 'muted proc-tree-note', '尚未读取。')); return; }
+    var all = S.gPorts.listeners || [];
+    var q = S.gPortsQ.trim().toLowerCase();
+    var rows = q ? all.filter(function (l) {
+      return String(l.port).indexOf(q) >= 0 || (l.address || '').toLowerCase().indexOf(q) >= 0 ||
+        (l.name || '').toLowerCase().indexOf(q) >= 0 || (l.protocol || '').toLowerCase().indexOf(q) >= 0;
+    }) : all;
+    if (!rows.length) {
+      host.appendChild(window.KoreUI.emptyBlock({
+        title: q ? '没有匹配的监听端口' : '没有发现监听端口',
+        text: q ? '换个端口号、地址或进程名再试，或清空过滤看全部。' :
+          '这次扫描没有发现 LISTEN 状态的套接字；也可能进程属于其他用户、fd 不可读。',
+        label: q ? '清空过滤' : '重新读取',
+        onClick: q ? function () { S.gPortsQ = ''; paintGlobalPorts(); } : loadGlobalPorts
+      }));
+      return;
+    }
+    var table = add(host, el('table', 'proc-port-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['端口', '协议', '监听地址', '进程'].forEach(function (h) { add(htr, el('th', null, h)); });
+    var tbody = add(table, el('tbody'));
+    rows.forEach(function (l) {
+      var tr = add(tbody, el('tr'));
+      [[l.port, '端口'], [l.protocol || '—', '协议'], [l.address || '—', '监听地址'],
+        [(l.name || '—') + '（' + l.pid + '）', '进程']].forEach(function (cell) {
+        var td = add(tr, el('td', null, cell[0])); td.setAttribute('data-label', cell[1]);
+      });
+    });
+    var g = S.gPorts;
+    add(host, el('p', 'proc-global-meta', '显示 ' + rows.length + ' / ' + all.length +
+      ' 个监听 · 扫描 ' + fmtInt(g.scanned_processes) + ' 个进程 / ' + fmtInt(g.scanned_fds) + ' 个 fd' +
+      (g.truncated ? '（部分 fd 因超限未扫描，结果可能不完整）' : '') +
+      '。归属来自 /proc/net/tcp{,6} 与 fd 反查，只反映读取那一刻的状态。'));
+  }
+  function openGlobalTree() {
+    if (S.gTreeOpen) { S.gTreeOpen = false; paintGlobalTree(); return; }
+    S.gTreeOpen = true;
+    if (!S.gTree && !S.gTreeLoading) loadGlobalTree(); else paintGlobalTree();
+  }
+  function loadGlobalTree() {
+    S.gTreeLoading = true; S.gTreeError = ''; S.gTreeCode = ''; paintGlobalTree();
+    invoke('process.tree', {}).then(function (r) {
+      if (S.destroyed) return;
+      S.gTreeLoading = false; S.gTree = r; paintGlobalTree();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.gTreeLoading = false; S.gTreeError = err.message || '读取失败'; S.gTreeCode = err.code || ''; paintGlobalTree();
+    });
+  }
+  function paintGlobalTree() {
+    if (!S.gTreePanel) return;
+    S.gTreePanel.body.hidden = !S.gTreeOpen;
+    S.gTreeToggle.textContent = S.gTreeOpen ? '收起进程树' : '读取进程树';
+    if (!S.gTreeOpen) return;
+    var body = S.gTreePanel.body;
+    body.textContent = '';
+    var bar = add(body, el('div', 'proc-global-filter'));
+    var refresh = add(bar, el('button', 'btn btn-ghost', '重新读取')); refresh.type = 'button';
+    on(refresh, loadGlobalTree);
+    if (S.gTreeLoading) { add(body, el('p', 'muted proc-tree-note', '正在读取全系统进程树…')); return; }
+    if (S.gTreeError) {
+      body.appendChild(window.KoreUI.errorBlock({ code: S.gTreeCode, message: S.gTreeError }, {
+        title: '全系统进程树读取失败', retryLabel: '重新读取', onRetry: loadGlobalTree
+      }));
+      return;
+    }
+    if (!S.gTree) { add(body, el('p', 'muted proc-tree-note', '尚未读取。')); return; }
+    var nodes = S.gTree.nodes || [];
+    if (!nodes.length) {
+      body.appendChild(window.KoreUI.emptyBlock({
+        title: '进程树为空', text: '这次扫描没有拿到可展示的进程；稍后重试。',
+        label: '重新读取', onClick: loadGlobalTree
+      }));
+      return;
+    }
+    var pre = add(body, el('pre', 'proc-tree-pre'));
+    pre.textContent = nodes.map(function (n) {
+      var indent = '';
+      for (var i = 0; i < n.depth; i++) indent += '  ';
+      return indent + n.pid + '  ' + n.name + (n.children_count ? '  (' + n.children_count + ' 子)' : '');
+    }).join('\n');
+    add(body, el('p', 'proc-global-meta', '共 ' + nodes.length + ' / ' + fmtInt(S.gTree.total) +
+      ' 个节点 · ' + (S.gTree.roots || []).length + ' 个树根' +
+      (S.gTree.truncated ? ' · 已截断（深度 ≤' + S.gTree.max_depth + ' / 节点 ≤' + S.gTree.max_nodes + '）' : '') +
+      '。缩进表示父子层级。'));
+  }
+
   function load() {
     S.loading = true; S.loadError = ''; S.shown = PAGE_SIZE; paintTable();
     invoke('process.list', { sort: S.sort, limit: FETCH_LIMIT }).then(function (d) {
@@ -1047,6 +1192,18 @@
     add(ph, el('span', 'panel-meta', '点列头排序 · 点行看详情'));
     S.tableHost = add(panel, el('div', 'proc-table-host'));
     S.moreHost = add(panel, el('div', 'proc-more'));
+    // 全系统工具面板：后端 process.ports 缺省 pid / process.tree 缺省 root 的只读入口（点开才拉）。
+    var gtools = add(root, el('section', 'panel proc-global-tools'));
+    var gth = add(gtools, el('div', 'panel-head'));
+    add(gth, el('span', 'panel-title', '全系统工具'));
+    add(gth, el('span', 'panel-meta', '端口占用 · 进程树 · 只读，点开才读取'));
+    var gacts = add(gtools, el('div', 'proc-global-actions'));
+    S.gPortsToggle = add(gacts, el('button', 'btn btn-ghost', '读取端口')); S.gPortsToggle.type = 'button';
+    on(S.gPortsToggle, openGlobalPorts);
+    S.gTreeToggle = add(gacts, el('button', 'btn btn-ghost', '读取进程树')); S.gTreeToggle.type = 'button';
+    on(S.gTreeToggle, openGlobalTree);
+    S.gPortsPanel = { body: add(gtools, el('div', 'proc-global-body')) }; S.gPortsPanel.body.hidden = true;
+    S.gTreePanel = { body: add(gtools, el('div', 'proc-global-body')) }; S.gTreePanel.body.hidden = true;
     S.mask = add(root, el('div', 'proc-mask')); S.mask.hidden = true; on(S.mask, closeDrawer);
     S.drawer = add(root, el('aside', 'proc-drawer')); S.drawer.hidden = true;
     S.drawer.setAttribute('role', 'dialog'); S.drawer.setAttribute('aria-modal', 'true'); S.drawer.setAttribute('aria-label', '进程详情');
