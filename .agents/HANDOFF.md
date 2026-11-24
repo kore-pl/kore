@@ -216,7 +216,7 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 - 备份双保险：`/tmp` + `bin/` 冗余备份；**禁改历史**（无 amend/reset/rebase）。
 - **G-29 声明：R8 本轮未改主配置 / state / ssl**（复核口径：`paths.index_dir` 指向 `kore-plugins/index`，商店版本 == 索引版本）。
 
- **运行态时间线（r9-docssync 核查 + r9-restart 重建——最终态，根治「源码有 commit」错当「运行态已生效」）**：
+ **运行态时间线（r9-docssync 核查 + r9-restart 重建——R9 时点快照（当前最终态见 §0.0.7，PID 1753674），根治「源码有 commit」错当「运行态已生效」）**：
  - **R8-0（13:58）**：三组件 404 → 200，九条复核全 PASS——但此时 dist 停在 **13:14**、二进制停在 **13:58**。
  - **滞后窗口（14:24 后）**：本轮 **15 个 UI / 本地化 commit**（`091c251` / `956ce99` / `a7409cf` /
    `ee1d606` / `64ae7d8` / `e3e13c0` / `300156e` 等）均在 13:58 构建之后落地，**未编入 13:58 构建**；
@@ -279,11 +279,37 @@ prune `--dry-run`（只留最新 5，GitHub 无对应 release 的版本永不删
 
 | # | 优先级 | 可执行动作 | 验收 |
 | --- | --- | --- | --- |
-| ① | P1 | 这批 commit 攒批待用户授权后**统一 push**（多提交少推送，不逐个推） | 用户明确授权后一次性 push，_remote peeled sha 逐端一致 |
+| ① | ~~P1~~ **已闭环（第6轮 2026-11-24）** | r11-push 一批推完 origin/github/gitee 三端，三端 main 全对齐 `80f6c48` | 三端 `git ls-remote` 实测 main 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，本地 HEAD 同 sha，零失败零 WARN，未重复推 gitea(ssh) |
 | ② | ~~P1~~ **已闭环（同上两笔 commit）** | G-28 截图收口验收：`873409c` / `204be96` 两批已交付并回读 PASS | 16 张双端截图 + 自评三问齐备，`file`/`identify` 校验宽高、md5 全异——全部命中 |
 | ③ | P2 | site 外部 ADR-0052 收敛后单独成批入索引 | 索引 site 版本与仓库一致，重签 + 公钥不变 |
 | ④ | P2 | `RELEASE-EVIDENCE.md` 归属裁决 | 结论落 DECISIONS / ADR（§0.0.3 第 3 条） |
-| ⑤ | P3 | ~~主实例已是新构建，可抽查生产态三组件~~ → **R9 已重建重启到 15:18 新构建**（PID 1533701 / sha `721a748d`），本轮 UI / 本地化已生效；生产态抽查由 `r9-runverify` 复验（四项特征 > 0） | 独立 verifier r9-runverify **PASS**（四项特征真 UI + 八项门禁全绿，零 FAIL） |
+| ⑤ | ~~P3~~ **已闭环（第5轮最终态）** | R10 最终重建重启（r10-runverify 独立 PASS）：现运行 **PID `1753674`** / exe sha `9d9fe444eed83b1b714f9b75ecb5f9184550a1f6cae1cedc7a9cfcc60d26728e` / version 0.1.1；本批 11 卡成果（图表 / 白话 / 断点续传 / 改口令 / 本地化 850key）全部生效；改口令端点未登录 POST 实测 401（非 501） | `ps` 实测 PID 1753674 存活、`readlink /proc/1753674/exe` → `bin/kored`、`sha256sum` == 上列 sha；r10-runverify 独立 PASS |
+
+### 0.0.7 第 6/7 轮交付快照（2026-11-24）
+
+> 本节一次同步交接文件落后于真实状态的收口事实，供只读本文件的人接手。
+> 事实口径：commit / sha / 远端 main / 运行态 PID 全部用 `git log` / `git ls-remote` / `ps` / `sha256sum` 实测复核（复核时间 2026-11-24 16:2x）；
+> §0.0.1–§0.0.6 及更早内容为历史，全部保留不动。本轮写域只有本文件。
+
+**1. 第 6 轮——攒批 push 三端对齐（已闭环）**：r11-push 一批推完 origin / github / gitee 三端，
+三端 `main` 全为 `80f6c48b447a34ea77cd76bbf9fefba92df8c68d`，本地 HEAD 同 sha，零失败零 WARN，未重复推 gitea(ssh)。
+（实测：`git ls-remote origin|github|gitee refs/heads/main` 三行同 sha；详见 §0.0.6「下一轮建议①」已闭环标注。）
+
+**2. 第 5 轮——R10 最终态（运行态 + 成果）**：
+- **8 张功能卡 commit**：图表 `0c4d1f9`(进程)/`b685155`(日志)、白话 `699cf4f`/`2b68649`/`d33eb6b`、
+  断点续传 `06811ae`、改口令交互 `c8dcb9e` + 后端端点 `80f6c48`、i18n 接线 `e2cf84c`。
+- **本地化**：四高频视图 key 清单 `8485281`；en-US 两批 `b1bce5e`(redis/search 269) + `fc83056`(sshguard/runtimes 239)，
+  合计 **508 key 新增、en-US 850 key 收口**。
+- **G-28 截图两批**：`9f8665c` + `e9227e6`（各 4 场景双端 + 自评）。
+- **文档收尾**：`49fd736`(ADR-0050 台账 + 审计 §3 证据) + `fd3d244`(白话化缺口表)。
+- **A1 收敛**：`321c34d`（三文件在途挂账：monitor-cards G-32 图表 / ADR-0050 / 审计文档）。
+- **运行态最终 PID `1753674`**：exe sha `9d9fe444eed83b1b714f9b75ecb5f9184550a1f6cae1cedc7a9cfcc60d26728e`、
+  version 0.1.1；r10-runverify 独立 PASS；改口令端点未登录 POST 实测 **401（非 501）**。
+
+**3. 剩余挂账（三项 human gate，非本轮可闭环）**：
+- ① Gitea / Gitee release 缺 token（`GITEA_TOKEN` / `GITEE_TOKEN` 未设，见 §0.0.3 第 5 条 + §0.0.5 第 4 条）；
+- ② 管理员登录口令未交付，登录态商店字面复核 BLOCKED（见 §0.0.6「挂账⑤」）；
+- ③ site 0.8.x 外部 ADR-0052 在途，索引保持 0.4.4 未误收（见 §0.0.3 第 2/3 条 + §0.0.6「挂账⑥」）。
 
 ## 0. 当前交接快照（2026-11-24 10:20）
 
