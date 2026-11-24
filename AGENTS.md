@@ -74,6 +74,7 @@ kore 是一个**多仓库项目**：内核 + 插件中心 + 每插件一仓。�
 - 精确 add：`git add internal/core/bus.go`，禁止 `git add .` / `git add -A`。
 - 检查点即提交：一处自洽且过了对应层级门禁（G1/G2/G4）就提交，不攒到任务收尾。
 - 不提交未验证改动；门禁没跑或跑挂时，明确报告阻塞原因，不"先提交再说"。
+- **禁止裸 `git commit`**：共享工作树里 `git commit -m "..."`（不带路径）会提交暂存区里所有人的内容——包括他人未完成的暂存与陈旧的反相暂存，可静默回退已提交内容。**必须用 `git commit -m "..." -- <精确路径>` 或 `GIT_INDEX_FILE` 临时索引**；确需提交整个暂存区时，先 `git status --short` + `git diff --cached` 逐条确认里面没有别人的或反相的内容。
 - **插件发版（G-17 延伸）**：`info.json` + `manifest.json` 版本同步 bump，`CHANGELOG.md` 记条目，dist 两打 + 干净树复现一致；索引同步 `versions.lock.json` 与 `presets/*.json`。**同 `id@version` 只允许一个 sha，任何改变 dist sha 的改动必须 bump**（见 [docs/RELEASE.md](docs/RELEASE.md)）。
 - **提交归属**：每条提交首行带 `[agent:<name>]` 前缀（如 `[agent:kore-architect-maturity] feat(...): ...`），便于并发仓库追溯"谁提交的"；`d7b8e7b` 的教训是统一工作区身份让归因只能靠 `git show` 的 author（无法定位 agent）。
 - **禁改写历史**：并发仓库**禁止 `git commit --amend` / `git reset` / `rebase` / force-push**；回退一律用**追加 revert 提交**（`git revert --no-edit <sha>`）。改写会覆盖他人已拉取或未提交的改动。
