@@ -38,6 +38,7 @@ git push gitee  main --tags || echo "WARN: gitee push failed (Gitea 已成功)" 
 
 - **建 release**：镜像 GitHub release 的 `tag_name` / `name` / `body`，附件用本地 `dist/<id>-<version>.tar.gz`（与 GitHub 同 sha256，可离线复用）；GitHub 无 release 的仓库只镜像分支与 tag。
 - **清理 release**：`scripts/gitee-release-prune.sh`，默认保留 5 个，先删附件再删 release。
+- **例外（显式清单）**：**GitHub 无对应 release 的版本永不删除（Gitee 为唯一副本）**。当前唯一实例：`kore-plugin-echo v0.1.0`——GitHub 只有 tag `v0.1.0`、没有对应 release（release 从 `v0.1.1` 起才有），Gitee 是该版本唯一的发行物副本。例外必须逐条登记在脚本的 `PRUNE_EXCEPTIONS`（`<owner>/<repo>:<tag>`），命中时打印 `[SKIP-EXCEPTION] <repo> <tag>: GitHub 无对应 release，Gitee 为唯一副本，保留`；**禁止**用「GitHub 查不到就跳过」的隐式行为替代清单。新增 / 移除例外必须同步本节。
 - 清理脚本支持 `--dry-run`（只打印判序依据与计划）、`--keep N`、`--repo owner/name`（可重复、可跨仓库批量）。
 
 **判序规则（为什么不用 `created_at`）**：补建批次按版本**倒序**创建，时间序 ≠ 版本序。2026-11-24 事故（`33088d9`）：脚本按 `created_at` 判序，把 `kore-plugin-integrity` 版本第 2 新的 `v0.4.0` 当第 6 新删掉、却漏删 `v0.3.0`，靠本地 `dist` 残留 tar.gz 才恢复（sha256 一致），**属运气**。现行规则：
@@ -46,7 +47,7 @@ git push gitee  main --tags || echo "WARN: gitee push failed (Gitea 已成功)" 
 2. 版本号用 GNU version sort（`sort -V`），`0.10.0` 排在 `0.9.0` 之后；
 3. 同版本多前缀（`v1.0.0` 与 `1.0.0` 并存）视为判序歧义 → **整仓跳过并 WARN**，绝不猜。
 
-**删除护栏**（任一不成立即中止该仓、不删）：① 删除后剩余数量 == `--keep`；② 被删版本**全部严格小于**保留集最小版本。`--dry-run` 对每仓打印「保留集（按版本序）+ 待删集 + 判序依据」与两条护栏的校验结果，可逐条人工核对。
+**删除护栏**（任一不成立即中止该仓、不删）：① 删除后剩余数量 == `--keep`（命中显式例外的仓为 `--keep + 例外数`）；② 被删版本**全部严格小于**保留集最小版本。`--dry-run` 对每仓打印「保留集（按版本序）+ 待删集 + 判序依据」与两条护栏的校验结果，可逐条人工核对。
 
 ```bash
 export GITEE_TOKEN=***            # 只从环境变量读取，禁止写进仓库（G-30）
@@ -68,7 +69,7 @@ bash scripts/gitee-release-prune.sh --repo pengtang1024/kore --repo pengtang1024
 2. 推代码：`git push gitee main --tags`。
 3. 转公开：空仓库不允许设为公开，push 完成后 `PATCH /repos/{owner}/{repo}` 传 `private=false`。
 4. 建 release：GitHub 有 release 的仓库，镜像最新 5 个；`kore` / `kore-plugins` 当前无 GitHub release，只镜像分支与 tag。
-5. 校验：Gitee release 数量 ≤5，且 tag 与 GitHub 最新一致。
+5. 校验：Gitee release 数量 ≤5（显式例外除外，见 §3；`kore-plugin-echo` 因 `v0.1.0` 例外为 6），且 tag 与 GitHub 最新一致。
 
 ## 6. 凭据
 

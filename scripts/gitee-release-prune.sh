@@ -17,8 +17,13 @@
 #   2) 版本号用 GNU version sort（sort -V）排序，0.10.0 排在 0.9.0 之后
 #   3) 同版本多前缀（v1.0.0 与 1.0.0 并存）视为歧义 → 整仓跳过并 WARN，绝不猜
 #
+# 例外清单（显式，设计允许的偏差）:
+#   PRUNE_EXCEPTIONS 中的 "<owner>/<repo>:<tag>" 永不删除，命中时打印 [SKIP-EXCEPTION]。
+#   仅用于「GitHub 无对应 release、Gitee 为唯一发行物副本」的历史版本；
+#   新增 / 移除例外必须同步 docs/GITEE-MIRROR.md §3——禁止写成「GitHub 查不到就跳过」的隐式行为。
+#
 # 删除护栏（任一条不成立即中止该仓、不删）:
-#   ① 删除后剩余数量 == --keep
+#   ① 删除后剩余数量 == --keep（该仓命中显式例外时：== --keep + 例外数）
 #   ② 被删版本全部严格小于保留集最小版本
 #
 # 凭据: 环境变量 GITEE_TOKEN（必填）。禁止把 token 写进本文件或提交历史（G-30）。
@@ -31,12 +36,26 @@ DRY_RUN=0
 REPOS=()
 SKIPPED=0
 
+# 显式例外：<owner>/<repo>:<tag>。见 docs/GITEE-MIRROR.md §3「例外（显式清单）」。
+PRUNE_EXCEPTIONS=(
+  "pengtang1024/kore-plugin-echo:v0.1.0"  # GitHub 只有 tag、无 release；Gitee 是该版本唯一副本
+)
+
 usage() {
   sed -n '2,/^set -uo pipefail/p' "$0" | grep -v '^set -uo pipefail' | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
 die() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+# 显式例外判定：只有清单里逐条登记的 <owner>/<repo>:<tag> 才算例外
+is_exception() {  # $1=owner/repo $2=tag
+  local e
+  for e in "${PRUNE_EXCEPTIONS[@]}"; do
+    [ "$e" = "$1:$2" ] && return 0
+  done
+  return 1
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -131,16 +150,29 @@ prune_repo() {
   printf '   判序依据: tag 语义版本（sort -V）；不使用 created_at / release id\n'
 
   # ── 抽取候选 tag，行格式: 版本<TAB>id<TAB>tag ──
-  local -a rows=() extra=()
+  local -a rows=() extra=() alltags=()
   local rid rtag ver unparsed=0
   while IFS=$'\t' read -r rid rtag; do
     [ -n "$rtag" ] || continue
+    alltags+=("$rtag")
     case "$rtag" in
       v[0-9]*)      rows+=("${rtag#v}"$'\t'"$rid"$'\t'"$rtag") ;;
       [0-9]*|V[0-9]*) extra+=("${rtag#V}"$'\t'"$rtag") ;;  # 非 v 前缀的版本号候选
       *)            unparsed=$((unparsed + 1)) ;;          # 子模块 tag 等：不参与判序
     esac
   done < <(jq -r '[.id, .tag_name] | @tsv' "$tmp")
+
+  # ── 例外清单校验：本仓登记的例外必须真实存在（防过期 / 拼错）──
+  local e erepo etag found t
+  for e in "${PRUNE_EXCEPTIONS[@]}"; do
+    erepo="${e%%:*}"; etag="${e##*:}"
+    [ "$erepo" = "$repo" ] || continue
+    found=0
+    for t in "${alltags[@]}"; do
+      [ "$t" = "$etag" ] && { found=1; break; }
+    done
+    [ "$found" = 1 ] || printf '   [WARN] 例外清单条目未在本仓 release 中找到：%s（过期或拼错？）\n' "$e"
+  done
 
   # ── 同版本多前缀歧义（v1.0.0 与 1.0.0 并存）→ 不猜，整仓跳过 ──
   local ambig=0 ev etag line
@@ -186,12 +218,24 @@ prune_repo() {
   done
   printf '   保留（按版本序，新→旧，%s 个）: %s\n' "${#keep_tags[@]}" "${keep_tags[*]}"
 
-  # ── 待删集（版本序，旧→新） ──
-  local -a victims=()
-  for (( i=0; i<keepstart-1; i++ )); do victims+=("${asc[$i]}"); done
+  # ── 待删集（版本序，旧→新；命中显式例外的不删，且必须显式打印） ──
+  local -a victims=() excepted=()
+  for (( i=0; i<keepstart-1; i++ )); do
+    IFS=$'\t' read -r ver rid rtag <<< "${asc[$i]}"
+    if is_exception "$repo" "$rtag"; then
+      printf '   [SKIP-EXCEPTION] %s %s: GitHub 无对应 release，Gitee 为唯一副本，保留\n' "$repo" "$rtag"
+      excepted+=("$rtag")
+      continue
+    fi
+    victims+=("${asc[$i]}")
+  done
 
   if [ "${#victims[@]}" -eq 0 ]; then
-    printf '   将删除: 无（可判序 release %s <= --keep %s）\n' "$ncand" "$KEEP"
+    if [ "${#excepted[@]}" -gt 0 ]; then
+      printf '   将删除: 无（%s 条待删版本命中显式例外清单，保留）\n' "${#excepted[@]}"
+    else
+      printf '   将删除: 无（可判序 release %s <= --keep %s）\n' "$ncand" "$KEEP"
+    fi
     printf '   [%s] 无需清理\n' "$([ "$DRY_RUN" = 1 ] && echo DRY-RUN || echo OK)"
     rm -f "$tmp"; return 0
   fi
@@ -203,14 +247,17 @@ prune_repo() {
   done
   printf '   将删除（版本序，旧→新，%s 个）: %s\n' "${#vtags[@]}" "${vtags[*]}"
 
-  # ── 护栏①：删除后剩余数量必须等于 --keep ──
+  # ── 护栏①：删除后剩余数量必须等于 --keep + 本仓命中的显式例外数 ──
   local remaining=$(( total - ${#victims[@]} ))
-  if [ "$remaining" -ne "$KEEP" ]; then
-    printf '   [FAIL] 护栏①不成立：删除 %s 条后剩余 %s != --keep %s\n' "${#victims[@]}" "$remaining" "$KEEP"
+  local expect_remaining=$(( KEEP + ${#excepted[@]} ))
+  local exc_note=""
+  [ "${#excepted[@]}" -eq 0 ] || exc_note=" + 显式例外 ${#excepted[@]}"
+  if [ "$remaining" -ne "$expect_remaining" ]; then
+    printf '   [FAIL] 护栏①不成立：删除 %s 条后剩余 %s != --keep %s%s\n' "${#victims[@]}" "$remaining" "$KEEP" "$exc_note"
     printf '          原因：有 %s 条 release 的 tag 不参与判序，无法保证收敛到 %s 条；中止该仓、不删\n' "$unparsed" "$KEEP"
     rm -f "$tmp"; return 1
   fi
-  printf '   ✓ 护栏①：删除 %s 条后剩余 %s == --keep %s\n' "${#victims[@]}" "$remaining" "$KEEP"
+  printf '   ✓ 护栏①：删除 %s 条后剩余 %s == --keep %s%s\n' "${#victims[@]}" "$remaining" "$KEEP" "$exc_note"
 
   # ── 护栏②：被删版本必须全部严格小于保留集最小版本 ──
   local min_kept bad=0
@@ -257,7 +304,8 @@ prune_repo() {
   local after; after="$(mktemp)"
   local n; n="$(list_releases "$repo" "$after")" || n="?"
   printf '   清理后 release 数: %s\n' "$n"
-  [ "$n" = "$KEEP" ] || { printf '   [FAIL] 清理后数量不等于 %s\n' "$KEEP"; rc=1; }
+  [ "$n" = "$expect_remaining" ] || { printf '   [FAIL] 清理后数量不等于 %s（--keep %s%s）\n' "$expect_remaining" "$KEEP" "$exc_note"; rc=1; }
+  [ "${#excepted[@]}" -eq 0 ] || printf '   例外保留: %s\n' "${excepted[*]}"
   rm -f "$after"
   return "$rc"
 }
