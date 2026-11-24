@@ -215,7 +215,13 @@
 4. **写**：审计 begin（写盘前、fail-closed，只记 `path/sha256/size/mode/copy_path`，**不记正文**）→ 写前备份到 `<state>/backups/<plugin>/<ts>/` → 同目录临时文件 + `rename` 原子替换 → **属主复核 `root:root 0644`**（`internal/platform.VerifyOwner`；失败**回滚**：有备份则恢复，新文件则删除，并以 `E_OWNER_MISMATCH` 拒绝）→ 审计 end；同一路径的并发写在进程内**按路径锁**串行（锁覆盖「检查 → 写」整段，防 TOCTOU 与备份链错乱）；
 5. **回滚账本**：`changes.jsonl` 的 `purge_op` 是**运行时**得到的结构化操作——有备份 → `file.restore`（备份路径, 目标路径），新文件 → `file.remove`（目标路径）；永不存 shell 字符串。
 
-**证书/口令目录白名单（运行时注入）**：`FileWriteOptions.Nginx.CertPrefixes` / `AuthFilePrefixes` 缺省为空 → `ssl_certificate*` / `auth_basic_user_file` 一律拒绝（错误信息明说「白名单为空」，不猜安装路径）。内核侧的注入点是 `privilege.FileWriteOptions.Policy`，K3 单测覆盖「空 → 拒绝 / 注入 → 放行」；**值**的注入（`<install>/data/ssl/` + 类别目录）必须由 `pkg/pluginapi` 产出（`nginx`/`ssl` 是薄壳门禁业务域词，不得进 `cmd`/`internal`），K3 未跨域修改 `pkg/pluginapi`，生产值注入待独立小卡（见 §3.1.3.2 末「真机验证」）。
+**证书/口令目录白名单（运行时注入）**：`FileWriteOptions.Nginx.CertPrefixes` / `AuthFilePrefixes` 缺省为空 → `ssl_certificate*` / `auth_basic_user_file` 一律拒绝（错误信息明说「白名单为空」，不猜安装路径）。值来源两处：
+- **协议类别目录**（唯一真源，如 `/etc/nginx/conf.d/`）由内核从 `pluginapi.FileWritePrefixClasses` 派生，不在 `cmd`/`internal` 抄路径字面量；
+- **安装路径目录**（如 `<install>/data/ssl/`）只能**运行时注入**：环境变量 `KORE_FILE_WRITE_ALLOW_DIRS`（路径列表，`os.PathListSeparator` 分隔；未设置 = 空 = 拒绝）。内核不猜安装布局；
+- 两项合并后经 `pluginapi.FileWriteOptionsWithDirs(certDirs, authDirs)` 注入——`nginx`/`ssl` 是薄壳门禁业务域词（G-01），赋值只允许发生在 `pkg/pluginapi`；helper 做词法规范化（绝对路径、无 `..`/变量/控制字符、补尾斜杠、去重、非法逐条丢弃），**纯词法不 stat/不解析软链**。
+- 运维口径：`KORE_FILE_WRITE_ALLOW_DIRS` 用 systemd `Environment=` 固定（unit 内 root 所有，非 root 不可改）；本地模式由同权用户控制——**不要加引号、不要用 `~`**（引号会让条目不是绝对路径而被逐条丢弃，结果是证书指令继续被拒但不额外报错，fail-closed）。
+- 残余语义宽松（已披露，非提权）：类别目录同时进入 `CertPrefixes`（按 §3.1.3.2 的「证书/口令白名单都吃 conf.d」口径），因此 `ssl_certificate*` 可指向 conf.d 下的任意文件——nginx 只会解析失败，没有内容外泄通道；若要证书面最小，把 `CertPrefixes` 收成「仅安装注入目录」即可（本卡不改，避免与协议口径漂移）。
+- 单测：`cmd/kored` 覆盖「空注入 → `<install>/data/ssl/` 证书拒绝 / 注入后放行 + `/opt/kore/data/ssl-evil/` 边界不被放行 / 非法条目丢弃」；`pkg/pluginapi` 覆盖 helper 语义与反例自证。
 
 **真机 root e2e（未执行；本机非 root，`/etc/nginx/conf.d` 为开发假象）**：
 
