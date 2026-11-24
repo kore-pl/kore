@@ -2,10 +2,13 @@
    调用形态：POST /api/v1/invoke/<id>/<id>.<action>（本例 /api/v1/invoke/ssl/ssl.list）；
    方法段一律写完整限定名 ssl.*，裸动词只是插件侧兼容，不得依赖。
    window.KoreSsl.render(container) 调 ssl 插件：ssl.list / ssl.selfsign / ssl.import /
-   ssl.renew / ssl.verify / ssl.expiring / ssl.renew.set / ssl.acme.status / ssl.acme.issue。
-   自动续期不在插件里创建任务：前端把 ssl.renew.set 给的 recommended_task 原样
+   ssl.renew / ssl.verify / ssl.expiring / ssl.renew.set / ssl.acme.status / ssl.acme.issue /
+   ssl.acme.builtin.status / ssl.acme.builtin.issue / ssl.acme.auto（内置 ACME，0.5.0 起默认主推）。
+   自动续期不在插件里创建任务：前端把 ssl.renew.set / ssl.acme.auto 给的 task 原样
    POST 到内核 ADR-0019 的 /api/v1/scheduler/tasks（插件无权调内核 API）。
-   ACME 会联网，必须用户勾选确认后才调用外部客户端（certbot / acme.sh）。
+   ACME 两条路线并存、互不互斥：①内置（默认，标准库 RFC8555，零外部依赖）；
+   ②外部客户端（engine=external，certbot / acme.sh）。两者都会联网，必须用户勾选确认后才调用；
+   builtin.status 只读探测（system:read、零联网），可安全自动加载用于展示内置 ACME 可用状态。
    强制 HTTPS 走 ssl.https.status / ssl.https.enforce / ssl.https.unenforce：本插件只登记期望状态、
    真正让浏览器自动跳转由网站页完成，故 UI 区分「已记录」与「已生效」，不把登记说成生效。
    私钥只经 password 输入框粘贴，内容留在内存变量、提交后清空；不回显、不写日志、不落 localStorage。 */
@@ -21,6 +24,10 @@
       expiry: null, expiryHost: null, expiryActions: null, tasks: [], taskLoaded: false,
       acmeStatus: null, acmeStatusHost: null, acmeDomain: null, acmeEmail: null, acmeConfirm: null,
       acmeSubmit: null, acmeNote: null, acmeResult: null, acmeResultHost: null,
+      builtinStatus: null, builtinStatusHost: null, bDomain: null, bEmail: null, bCA: null,
+      bWebroot: null, bConfirm: null, bSubmit: null, bResult: null, bResultHost: null,
+      autoEnabled: null, autoDays: null, autoCA: null, autoWebroot: null, autoEmail: null,
+      autoConfirm: null, autoSubmit: null, autoResultHost: null, autoResult: null,
       httpsDomain: null, httpsAutoNote: null, httpsStatus: null, httpsStatusHost: null,
       httpsCheckBtn: null, httpsBtnOn: null, httpsBtnOff: null, httpsUserEdited: false };
   }
@@ -384,6 +391,156 @@
       if (!S.httpsStatus && !S.destroyed) loadHTTPS(true);
     }
   }
+  // ---- 内置 ACME（0.5.0 起默认主推；标准库 RFC8555，零外部依赖） ----
+  // builtin.status 只读探测（system:read、零联网、无副作用），自动加载展示配置与审计。
+  function loadBuiltinStatus() {
+    if (!S.builtinStatusHost) return;
+    invoke('ssl.acme.builtin.status', {}).then(function (status) {
+      if (S.destroyed) return;
+      S.builtinStatus = status; paintBuiltinStatus();
+      fillBuiltinFromStatus(status);
+    }, function (err) {
+      if (S.destroyed) return;
+      S.builtinStatus = { __error: errText(err) }; paintBuiltinStatus();
+    });
+  }
+  // 自动填 webroot / 域名等（易用性：自动发现、不让人填环境细节；标注来源）。
+  function fillBuiltinFromStatus(st) {
+    if (!st || st.__error) return;
+    if (S.bWebroot && !S.bWebroot.value.trim() && st.webroot) {
+      S.bWebroot.value = st.webroot;
+      if (S.bWebrootNote) S.bWebrootNote.textContent = '已自动填入当前配置的 webroot（来自内置 ACME 状态），可改成站点根目录';
+    }
+    if (S.bCA && !S.bCA.value && st.ca) S.bCA.value = st.ca;
+    if (S.autoWebroot && !S.autoWebroot.value.trim() && st.webroot) S.autoWebroot.value = st.webroot;
+  }
+  function paintBuiltinStatus() {
+    if (!S.builtinStatusHost) return;
+    var host = S.builtinStatusHost; host.textContent = '';
+    var st = S.builtinStatus;
+    if (!st) { add(host, el('span', 'muted', '正在检测内置 ACME 配置（只读，不联网）…')); return; }
+    if (st.__error) { add(host, el('div', 'row-note-fail', '读取内置 ACME 状态失败：' + st.__error +
+      '。请点刷新重试；若反复失败，确认 ssl 插件已加载且为 0.5.0 以上版本。')); return; }
+    var line = add(host, el('div', 'ssl-verify-line'));
+    line.appendChild(chip('ok', '内置可用'));
+    var ca = st.ca || '—';
+    add(line, el('span', 'ssl-acme-tool', 'CA：' + ca + (st.staging ? '（staging，浏览器不信任）' : '')));
+    line.appendChild(chip(st.account_exists ? 'ok' : 'warn', st.account_exists ? '账户已注册' : '账户未注册'));
+    line.appendChild(chip(st.auto_renew ? 'ok' : 'na', st.auto_renew ? '自动续期已开' : '自动续期关闭'));
+    var meta = add(host, el('div', 'muted'));
+    add(meta, el('span', null, '证书目录：' + (st.cert_dir || '—')));
+    if (st.webroot) add(meta, el('span', null, ' · webroot：' + st.webroot));
+    if (st.days_before) add(meta, el('span', null, ' · 到期前 ' + st.days_before + ' 天续期'));
+    if (st.hint) add(host, el('div', 'field-hint', '提示：' + st.hint));
+    var aud = st.last_audit || [];
+    if (aud.length) {
+      var det = add(host, el('details', 'ssl-https-how'));
+      add(det, el('summary', null, '展开看最近审计（' + aud.length + ' 条）'));
+      aud.slice(-5).reverse().forEach(function (a) {
+        add(det, el('div', 'muted', (a.at || '—') + ' · ' + (a.action || '—') +
+          ' · ' + (a.domain || a.ca || '—') + ' · ' + (a.result || '—') +
+          (a.reason ? '（' + a.reason + '）' : '')));
+      });
+    }
+  }
+  function paintBuiltinResult() {
+    if (!S.bResultHost) return;
+    var host = S.bResultHost; host.textContent = '';
+    var r = S.bResult;
+    if (!r) return;
+    var line = add(host, el('div', 'ssl-verify-line'));
+    line.appendChild(chip('ok', '已签发并导入'));
+    add(line, el('code', 'ssl-verify-host', r.cert_path || r.domain || '—'));
+    add(line, el('span', 'ssl-verify-days', 'days_left=' + r.days_left));
+    add(line, el('span', 'muted', '到期 ' + fmtTime(r.not_after)));
+    if (r.staging) add(host, el('div', 'field-hint', '注意：当前是 staging 证书，浏览器不信任；验证通过后把 CA 换成 letsencrypt 或 litessl 再签一次。'));
+  }
+  function paintAutoResult() {
+    if (!S.autoResultHost) return;
+    var host = S.autoResultHost; host.textContent = '';
+    var r = S.autoResult;
+    if (!r) return;
+    var line = add(host, el('div', 'ssl-verify-line'));
+    line.appendChild(chip(r.auto_renew ? 'ok' : 'na', r.auto_renew ? '自动续期已开启' : '自动续期已关闭'));
+    add(host, el('div', 'muted', 'CA：' + (r.ca || '—') +
+      (r.webroot ? ' · webroot：' + r.webroot : '') +
+      (r.next_run_at ? ' · 下次检查 ' + fmtTime(r.next_run_at) : '')));
+    if (r.warning) add(host, el('div', 'field-hint', r.warning));
+    if (r.hint) add(host, el('div', 'field-hint', '怎么办：' + r.hint));
+  }
+  // 签发：显式确认门（勾选才解锁按钮，confirm:true 硬门在后端 acme_issue.go:212）。
+  function submitBuiltinIssue(ev) {
+    ev.preventDefault();
+    var domain = S.bDomain.value.trim().toLowerCase();
+    var email = S.bEmail.value.trim();
+    var ca = S.bCA.value.trim();
+    var webroot = S.bWebroot.value.trim();
+    if (!domain) { setStatus('请填写要申请证书的域名', 'fail'); return; }
+    if (!webroot) { setStatus('请填写站点根目录（webroot）：HTTP-01 校验文件要写进去', 'fail'); return; }
+    if (!S.bConfirm.checked) { setStatus('必须勾选「我确认联网申请」才会调用内置 ACME', 'fail'); return; }
+    var params = { domain: domain, webroot: webroot, confirm: true };
+    if (email) params.email = email;
+    if (ca) params.ca = ca;
+    S.bSubmit.disabled = true;
+    setStatus('正在用内置 ACME 为 ' + domain + ' 申请证书（会联网，可能需要 1–2 分钟）…');
+    invoke('ssl.acme.builtin.issue', params).then(function (result) {
+      if (S.destroyed) return;
+      S.bResult = result; paintBuiltinResult();
+      setStatus('内置 ACME 签发成功：' + domain + '，有效期至 ' + fmtTime(result.not_after) +
+        '，已纳入证书管理', 'ok');
+      S.bConfirm.checked = false;
+      load(true); loadExpiry(); loadBuiltinStatus();
+    }, function (err) {
+      if (!S.destroyed) setStatus('内置 ACME 签发失败：' + errText(err) +
+        '。首次建议把 CA 设为 letsencrypt-staging 跑通，并确认域名已解析到本机、80 端口可访问。', 'fail');
+    }).then(function () { if (S.bSubmit) S.bSubmit.disabled = false; paintBuiltinStatus(); });
+  }
+  // acme.auto：写配置 + 自动续期开关，confirm:true 硬门；开启后把返回的 task 落到内核 scheduler。
+  function submitAuto(ev) {
+    ev.preventDefault();
+    if (!S.autoConfirm.checked) { setStatus('必须勾选「我确认修改自动续期设置」才会保存', 'fail'); return; }
+    var enabled = !!S.autoEnabled.checked;
+    var days = parseInt(S.autoDays.value, 10);
+    var params = { enabled: enabled, confirm: true };
+    if (isFinite(days) && days >= 1) params.days_before = days;
+    var ca = S.autoCA.value.trim(); if (ca) params.ca = ca;
+    var wr = S.autoWebroot.value.trim(); if (wr) params.webroot = wr;
+    var em = S.autoEmail.value.trim(); if (em) params.email = em;
+    S.autoSubmit.disabled = true;
+    setStatus('正在保存 ACME 设置' + (enabled ? '并开启自动续期（会允许内核每天联网检查）…' : '并关闭自动续期…'));
+    invoke('ssl.acme.auto', params).then(function (result) {
+      if (S.destroyed) return result;
+      S.autoResult = result; paintAutoResult();
+      // 开启时把 task 原样 POST 到 scheduler（插件无权自建任务，ADR-0019 / G-19）。
+      var task = result && result.task;
+      if (!enabled || !task || !task.name) {
+        setStatus('ACME 设置已保存' + (enabled ? '；但返回里没有可创建的定时任务，请联系管理员检查插件版本' : ''),
+          enabled ? 'fail' : 'ok');
+        loadBuiltinStatus();
+        return result;
+      }
+      return loadTasks().then(function () {
+        if (findTask(task.name)) {
+          setStatus('ACME 设置已保存；自动续期任务 ' + task.name + ' 已存在，未重复创建', 'ok');
+          return result;
+        }
+        var body = { name: task.name, plugin: task.plugin, method: task.method,
+          params: task.params, schedule: task.schedule || RENEW_SCHEDULE, timeout_s: 300, enabled: true };
+        return request(SCHED, 'POST', body).then(function (created) {
+          S.tasks.push(created);
+          setStatus('ACME 设置已保存；已创建自动续期任务 ' + created.name +
+            '，每天 03:00 检查（到期前才续），下次 ' + fmtTime(created.next_run_at), 'ok');
+          return result;
+        });
+      });
+    }).then(function () {
+      if (!S.destroyed) { S.autoConfirm.checked = false; if (S.autoSubmit) S.autoSubmit.disabled = false; loadBuiltinStatus(); }
+    }, function (err) {
+      if (!S.destroyed) setStatus('保存 ACME 设置失败：' + errText(err) +
+        '。检查 webroot 是否为站点根目录、CA 是否需要 EAB；自动续期未生效前不会产生联网任务。', 'fail');
+      if (S.autoSubmit) S.autoSubmit.disabled = false;
+    });
+  }
   // ---- ACME（探测 + 显式调用外部客户端） ----
   function loadACME() {
     if (!S.acmeStatusHost) return;
@@ -527,13 +684,13 @@
   function build(root) {
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', 'SSL 证书'));
-    add(head, el('p', 'view-sub', '到期告警、自签 / 导入 / 自动续期与真实 TLS 握手验证；ACME 由本机外部客户端执行，必须手动确认。'));
+    add(head, el('p', 'view-sub', '到期告警、自签 / 导入 / 自动续期与真实 TLS 握手验证；ACME 有内置（默认推荐，零外部依赖）与外部客户端两条路线，均需手动确认。'));
     var bar = add(root, el('div', 'ssl-toolbar')), vbox = add(bar, el('div', 'ssl-verify-box'));
     S.verifyHost = add(vbox, input('text', 'ssl-verify-input', 'host 或 host:port（如 127.0.0.1:443）'));
     S.verifyHost.setAttribute('aria-label', '验证目标 host 或 host:port');
     var vbtn = add(vbox, el('button', 'btn btn-primary', '验证')); vbtn.type = 'button'; on(vbtn, verify);
     var refresh = add(bar, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
-    on(refresh, function () { load(false); loadExpiry(); loadACME(); loadHTTPS(true); });
+    on(refresh, function () { load(false); loadExpiry(); loadBuiltinStatus(); loadACME(); loadHTTPS(true); });
     S.status = add(root, el('div', 'ssl-status muted')); S.status.setAttribute('role', 'status');
     S.expiryHost = add(root, el('div', 'ssl-expiry-host'));
     S.expiryActions = add(root, el('div', 'ssl-expiry-actions')); S.expiryActions.hidden = true;
@@ -570,6 +727,58 @@
     S.httpsStatusHost = add(enforce, el('div', 'ssl-https-status'));
     paintHTTPS();
 
+    // 内置 ACME 卡片（默认主推、零外部依赖）：只读 status 自动探测，签发/自动续期需显式确认。
+    var builtin = panel(root, 'ACME 证书（内置 · 推荐）', '零外部依赖 · 需手动确认 · 会联网');
+    S.builtinStatusHost = add(builtin, el('div', 'ssl-acme-status'));
+    var bf = add(builtin, el('form', 'ssl-form ssl-acme-form'));
+    S.bDomain = input('text', '', 'www.example.com'); field(bf, '域名', S.bDomain);
+    S.bEmail = input('email', '', 'ops@example.com（可选，CA 用于联系）'); field(bf, '账号邮箱', S.bEmail);
+    S.bCA = el('select', 'field-input');
+    [['letsencrypt-staging', 'Let\'s Encrypt staging（测试，不占配额）'],
+      ['letsencrypt', 'Let\'s Encrypt（生产）'], ['litessl', 'LiteSSL（需 EAB）']].forEach(function (o) {
+      var opt = el('option', null, o[1]); opt.value = o[0]; S.bCA.appendChild(opt);
+    });
+    field(bf, 'CA 服务商', S.bCA);
+    S.bWebroot = input('text', 'span2', '/install/data/sites/你的域名');
+    S.bWebroot.setAttribute('aria-label', '站点根目录 webroot（HTTP-01 校验文件写入处）');
+    field(bf, '站点根目录（webroot）', S.bWebroot, 'span2');
+    S.bWebrootNote = add(bf, el('p', 'field-hint span2', 'HTTP-01 校验文件会临时写进这个目录，签发后自动删除。'));
+    var bConfirmBox = add(bf, el('label', 'field ssl-acme-confirm span2'));
+    S.bConfirm = el('input'); S.bConfirm.type = 'checkbox';
+    bConfirmBox.appendChild(S.bConfirm);
+    add(bConfirmBox, el('span', null, '我确认由内置 ACME 联网向 CA 申请证书（首次建议先用 staging）'));
+    S.bSubmit = add(bf, el('button', 'btn btn-primary ssl-submit', '申请证书（需勾选确认）'));
+    S.bSubmit.type = 'submit'; S.bSubmit.disabled = true;
+    S.bSubmit.style.minHeight = 'var(--kore-touch)'; S.bSubmit.style.minWidth = 'var(--kore-touch)';
+    add(bf, el('p', 'field-hint span2',
+      '会占用 80 端口；域名需先解析到本机且 80 可访问。失败提示里会给排查办法，可先切 staging 跑通。'));
+    S.bConfirm.addEventListener('change', function () { S.bSubmit.disabled = !S.bConfirm.checked; });
+    bf.addEventListener('submit', submitBuiltinIssue);
+    // 自动续期设置（独立的显式确认门；开启后把 task 落到内核 scheduler）。
+    var af2 = add(builtin, el('form', 'ssl-form ssl-acme-form'));
+    add(af2, el('p', 'field-hint span2', '自动续期默认关闭：开启后内核每天 03:00 检查，到期前才联网续期；关闭则不联网。'));
+    var autoEnableBox = add(af2, el('label', 'field ssl-acme-confirm span2'));
+    S.autoEnabled = el('input'); S.autoEnabled.type = 'checkbox';
+    autoEnableBox.appendChild(S.autoEnabled);
+    add(autoEnableBox, el('span', null, '开启自动续期（会允许内核按计划联网检查）'));
+    S.autoDays = input('number', '', '30'); S.autoDays.value = '30';
+    S.autoDays.min = '1'; S.autoDays.max = '90'; field(af2, '到期前多少天续期', S.autoDays);
+    S.autoCA = input('text', '', 'letsencrypt-staging（留空表示不改）'); field(af2, 'CA（可选）', S.autoCA);
+    S.autoWebroot = input('text', '', '站点根目录（留空表示不改）'); field(af2, 'webroot（可选）', S.autoWebroot);
+    S.autoEmail = input('email', '', '账号邮箱（可选）'); field(af2, '邮箱（可选）', S.autoEmail);
+    var autoConfirmBox = add(af2, el('label', 'field ssl-acme-confirm span2'));
+    S.autoConfirm = el('input'); S.autoConfirm.type = 'checkbox';
+    autoConfirmBox.appendChild(S.autoConfirm);
+    add(autoConfirmBox, el('span', null, '我确认保存上述设置（修改会写入 ACME 配置）'));
+    S.autoSubmit = add(af2, el('button', 'btn btn-ghost ssl-submit', '保存 ACME 设置'));
+    S.autoSubmit.type = 'submit'; S.autoSubmit.disabled = true;
+    S.autoSubmit.style.minHeight = 'var(--kore-touch)'; S.autoSubmit.style.minWidth = 'var(--kore-touch)';
+    S.autoConfirm.addEventListener('change', function () { S.autoSubmit.disabled = !S.autoConfirm.checked; });
+    af2.addEventListener('submit', submitAuto);
+    S.bResultHost = add(builtin, el('div', 'ssl-verifyresult'));
+    S.autoResultHost = add(builtin, el('div', 'ssl-verifyresult'));
+
+    // 外部客户端路线（保留，与内置并存、互不互斥）。
     var acme = panel(root, 'ACME 证书（外部客户端）', '需手动确认 · 会联网');
     S.acmeStatusHost = add(acme, el('div', 'ssl-acme-status'));
     var af = add(acme, el('form', 'ssl-form ssl-acme-form'));
@@ -627,7 +836,7 @@
     if (!container) return null;
     S = fresh(); container.textContent = '';
     var root = add(container, el('section', 'ssl'));
-    build(root); load(false); loadExpiry(); loadACME();
+    build(root); load(false); loadExpiry(); loadBuiltinStatus(); loadACME();
     return { destroy: function () { S.destroyed = true; S.keyPEM = ''; } };
   }
   window.KoreSsl = { render: render };
