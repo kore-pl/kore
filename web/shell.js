@@ -42,6 +42,9 @@
     redis: ['M4 6.5 10 3l6 3.5-6 3.5z', 'M4 10l6 3.5L16 10', 'M4 13.5 10 17l6-3.5'],
     // 防火墙：盾牌 + 对勾（20×20、currentColor、stroke-width 1.5）
     firewall: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.5 10l1.8 1.8 3.4-3.4'],
+    // 安全（一级项）：盾牌 + 锁孔（防火墙 / WAF / SSH / 证书 / 完整性 / 服务发现 的共同入口）
+    security: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z',
+      'M10 7.4a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2', 'M10 10.6v2.2'],
     // WAF：盾牌 + 三道筛条（与 firewall 的对勾、integrity 的双层盾区分，20×20、currentColor、stroke-width 1.5）
     waf: ['M10 3l6 2v5c0 3.6-2.4 6.2-6 7-3.6-.8-6-3.4-6-7V5z', 'M7.4 7.6h5.2', 'M7.4 10h5.2', 'M7.4 12.4h3.2'],
     // DNS：地球经纬（与 sites 的球区分：多一道横纬线 + 中部节点，20×20、currentColor、stroke-width 1.5）
@@ -61,40 +64,33 @@
       'M10 4.9l3.5 1.3v3.7c0 2.1-1.4 3.7-3.5 4.3-2.1-.6-3.5-2.2-3.5-4.3V6.2z',
       'M8.4 9.6l1.3 1.3 2.2-2.4']
   };
-  // 导航按使用频率分四组：运维是日常入口，常驻手机底部 5 个 tab；
-  // 其余项进「更多」抽屉并按组展示，组标题不增加点击层级（仍 ≤2 次点击）。
-  // key 是 i18n 键（ADR-0021：中文为主、英文可选），title 是缺 i18n 时的中文兜底。
-  var NAV_GROUPS = [
-    { key: 'nav.group.ops', title: '运维', ids: ['dashboard', 'monitor', 'logs', 'process', 'terminal'] },
-    { key: 'nav.group.biz', title: '业务', ids: ['sites', 'db', 'redis', 'tasks', 'runtimes'] },
-    { key: 'nav.group.res', title: '资源', ids: ['files', 'backup', 'ssl', 'container'] },
-    { key: 'nav.group.platform', title: '平台', ids: ['store', 'plugins', 'discover', 'integrity', 'firewall', 'waf', 'dns', 'sshguard', 'appdeploy', 'settings'] }
-  ];
-  var OTHER_GROUP = { key: 'nav.group.other', title: '其他' };
-  function groupTitle(id) {
-    for (var i = 0; i < NAV_GROUPS.length; i++) {
-      if (NAV_GROUPS[i].ids.indexOf(id) >= 0) return NAV_GROUPS[i];
-    }
-    return OTHER_GROUP;
-  }
-  // 按组顺序重排路由，未知 id 保序落到末尾「其他」；手机前 5 项因此固定为「运维」组。
-  function orderRoutes(list) {
-    var out = [], seen = Object.create(null);
-    for (var i = 0; i < NAV_GROUPS.length; i++) {
-      for (var j = 0; j < NAV_GROUPS[i].ids.length; j++) {
-        var id = NAV_GROUPS[i].ids[j];
-        for (var k = 0; k < list.length; k++) {
-          if (list[k].id === id && !seen[id]) { out.push(list[k]); seen[id] = true; break; }
-        }
-      }
-    }
-    for (var m = 0; m < list.length; m++) if (!seen[list[m].id]) { out.push(list[m]); seen[list[m].id] = true; }
-    return out;
-  }
-  function groupLabel(group, drawer) {
-    var n = el('div', drawer ? 'kore-nav-drawer-group' : 'kore-nav-group');
-    n.setAttribute('role', 'presentation');
-    return bindLabel(n, group.key, group.title);
+  /* 导航不再分组：收敛到 ≤10 项后一层平铺就够读，组标题只会制造视觉噪音。
+     一级菜单只表达「用户要干的事」，插件视图降到一级项内部的 tab（见下方 hubView）。
+     顺序即优先级：桌面侧栏全量按此顺序；手机底部 tab bar 固定取前 5 项，其余进「更多」抽屉。 */
+
+  /* ===== 一级项 = 任务 → 子视图 = tab（24 → ≤10 的实现机制） =====
+     一个 hub 只产生一个一级菜单项；它下面的 tab 各自仍是原来的懒加载模块，
+     能力一个不少（可达性由 tab 承担，不是删除），但侧栏不再被插件清单线性撑长。
+     为什么二级用 tab 而不是第二根侧栏：侧栏再加一层等于把刚收敛掉的层级又长回去，
+     且 tab 单行可横向滚动，640px 以下天然可用（触摸目标 ≥44px），不需要视口分支。 */
+  var HUB_CSS = '.kore-hub{display:flex;flex-direction:column;gap:var(--kore-space-3,12px);min-width:0}' +
+    '.kore-hub-tabs{display:flex;gap:var(--kore-space-1,4px);overflow-x:auto;border-bottom:1px solid var(--kore-border-1);' +
+    'scrollbar-width:thin;-webkit-overflow-scrolling:touch}' +
+    '.kore-hub-tab{flex:0 0 auto;min-height:36px;padding:0 12px;border:0;border-bottom:2px solid transparent;' +
+    'background:transparent;color:var(--kore-text-2);font:inherit;font-size:var(--kore-font-13,13px);' +
+    'cursor:pointer;white-space:nowrap}' +
+    '.kore-hub-tab:hover{color:var(--kore-text-1)}' +
+    '.kore-hub-tab[aria-selected="true"]{color:var(--kore-text-1);border-bottom-color:var(--kore-primary,#2563eb);font-weight:600}' +
+    '.kore-hub-tab:focus-visible{outline:2px solid var(--kore-primary,#2563eb);outline-offset:-2px}' +
+    '.kore-hub-body{min-width:0}' +
+    '@media (max-width:639px){.kore-hub-tab{min-height:44px;padding:0 10px}}';
+
+  function injectHubCss() {
+    if (document.getElementById('kore-hub-css')) return;
+    var s = el('style');
+    s.id = 'kore-hub-css';
+    s.textContent = HUB_CSS;
+    document.head.appendChild(s);
   }
   var byId = Object.create(null);
   var currentId = '';
@@ -164,12 +160,29 @@
   }
 
   // 'store' / '#/store' / '/store' / '#/store?x' 统一成 'store'；空值回默认视图。
+  // 二级路由 '#/security/dns' 只取一级 'security'（子视图另由 subOf 解析）。
   function normalize(raw) {
     var s = String(raw === undefined || raw === null ? '' : raw);
     s = s.replace(/^#/, '').replace(/^\//, '');
     if (s.indexOf('?') >= 0) s = s.slice(0, s.indexOf('?'));
     if (s.indexOf('/') >= 0) s = s.slice(0, s.indexOf('/')); // 只认一级视图，插件子路由不归此层
     return s || DEFAULT_ID;
+  }
+
+  // 二级路由：'#/security/dns' → 'dns'；没有第二段 → ''（由 hub 落默认 tab）。
+  function subOf(raw) {
+    var s = String(raw === undefined || raw === null ? '' : raw);
+    s = s.replace(/^#/, '').replace(/^\//, '');
+    if (s.indexOf('?') >= 0) s = s.slice(0, s.indexOf('?'));
+    var i = s.indexOf('/');
+    return i >= 0 ? s.slice(i + 1) : '';
+  }
+
+  // 路由键 = 一级 + 可选二级（'security' / 'security/dns'）。它是「当前视图」的唯一标识：
+  // 同一个 hub 内换 tab 必须改变路由键，否则 onHash 会因为「一级没变」直接返回、tab 不重绘。
+  function routeKey(raw) {
+    var parent = normalize(raw), child = subOf(raw);
+    return child ? parent + '/' + child : parent;
   }
 
   // 显式回到站点根（''、'/'、'#/'）不算「概览」：它是退出/失效后的归位意图，
@@ -222,8 +235,11 @@
     handle = null;
   }
 
-  function paint(id) {
-    var route = byId[id] || byId[DEFAULT_ID];
+  function paint(key) {
+    var k = String(key === undefined || key === null ? '' : key);
+    var cut = k.indexOf('/');
+    var parentId = cut >= 0 ? k.slice(0, cut) : k;
+    var route = byId[parentId] || byId[DEFAULT_ID];
     if (!route || !viewBox) return null;
     releaseHandle();
     for (var key in navButtons) {
@@ -244,7 +260,8 @@
       else moreBtn.removeAttribute('aria-current');
     }
     setDrawer(false, false);
-    currentId = route.id;
+    // currentId 记完整路由键（含二级）：同一个 hub 换 tab 时 hashchange 必须能识别出差异。
+    currentId = cut >= 0 && k.length > cut + 1 ? route.id + '/' + k.slice(cut + 1) : route.id;
     viewBox.setAttribute('data-view', route.id);
     // 视图模块会给容器加自己的类（如 monitor 加 .kore-monitor）；切走时必须还原，
     // 否则上一个视图的类会残留、污染下一个视图的样式与选择器。
@@ -261,25 +278,30 @@
 
   // navigate 是唯一入口：先写 hash（可分享 / 可后退），再同步重绘。
   // hashchange 再进来时 compare currentId 已相等 → 不重复 paint，避免双份请求。
+  // 接受一级 id（'store'）与二级路由（'store/installed'）；二级缺省由 hub 落第一个 tab。
   function navigate(id) {
     if (isRoot(id)) { rootIntent(); return ''; }
     setDrawer(false, false);
-    var next = normalize(id);
-    if (!byId[next]) next = byId[DEFAULT_ID] ? DEFAULT_ID : '';
-    if (!next) return '';
-    var target = '#/' + next;
+    var raw = String(id === undefined || id === null ? '' : id);
+    var parent = normalize(raw), child = subOf(raw);
+    if (!byId[parent]) { parent = byId[DEFAULT_ID] ? DEFAULT_ID : ''; child = ''; }
+    if (!parent) return '';
+    var key = child ? parent + '/' + child : parent;
+    var target = '#/' + key;
     if (window.location.hash !== target) window.location.hash = target;
-    paint(next);
-    return next;
+    paint(key);
+    return key;
   }
 
   function onHash() {
     var raw = window.location.hash;
     setDrawer(false, false);
     if (isRoot(raw)) { rootIntent(); return; }
-    var id = normalize(raw);
-    if (id === currentId) return;
-    paint(id);
+    var key = routeKey(raw);
+    if (!byId[normalize(key)]) key = byId[DEFAULT_ID] ? DEFAULT_ID : '';
+    if (!key) return;
+    if (key === currentId) return;
+    paint(key);
   }
 
   function navIcon(id) {
@@ -382,6 +404,60 @@
             try { live.handle.destroy(); } catch (err) { /* 模块清理失败不阻断切视图 */ }
           }
           live.handle = null;
+        }
+      };
+    };
+  }
+
+  // hubView 生成一级项 render：渲染 tab 条 + 只挂载当前 tab 的子视图。
+  // 子视图全部保持懒加载语义（children[i].render 通常是 view()/moduleView() 包过的），
+  // 首次切到某个 tab 才注入它的脚本，首屏请求数与 tab 数无关（FRONTEND §7）。
+  function hubView(parentId, children) {
+    return function (box) {
+      injectHubCss();
+      var wrap = el('div', 'kore-hub');
+      var tabbar = el('div', 'kore-hub-tabs');
+      tabbar.setAttribute('role', 'tablist');
+      var body = el('div', 'kore-hub-body');
+      wrap.appendChild(tabbar);
+      wrap.appendChild(body);
+      box.appendChild(wrap);
+      var childById = Object.create(null), i;
+      for (i = 0; i < children.length; i++) childById[children[i].id] = children[i];
+      // 当前 tab 由 hash 第二段决定；不合法（含直接打开一级项）落第一个 tab，
+      // 但**不改写 hash**——深链接 #/security 保持干净，用户点 tab 后才出现第二段。
+      var activeId = subOf(window.location.hash);
+      if (!childById[activeId]) activeId = children[0].id;
+      for (i = 0; i < children.length; i++) {
+        (function (child) {
+          var b = el('button', 'kore-hub-tab');
+          b.type = 'button';
+          b.setAttribute('role', 'tab');
+          b.setAttribute('data-sub', child.id);
+          b.setAttribute('aria-selected', child.id === activeId ? 'true' : 'false');
+          if (child.id === activeId) b.className += ' is-active';
+          b.appendChild(bindLabel(el('span'), child.labelKey || ('nav.' + parentId + '.' + child.id),
+            child.label || child.id));
+          b.addEventListener('click', function () {
+            if (child.id === activeId) return;
+            window.location.hash = '#/' + parentId + '/' + child.id; // 只写 hash，重绘交给 onHash 单一路径
+          });
+          tabbar.appendChild(b);
+        })(children[i]);
+      }
+      var handle = null;
+      try {
+        handle = childById[activeId].render(body) || null;
+      } catch (err) {
+        body.appendChild(el('div', 'stub', tr('common.viewRenderFailed', '视图渲染失败：{error}',
+          { error: err && err.message ? err.message : err })));
+      }
+      return {
+        destroy: function () {
+          if (handle && typeof handle.destroy === 'function') {
+            try { handle.destroy(); } catch (err) { /* 子视图清理失败不阻断切视图 */ }
+          }
+          handle = null;
         }
       };
     };
@@ -569,46 +645,21 @@
     var items = [];
     for (var i = 0; list && i < list.length; i++) {
       var r = list[i];
-      if (!r || typeof r.id !== 'string' || !r.id || typeof r.render !== 'function') continue;
+      // 带 children 的一级项自己没有 render（render 由下方 hubView 生成），不能在这一步被筛掉；
+      // 否则「任务 → tab」的 hub 会整体从导航消失（只剩有 render 的几项）。
+      var hasChildren = !!(r && r.children && r.children.length);
+      if (!r || typeof r.id !== 'string' || !r.id || (typeof r.render !== 'function' && !hasChildren)) continue;
       items.push(r);
     }
-    var hasTerminal = false, hasDb = false, hasLogs = false, hasProcess = false, hasSsl = false, hasBackup = false,
-      hasRedis = false, hasFirewall = false, hasWaf = false, hasDns = false, hasDiscover = false, hasSshGuard = false, hasRuntimes = false, hasIntegrity = false, hasContainer = false, hasAppDeploy = false;
-    for (var t = 0; t < items.length; t++) {
-      if (items[t].id === 'terminal') hasTerminal = true;
-      if (items[t].id === 'db') hasDb = true;
-      if (items[t].id === 'logs') hasLogs = true;
-      if (items[t].id === 'process') hasProcess = true;
-      if (items[t].id === 'ssl') hasSsl = true;
-      if (items[t].id === 'backup') hasBackup = true;
-      if (items[t].id === 'redis') hasRedis = true;
-      if (items[t].id === 'firewall') hasFirewall = true;
-      if (items[t].id === 'waf') hasWaf = true;
-      if (items[t].id === 'dns') hasDns = true;
-      if (items[t].id === 'discover') hasDiscover = true;
-      if (items[t].id === 'sshguard') hasSshGuard = true;
-      if (items[t].id === 'runtimes') hasRuntimes = true;
-      if (items[t].id === 'integrity') hasIntegrity = true;
-      if (items[t].id === 'container') hasContainer = true;
-      if (items[t].id === 'appdeploy') hasAppDeploy = true;
+    // 一级项自报 children 时，把 render 包成 hub（tab 条 + 当前 tab 子视图）。
+    // 这里不再内置任何插件视图：以前 mount 会补 16 个「免得漏项」的兜底路由，
+    // 导致导航=插件清单的线性投影（24 项）。现在清单由 app.js 一处声明，漏项在 code review 就暴露。
+    for (var c = 0; c < items.length; c++) {
+      var it = items[c];
+      if (it && it.children && it.children.length) {
+        it.render = hubView(it.id, it.children);
+      }
     }
-    if (!hasTerminal) items.push({ id: 'terminal', label: '终端', render: lazyView('KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端') });
-    if (!hasDb) items.push({ id: 'db', label: '数据库', render: lazyView('KoreDb', '/assets/db.js', 'nav.db', '数据库') });
-    if (!hasLogs) items.push({ id: 'logs', label: '日志', render: lazyView('KoreLogs', '/assets/logs.js', 'nav.logs', '日志') });
-    if (!hasProcess) items.push({ id: 'process', label: '进程', render: lazyView('KoreProcess', '/assets/process.js', 'nav.process', '进程') });
-    if (!hasSsl) items.push({ id: 'ssl', label: 'SSL', render: lazyView('KoreSsl', '/assets/ssl.js', 'nav.ssl', 'SSL') });
-    if (!hasBackup) items.push({ id: 'backup', label: '备份', render: lazyView('KoreBackup', '/assets/backups.js', 'nav.backup', '备份') });
-    if (!hasRedis) items.push({ id: 'redis', label: 'Redis', render: lazyView('KoreRedis', '/assets/redis.js', 'nav.redis', 'Redis') });
-    if (!hasFirewall) items.push({ id: 'firewall', label: '防火墙', render: lazyView('KoreFirewall', '/assets/firewall.js', 'nav.firewall', '防火墙') });
-    if (!hasWaf) items.push({ id: 'waf', label: 'Web 防火墙', render: lazyView('KoreWaf', '/assets/waf.js', 'nav.waf', 'Web 防火墙') });
-    if (!hasDns) items.push({ id: 'dns', label: 'DNS 解析', render: lazyView('KoreDns', '/assets/dns.js', 'nav.dns', 'DNS 解析') });
-    if (!hasDiscover) items.push({ id: 'discover', label: '服务发现', render: lazyView('KoreDiscover', '/assets/discover.js', 'nav.discover', '服务发现') });
-    if (!hasSshGuard) items.push({ id: 'sshguard', label: 'SSH 防护', render: lazyView('KoreSshGuard', '/assets/sshguard.js', 'nav.sshguard', 'SSH 防护') });
-    if (!hasRuntimes) items.push({ id: 'runtimes', label: '运行环境', render: lazyView('KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境') });
-    if (!hasIntegrity) items.push({ id: 'integrity', label: '完整性', render: lazyView('KoreIntegrity', '/assets/integrity.js', 'nav.integrity', '完整性') });
-    if (!hasContainer) items.push({ id: 'container', label: '容器', render: lazyView('KoreContainer', '/assets/container.js', 'nav.container', '容器') });
-    if (!hasAppDeploy) items.push({ id: 'appdeploy', label: '应用部署', render: lazyView('KoreAppDeploy', '/assets/appdeploy.js', 'nav.appdeploy', '应用部署') });
-    items = orderRoutes(items);
     var host = document.getElementById('app');
     if (!items.length || !host) return null;
 
@@ -629,7 +680,6 @@
     brand.appendChild(bindLabel(el('span', 'kore-nav-brand-sub'), 'nav.brandSub', '控制台'));
     nav.appendChild(brand);
 
-    var lastGroup = null;
     for (var j = 0; j < items.length; j++) {
       var route = {
         id: items[j].id,
@@ -638,8 +688,6 @@
         extra: j >= 5
       };
       byId[route.id] = route;
-      var group = groupTitle(route.id);
-      if (!lastGroup || group.key !== lastGroup.key) { nav.appendChild(groupLabel(group, false)); lastGroup = group; }
       var btn = navItem(route, false);
       navButtons[route.id] = [btn];
       nav.appendChild(btn);
@@ -682,10 +730,8 @@
       drawerHead.appendChild(el('span', 'kore-nav-brand-name', 'Kore'));
       drawerHead.appendChild(bindLabel(el('span', 'kore-nav-brand-sub'), 'nav.moreTitle', '更多导航'));
       drawer.appendChild(drawerHead);
-      var lastDrawerGroup = null;
       for (var k = 0; k < extras.length; k++) {
-        var extraRoute = byId[extras[k].id], drawerGroup = groupTitle(extraRoute.id);
-        if (!lastDrawerGroup || drawerGroup.key !== lastDrawerGroup.key) { drawer.appendChild(groupLabel(drawerGroup, true)); lastDrawerGroup = drawerGroup; }
+        var extraRoute = byId[extras[k].id];
         var extraBtn = navItem(extraRoute, true);
         navButtons[extraRoute.id].push(extraBtn);
         drawer.appendChild(extraBtn);
@@ -718,7 +764,7 @@
       document.addEventListener('keydown', onDrawerKey);
       drawerListening = true;
     }
-    paint(hashView()); // 深链接：登录后打开 #/store 直接落到该视图
+    paint(routeKey(window.location.hash)); // 深链接：登录后打开 #/store 或 #/security/dns 直接落到该视图
     return shell;
   }
 
@@ -743,5 +789,7 @@
     return null;
   }
 
-  window.KoreShell = { mount: mount, navigate: navigate, current: current, openConfig: openConfig };
+  // view 是一级项 children 的渲染工厂：与内置 lazyView 同语义（懒注入 / 失败可重试 / destroy 兑现），
+  // 供 app.js 在声明「任务 → tab」时复用，避免导航清单再分裂成 shell 与 app 两处。
+  window.KoreShell = { mount: mount, navigate: navigate, current: current, openConfig: openConfig, view: lazyView };
 })();

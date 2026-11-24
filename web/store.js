@@ -56,14 +56,17 @@
   function storeIcon(id) { return iconSvg(ICON_PATHS[id] || ICON_PATHS.container); }
   function checkSvg() { return iconSvg(['M4.5 10.5l3.5 3.5 7.5-8']); }
   // 分类按 scenario_tags 映射；多标签插件会出现在多个分类（file = ops + data）。
-  var CATS = [{ id: 'all', label: '全部', tags: [] }, { id: 'site', label: '站点与运行时', tags: ['web', 'app'] },
+  var CATS = [{ id: 'all', label: '全部分类', tags: [] }, { id: 'site', label: '站点与运行时', tags: ['web', 'app'] },
     { id: 'data', label: '数据库', tags: ['data'] }, { id: 'ops', label: '运维', tags: ['ops'] },
     { id: 'sec', label: '安全', tags: ['sec'] }];
+  // 安装状态轴（与「分类」正交）：商店必须自己回答「我装了什么 / 哪些能升级」，
+  // 否则用户只能切到另一个「已装插件」页面去看——那正是重复菜单的来源。
+  var SCOPES = [{ id: 'all', label: '全部' }, { id: 'installed', label: '已安装' }, { id: 'upgradable', label: '可更新' }];
   var CN = { web: '站点', app: '运行时', data: '数据库', ops: '运维', sec: '安全' };
   // 商店每页 12 个卡片（24 个插件正好 2 页），避免分类筛选后某类很多时页面无限拉长。
   var PAGE_SIZE = 12;
   var S = { plugins: [], presets: [], installed: Object.create(null), status: Object.create(null),
-    cat: 'all', q: '', page: 1, grid: null, empty: null, stats: null, notice: null,
+    cat: 'all', scope: 'all', q: '', page: 1, grid: null, empty: null, stats: null, notice: null,
     summary: null, batchStatus: null,
     batch: { running: false, done: 0, total: 0, failed: [], message: '' },
     restart: null, restartCode: null };
@@ -192,13 +195,27 @@
     });
     return list;
   }
+  function inScope(p, scope) {
+    if (scope === 'all') return true;
+    var ins = S.installed[p.id];
+    if (!ins) return false;
+    if (scope === 'installed') return true;
+    return cardState(ins, p.version) === 'upgradable'; // 与 upgradable()/顶部汇总同一口径
+  }
   function visible() {
     var q = S.q.trim().toLowerCase();
     return allCards().filter(function (p) {
+      if (!inScope(p, S.scope)) return false;
       if (!inCat(p, S.cat)) return false;
       if (!q) return true;
       return [p.id, p.name].concat(p.scenario_tags || []).join(' ').toLowerCase().indexOf(q) !== -1;
     });
+  }
+  // 空状态必须给出「下一步」，而不是一句放之四海皆准的「没有匹配」（易用性四原则④）。
+  function emptyText() {
+    if (S.scope === 'installed') return '还没有安装任何插件。切到「全部」挑一个装上，装完会出现在这里。';
+    if (S.scope === 'upgradable') return '已装插件都是最新版本，暂时没有可更新的。';
+    return '没有匹配的插件：换个关键词，或把分类/状态切回「全部」。';
   }
   function setStatus(id, kind, text, href, linkText) {
     S.status[id] = { kind: kind, text: text, href: href || '', linkText: linkText || '' };
@@ -378,6 +395,7 @@
     var pageList = list.slice(start, start + PAGE_SIZE);
     S.grid.textContent = '';
     pageList.forEach(function (p) { S.grid.appendChild(renderCard(p)); });
+    S.empty.textContent = emptyText();
     S.empty.hidden = list.length !== 0;
     renderPager(list.length, pages);
     var up = upgradable().length;
@@ -830,6 +848,23 @@
     var bar = add(root, el('div', 'store-bar'));
     var search = add(bar, input('store-search', '按 id / 名称搜索插件', '搜索插件', 'search'));
     search.addEventListener('input', function () { S.q = search.value; S.page = 1; renderGrid(); });
+    // 状态筛选（全部 / 已安装 / 可更新）：放在分类前面，因为它回答的是更前置的问题
+    // 「我关心的是哪个范围」；复用 .store-cat 的既有样式，不新增 CSS。
+    var scopes = add(bar, el('div', 'store-scopes'));
+    scopes.setAttribute('role', 'group'); scopes.setAttribute('aria-label', '按安装状态筛选');
+    SCOPES.forEach(function (sc) {
+      var b = add(scopes, on(el('button', 'store-cat store-scope', sc.label), function () {
+        S.scope = sc.id;
+        S.page = 1;
+        var all = scopes.querySelectorAll('.store-scope');
+        for (var i = 0; i < all.length; i++) {
+          all[i].setAttribute('aria-pressed', all[i].dataset.scope === sc.id ? 'true' : 'false');
+        }
+        renderGrid();
+      }));
+      b.type = 'button'; b.dataset.scope = sc.id;
+      b.setAttribute('aria-pressed', sc.id === S.scope ? 'true' : 'false');
+    });
     var cats = add(bar, el('div', 'store-cats'));
     cats.setAttribute('role', 'group'); cats.setAttribute('aria-label', '按分类筛选');
     CATS.forEach(function (c) {

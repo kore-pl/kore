@@ -201,6 +201,72 @@
     return { title: view ? view.title : '', action: view ? view.action : '', detail: detail, mapped: !!view };
   }
 
+  // ---- 全页统一文案契约（AGENTS.md §7 ④；G-33 A4/A5）----
+  // 错误：<什么错了>。<怎么办：具体动作>      —— errorText（单行串）/ errorBlock（带重试按钮的块）
+  // 空态：<当前没有 X> + <一句话说明> + [下一步按钮] —— emptyBlock
+  // 视图模块一律调这里，别各自拼「X失败：' + err」——那会把内部错误原文直接甩给用户。
+  var DEFAULT_ACTION = '按提示修正后重试；仍不成功请刷新页面，或到「日志」页查看插件日志。';
+
+  // sentence 是错误文案的唯一拼装函数：保证「。怎么办：」只有一处，标点不重复。
+  function sentence(title, action) {
+    var t = String(title || '').replace(/[\s。：:；;，,、]+$/, '');
+    var a = String(action || '').replace(/^\s*怎么办\s*[：:]?\s*/, '').replace(/[\s。；;]+$/, '');
+    if (!t) t = '操作未完成';
+    if (!a) a = DEFAULT_ACTION;
+    return t + '。怎么办：' + a + '。';
+  }
+
+  // errorText 把任意错误对象压成一句可直接显示的「什么错了。怎么办：动作」。
+  function errorText(err, fallbackTitle) {
+    var f = failureOf(err);
+    if (f.mapped) return sentence(f.title, f.action);
+    var detail = String(f.detail || '').replace(/^E_[A-Z_]+[:：]\s*/, '').trim();
+    return sentence(detail || fallbackTitle || '操作未完成', DEFAULT_ACTION);
+  }
+
+  // errorBlock 是错误态的统一块：标题 / 服务端原文 / 「怎么办」/（可选）重试按钮。
+  function errorBlock(err, options) {
+    var o = options || {};
+    var f = failureOf(err);
+    var box = el('div', 'empty-state');
+    box.setAttribute('role', 'alert');
+    box.appendChild(el('p', 'empty-state-title', o.title || f.title || '操作未完成'));
+    var detail = String(f.detail || '').replace(/^E_[A-Z_]+[:：]\s*/, '').trim();
+    if (detail) box.appendChild(el('p', 'empty-state-text', detail));
+    box.appendChild(el('p', 'empty-state-text', '怎么办：' + (f.action || o.action || DEFAULT_ACTION)));
+    if (typeof o.onRetry === 'function') {
+      var retry = el('button', 'btn btn-ghost', o.retryLabel || '重新读取');
+      retry.type = 'button';
+      retry.addEventListener('click', o.onRetry);
+      box.appendChild(retry);
+    }
+    return box;
+  }
+
+  // emptyBlock 是空态的统一块：<当前没有 X> + <一句话说明> + [下一步按钮]。
+  // 没有 label 就不渲染按钮——调用方必须自己想清楚「用户下一步该点哪」。
+  function emptyBlock(options) {
+    var o = options || {};
+    var box = el('div', 'panel-empty empty-state');
+    box.appendChild(el('p', 'empty-state-title', o.title || '这里还没有内容'));
+    if (o.text) box.appendChild(el('p', 'empty-state-text', o.text));
+    if (o.hint) box.appendChild(el('p', 'empty-state-text', o.hint));
+    if (o.label) {
+      var btn = el('button', 'btn btn-primary', o.label);
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        if (o.route) {
+          if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate(o.route);
+          else window.location.hash = '#/' + o.route;
+          return;
+        }
+        if (typeof o.onClick === 'function') o.onClick();
+      });
+      box.appendChild(btn);
+    }
+    return box;
+  }
+
   // CSRF 双提交：cookie 缺失时先 GET 一次探测（服务端仅在登录成功时下发），仍无则明确报错。
   function ensureCsrf() {
     var token = readCookie('kore_csrf');
@@ -2047,20 +2113,134 @@
   function renderPluginsView(box) {
     viewNotice(box);
     box.appendChild(renderPluginsPanel());
-    renderPluginUis(box, { status: 'fulfilled', value: { plugins: state.plugins } });
+    // 插件 UI 面板按需出现：只有真有插件声明了 web.entry 才建区块。
+    // 24 个 info.json 当前无一声明 web 字段 → 该面板此前是「永远空的死面板」，
+    // 不删代码（桥接仍是 v1.1 的接入点），但也不再对用户展示一块永远没内容的区域。
+    if (hasPluginWebUi()) {
+      renderPluginUis(box, { status: 'fulfilled', value: { plugins: state.plugins } });
+    }
     refreshPluginsView();
   }
 
-  var SHELL_ROUTES = [
+  // 判据与 PluginBridge 建帧条件严格一致（enabled + web.entry），不另立一套口径。
+  function hasPluginWebUi() {
+    for (var i = 0; i < state.plugins.length; i++) {
+      var p = state.plugins[i];
+      if (p && p.enabled === true && p.web && typeof p.web.entry === 'string') return true;
+    }
+    return false;
+  }
+
+  /* 一级导航 = 10 项「用户任务」，插件视图收进所属任务的 tab（子视图）。
+     收敛口径：一级项回答「用户要干什么」，插件只是能力的实现方式，不该一个个占一级菜单。
+     之前 8 项硬编码 + shell.mount() 补 16 项 = 24 项，导航成了插件清单的线性投影；
+     现在一级清单只在这里声明一处，漏项在 review 阶段就暴露，不再有「免得漏项」的兜底注入。
+     子视图一律懒加载：首次点进该 tab 才注入脚本，首屏请求数/体积与 tab 数无关（FRONTEND §7）。
+
+     形状约束（G-33 A6 / A5 会静态解析本注册表，改形状前先读 scripts/usability-check.sh）：
+       · 块内 `id:` 只允许是一级项 → 子视图用 `sub:`，否则 A6 把子视图也算进一级菜单；
+       · 块内保留 app.js 自有视图的 /assets/*.js 路径 → A5 据此定位视图文件检查空状态。 */
+  // 壳内置模块的子视图定义（[全局名, 脚本, i18n 键, 中文兜底]）。放块外：它们不是一级项。
+  var SHELL_VIEWS = {
+    db: ['KoreDb', '/assets/db.js', 'nav.db', '数据库'],
+    redis: ['KoreRedis', '/assets/redis.js', 'nav.redis', 'Redis'],
+    backup: ['KoreBackup', '/assets/backups.js', 'nav.backup', '备份'],
+    logs: ['KoreLogs', '/assets/logs.js', 'nav.logs', '日志'],
+    process: ['KoreProcess', '/assets/process.js', 'nav.process', '进程'],
+    firewall: ['KoreFirewall', '/assets/firewall.js', 'nav.firewall', '防火墙'],
+    waf: ['KoreWaf', '/assets/waf.js', 'nav.waf', 'Web 防火墙'],
+    sshguard: ['KoreSshGuard', '/assets/sshguard.js', 'nav.sshguard', 'SSH 防护'],
+    dns: ['KoreDns', '/assets/dns.js', 'nav.dns', 'DNS 解析'],
+    ssl: ['KoreSsl', '/assets/ssl.js', 'nav.ssl', '证书'],
+    integrity: ['KoreIntegrity', '/assets/integrity.js', 'nav.integrity', '完整性'],
+    discover: ['KoreDiscover', '/assets/discover.js', 'nav.discover', '服务发现'],
+    runtimes: ['KoreRuntimes', '/assets/runtimes.js', 'nav.runtimes', '运行环境'],
+    appdeploy: ['KoreAppDeploy', '/assets/appdeploy.js', 'nav.appdeploy', '应用部署'],
+    container: ['KoreContainer', '/assets/container.js', 'nav.container', '容器'],
+    terminal: ['KoreTerminal', '/assets/terminal.js', 'nav.terminal', '终端']
+  };
+
+  var HUB_DEFS = [
     { id: 'dashboard', label: '概览', render: renderDashboardView },
-    { id: 'store', label: '软件商店', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
-    { id: 'plugins', label: '已装插件', render: renderPluginsView },
-    { id: 'files', label: '文件管理', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
-    { id: 'sites', label: '网站', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
+    {
+      id: 'sites', label: '网站', views: [
+        { sub: 'sites', label: '网站', labelKey: 'nav.sites', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
+        { sub: 'runtimes' },
+        { sub: 'appdeploy' },
+        { sub: 'container' }
+      ]
+    },
+    {
+      id: 'db', label: '数据库', views: [{ sub: 'db' }, { sub: 'redis' }]
+    },
+    {
+      id: 'files', label: '文件', views: [
+        { sub: 'files', label: '文件管理', labelKey: 'nav.files', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
+        { sub: 'backup' }
+      ]
+    },
+    {
+      // 「已装插件」不再是独立一级菜单：商店自带「已安装 / 可更新」筛选，
+      // 插件管理表（版本 / 深度 / 运行方式 / 状态 / 批量升级）作为商店第二个 tab。
+      id: 'store', label: '软件商店', views: [
+        { sub: 'store', label: '应用商店', labelKey: 'nav.store', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
+        { sub: 'plugins', label: '插件管理', labelKey: 'nav.store.plugins', render: renderPluginsView }
+      ]
+    },
+    {
+      id: 'monitor', label: '监控', views: [
+        { sub: 'monitor', label: '监控', labelKey: 'nav.monitor', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
+        { sub: 'logs' },
+        { sub: 'process' }
+      ]
+    },
     { id: 'tasks', label: '计划任务', render: moduleView('KoreTasks', '/assets/tasks.js', '计划任务') },
-    { id: 'monitor', label: '监控', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
+    {
+      // 「安全」收的是「对外暴露面的防守」：网络边界（防火墙/WAF/DNS/SSH）、信任链（证书）、
+      // 资产完整性（完整性校验）、本机暴露面盘点（服务发现）。同一心智模型：
+      // 谁在敲门、门锁没锁、锁还灵不灵——服务发现的产出正是「这台机器上有什么在监听」，是安全视图的输入。
+      id: 'security', label: '安全', views: [
+        { sub: 'firewall' }, { sub: 'waf' }, { sub: 'sshguard' }, { sub: 'dns' },
+        { sub: 'ssl' }, { sub: 'integrity' }, { sub: 'discover' }
+      ]
+    },
+    { id: 'terminal', label: '终端', views: [{ sub: 'terminal' }] },
     { id: 'settings', label: '设置', render: moduleView('KoreSettings', '/assets/settings.js', '设置') }
   ];
+
+  // 把注册表展开成 shell 要的 routes：单子视图的一级项直接渲染（不显示只有一格的 tab 条）。
+  function shellRoutes() {
+    var K = window.KoreShell;
+    function resolve(v) {
+      if (typeof v.render === 'function') return v.render;
+      var def = SHELL_VIEWS[v.sub];
+      return K.view(def[0], def[1], def[2], def[3]);
+    }
+    var out = [];
+    for (var i = 0; i < HUB_DEFS.length; i++) {
+      var def = HUB_DEFS[i];
+      if (!def.views || !def.views.length) {
+        out.push({ id: def.id, label: def.label, render: def.render });
+        continue;
+      }
+      if (def.views.length === 1) {
+        out.push({ id: def.id, label: def.label, render: resolve(def.views[0]) });
+        continue;
+      }
+      var children = [];
+      for (var j = 0; j < def.views.length; j++) {
+        var v = def.views[j], sv = SHELL_VIEWS[v.sub];
+        children.push({
+          id: v.sub,
+          label: v.label || (sv ? sv[3] : v.sub),
+          labelKey: v.labelKey || (sv ? sv[2] : ''),
+          render: resolve(v)
+        });
+      }
+      out.push({ id: def.id, label: def.label, children: children });
+    }
+    return out;
+  }
 
   function renderDashboard() {
     if (!window.KoreShell || typeof window.KoreShell.mount !== 'function') {
@@ -2069,7 +2249,7 @@
     }
     // 首次登录挂壳；后续数据刷新只重绘当前视图，不重建导航（否则丢失视图与滚动位置）。
     var mounted = !!document.getElementById('view');
-    if (!mounted) window.KoreShell.mount(SHELL_ROUTES);
+    if (!mounted) window.KoreShell.mount(shellRoutes());
     else window.KoreShell.navigate(window.KoreShell.current() || 'dashboard');
 
     var top = document.getElementById('kore-topbar');
@@ -2237,6 +2417,11 @@
   // 错误码分流入口：视图模块统一走这里，避免各自复制一套 code → 文案判断。
   window.KoreUI.failureOf = failureOf;
   window.KoreUI.failureReason = failureReason;
+  // 统一文案入口（AGENTS.md §7 ④）：错误句 / 错误块 / 空态块，视图模块只调这三个。
+  window.KoreUI.sentence = sentence;
+  window.KoreUI.errorText = errorText;
+  window.KoreUI.errorBlock = errorBlock;
+  window.KoreUI.emptyBlock = emptyBlock;
 
   start();
 })();

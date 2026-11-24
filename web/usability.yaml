@@ -11,5 +11,25 @@
 #     <nav-id>:
 #       main_flow: [第 1 步, 第 2 步, 第 3 步]
 views:
+  dashboard:
+    main_flow: [登录后默认落到「概览」, 看资源与告警卡片]
+  sites:
+    main_flow: [打开「网站」, 点「创建第一个站点」]
+  db:
+    main_flow: [打开「数据库」, 点「新建数据库」]
+  files:
+    main_flow: [打开「文件」, 进入目标目录]
+  store:
+    main_flow: [打开「软件商店」, 点卡片「安装」]
+  monitor:
+    main_flow: [打开「监控」, 看指标卡片]
+  tasks:
+    main_flow: [打开「计划任务」, 新建一个任务]
+  security:
+    main_flow: [打开「安全」, 切到要处理的子页（防火墙 / SSH / 证书…）]
+  terminal:
+    main_flow: [打开「终端」, 直接输入命令]
+  settings:
+    main_flow: [打开「设置」, 改要改的那一项]
   backup:
     main_flow: [打开备份页, 点「创建备份」]

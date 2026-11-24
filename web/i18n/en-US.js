@@ -6,6 +6,8 @@
     'nav.dashboard': 'Overview',
     'nav.store': 'App Store',
     'nav.plugins': 'Installed Plugins',
+    'nav.security': 'Security',
+    'nav.store.plugins': 'Plugin Management',
     'nav.files': 'Files',
     'nav.sites': 'Websites',
     'nav.tasks': 'Scheduled Tasks',

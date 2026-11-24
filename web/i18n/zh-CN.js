@@ -5,6 +5,8 @@
   'nav.dashboard': '概览',
   'nav.store': '软件商店',
   'nav.plugins': '已装插件',
+  'nav.security': '安全',
+  'nav.store.plugins': '插件管理',
   'nav.files': '文件管理',
   'nav.sites': '网站',
   'nav.tasks': '计划任务',
