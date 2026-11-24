@@ -12,11 +12,10 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// fakeRunner 记录调用并模拟 systemd-run；block=true 时等 ctx 超时（测 kill 路径）。
+// fakeRunner 记录调用并模拟命令执行（ADR-0049 直接 exec 契约：无 unit、无 Kill）；
+// block=true 时等 ctx 超时（测超时路径）。
 type fakeRunner struct {
 	calls  [][]string
-	units  []string
-	killed []string
 	exit   int
 	err    error
 	block  bool
@@ -24,9 +23,8 @@ type fakeRunner struct {
 	errOut string
 }
 
-func (f *fakeRunner) Run(ctx context.Context, unit string, argv []string, stdoutPath, stderrPath string) (int, error) {
+func (f *fakeRunner) Run(ctx context.Context, argv []string, stdoutPath, stderrPath string) (int, error) {
 	f.calls = append(f.calls, append([]string(nil), argv...))
-	f.units = append(f.units, unit)
 	if f.out != "" {
 		_ = os.WriteFile(stdoutPath, []byte(f.out), 0o600)
 	}
@@ -39,8 +37,6 @@ func (f *fakeRunner) Run(ctx context.Context, unit string, argv []string, stdout
 	}
 	return f.exit, f.err
 }
-
-func (f *fakeRunner) KillUnit(unit string) { f.killed = append(f.killed, unit) }
 
 // fakeAuditor 记录审计事件；fail=true 模拟 bbolt 写失败。
 type fakeAuditor struct {
@@ -56,17 +52,11 @@ func (a *fakeAuditor) Record(_ context.Context, ev Event) error {
 	return nil
 }
 
-func testService(t *testing.T, runner *fakeRunner, auditor *fakeAuditor, root, systemd bool) *Service {
+func testService(t *testing.T, runner *fakeRunner, auditor *fakeAuditor, root bool) *Service {
 	t.Helper()
 	return New(Options{
 		Auditor: auditor, Runner: runner, TempDir: t.TempDir(),
 		Root: func() bool { return root },
-		Systemd: func() (bool, string) {
-			if systemd {
-				return true, ""
-			}
-			return false, "systemd-run 缺失"
-		},
 	})
 }
 
@@ -142,7 +132,7 @@ func TestValidateActionSchema(t *testing.T) {
 func TestExecuteArgvFixed(t *testing.T) {
 	runner := &fakeRunner{out: "Rule added\n"}
 	auditor := &fakeAuditor{}
-	svc := testService(t, runner, auditor, true, true)
+	svc := testService(t, runner, auditor, true)
 	// ufw allow 的形状是「声明 [allow] + 追加 <ufw-target>」。
 	action := Action{ID: "ufw-allow", Argv: []string{"ufw", "allow"}, TimeoutS: 5}
 	result, err := svc.Execute(context.Background(), Request{
@@ -200,7 +190,7 @@ func TestExecuteRejectsAppendedInjection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &fakeRunner{}
 			auditor := &fakeAuditor{}
-			svc := testService(t, runner, auditor, true, true)
+			svc := testService(t, runner, auditor, true)
 			_, err := svc.Execute(context.Background(), Request{
 				Actor: "admin", PluginID: "waf",
 				Action: Action{ID: "probe", Argv: tc.argv, TimeoutS: 5}, Args: tc.args,
@@ -222,7 +212,7 @@ func TestExecuteRejectsAppendedInjection(t *testing.T) {
 func TestExecuteNeedRoot(t *testing.T) {
 	runner := &fakeRunner{}
 	auditor := &fakeAuditor{}
-	svc := testService(t, runner, auditor, false, true)
+	svc := testService(t, runner, auditor, false)
 	_, err := svc.Execute(context.Background(), Request{Actor: "admin", PluginID: "firewall", Action: ufwStatus()})
 	if code := codeOf(t, err); code != pluginapi.E_NEED_ROOT {
 		t.Fatalf("应 E_NEED_ROOT，实际 %s", code)
@@ -239,27 +229,34 @@ func TestExecuteNeedRoot(t *testing.T) {
 	}
 }
 
-// TestExecuteNoSystemd 无 systemd → E_NO_SYSTEMD + hint，且不执行。
-func TestExecuteNoSystemd(t *testing.T) {
-	runner := &fakeRunner{}
+// TestNoSystemdGate 证明提权准入里**不再有 systemd 前置**（ADR-0049）：
+// 同一个请求在旧实现会返回 E_NO_SYSTEMD，现在必须正常执行。
+//
+// 「/run/systemd/system 不存在」的真实环境用例见 exec_integration_test.go
+// （TestExecuteWithoutSystemdMarker），那里用真实 Runner 跑通全链路。
+func TestNoSystemdGate(t *testing.T) {
+	runner := &fakeRunner{out: "Status: active\n"}
 	auditor := &fakeAuditor{}
-	svc := testService(t, runner, auditor, true, false)
-	_, err := svc.Execute(context.Background(), Request{Actor: "admin", PluginID: "firewall", Action: ufwStatus()})
-	if code := codeOf(t, err); code != pluginapi.E_NO_SYSTEMD {
-		t.Fatalf("应 E_NO_SYSTEMD，实际 %s", code)
+	svc := testService(t, runner, auditor, true)
+	result, err := svc.Execute(context.Background(), Request{
+		Actor: "admin", PluginID: "firewall", Action: ufwStatus(),
+	})
+	if err != nil {
+		t.Fatalf("不应因缺 systemd 被拒绝（ADR-0049）：%v", err)
 	}
-	if hint := hintOf(t, err); !strings.Contains(hint, "systemd") {
-		t.Fatalf("hint 应说明 systemd，实际 %q", hint)
+	if !result.Executed || len(runner.calls) != 1 {
+		t.Fatalf("应执行一次，实际 %+v / calls=%d", result, len(runner.calls))
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("拒绝路径不得执行命令，实际调用 %d 次", len(runner.calls))
+	// 常量保留做协议兼容（老客户端认识这个码），只是不再触发。
+	if pluginapi.E_NO_SYSTEMD == "" {
+		t.Fatal("E_NO_SYSTEMD 常量必须保留做协议兼容")
 	}
 }
 
 // TestAuditFailureBlocksExecution 审计写失败 → E_INTERNAL 且不执行（fail-closed）。
 func TestAuditFailureBlocksExecution(t *testing.T) {
 	runner := &fakeRunner{}
-	svc := testService(t, runner, &fakeAuditor{fail: true}, true, true)
+	svc := testService(t, runner, &fakeAuditor{fail: true}, true)
 	_, err := svc.Execute(context.Background(), Request{Actor: "admin", PluginID: "firewall", Action: ufwStatus()})
 	if code := codeOf(t, err); code != pluginapi.E_INTERNAL {
 		t.Fatalf("应 E_INTERNAL，实际 %s", code)
@@ -273,7 +270,7 @@ func TestAuditFailureBlocksExecution(t *testing.T) {
 func TestExecuteIrreversibleConfirm(t *testing.T) {
 	runner := &fakeRunner{}
 	auditor := &fakeAuditor{}
-	svc := testService(t, runner, auditor, true, true)
+	svc := testService(t, runner, auditor, true)
 	action := ufwStatus()
 	action.Irreversible = true
 
@@ -335,12 +332,16 @@ func TestConfirmTokenLifecycle(t *testing.T) {
 	}
 }
 
-// TestTimeoutKillsUnit 超时必须 kill unit，并返回 E_UPSTREAM。
-func TestTimeoutKillsUnit(t *testing.T) {
+// TestTimeoutReturnsUpstream 超时返回 E_UPSTREAM，退出码归一为 -1。
+//
+// 进程树真的被 kill 由 exec_integration_test.go 的真实用例覆盖（pgrep -g 断言）：
+// fakeRunner 只负责验证上层判定与归一，不假装自己会杀进程。
+func TestTimeoutReturnsUpstream(t *testing.T) {
 	runner := &fakeRunner{block: true}
-	svc := testService(t, runner, &fakeAuditor{}, true, true)
+	svc := testService(t, runner, &fakeAuditor{}, true)
 	action := ufwStatus()
 	action.TimeoutS = 1
+	start := time.Now()
 	result, err := svc.Execute(context.Background(), Request{Actor: "admin", PluginID: "firewall", Action: action})
 	if code := codeOf(t, err); code != pluginapi.E_UPSTREAM {
 		t.Fatalf("超时应 E_UPSTREAM，实际 %s", code)
@@ -348,45 +349,9 @@ func TestTimeoutKillsUnit(t *testing.T) {
 	if !result.Executed || result.ExitCode != -1 {
 		t.Fatalf("超时结果应 executed=true/exit=-1，实际 %+v", result)
 	}
-	if len(runner.killed) != 1 || runner.killed[0] != result.Unit {
-		t.Fatalf("应 kill 对应 unit，实际 %v", runner.killed)
-	}
-}
-
-// TestBuildSystemdRunArgv 锁定 systemd-run argv 原文（报告与文档引用这一份）。
-func TestBuildSystemdRunArgv(t *testing.T) {
-	got := strings.Join(BuildSystemdRunArgv("kore-root-firewall-ufw-status-abcd", "/tmp/o", "/tmp/e", []string{"ufw", "status"}), " ")
-	const want = "systemd-run --uid=0 --collect --wait -p StandardOutput=file:/tmp/o " +
-		"-p StandardError=file:/tmp/e --unit=kore-root-firewall-ufw-status-abcd -- ufw status"
-	if got != want {
-		t.Fatalf("systemd-run argv 漂移：\n got %s\nwant %s", got, want)
-	}
-}
-
-// TestBuildSystemdRunArgvNoPipeWithFileOutput 锁定"文件输出与 --pipe 互斥"的不变量。
-//
-// systemd-run 同时带 --pipe 与 `-p StandardOutput=file:...` 时，文件重定向被静默忽略：
-// unit 输出走管道、文件不创建，内核读到空 stdout/stderr（R5-1 真 root 实测缺陷）。
-// 本测试防止 argv 再次漂回该组合。
-func TestBuildSystemdRunArgvNoPipeWithFileOutput(t *testing.T) {
-	argv := BuildSystemdRunArgv("kore-root-firewall-ufw-status-abcd", "/tmp/o", "/tmp/e",
-		[]string{"ufw", "status"})
-	hasPipe := false
-	hasFileOutput := false
-	for _, arg := range argv {
-		if arg == "--pipe" {
-			hasPipe = true
-		}
-		if strings.HasPrefix(arg, "StandardOutput=file:") ||
-			strings.HasPrefix(arg, "StandardError=file:") {
-			hasFileOutput = true
-		}
-	}
-	if hasPipe && hasFileOutput {
-		t.Fatalf("argv 同时含 --pipe 与 file: 输出属性，systemd 会静默丢弃文件输出：%v", argv)
-	}
-	if hasFileOutput != true {
-		t.Fatalf("argv 必须用 file: 属性收集输出：%v", argv)
+	// 直接执行没有 systemd-run 的 2s 宽限：动作 timeout_s 到点即返回。
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("超时应在 timeout_s 附近返回，实际 %v", elapsed)
 	}
 }
 

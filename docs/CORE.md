@@ -127,10 +127,11 @@
 
 ### 2.13 `internal/core/privilege`（提权通道，ADR-0018）
 
-- **职责**：校验 `info.json.root_actions` schema；经 `systemd-run --uid=0 --collect --wait -p StandardOutput=file:<tmp> -p StandardError=file:<tmp>` 的 transient unit 执行**固定 argv**；签发/核销不可回滚动作的一次性 `confirm` 令牌；构造 `root.action` 审计事件并 **fail-closed**（审计写失败 → 动作不执行，返回 `E_INTERNAL`）。**不能再加 `--pipe`**：它会把 unit 的 stdout/stderr 接管成到 systemd-run 父进程的管道，`-p StandardOutput=file:` / `-p StandardError=file:` 被 systemd 静默忽略、文件不创建，root 动作的输出永远为空（R5-1 真机实测，systemd 259：systemd-run 仍退出 0）；等待完成与退出码透传已由 `--wait` 负责。
+- **职责**：校验 `info.json.root_actions` schema；用 `os/exec` **直接执行固定 argv**（ADR-0049：不经 `systemd-run`、不经 shell、不依赖 systemd / polkit）；签发/核销不可回滚动作的一次性 `confirm` 令牌；构造 `root.action` 审计事件并 **fail-closed**（审计写失败 → 动作不执行，返回 `E_INTERNAL`）。**进程树回收**：`internal/platform` 收口 `Setpgid` + `kill(-pgid, SIGKILL)`，超时 / 取消时父与所有后代一起回收（`systemd-run` 时代由 unit cgroup 提供的唯一真实价值，由本层保住）。
+- **宿主变更账本（ADR-0049 §5.1，`hostwrite.go`）**：`root_actions[].writes_host=true` 的动作**成功**（`exit_code=0` 且未超时）后，经 `ChangeRecorder` 单方法接口追加一条 `changes.jsonl`（`summary`/`target`/`purge_op`，见 DATA-MODEL §9.1）——用户能在账本里看到"软件替我用 root 改了什么、怎么退回去"。**账本未装配时写宿主动作 fail-closed**（`deny_reason=change_ledger_unavailable`，不执行）；账本写失败不回滚已执行动作，但 WARN 留痕且响应里 `host_change_recorded=false`。**降级**：`writes_host=true` 但无结构化 `purge_op` → `NeedsConfirm=true`，按不可逆动作要求一次性 `confirm` 令牌（`confirm-token` 端点用同一判据，避免"降级了却拿不到令牌"）。回滚只按白名单 `purge_op` 分派，**账本内永不存 shell 字符串**。
 - **边界**：不认识 `ufw`/`nginx` 等业务语义（G-01）；不直接 import `store`（审计走 `Auditor` 单方法接口，装配层写 bbolt）；不引入常驻进程（ADR-0016）；插件永远拿不到 root。
-- **执行契约**：请求只能给 `action_id` + 追加参数（拼在声明 argv 之后，不能替换 argv[0]）；transient unit 名 `kore-root-<plugin>-<action>-<rand>`；超时 kill unit；stdout/stderr 各上限 1 MiB；`exit_code` 取 `systemd-run --wait` 的退出码。
-- **降级**：非 root → `E_NEED_ROOT`；无 systemd → `E_NO_SYSTEMD`；均带 `detail.hint`（HTTP 层提升为顶层 `hint`）。
+- **执行契约**：请求只能给 `action_id` + 追加参数（拼在声明 argv 之后，不能替换 argv[0]）；审计标识 `kore-root-<plugin>-<action>-<rand>`（串起 begin/end 两条记录，不再是 transient unit 名）；超时 / 取消 kill **整棵进程组**；`LC_ALL=C`、无 shell、stdout/stderr 各上限 1 MiB；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`，`exit 42` → 42；超时 / 未执行归一为 -1）。
+- **降级**：非 root → `E_NEED_ROOT`（带 `detail.hint`）。**无 systemd 不再是降级条件**（容器 / Alpine / Tier B 照常执行）；`E_NO_SYSTEMD` 常量保留做协议兼容但**不再触发**；平台无进程组语义（非 Unix）→ 显式 `E_UPSTREAM`，禁止静默降级为「只杀直接子进程」。
 - **端点**：`POST /api/v1/plugins/{id}/root-action` 需 `system:admin`（或目标插件自身的 bearer 身份 + 该插件已获 `system:admin`）；`GET .../confirm-token` 只允许管理会话签发，5 分钟一次性。
 
 ### 2.14 `internal/core/market`（软件商店，HTTP 前缀 `/store`）

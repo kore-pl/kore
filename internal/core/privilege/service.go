@@ -23,12 +23,12 @@ var pluginIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 type Options struct {
 	// Auditor 是审计出口（必须注入；nil 时所有动作 fail-closed）。
 	Auditor Auditor
+	// ChangeRecorder 是宿主变更账本出口；声明 writes_host 的动作在 nil 时 fail-closed。
+	ChangeRecorder ChangeRecorder
 	// Runner 是 systemd-run 执行器；nil 用真实实现。
 	Runner Runner
 	// Root 报告 kored 是否 root；nil 用 os.Geteuid()==0。
 	Root func() bool
-	// Systemd 报告 systemd 可用性；第二返回值是原因（不可用时写进 hint）。
-	Systemd func() (bool, string)
 	// TempDir 是 stdout/stderr 临时文件目录；空串用 os.TempDir()。
 	TempDir string
 	// MaxOutput 是单个输出流上限；<=0 用 1 MiB。
@@ -54,9 +54,6 @@ func New(opts Options) *Service {
 	if opts.Root == nil {
 		opts.Root = DetectRoot
 	}
-	if opts.Systemd == nil {
-		opts.Systemd = DetectSystemd
-	}
 	if opts.MaxOutput <= 0 {
 		opts.MaxOutput = maxOutput
 	}
@@ -72,10 +69,11 @@ func (s *Service) Confirm() *ConfirmStore { return s.confirm }
 // Execute 执行一次 root 动作：
 //  1. schema 复核（argv 固定、args 仅追加）；
 //  2. 不可回滚动作核销 confirm 令牌；
-//  3. 非 root → E_NEED_ROOT，非 systemd → E_NO_SYSTEMD（均写 deny 审计）；
+//  3. 非 root → E_NEED_ROOT（写 deny 审计）；**不再有 systemd 前置**（ADR-0049）——
+//     无 systemd 的宿主（容器 / Alpine / Tier B）同样能执行；
 //  4. **先落审计再执行**（fail-closed），审计失败返回 E_INTERNAL；
-//  5. systemd-run 执行，超时 kill unit，输出各截断 1 MiB；
-//  6. 执行后补一条 end 审计（带 exit_code / dur_ms）。
+//  5. 直接 exec 执行（不经 shell），超时 kill 整棵进程树，输出各截断 1 MiB；
+//  6. 执行后补一条 end 审计（带**真实** exit_code / dur_ms）。
 func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 	argv := append([]string(nil), req.Action.Argv...)
 	argv = append(argv, req.Args...)
@@ -83,7 +81,7 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 	if perr := s.validateRequest(req); perr != nil {
 		return Result{}, s.deny(ctx, req, argvText, "schema: "+perr.Message, perr)
 	}
-	if req.Action.Irreversible {
+	if NeedsConfirm(req.Action) {
 		if err := s.confirm.Consume(req.Confirm, req.PluginID, req.Action.ID); err != nil {
 			return Result{}, s.deny(ctx, req, argvText, "confirm 校验失败", asProtocolError(err))
 		}
@@ -93,10 +91,11 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 			"需要 root 权限：内核需以系统服务形态运行",
 			"按 ADR-0042 以系统服务形态运行内核（systemd unit 内 User=root，`systemctl enable --now kore`）后重试；插件进程自身永不提权"))
 	}
-	if ok, detail := s.opts.Systemd(); !ok {
-		return Result{}, s.deny(ctx, req, argvText, "no_systemd", errCode(pluginapi.E_NO_SYSTEMD,
-			"环境不支持提权通道："+detail,
-			"安装并启用 systemd 后重启 kored；无 systemd 环境请显式配置 sudoers 降级（见 docs/RUNBOOK.md）"))
+	// 写宿主动作必须能落账：账本未装配时拒绝执行（不能"改了宿主但查无此事"）。
+	if req.Action.WritesHost && s.opts.ChangeRecorder == nil {
+		return Result{}, s.deny(ctx, req, argvText, "change_ledger_unavailable", errCode(pluginapi.E_INTERNAL,
+			"宿主变更账本未装配，写宿主动作已拒绝",
+			"按 ADR-0023 以系统服务形态运行内核（装配 changes.jsonl 账本）后重试"))
 	}
 
 	unit := unitName(req.PluginID, req.Action.ID)
@@ -114,14 +113,17 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 	defer cleanup()
 
 	timeout := time.Duration(req.Action.TimeoutS) * time.Second
-	runCtx, cancel := context.WithTimeout(ctx, timeout+rootTimeoutGrace)
+	// 直接执行没有中间层开销，ctx 截止时间就是动作的 timeout_s；到点即由
+	// execRunner 回收整棵进程树（不再像 systemd-run 时代那样额外留 2s 宽限）。
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
-	exitCode, runErr := s.opts.Runner.Run(runCtx, unit, argv, stdoutPath, stderrPath)
+	// Runner 契约（ADR-0049 直接执行）：超时 / 取消由实现自己回收进程组，
+	// 上层只负责判定 timedOut 并归一退出码。
+	exitCode, runErr := s.opts.Runner.Run(runCtx, argv, stdoutPath, stderrPath)
 	durMS := time.Since(start).Milliseconds()
 	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	if timedOut {
-		s.opts.Runner.KillUnit(unit)
 		exitCode = -1
 	}
 	stdout, stderr, truncated := readOutputs(stdoutPath, stderrPath, s.opts.MaxOutput)
@@ -137,14 +139,26 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 			"action_id", req.Action.ID, "unit", unit, "err", err)
 	}
 
+	// 写宿主动作成功（exit_code=0 且未超时）→ 追加一条用户可见、可回滚的变更账本。
+	// 顺序在 end 审计之后：审计是 fail-closed 的事前凭证，账本是事后产品记录；
+	// 账本写失败不回滚已执行的动作（做不到），但必须 WARN 留痕且结果里可见。
+	if req.Action.WritesHost && runErr == nil && !timedOut && exitCode == 0 {
+		if err := s.opts.ChangeRecorder.RecordHostChange(ctx, HostChangeOf(req.PluginID, req.Action)); err != nil {
+			s.logger.Warn("宿主变更账本写入失败（动作已执行）", "plugin_id", req.PluginID,
+				"action_id", req.Action.ID, "target", req.Action.Target, "err", err)
+		} else {
+			result.HostChangeRecorded = true
+		}
+	}
+
 	switch {
 	case timedOut:
 		return result, errCode(pluginapi.E_UPSTREAM,
-			fmt.Sprintf("提权动作超时（%ds），已 kill unit", req.Action.TimeoutS),
+			fmt.Sprintf("提权动作超时（%ds），已 kill 整个进程组", req.Action.TimeoutS),
 			"缩短操作范围或调大 timeout_s（≤300）后重试")
 	case runErr != nil:
-		return result, errCode(pluginapi.E_UPSTREAM, "提权动作启动失败："+runErr.Error(),
-			"检查 systemd / polkit 权限与命令是否存在")
+		return result, errCode(pluginapi.E_UPSTREAM, "提权动作执行失败："+runErr.Error(),
+			"确认命令存在、当前内核进程（uid=0）对它有执行权限；仍失败请查 journalctl -u kore 的 root.action 日志")
 	}
 	return result, nil
 }

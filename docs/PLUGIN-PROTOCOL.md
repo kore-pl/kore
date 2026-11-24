@@ -166,6 +166,9 @@
 | timeout_s | int | 是 | 1–300；超时 kill transient unit |
 | description | string | 否 | ≤200 字符；启用/升级确认时展示 |
 | irreversible | bool | 否 | `true` 时必须携带一次性 `confirm` 令牌（见 §3.1.4） |
+| writes_host | bool | 否 | 声明本动作会修改安装目录外的宿主状态（ADR-0023 §3.5 #3）。`true` 时 `target` 必填；执行成功后内核追加一条 `changes.jsonl`（DATA-MODEL §9.1）；**无 `purge_op` 的写宿主动作按不可逆处理**（需 `confirm` 令牌） |
+| target | string | `writes_host=true` 时必填 | ≤200 字符；影响对象（人话），如 `/etc/nginx/conf.d/kore-a.conf`、`22/tcp`；写进变更账本供用户看懂"改了什么" |
+| purge_op | object | 否 | **结构化回滚操作**（ADR-0023 §3.4）：`{kind,args}`，kind ∈ `file.remove`（args=`[path]`）/ `file.restore`（args=`[原文件,目标]`），路径必须绝对、非根、无 `..`；仅允许与 `writes_host=true` 同时出现。**协议不提供 shell 字符串回滚字段**——那等于把 RCE 面写进账本 |
 
 **受控命令形状**（协议常量，唯一实现在 `pkg/pluginapi/rootpolicy.go`，决策见 [ADR-0022](DECISIONS/0022-root-command-shapes.md)）：`nginx` `ufw` `iptables` `systemctl` `crontab` `chmod` `chown` `docker` `nft` `resolvectl` `unbound-control` `dig` `fail2ban-client`（13 个）。**未使用的命令不进表**：每多一个命令就多一条被误用路径，`ipset` 因无消费者已被移除（ADR-0022）。白名单单位不是命令名而是**语句形状**——只给命令名、不给子命令与参数形状等于放行任意 argv。
 
@@ -184,11 +187,11 @@
 
 **SDK 自检（`pkg/pluginapi` v0.1.2 起）**：公开 SDK 提供 `pluginapi.RootAction` 与 `pluginapi.ValidateRootAction`。插件应在自己的测试里读 `info.json` 的 `root_actions`，逐条调用 `ValidateRootAction`，失败即测试失败（样例见 `pkg/pluginapi/rootaction_test.go`）——不要手写一份 schema，也不要用跨仓 `replace`（G-17 禁止）；清单与代码的漂移应在插件 CI 暴露，而不是等用户安装时才报错。**形状表变更（ADR-0022）需要 SDK 新版本（v0.1.3+）**：插件钉的 SDK 尚未包含某命令时，自检应显式 skip 并写明「需要 pluginapi ≥ 该版本」，不得改写成本地宽松校验。
 
-**执行口径**：内核 `POST /api/v1/plugins/<id>/root-action` → `systemd-run --uid=0 --collect --wait -p StandardOutput=file:<tmp> -p StandardError=file:<tmp> --unit=kore-root-<plugin>-<action>-<rand> -- <argv...>`（**不加 `--pipe`**：与 file: 输出属性并存会被 systemd 静默忽略、stdout/stderr 丢失；`--wait` 已负责等待与退出码透传）。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）；stdout/stderr 各截断 1 MiB。
+**执行口径（ADR-0049）**：内核 `POST /api/v1/plugins/<id>/root-action` → **`os/exec` 直接执行固定 argv**（不经 shell、不经 `systemd-run`、不依赖 polkit / systemd）：新进程组（`Setpgid`）+ 超时 / 取消时 `kill(-pgid, SIGKILL)` 回收整棵进程树；`exit_code` 是**被调命令的真实退出码**（`exec.ExitError.ExitCode()`）；stdout/stderr 各截断 1 MiB；`LC_ALL=C`。请求只能给 `action_id` 与追加参数（附在固定 argv 之后，不能替换 `argv[0]`，并逐位通过 §3.1.3.1 的执行层形状校验）。响应里的 `unit`（`kore-root-<plugin>-<action>-<rand>`）只是审计关联标识。
 
 **G-01 边界**：内核只校验 schema（id/argv/timeout）与**参数形状**（族/前缀/地址/端口这些语法级约束），不判断「这是防火墙动作」——业务语义留在插件自己的 `id` 与 `description`。
 
-**降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT`；无 systemd → `E_NO_SYSTEMD`；两者都必须带可操作 `hint`，禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
+**降级（硬要求）**：非 root 启动的 kored → `E_NEED_ROOT` + 可操作 `hint`；**无 systemd 不再是降级条件**（ADR-0049 后照常执行）；平台无进程组语义（当前仅 Tier B 未实现 Job Object）→ `502 E_UPSTREAM` 显式拒绝，禁止静默退化为「只杀直接子进程」。禁止静默失败、空错误或把权限错误映射成 `E_INVALID`。
 
 ### 3.1.4 不可回滚动作的 confirm 令牌
 
@@ -389,7 +392,7 @@
 | E_UNSUPPORTED | 501 | 协议主版本不符、能力未实现、平台不支持 cgroup | 升级内核或插件；不重试 |
 | E_RATELIMIT | 429 | 触发限流（登录、oneshot 并发队列满） | 按 `Retry-After` 退避后重试 |
 | E_NEED_ROOT | 403 | 动作需要宿主 root，但 kored 非 root 启动 | 按 `hint` 以**系统服务形态**运行 kored（内核即 root，见 ADR-0042）；不要用 sudo 包装单次请求；不重试 |
-| E_NO_SYSTEMD | 501 | 提权通道依赖 systemd-run，当前环境无 systemd | 换支持 systemd 的环境；无 systemd 时该能力显式不可用（`available=false`），不引导 sudoers 降级；不重试 |
+| E_NO_SYSTEMD | 501 | **保留码：协议兼容用，ADR-0049 起不再返回**（提权通道已不依赖 systemd） | 不会出现；老客户端收到时按旧口径理解即可，不需要换环境 |
 
 路由层因插件 `degraded` 主动拒绝时返回 503 + `E_UPSTREAM`（`detail.retry_after_s`）：502 表示调用已发出后失败，503 表示未发出即拒绝，调用方按同一 code 处理。
 

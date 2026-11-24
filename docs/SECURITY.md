@@ -309,7 +309,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ## 15. 提权模型（ADR-0018；插件降权 2026-11-23 已实现）
 
-需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，插件自身永不获得 root。方案对比、实现选择、被否决方案与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)；真机证据（命令 + 退出码 + 原始输出）见 [r5-plugin-demotion](../.agents/verify/r5-plugin-demotion.md)。
+需要宿主权限的插件（firewall / site / waf / dns / container / runtime-\*，以及跨用户目录的 backup）**不以 root 运行**：Linux GA 下 `kored` 以 root 启动、插件一律降到 `kore-<id>`；需要 root 的动作只能由内核**直接 `exec`**（ADR-0049：新进程组 + 真实退出码，不经 `systemd-run` / polkit / shell）执行，插件自身永不获得 root。方案对比、实现选择、被否决方案与复审条件见 [ADR-0018](./DECISIONS/0018-privilege-model.md)；真机证据（命令 + 退出码 + 原始输出）见 [r5-plugin-demotion](../.agents/verify/r5-plugin-demotion.md)。
 
 ### 15.1 已实现（不再是"承诺"）
 
@@ -318,7 +318,7 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 - **插件 → 内核 root-action 通道（独立 socket）**：`<run>/kore-channel.sock` 为 `root:kore 0660`，插件用户通过共享组 `kore` 获得 connect 权限；请求必须同时通过 bearer（token 所属插件 == 路径插件）、`SO_PEERCRED` 的 uid==`kore-<id>` 与 pid==supervisor 记录的子进程、`system:admin` 能力四关。管理入口 `kore.sock` 保持 `0600 root:root` 不放宽；拒绝路径落 `capability.denied` 审计并 WARN。
 - **目录收口**：`KORE_STATE_DIR`（`<pluginDir>/<id>`）`0700 kore-<id>`；状态根/运行根 `0701 root:root`（只补 o+x，可穿越不可列举）；版本树补 `o+rx` 让插件能 exec 自己的二进制（属主与写权限不动）。详见 §6。
 - **非 root 内核是显式降级**：启动时 WARN「插件降权未生效（插件与内核同 uid）」，插件仍需 root 的动作只能返回 `E_NEED_ROOT`，管理面经 root-action 通道执行。
-- **降级必须显式**：非 root / 无 systemd / polkit 拒绝时，插件返回 `available=false` + `E_NEED_ROOT`（无 systemd 为 `E_NO_SYSTEMD`）+ 可操作 `hint`；禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
+- **降级必须显式**：非 root 时插件返回 `available=false` + `E_NEED_ROOT` + 可操作 `hint`；平台无进程组语义时返回 `502 E_UPSTREAM`（显式拒绝，不退回「只杀直接子进程」）。**无 systemd 不再是降级条件**（ADR-0049）；`E_NO_SYSTEMD` 常量保留、不再触发。禁止静默失败、空 error、把权限错误映射成 `E_INVALID`。
 - **审计 fail-closed**：每次提权（含被拒绝的）写 `root.action`；字段 `actor / plugin_id / action_id / argv（脱敏）/ unit / decision(allow|deny) / deny_reason / exit_code / dur_ms`（时间在 bbolt 键里，字典序即时间序）。实现顺序：**执行前**先写一条 `phase=begin` 的 allow 记录，写失败即返回 `E_INTERNAL` 且不拉起 unit；执行后补一条 `phase=end` 携带 `exit_code/dur_ms`。审计未装配按失败处理（不允许"没装配就不审计"）。
 - **不可回滚动作**（防火墙 / IP 与路由 / 服务重启 / 包卸载 / 删备份 / 容器删除）需一次性 `confirm` 令牌二次确认：`GET .../confirm-token` 只允许管理会话签发（插件 bearer 不得自签），令牌 5 分钟有效、绑定 `plugin_id + action_id`、单次核销、进程重启即失效。一次一确认，不批量静默执行。
 - **调用方边界**：管理会话需 `system:admin`；插件经 `KORE_PLUGIN_TOKEN` bearer 只能调用**自己**声明的动作，且该插件必须已获 `system:admin`；插件 token 只在进程存活期有效（spawn 注入、退出即清），比较用常量时间。插件永远不会拿到 root，也不会执行 sudo/setuid。
@@ -353,6 +353,20 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 被否决：②放宽 `kore.sock` 到 0660（所有 kore 组进程可连管理面，爆炸半径过大）；③只由管理会话发起（插件自主 root 动作彻底不可用，waf/dns 自动响应报废）。
 **残余取舍（见 §15.4）**：共享组方案下 socket 属主是 `root` 而非 `kore-<id>`（无法用单 socket 表达每插件属主）；身份边界靠 bearer + uid/pid 双校验，而非文件属主。若未来要"每插件一个通道 socket"，需引入按插件 listener，成本更高。
 
+#### 15.3.1 写宿主动作的账本与降级（ADR-0049 §5.1）
+
+root 的管理能力本身是产品能力的一部分，因此提权通道的**写宿主动作**必须可被用户在面板/账本上读懂并回滚，而不是只留在内部审计里：
+
+| 规则 | 实现（`privilege/hostwrite.go` + `cmd/kored/changes.go`） |
+| --- | --- |
+| 声明 | `root_actions[].writes_host=true` 时 `target`（影响对象）必填；`purge_op` 只允许出现在 `writes_host=true` 的动作上 |
+| 成功落账 | `exit_code=0` 且未超时 → 追加一条 `changes.jsonl`（`summary`=description、`target`、`reversible`、结构化 `purge_op`）；**账本未装配 → fail-closed 拒绝执行**（`deny_reason=change_ledger_unavailable`） |
+| 无回滚信息 | `writes_host=true` 但无 `purge_op` → **降级为需一次性 confirm 令牌**（`NeedsConfirm`，与 `irreversible` 同一出口；`confirm-token` 端点用同一判据，不会出现"降级了却签不出令牌"） |
+| 回滚执行 | 只按白名单 `purge_op.kind`（`file.remove` / `file.restore`）分派，路径必须绝对且非根、无 `..`；**账本内不存 shell 命令字符串**，未知 kind 直接拒绝 |
+| 与审计的分工 | bbolt `audit` 仍是**事前 fail-closed** 的取证链（`root.action` begin/end）；`changes.jsonl` 是**事后产品记录**（用户可见、可回滚）。账本写失败不回滚已执行动作，但 WARN 留痕且响应 `host_change_recorded=false`，不静默 |
+
+**未放宽的边界**：审计 fail-closed 口径不变（`begin` 写不进去仍拒绝执行）；账本不能替代审计，也不因为"有账本"而跳过审计。
+
 ### 15.4 未证明项（明确列出，不得当成已通过）
 
 1. **macOS / Windows（Tier B）**：非 Linux 只有 `ErrUnsupported` 桩，插件仍与内核同用户；§6.3「macOS 独立 uid」仍是目标。
@@ -366,9 +380,9 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 
 ### 15.5 root 提权为何不需要口令（结论：系统级 root 服务）
 
-用户裁决：「root 管理本来也是这个软件的功能的一部分，不应该有任何一次输入账号密码确认」。ADR-0018 只定了「谁来执行」（内核经 `systemd-run --uid=0` 的 transient unit），**没定「谁来授权」**——默认 polkit 策略下 `org.freedesktop.systemd1.manage-units` 是 `auth_admin`，于是普通用户跑 `kored` 时每个 root 动作都弹管理员口令框（实测：`systemd-run --uid=0 --pipe true` → `Failed to start transient service unit: Access denied`，journal 记 `FAILED to authenticate to gain authorization`）。这是产品级否决。
+用户裁决：「root 管理本来也是这个软件的功能的一部分，不应该有任何一次输入账号密码确认」。ADR-0018 只定了「谁来执行」（最初实现为内核经 `systemd-run --uid=0` 的 transient unit；ADR-0049 起改为内核直接 `exec`），**没定「谁来授权」**——默认 polkit 策略下 `org.freedesktop.systemd1.manage-units` 是 `auth_admin`，于是普通用户跑 `kored` 时每个 root 动作都弹管理员口令框（实测：`systemd-run --uid=0 --pipe true` → `Failed to start transient service unit: Access denied`，journal 记 `FAILED to authenticate to gain authorization`）。这是产品级否决。
 
-**结论（ADR-0042，方案 B）**：`kored` 以**系统级 root 服务**运行（`/etc/systemd/system/kore.service`，`User=root`），特权动作由内核经 `systemd-run --uid=0` 执行——**uid=0 不进入 polkit 判定**，systemd 对已授权的 root 直接放行。于是运行期**不存在授权判定这一步**，也不可能出现口令输入；这与 `dockerd` 以 root 运行、`docker run` 从不要口令同构。插件仍是独立低权进程（`kore-<id>`），G-04 与 ADR-0018「插件低权、内核代理特权动作」原意不变。方案对比、代价（root 进程面、目录属主迁移、两实例互斥）与复审条件见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)；安装走 `scripts/install-system-service.sh`（幂等、`--dry-run`，只写 ADR-0023 §3.5 豁免 #1 的 unit）。
+**结论（ADR-0042 方案 B + ADR-0049）**：`kored` 以**系统级 root 服务**运行（`/etc/systemd/system/kore.service`，`User=root`），特权动作由内核**直接 `exec`**（新进程组 + 真实退出码）——机制上已不存在 polkit 判定这一步，也不依赖 systemd 运行时。于是运行期**不存在授权判定这一步**，也不可能出现口令输入；这与 `dockerd` 以 root 运行、`docker run` 从不要口令同构。插件仍是独立低权进程（`kore-<id>`），G-04 与 ADR-0018「插件低权、内核代理特权动作」原意不变。方案对比、代价（root 进程面、目录属主迁移、两实例互斥）与复审条件见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)；安装走 `scripts/install-system-service.sh`（幂等、`--dry-run`，只写 ADR-0023 §3.5 豁免 #1 的 unit）。
 
 **为什么不是"配一条 polkit 规则"**：规则只是把弹框改成静默 YES，**每次操作仍过一次 authorization check**；规则丢失/被覆盖/被收紧时会退回弹框，违反用户「任何时候都不应该有本机账号密码的输入」这条绝对约束；而且规则本身是一个静默提权面（等价于该用户可免密以任意 uid 起 `kore-root-*` 单元），需要新增 ADR-0023 豁免项。因此 polkit 规则只保留为**降级路径 A**：
 

@@ -3,6 +3,7 @@ package pluginapi
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,10 +22,88 @@ type RootAction struct {
 	Argv []string `json:"argv"`
 	// TimeoutS 单次执行上限（秒），范围 1–300。
 	TimeoutS int `json:"timeout_s"`
-	// Description 面向用户的说明，启用时展示确认。
+	// Description 面向用户的说明，启用时展示确认；写宿主动作同时作为变更账本的人话摘要。
 	Description string `json:"description,omitempty"`
 	// Irreversible 为 true 时必须携带一次性 confirm 令牌才能执行。
 	Irreversible bool `json:"irreversible,omitempty"`
+	// WritesHost 声明本动作会修改安装目录之外的宿主状态（ADR-0023 §3.5 #3）。
+	// 为 true 时：Target 必填；成功后内核必须追加一条 changes.jsonl；未带 PurgeOp
+	// 的写宿主动作按不可逆处理（需一次性 confirm 令牌）。
+	WritesHost bool `json:"writes_host,omitempty"`
+	// Target 是影响对象（人话，如 `/etc/nginx/conf.d/kore-a.conf` / `22/tcp`）；
+	// WritesHost 为 true 时必填，写进变更账本供用户看懂"改了什么"。
+	Target string `json:"target,omitempty"`
+	// PurgeOp 是**结构化**回滚操作；账本不存 shell 命令字符串（ADR-0023 §3.4）。
+	// 为 nil 时动作不可回滚：只能作为 confirmation 后的不可逆动作执行。
+	PurgeOp *PurgeOp `json:"purge_op,omitempty"`
+}
+
+// PurgeOp 是结构化回滚操作：白名单 kind + 参数，由内核分派执行，永不拼 shell。
+//
+// 为什么结构化：以 root 执行账本里的任意字符串等于把 RCE 面写进文件；结构化 op
+// 只允许已知 kind + 受校验参数，未知 kind 一律拒绝（不猜、不兜底）。
+type PurgeOp struct {
+	// Kind 是白名单操作类型：file.remove / file.restore。
+	Kind string `json:"kind"`
+	// Args 是操作参数（file.remove: [path]；file.restore: [原文件, 目标]）。
+	Args []string `json:"args"`
+}
+
+// 结构化回滚操作的白名单 kind（新增 kind 属安全边界调整，须同步 ADR-0023）。
+const (
+	// PurgeKindFileRemove 删除单个文件。
+	PurgeKindFileRemove = "file.remove"
+	// PurgeKindFileRestore 用备份覆盖目标文件（rename）。
+	PurgeKindFileRestore = "file.restore"
+)
+
+// validatePurgeOp 校验结构化回滚操作：kind 白名单 + 参数个数 + 绝对路径（非根、无 ..）。
+func validatePurgeOp(op *PurgeOp) error {
+	if op == nil {
+		return fmt.Errorf("purge_op 为空")
+	}
+	var args []string
+	switch op.Kind {
+	case PurgeKindFileRemove:
+		args = op.Args
+		if len(args) != 1 {
+			return fmt.Errorf("purge_op kind=file.remove 需要 1 个参数（path），当前 %d 个", len(args))
+		}
+	case PurgeKindFileRestore:
+		args = op.Args
+		if len(args) != 2 {
+			return fmt.Errorf("purge_op kind=file.restore 需要 2 个参数（原文件, 目标），当前 %d 个", len(args))
+		}
+	default:
+		return fmt.Errorf("purge_op kind=%q 不在白名单内（允许：%s / %s）",
+			op.Kind, PurgeKindFileRemove, PurgeKindFileRestore)
+	}
+	for index, arg := range args {
+		if err := validatePurgePath(arg); err != nil {
+			return fmt.Errorf("purge_op args[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// validatePurgePath 拒绝空路径 / 相对路径 / 根目录 / 含 .. 的路径，避免误删。
+func validatePurgePath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("路径为空")
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("路径必须是绝对路径: %s", path)
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == "/" || cleaned == "." {
+		return fmt.Errorf("拒绝操作根路径: %s", path)
+	}
+	// Clean 会把 `..` 折叠掉（`/etc/../passwd` → `/passwd`），因此必须比对原串：
+	// 非规范化路径一律拒绝，否则「含 ..」的路径能绕过字符串检查。
+	if cleaned != path {
+		return fmt.Errorf("路径必须是规范化绝对路径（不得含 .. 或重复分隔符）: %s", path)
+	}
+	return nil
 }
 
 // root_actions schema 上限（协议常量；改值属协议变更，走 ADR）。
@@ -103,6 +182,23 @@ func ValidateRootAction(action RootAction) error {
 	}
 	if utf8.RuneCountInString(action.Description) > MaxRootActionDescriptionRunes {
 		return fmt.Errorf("description 超过 %d 个字符", MaxRootActionDescriptionRunes)
+	}
+	// 写宿主动作必须能让用户看懂「改了什么」：target 是必填项，不是可选装饰。
+	if action.WritesHost {
+		if strings.TrimSpace(action.Target) == "" {
+			return fmt.Errorf("writes_host=true 时 target 必填（影响对象，如 /etc/nginx/conf.d/x.conf）")
+		}
+		if utf8.RuneCountInString(action.Target) > MaxRootActionDescriptionRunes {
+			return fmt.Errorf("target 超过 %d 个字符", MaxRootActionDescriptionRunes)
+		}
+	}
+	if action.PurgeOp != nil {
+		if !action.WritesHost {
+			return fmt.Errorf("purge_op 仅在 writes_host=true 时有效（回滚信息必须绑定写宿主动作）")
+		}
+		if err := validatePurgeOp(action.PurgeOp); err != nil {
+			return err
+		}
 	}
 	return nil
 }

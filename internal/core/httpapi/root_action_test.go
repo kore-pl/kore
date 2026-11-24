@@ -46,8 +46,7 @@ func newRootActionServer(t *testing.T, backend Backend, pluginAuth PluginTokenAu
 	t.Cleanup(func() { _ = db.Close() })
 	priv := privilege.New(privilege.Options{
 		Auditor: discardPrivilegeAuditor{}, TempDir: t.TempDir(),
-		Root:    func() bool { return false }, // 本环境非 root：拒绝路径
-		Systemd: func() (bool, string) { return true, "" },
+		Root: func() bool { return false }, // 本环境非 root：拒绝路径（ADR-0049 后无 systemd 前置）
 	})
 	srv := New(Options{
 		Version: "0.1.0-rootaction", Report: envprobe.Report{OS: "linux", Arch: "amd64"},

@@ -155,7 +155,7 @@ rc=7
 | --- | --- |
 | [internal/core/privilege/systemd.go](../../internal/core/privilege/systemd.go) | argv 去掉 `--pipe`；补注释说明「`--pipe` 与 `-p StandardOutput=file:` 并存会被 systemd 静默忽略，输出丢失；等待与退出码由 `--wait` 负责」 |
 | [internal/core/privilege/privilege_test.go](../../internal/core/privilege/privilege_test.go) | 同步锁定 argv 原文；新增 `TestBuildSystemdRunArgvNoPipeWithFileOutput`（不变量：不得同时出现 `--pipe` 与 `file:` 输出属性） |
-| [internal/core/privilege/systemd_integration_test.go](../../internal/core/privilege/systemd_integration_test.go)（新增） | 真 root 门禁集成测试：`TestExecRunnerCapturesOutput`（stdout/stderr 落盘 + exit 3）、`TestServiceExecuteSystemdEndToEnd`（完整 Execute：审计 begin/end → unit → exit 4 → 输出内容） |
+| [internal/core/privilege/rootaction_e2e_test.go](../../internal/core/privilege/rootaction_e2e_test.go)（新增；2026-11-24 ADR-0049 续：原名 `systemd_integration_test.go`，用例改名为 `TestServiceExecuteEndToEnd`，stdout/stderr 落盘用例迁至 `exec_integration_test.go`） | 真 root 门禁集成测试：完整 Execute（审计 begin/end → 直接 exec → 真实退出码 → 输出内容） |
 
 修复后 argv 原文（测试锁定）：
 

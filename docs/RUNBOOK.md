@@ -155,7 +155,7 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 
 ## 5. 以 root 启动 kored 与提权通道（ADR-0018）
 
-需要宿主 root 的插件（firewall / site / waf / dns / runtime-* / 跨用户目录的 backup）**不以 root 运行**：`kored` 以 root 启动、插件由内核拉起；需要 root 的动作只能经内核 `root_actions` 代理执行。**kored 非 root 时通道整体返回 `E_NEED_ROOT`**（不会静默降级），无 systemd 的环境返回 `E_NO_SYSTEMD`。
+需要宿主 root 的插件（firewall / site / waf / dns / runtime-* / 跨用户目录的 backup）**不以 root 运行**：`kored` 以 root 启动、插件由内核拉起；需要 root 的动作只能经内核 `root_actions` 代理执行。**kored 非 root 时通道整体返回 `E_NEED_ROOT`**（不会静默降级）。**无 systemd 不再是拒绝条件**（ADR-0049）：内核直接 `exec` 动作，容器 / Alpine / Tier B 同样可用；`E_NO_SYSTEMD` 保留为协议兼容码、不再返回。
 
 ### 5.1 systemd unit 示例（`/etc/systemd/system/kore.service`）
 
@@ -201,7 +201,7 @@ ps -o user= -C kored                     # 判据：root
 
 一次性真机验证包：`sudo bash scripts/verify-root-service.sh --yes`（六步：装 root unit → 身份 → polkit 零判定 → 假安装根上升级/回滚 → 自卸载只预演）。期望输出、回滚与风险清单见 [VERIFY-ROOT.md](./VERIFY-ROOT.md)。
 
-**为什么必须 root**：`systemd-run --uid=0` 由非 root 调用会走 polkit 交互认证；本机实测 `--no-ask-password` 被拒。以 root 启动 kored 后，transient unit 由已授权的 systemd 直接拉起，**uid=0 不进入 polkit 判定、`systemd-run --uid=0` 没有 authorization check**，所以运行期不需要任何交互（ADR-0042 方案 B；对照降级路径 A，每次操作仍过一次判定、只是规则返回 YES 不弹框）。
+**为什么必须 root**：阈值在「谁持有特权身份」——`kored` 以 root 运行时，root 动作由内核**直接 `exec`**（ADR-0049），不经过 `systemd-run`、不经过 polkit，运行期**不存在授权判定这一步**，也不可能有口令输入（ADR-0042 方案 B 继续有效）。非 root 运行时通道整体返回 `E_NEED_ROOT`，不会把动作交给任何外部提权工具。
 
 ### 5.2 通道验证（root 环境）
 
@@ -224,15 +224,15 @@ curl -sS --unix-socket $S -b $J -H 'Content-Type: application/json' \
 curl -sS --unix-socket $S -b $J 'http://kore/api/v1/audit?action=root.action&limit=10' | python3 -m json.tool
 ```
 
-响应字段：`{executed, exit_code, stdout, stderr, dur_ms, unit}`；`exit_code` 取 `systemd-run --wait` 的退出码。
+响应字段：`{executed, exit_code, stdout, stderr, dur_ms, unit, host_change_recorded}`；`exit_code` 是**被调命令的真实退出码**（`exit 42` → 42；超时 / 未执行 → -1）。`unit` 仅为审计关联标识（`kore-root-<plugin>-<action>-<rand>`）。
 
 ### 5.3 非 root / 无 systemd 的表现与处置
 
 | 场景 | 返回 | 处置 |
 | --- | --- | --- |
 | kored 非 root | `403 E_NEED_ROOT` + `hint` | 按 §5.1 以 root 启动；不要用 sudo 包装单次请求 |
-| 无 systemd（Alpine / 精简容器） | `501 E_NO_SYSTEMD` + `hint` | 换支持 systemd 的环境；或由运维手写 sudoers 片段（kore 不自动改 sudoers，必须 `visudo -c` 校验） |
-| polkit / systemd 拒绝 | `502 E_UPSTREAM` + systemd-run 错误原文 | 查 `journalctl -u kore` 与 `systemctl status kore-root-*` |
+| 无 systemd（Alpine / 精简容器） | **正常执行**（ADR-0049：不再返回 `E_NO_SYSTEMD`） | 无需处置；`E_NO_SYSTEMD` 常量保留仅为协议兼容 |
+| 命令不存在 / 无执行权限 / 平台无进程组 | `502 E_UPSTREAM` + 真实错误原文 | 查 `journalctl -u kore` 的 `root.action` 记录；Tier B 需先补 Job Object（当前显式拒绝，不静默降级） |
 
 **不要**把 `E_NEED_ROOT` 当成参数错误重试；也不要绕过内核直接给插件 `sudo` / setuid / root —— 那会破坏 ADR-0018 的威胁模型。
 

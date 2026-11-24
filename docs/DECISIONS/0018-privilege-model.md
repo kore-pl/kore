@@ -279,3 +279,5 @@ v0.x 实现后的验收：firewall 在非 root 下 `available=false` + `E_NEED_R
 
 ## 实施注记（2026-11-23）
 本 ADR 的「root 动作经内核代理」在落地形态上已确定为：kored 以系统级 root 服务运行（见 [0042](0042-privilege-without-prompt.md)），运行期**不经过任何 polkit 授权判定**；本文档中提及 `sudo` 的历史示例仅适用于「非 root 裸跑」这一降级形态。
+
+**追加注记（2026-11-24，ADR-0049）**：执行机制已由「`systemd-run --uid=0` transient unit」改为**内核直接 `exec`**（新进程组 + 真实退出码 + 超时 kill 整棵进程树）。本 ADR 的授权模型（插件低权、内核持有 root、root 动作经内核代理、形状校验 + confirm + 审计 fail-closed）**一条未变**；`systemd-run` 曾提供的 cgroup 限额从未启用，需要时按 [0049](./0049-privilege-direct-execution.md) 复审条件 1 直接上 cgroup v2。

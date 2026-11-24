@@ -145,4 +145,6 @@ journalctl -u polkit --since -5min | grep -c manage-units              # 期望 
 
 ### 5. 复审条件（在上文 1–5 之外追加第 6 条）
 
+**追加注记（2026-11-24，ADR-0049）**：本 ADR 的 `User=root` 前提继续有效；其中「经 `systemd-run --uid=0` 执行」的机制描述**已失效**——root 动作改由内核直接 `exec`（新进程组 + 真实退出码），运行期不仅不判定 polkit，也不再依赖 systemd 运行时。§5 第 6 条（改回普通用户运行的复审条件）保留，但降级路径 A（polkit 规则）不再是唯一手段，需按 ADR-0049 复审条件 3 重新裁决。
+
 6. **若将来要把服务改回普通用户运行**（portable / 无 systemd / 托管环境），必须**同时**满足三项：① 启用降级路径 A（`scripts/install-polkit-rule.sh`）；② 在 **ADR-0023 §3.5 新增第 5 项豁免**（`/etc/polkit-1/rules.d/49-kore.rules`）；③ 在文档与 UI 显式提示「本机授权由 polkit 规则承担」。只做其中一项即退回「运行期可能再次出现本机口令输入」的状态，违反用户绝对约束。

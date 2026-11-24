@@ -3,7 +3,6 @@ package privilege
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -30,17 +29,21 @@ type Request struct {
 type Result struct {
 	// Executed 表示动作是否真的被拉起执行。
 	Executed bool `json:"executed"`
-	// ExitCode 是 systemd-run --wait 的退出码；-1 表示未执行或超时被 kill。
+	// ExitCode 是被调命令**真实**退出码（exec.ExitError.ExitCode()）；
+	// -1 表示未执行、超时被 kill（整棵进程树）或平台不支持进程组回收。
 	ExitCode int `json:"exit_code"`
-	// Stdout / Stderr 是 unit 输出（各截断到 1 MiB）。
+	// Stdout / Stderr 是命令输出（各截断到 1 MiB）。
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
 	// DurMS 是墙钟耗时（毫秒）。
 	DurMS int64 `json:"dur_ms"`
-	// Unit 是本次 transient unit 名。
+	// Unit 是本次执行的审计标识 `kore-root-<plugin>-<action>-<rand>`：把 begin/end
+	// 两条审计串起来（ADR-0049 后不再是 transient unit 名，字段保留做协议兼容）。
 	Unit string `json:"unit"`
 	// Truncated 表示输出超过上限被截断。
 	Truncated bool `json:"truncated,omitempty"`
+	// HostChangeRecorded 表示写宿主动作已追加到 changes.jsonl（仅 writes_host 成功时可能为 true）。
+	HostChangeRecorded bool `json:"host_change_recorded,omitempty"`
 }
 
 // Auditor 是审计出口，由装配层注入（写 store.PutAudit）；nil 表示不审计，
@@ -68,6 +71,3 @@ func errCode(code, message, hint string) *pluginapi.Error {
 	protocolErr.Detail = raw
 	return protocolErr
 }
-
-// rootTimeoutGrace 是给 systemd-run 的宽限：动作超时后额外留 2s 等 kill 生效。
-const rootTimeoutGrace = 2 * time.Second
