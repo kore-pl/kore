@@ -3,10 +3,20 @@
    覆盖 file.upload / download / extract / compress / chmod / move / copy 与批量删除：
    所有失败都原样展示后端 code + message + detail，并附本页的可执行提示。
    单帧可承载约 5.95 MiB（8 MiB 帧上限 − 64 KiB 余量，base64 膨胀 4/3），
-   因此前端在 5 MiB 处先拦截，不把必然失败的请求打到后端。 */
+   因此单块取 4 MiB（base64 后约 5.33 MiB），不把必然失败的请求打到后端。
+
+   大文件断点续传（后端 file 0.3.1+，契约读自 fileop/upload_chunk.go + call.go）：
+   - file.uploadStatus {path} → {path, received, exists}：received 即应续传的 offset；
+   - file.uploadChunk {path, offset, data_base64, total_size?} →
+     {path, received, total_size?, complete, replayed}：offset 必须落在 [0, 已收字节]，
+     offset>已收（跳空）或重叠区内容不一致回 E_CONFLICT，重复 offset 幂等重传（replayed）。
+   - 两方法是 L2 新方法，必须用完整限定名 file.uploadStatus / file.uploadChunk（call.go:82-84 裸名不认）。
+   - 中断后重开弹层再点「从断点续传」：先查 uploadStatus 拿最新 received，从断点继续，
+     不重传已落盘的分块；≤5 MiB 的小文件仍走原 file.upload，行为不变。 */
 (function () {
   'use strict';
   var LIMIT_HINT = '单帧上限 8 MiB，大文件请先压缩或用终端上传';
+  var CHUNK_SIZE = 4 * 1024 * 1024; // 4 MiB，base64 后约 5.33 MiB < 后端 5.95 MiB 单块上限
   function bind(ctx) {
     var el = ctx.ui.el, add = ctx.ui.add, on = ctx.ui.on;
     function fail(ui, err) { ui.msg.textContent = ctx.errText(err) + (ctx.hintFor('', err) ? ' ' + ctx.hintFor('', err) : ''); }
@@ -98,6 +108,55 @@
         reader.readAsDataURL(file);
       });
     }
+    // arrayBuffer → base64：按 32 KiB 分段拼，避免 String.fromCharCode.apply 栈溢出。
+    function abToB64(buf) {
+      var bytes = new Uint8Array(buf), parts = [], CH = 32768;
+      for (var i = 0; i < bytes.length; i += CH) {
+        parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CH)));
+      }
+      return btoa(parts.join(''));
+    }
+    // 只读文件的 [start,end) 区间，避免把整个大文件读进内存。
+    function readBase64Range(file, start, end) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () { resolve(abToB64(reader.result)); };
+        reader.onerror = function () { reject(new Error('读取文件分片失败：' + file.name)); };
+        reader.readAsArrayBuffer(file.slice(start, end));
+      });
+    }
+    // 从 startOffset 逐块调 file.uploadChunk；游标严格跟随后端 received。
+    // 契约：offset 必须落在 [0, 已收字节]，跳空会 E_CONFLICT——所以游标只能用后端
+    // 返回的 received（真实已落盘字节），不能用本地 end 猜测；replayed 分块时后端
+    // received 可能停在原值，此时下一块会带重叠区重发（重叠一致即幂等），不会跳空。
+    function chunkedUpload(file, targetPath, totalSize, startOffset, ui) {
+      var offset = startOffset;
+      function step() {
+        if (offset >= totalSize) return Promise.resolve(offset);
+        var end = Math.min(offset + CHUNK_SIZE, totalSize);
+        var pct = Math.floor(offset * 100 / totalSize);
+        ui.msg.textContent = '正在上传 ' + file.name + '：' + ctx.fmtSize(offset) + ' / ' +
+          ctx.fmtSize(totalSize) + '（' + pct + '%）…';
+        ctx.setStatus('上传 ' + file.name + '：' + pct + '%');
+        return readBase64Range(file, offset, end).then(function (b64) {
+          return ctx.invoke('file.uploadChunk', {
+            path: targetPath, offset: offset, data_base64: b64, total_size: totalSize
+          });
+        }).then(function (res) {
+          var next = typeof res.received === 'number' ? res.received : end;
+          if (next <= offset) {
+            // 后端未前进（异常/旧版本）：查权威状态校正，禁止本地硬推导致跳空冲突。
+            return ctx.invoke('file.uploadStatus', { path: targetPath }).then(function (st) {
+              offset = st && typeof st.received === 'number' && st.received > offset ? st.received : end;
+              return step();
+            }, function () { offset = end; return step(); });
+          }
+          offset = next;
+          return step();
+        });
+      }
+      return step();
+    }
     function uploadSeq(files, overwrite, ui) {
       var failed = [], chain = Promise.resolve();
       files.forEach(function (file, index) {
@@ -117,28 +176,106 @@
       return chain.then(function () { return failed; });
     }
     function uploadFiles(files) {
-      var usable = [], blocked = [];
+      var small = [], large = [];
       for (var i = 0; i < files.length; i++) {
-        if (files[i].size > ctx.maxInline) blocked.push(files[i].name); else usable.push(files[i]);
+        if (files[i].size > ctx.maxInline) large.push(files[i]); else small.push(files[i]);
       }
-      if (!usable.length) {
-        ctx.setStatus('未上传：' + blocked.join('、') + ' 超过 5 MiB。' + LIMIT_HINT, 'fail');
-        return Promise.resolve();
+      var total = small.length + large.length;
+      if (!total) { ctx.setStatus('没有可上传的文件', 'fail'); return Promise.resolve(); }
+      var text = '目标目录 ' + ctx.disp(ctx.state.path) + '，共 ' + total + ' 个文件（小文件 ' + small.length +
+        ' 个 / 大文件 ' + large.length + ' 个）。大文件分块上传，中断或失败后点「从断点续传」可接着传，不必从头再来。';
+      var resumeList = [];   // [{file, path, totalSize}]：仅记录失败的大文件（可续传）
+      var resuming = false;  // 弹层确定按钮第二次点 = 续传
+
+      function pathFor(file) { return ctx.join(ctx.state.path, file.name); }
+      function dropResume(path) {
+        resumeList = resumeList.filter(function (x) { return x.path !== path; });
       }
-      var text = '目标目录 ' + ctx.disp(ctx.state.path) + '，共 ' + usable.length + ' 个文件。';
-      if (blocked.length) text += ' 已跳过 ' + blocked.length + ' 个超过 5 MiB 的文件：' + blocked.join('、') + '。' + LIMIT_HINT;
+      // 首次上传：小文件走原 file.upload（零行为变化）；大文件先查 uploadStatus 再分块。
+      function freshUpload(overwrite, ui) {
+        var failedNames = [];
+        return uploadSeq(small, overwrite, ui).then(function (smallFailed) {
+          failedNames = failedNames.concat(smallFailed);
+          var chain = Promise.resolve();
+          large.forEach(function (file) {
+            chain = chain.then(function () {
+              var path = pathFor(file);
+              return ctx.invoke('file.uploadStatus', { path: path }).then(function (st) {
+                var received = st && typeof st.received === 'number' ? st.received : 0;
+                var exists = !!(st && st.exists);
+                if (!overwrite && exists) {
+                  failedNames.push(file.name + '：目标已存在（' + ctx.fmtSize(received) +
+                    '），未覆盖；勾选「覆盖同名文件」后重新上传');
+                  return;
+                }
+                if (overwrite) {
+                  // uploadChunk 用 O_CREATE 不截断：先清空目标，避免旧内容尾部残留。
+                  ui.msg.textContent = '正在准备 ' + file.name + '…';
+                  return ctx.invoke('file.write', { path: path, content: '', create_if_missing: true })
+                    .then(function () { return chunkedUpload(file, path, file.size, 0, ui); });
+                }
+                return chunkedUpload(file, path, file.size, 0, ui);
+              }).then(function () { dropResume(path); }, function (err) {
+                failedNames.push(file.name + '：' + ctx.errText(err));
+                resumeList.push({ file: file, path: path, totalSize: file.size });
+              });
+            });
+          });
+          return chain.then(function () { return failedNames; });
+        });
+      }
+      // 续传：先 uploadStatus 拿服务器已收字节，再从断点调 uploadChunk；已完整的跳过。
+      function resumeUpload(ui) {
+        var failedNames = [], list = resumeList.slice(), chain = Promise.resolve();
+        list.forEach(function (item) {
+          chain = chain.then(function () {
+            ui.msg.textContent = '正在查询 ' + item.file.name + ' 的断点…';
+            return ctx.invoke('file.uploadStatus', { path: item.path }).then(function (st) {
+              var received = st && typeof st.received === 'number' ? st.received : 0;
+              if (received >= item.totalSize) { dropResume(item.path); return; } // ACK 丢失但已传完
+              ui.msg.textContent = '从 ' + ctx.fmtSize(received) + ' 处续传 ' + item.file.name + '…';
+              return chunkedUpload(item.file, item.path, item.totalSize, received, ui).then(function () {
+                dropResume(item.path);
+              });
+            }).then(undefined, function (err) {
+              failedNames.push(item.file.name + '：' + ctx.errText(err) + '（可再次点续传）');
+            });
+          });
+        });
+        return chain.then(function () { return failedNames; });
+      }
       return dialog({
         title: '上传文件', text: text, action: 'upload', okLabel: '开始上传',
-        fields: [{ key: 'overwrite', type: 'check', value: true, label: '覆盖同名文件', hint: '不勾选时同名文件会返回 E_CONFLICT 并记为失败' }],
+        fields: [{ key: 'overwrite', type: 'check', value: true, label: '覆盖同名文件', hint: '不勾选时同名文件若已存在会记为失败；大文件失败后可点「从断点续传」接着传' }],
         onSubmit: function (values, ui) {
-          return uploadSeq(usable, values.overwrite, ui).then(function (failed) {
+          if (resuming) {
+            return resumeUpload(ui).then(function (failedNames) {
+              return ctx.refresh().then(function () {
+                if (!resumeList.length) {
+                  ctx.setStatus('断点续传完成：文件已全部上传', 'ok');
+                  return false;
+                }
+                ctx.setStatus('续传后仍有 ' + resumeList.length + ' 个文件未完成', 'fail');
+                ui.msg.textContent = '仍有失败：' + failedNames.join('；') + '。可再次点「从断点续传」，已落盘的分块不会重传。';
+                return true;
+              });
+            });
+          }
+          return freshUpload(values.overwrite, ui).then(function (failedNames) {
             return ctx.refresh().then(function () {
-              if (!failed.length) {
-                ctx.setStatus('已上传 ' + usable.length + ' 个文件到 ' + ctx.disp(ctx.state.path), 'ok');
+              if (!failedNames.length) {
+                ctx.setStatus('已上传 ' + total + ' 个文件到 ' + ctx.disp(ctx.state.path), 'ok');
                 return false;
               }
-              ctx.setStatus('上传完成：成功 ' + (usable.length - failed.length) + ' 个，失败 ' + failed.length + ' 个', 'fail');
-              ui.msg.textContent = '失败明细：' + failed.join('；');
+              if (resumeList.length) {
+                resuming = true;
+                ui.ok.textContent = '从断点续传';
+                ctx.setStatus('上传未全部完成：成功 ' + (total - failedNames.length) + ' 个，失败 ' + failedNames.length + ' 个', 'fail');
+                ui.msg.textContent = '失败：' + failedNames.join('；') + '。点「从断点续传」会先查服务器已收字节，从断点接着传，不必重来。';
+                return true;
+              }
+              ctx.setStatus('上传完成：成功 ' + (total - failedNames.length) + ' 个，失败 ' + failedNames.length + ' 个', 'fail');
+              ui.msg.textContent = '失败明细：' + failedNames.join('；');
               return true;
             });
           });
