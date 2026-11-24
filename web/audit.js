@@ -2,12 +2,13 @@
    数据契约以源码为准（handlers_audit.go / store/audit.go）：since 必填、无 offset、
    记录本身无时间字段；本轮给响应增加由键派生的 at 与 order=desc（只加字段，不改 bbolt 存储）。
    筛选：动作（从数据聚合 distinct）、结果、时间范围；每页 50 + 加载更多（快照上限 1000）。
-   对外只暴露 window.KoreAudit = { render }。 */
+   对外暴露 window.KoreAudit = { render, _csv（纯函数测试钩子） }。 */
 (function () {
   'use strict';
   var EP = '/api/v1/audit', SNAP = 1000, PAGE = 50;
   var S = { rows: [], actions: [], action: '', result: '', range: '7d', shown: PAGE,
-    error: '', note: '', loading: false, container: null };
+    error: '', note: '', loading: false, container: null,
+    exporting: false, exportMsg: '', exportErr: false };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -35,6 +36,45 @@
     if (!at) return '—';
     var d = new Date(at);
     return isNaN(d.getTime()) ? '—' : d.toLocaleString('zh-CN', { hour12: false });
+  }
+  /* ---- CSV 导出：纯函数 + Blob 下载（不碰查询逻辑与后端） ---- */
+  // RFC4180 基本转义：字段含逗号 / 双引号 / CR / LF 必须整体加双引号，内部双引号翻倍。
+  function csvCell(value) {
+    var s = value === undefined || value === null ? '' : String(value);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  // detail 是 [{key,value}]，摊平成「键：值」多行，保留原始字符交给 csvCell 转义。
+  function detailText(r) {
+    var list = Array.isArray(r.detail) ? r.detail : [];
+    return list.map(function (kv) {
+      var k = kv && kv.key !== undefined && kv.key !== null ? String(kv.key) : '';
+      var v = kv && kv.value !== undefined && kv.value !== null ? String(kv.value) : '';
+      return k ? k + '：' + v : v;
+    }).join('\n');
+  }
+  // at 用原始值（ISO8601，便于对账排序），不用 fmtTime 的本地化展示值。
+  var CSV_COLUMNS = [
+    ['时间', function (r) { return r.at; }],
+    ['操作者', function (r) { return r.subject; }],
+    ['动作', function (r) { return r.action; }],
+    ['插件', function (r) { return r.plugin; }],
+    ['目标', function (r) { return r.target; }],
+    ['结果', function (r) { return r.result; }],
+    ['详情', detailText]
+  ];
+  // 返回带 UTF-8 BOM 的 CSV 字符串：Excel 双击打开中文不乱码，CRLF 行尾符合 RFC4180。
+  function buildCsv(rows) {
+    var lines = [CSV_COLUMNS.map(function (c) { return csvCell(c[0]); }).join(',')];
+    rows.forEach(function (r) {
+      lines.push(CSV_COLUMNS.map(function (c) { return csvCell(c[1](r)); }).join(','));
+    });
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';
+  }
+  // 文件名带本地时间戳（YYYYMMDD-HHmmss），多次导出不互相覆盖。
+  function exportFilename() {
+    var d = new Date(), p = function (n) { return n < 10 ? '0' + n : String(n); };
+    return 'audit-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+      '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.csv';
   }
   // 结果三色：文字同时写原始值（不只靠颜色，FRONTEND §6 红线 9）。
   function resultBadge(v) {
@@ -89,7 +129,44 @@
     var refresh = el('button', 'btn btn-ghost', '刷新'); refresh.type = 'button';
     refresh.addEventListener('click', load);
     bar.appendChild(refresh);
+    var exportBtn = el('button', 'btn btn-ghost audit-export', S.exporting ? '导出中…' : '导出 CSV');
+    exportBtn.type = 'button';
+    exportBtn.disabled = S.exporting;
+    exportBtn.style.minHeight = '44px'; // 触摸目标 ≥44px（裁决41），写域内内联不依赖公共 CSS
+    exportBtn.setAttribute('aria-label', '导出当前筛选结果为 CSV 文件');
+    exportBtn.addEventListener('click', doExport);
+    bar.appendChild(exportBtn);
     return bar;
+  }
+  // 导出当前筛选下的全部已加载记录（不是当前页），纯前端生成 CSV 并触发下载。
+  function doExport() {
+    if (S.exporting) return;
+    var rows = filtered();
+    if (!rows.length) {
+      S.exportMsg = '当前筛选下无记录可导出'; S.exportErr = true;
+      paint(); return;
+    }
+    S.exporting = true; S.exportMsg = '正在生成 CSV…'; S.exportErr = false;
+    paint();
+    // 让浏览器先把 loading 态绘制出来，再做同步的 CSV 拼装与下载。
+    setTimeout(function () {
+      var name = exportFilename();
+      try {
+        var csv = buildCsv(rows);
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = el('a');
+        a.href = url; a.download = name; a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+        S.exportMsg = '已导出 ' + rows.length + ' 条记录（' + name + '）';
+        S.exportErr = false;
+      } catch (e) {
+        S.exportMsg = '导出失败，请重试'; S.exportErr = true;
+      }
+      S.exporting = false;
+      paint();
+    }, 0);
   }
   function detailCell(r) {
     var td = el('td'); td.dataset.label = '详情';
@@ -131,6 +208,7 @@
     head.appendChild(el('span', 'panel-meta', '匹配 ' + f.length + ' 条 · 显示 ' + Math.min(S.shown, f.length) + ' 条'));
     panel.appendChild(head);
     panel.appendChild(toolbar());
+    if (S.exportMsg) panel.appendChild(el('div', S.exportErr ? 'audit-export-msg audit-export-err' : 'audit-export-msg', S.exportMsg));
     if (S.note) panel.appendChild(el('div', 'audit-hint', S.note));
     if (S.error) {
       var err = el('div', 'panel-empty empty-state');
@@ -169,6 +247,8 @@
   var CSS = '.audit-toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-bottom:1px solid var(--kore-border-2)}' +
     '.audit-select{background:var(--kore-bg-2);color:var(--kore-text-1);border:1px solid var(--kore-border-1);border-radius:4px;padding:6px 8px;font-size:var(--kore-font-12)}' +
     '.audit-hint{padding:8px 16px;color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
+    '.audit-export-msg{padding:8px 16px;font-size:var(--kore-font-12);color:var(--kore-success)}' +
+    '.audit-export-msg.audit-export-err{color:var(--kore-danger)}' +
     '.audit-panel .empty-state-title{margin:0;font-size:var(--kore-font-14);font-weight:600}' +
     '.audit-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-12)}' +
     '.audit-table th{text-align:left;padding:8px 12px;color:var(--kore-text-3);font-weight:400;border-bottom:1px solid var(--kore-border-2);white-space:nowrap}' +
@@ -192,5 +272,9 @@
     load();
     return { destroy: function () { if (S.container === container) S.container = null; } };
   }
-  window.KoreAudit = { render: render };
+  window.KoreAudit = {
+    render: render,
+    // 纯函数测试钩子：供 node 级 CSV 转义/BOM 自检，不参与渲染、不新增网络 API。
+    _csv: { buildCsv: buildCsv, csvCell: csvCell, detailText: detailText }
+  };
 })();
