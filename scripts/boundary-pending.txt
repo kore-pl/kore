@@ -16,11 +16,6 @@
 # t.Parallel 0/15、sync.* 0/15；判据② 15/15 实跑 PASS（161 用例）。补测试由后续卡承接，
 # 本清单只负责「现在挡住新增空口声明，存量不一次性打红」。
 
-site
-file
-ssl
-cron
-monitor
 logs
 runtime-php
 db-mysql
