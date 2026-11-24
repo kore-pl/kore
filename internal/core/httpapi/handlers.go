@@ -113,6 +113,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+schedulerTasksPath+"/{id}/run", s.handleSchedulerRun)
 	s.mux.HandleFunc("DELETE "+schedulerTasksPath+"/{id}", s.handleSchedulerDelete)
 	s.mux.HandleFunc("/api/v1/scheduler/", s.handleNotFound)
+	// 配置迁移（R22 migrate）：导出 / 预览 / 应用；system:admin。
+	s.mux.HandleFunc("GET "+migrateExportPath, s.handleMigrateExport)
+	s.mux.HandleFunc("POST "+migratePreviewPath, s.handleMigratePreview)
+	s.mux.HandleFunc("POST "+migrateApplyPath, s.handleMigrateApply)
 	s.mux.HandleFunc("/", s.handleNotFound)
 }
 
