@@ -26,6 +26,14 @@ func (f *dataTestAccess) Own(path string, _ platform.Account, mode os.FileMode) 
 
 func (f *dataTestAccess) Traversable(string) error { return nil }
 
+// Take 只记录路径：本用例验证的是「谁被移交」，真实属主变更由 platform 覆盖。
+func (f *dataTestAccess) Take(path string, _ platform.Account) error {
+	f.mu.Lock()
+	f.owned = append(f.owned, path)
+	f.mu.Unlock()
+	return nil
+}
+
 // TestPreparePluginDataCreates0700 验证数据根创建为 0700 且 env 注入两项。
 func TestPreparePluginDataCreates0700(t *testing.T) {
 	root := t.TempDir()

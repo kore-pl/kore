@@ -200,6 +200,11 @@ type AccountRemover interface {
 type Access interface {
 	// Own 把 path 属主改为 acct 并设置 mode；非 root 时只设置 mode。
 	Own(path string, acct Account, mode os.FileMode) error
+	// Take 只移交属主，不改 mode，且**不跟随符号链接**（lchown）：把插件自己的
+	// 数据树交给插件用户时用。与 Own 的分工是刻意的——Own 给「落点目录」定属主
+	// + mode（0700，不允许放宽到 0777），Take 只处理树内既有条目，mode 保持插件
+	// 自己定的样子（不替插件改权限）。换 uid 失败必须暴露为错误，不静默降级。
+	Take(path string, acct Account) error
 	// Traversable 给目录补「他人可穿越」位（o+x），保持不可列举。
 	Traversable(path string) error
 }

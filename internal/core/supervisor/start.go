@@ -129,6 +129,9 @@ func (m *Manager) spawn(inst *instance, acct platform.Account, dataDir string) e
 //
 // 数据根与安装树分离（安装树只读）：降权后必须属主 kore-<id> 且 0700，
 // 否则插件写不进自己的数据目录（例如 site 的 www 根、ssl 的证书目录）。
+// 移交是**整棵**的：上一轮以 root / 运维身份运行留下的文件若只交顶层，
+// 插件降权后照样读不到（P0）。父目录 <state>/plugin-data 保持内核所有，
+// 只补 o+x 让插件能穿越到自己的数据根（不可列举其它插件的数据）。
 func (m *Manager) preparePluginData(inst *instance, acct platform.Account) (string, error) {
 	if m.opts.PluginDataRoot == "" {
 		return "", nil
@@ -138,9 +141,13 @@ func (m *Manager) preparePluginData(inst *instance, acct platform.Account) (stri
 		return "", errf(pluginapi.E_INTERNAL, "创建插件数据根 %s 失败：%v", dir, err)
 	}
 	if acct.UID > 0 {
-		if err := m.access.Own(dir, acct, 0o700); err != nil {
+		if err := m.handOverDataDir(dir, acct); err != nil {
+			return "", err
+		}
+		if err := m.access.Traversable(m.opts.PluginDataRoot); err != nil {
 			return "", errf(pluginapi.E_INTERNAL,
-				"把插件数据根 %s 交给 %s(%d:%d) 失败：%v", dir, acct.Name, acct.UID, acct.GID, err)
+				"设置插件数据根父目录 %s 可穿越失败（插件用户 %s 需要经它到达自己的数据根）：%v",
+				m.opts.PluginDataRoot, acct.Name, err)
 		}
 		return dir, nil
 	}

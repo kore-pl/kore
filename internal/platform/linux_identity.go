@@ -270,6 +270,22 @@ func (linuxAccess) Own(path string, acct Account, mode os.FileMode) error {
 	return nil
 }
 
+// Take 只改属主（lchown，不跟随符号链接），不改 mode。
+//
+// 为什么必须 lchown：路径可能是指向宿主任意位置的符号链接（插件在自己的可写
+// 目录里就能造一个），跟随等于把目标文件——/etc/shadow、别人的配置——交给插件
+// 用户，是明确的提权面。lchown 作用在链接 inode 上，目标一个字节都不动。
+//
+// 不按 euid 提前返回：降权路径只在内核为 root 时走；若这里静默跳过，非 root 的
+// 误用会表现为「启动成功但插件读不到数据」。lchown 到自身属主是允许的（owner
+// 可以对自己的文件做无变化 chown），到他人属主则 EPERM——两种情况都如实回报。
+func (linuxAccess) Take(path string, acct Account) error {
+	if err := os.Lchown(path, acct.UID, acct.GID); err != nil {
+		return fmt.Errorf("%w: lchown %s → %s(%d:%d): %v", ErrAccount, path, acct.Name, acct.UID, acct.GID, err)
+	}
+	return nil
+}
+
 // Traversable 只补 o+x（0700 → 0701），不放开读位，目录仍不可列举。
 func (linuxAccess) Traversable(path string) error {
 	info, err := os.Stat(path)

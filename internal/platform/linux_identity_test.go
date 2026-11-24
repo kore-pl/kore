@@ -221,3 +221,35 @@ func TestEnsureAndApplySystemAccount(t *testing.T) {
 		t.Fatalf("子进程组 %s 不含共享组 %d", strings.TrimSpace(string(gout)), groupGID)
 	}
 }
+
+// TestAccessTakeDoesNotFollowSymlink 锁定 Take 的「不跟随」语义：悬空符号链接也能
+// 移交（lchown 作用在链接 inode 上），而跟随语义的 os.Chown 必然 ENOENT。
+//
+// 两条断言互补：① Take 成功 ② 同一路径用 Chown 失败。若实现把 Take 改成
+// os.Chown，① 立刻变红——这就是「不能 follow」的可执行证据，而不是注释承诺。
+func TestAccessTakeDoesNotFollowSymlink(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("以 root 运行时 chown 不受属主限制，反例（EPERM/ENOENT 差异）不成立")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "evil")
+	missing := filepath.Join(dir, "no-such-target")
+	if err := os.Symlink(missing, link); err != nil {
+		t.Fatalf("创建符号链接失败: %v", err)
+	}
+	acct := Account{UID: os.Getuid(), GID: os.Getgid()}
+	if err := SystemAccess().Take(link, acct); err != nil {
+		t.Fatalf("Take 必须不跟随符号链接（悬空链接也应成功）: %v", err)
+	}
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatalf("Take 不应创建/改动链接目标: err=%v", err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("链接本身必须保持存在: fi=%v err=%v", fi, err)
+	}
+	// 反例：跟随语义在同一路径上必然失败，证明上面的成功只可能来自 lchown。
+	if err := os.Chown(link, os.Getuid(), os.Getgid()); err == nil {
+		t.Fatal("反例不成立：跟随符号链接的 os.Chown 竟然成功了")
+	}
+}

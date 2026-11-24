@@ -80,9 +80,12 @@ func (f *fakeIdentity) Apply(cmd *exec.Cmd, acct platform.Account) error {
 type fakeAccess struct {
 	mu        sync.Mutex
 	owned     []string
+	taken     []string
 	traversed []string
 	// ownErr 模拟属主移交失败（触发回滚删账户路径）。
 	ownErr error
+	// takeErr 模拟「顶层已移交、树内条目移交失败」（P0 修复路径的失败分支）。
+	takeErr error
 	// traverseErr 模拟「属主已移交之后」的可穿越失败（触发保留账户路径）。
 	traverseErr error
 	log         *callLog
@@ -100,6 +103,17 @@ func (f *fakeAccess) Own(path string, _ platform.Account, mode os.FileMode) erro
 		return f.ownErr
 	}
 	return os.Chmod(path, mode)
+}
+
+// Take 记录路径（测试不真的改属主；符号链接不跟随由 platform 用例覆盖）。
+func (f *fakeAccess) Take(path string, _ platform.Account) error {
+	f.mu.Lock()
+	f.taken = append(f.taken, path)
+	f.mu.Unlock()
+	if f.log != nil {
+		f.log.add("take:" + path)
+	}
+	return f.takeErr
 }
 
 // Traversable 只记录路径（测试目录在 /tmp，无需真的改 o+x）。
@@ -176,6 +190,22 @@ func TestStartDemotesPluginProcess(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o700 {
 		t.Fatalf("状态目录权限 = %04o，期望 0700（不许放宽到 0777）", got)
+	}
+	// P0 回归：上一轮以当前身份写下的 config.json 必须交给插件身份（只交顶层
+	// 会让降权后的插件读不到自己的配置），而版本目录（安装树）绝不能被移交。
+	config := filepath.Join(stateDir, "fake.conf")
+	versionDir := filepath.Join(stateDir, pluginVersion)
+	taken := map[string]bool{}
+	access.mu.Lock()
+	for _, p := range access.taken {
+		taken[p] = true
+	}
+	access.mu.Unlock()
+	if !taken[config] {
+		t.Fatalf("插件状态目录里的配置文件（fake.conf）未交给插件身份: taken=%v", access.taken)
+	}
+	if taken[versionDir] {
+		t.Fatalf("安装树的版本目录被交给了插件（等于允许替换自身二进制）: %s", versionDir)
 	}
 	if len(access.traversed) < 2 {
 		t.Fatalf("可穿越目录调用不足: %v", access.traversed)

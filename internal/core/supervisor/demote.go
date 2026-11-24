@@ -142,12 +142,11 @@ func (m *Manager) prepareDemotion(inst *instance) (demotionOutcome, error) {
 		return demotionOutcome{Reason: "创建插件状态目录失败"},
 			errf(pluginapi.E_INTERNAL, "创建插件状态目录 %s 失败：%v", stateDir, err)
 	}
-	if err := m.access.Own(stateDir, acct, 0o700); err != nil {
+	// 两段式移交：状态目录本身 + 其下「插件私有」条目（config.json / 插件自建
+	// 子目录），安装树保持 root。只移交顶层会让降权后的插件读不到旧配置（P0）。
+	if err := m.handOverStateDir(stateDir, acct); err != nil {
 		rollback("own state dir")
-		return demotionOutcome{Reason: "状态目录属主移交失败"},
-			errf(pluginapi.E_INTERNAL,
-				"把插件状态目录 %s 交给 %s(%d:%d) 失败：%v（不允许为了可写而放宽为 0777）",
-				stateDir, acct.Name, acct.UID, acct.GID, err)
+		return demotionOutcome{Reason: "状态目录属主移交失败"}, err
 	}
 	handedOver = true
 	// 版本目录 → 入口二进制必须对该用户可读可执行：安装器用 0700 落位

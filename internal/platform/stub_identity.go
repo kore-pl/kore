@@ -35,6 +35,9 @@ type stubAccess struct{}
 // Own 返回 ErrUnsupported。
 func (stubAccess) Own(string, Account, os.FileMode) error { return ErrUnsupported }
 
+// Take 返回 ErrUnsupported（非 Linux 无 chown 语义，降权本就不生效）。
+func (stubAccess) Take(string, Account) error { return ErrUnsupported }
+
 // Traversable 返回 ErrUnsupported。
 func (stubAccess) Traversable(string) error { return ErrUnsupported }
 
