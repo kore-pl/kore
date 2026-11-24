@@ -143,7 +143,7 @@ func TestShortTTLNoSlideWriteAmplification(t *testing.T) {
 	}
 	// cookie 语义不变：Max-Age / Expires 仍按配置的 TTL。
 	rec := httptest.NewRecorder()
-	m.SetCookie(rec, token)
+	m.SetCookie(rec, httptest.NewRequest("GET", "/", nil), token)
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("应下发 1 个 cookie，实际 %d", len(cookies))

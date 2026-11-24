@@ -79,7 +79,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.loginLimiter != nil {
 		s.loginLimiter.RecordSuccess(loginRateKey)
 	}
-	s.auth.SetCookie(w, token)
+	s.auth.SetCookie(w, r, token)
 	// 双提交要求前端能读到与 X-Kore-CSRF 头同名比对的值，故 kore_csrf
 	// 非 HttpOnly（裁决40 的 HttpOnly 指主壳内部持有；此处以 withCSRF 的
 	// cookie==header 实际校验口径为准）。其余安全属性与会话 cookie 对齐。
@@ -144,7 +144,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.auth.ClearCookie(w)
+	s.auth.ClearCookie(w, r)
 	writeJSON(w, http.StatusOK, sessionBody{Authenticated: false})
 }
 

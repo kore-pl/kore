@@ -27,7 +27,7 @@
 | 威胁 | 场景 | 影响 | 缓解 | 残余风险 |
 | --- | --- | --- | --- | --- |
 | 未授权访问控制台 | 同机其他用户或暴露到 0.0.0.0 的 8787 被扫 | 全量插件操作 | 默认仅 UDS；目录 0700；**本机通道不是认证**（§3.2，ADR-0043）：`withAuth` 对全部 `/api/v1/*` 一律会话校验，本机 UDS / loopback 未登录同样是 401 + 登录页；「操作免密」只指登录一次后的 7 天滑动会话；**远程**另需 PBKDF2 口令 + 会话校验 | 用户显式绑 `0.0.0.0` 且无 TLS 时远程口令走明文 |
-| 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 60s 窗口内 5 次失败即锁定 300s（进程内存全局桶，见 §3.5）、恒定时间比较 | 慢速低频爆破（单机场景收益低）；锁定期随重启清零 |
+| 口令爆破 | 反复 `POST /api/v1/auth/login` | 账号接管 | 连续失败 5 次后按 1s→2s→4s→…→30s 递增延迟（正确口令始终放行，见 §3.5）、恒定时间比较、PBKDF2 校验单飞 | 并行连接仍可占满校验队列/消耗哈希 CPU（变慢但不锁死、不夺权）；限速状态随重启清零 |
 | CSRF | 恶意页面诱导已登录浏览器发写请求 | 停机、卸载插件 | `SameSite=Strict` + 双提交 token（两方，非会话绑定）+ `X-Kore-CSRF` + Origin 校验 | 同源 XSS 可绕过全部三层（纯双提交无会话绑定兜底，见 §4） |
 | 会话劫持 | XSS 读 cookie，或同机读取浏览器数据 | 会话盗用 | `HttpOnly`、默认 168h（7 天）滑动 TTL（阈值 `min(24h, ttl/2)`，绝对上限 30 天）、登出即删 | 同机 root 可读浏览器进程内存；**无 UA/IP 指纹绑定**，被盗 cookie 可在其它浏览器重放 |
 | 插件越权调用 | 低权插件请求 `system:admin` 方法 | 宿主被改写 | capabilities 三处校验（安装/授予/调用）+ 审计 | 用户安装时授予过宽能力 |
@@ -96,19 +96,50 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 
 ### 3.4 `Secure` 在纯 HTTP 下的取舍
 
-`localhost` / `127.0.0.1` / `[::1]` 属浏览器安全上下文，`Secure` cookie 在这些 origin 上仍会被接受；但把监听绑到内网 IP 又不加 TLS 时，`Secure=true` 会让浏览器直接丢弃 cookie，表现为"登录提交成功却立刻掉线"。
+**前提**：内核不终结 TLS（`server.tls` 固定 off，配置层拒绝），对外只能由同机反向代理暴露；反代经 UDS / `127.0.0.1` 回源。所以"浏览器这一段是不是 HTTPS"只能由反代告诉内核。
 
-决策：`auth.cookie_secure` 默认 `auto`——请求为 TLS 或 Host 属于以上三种回环名时设 `Secure`，否则不设，同时打一次 `WARN` 并在 `/system` 页顶部显示红条"当前非 TLS 且非回环，cookie 无 Secure 保护"。可显式改 `true`/`false`。不设 `Secure` 的残余风险是同网段被动嗅探可截获会话；`HttpOnly` 仍在，XSS 读不到。
+决策：`auth.cookie_secure` 三值，`auto`（默认）**逐请求**判定，判定顺序：
 
-### 3.5 登录限速
+1. `r.TLS != nil` → 加 `Secure`（为将来内核自终结 TLS 预留）；
+2. 对端是本机通道（UDS 或 loopback TCP）且 `X-Forwarded-Proto` 首个值（逗号分隔）为 `https` → 加 `Secure`；
+3. 其余（纯 HTTP）→ 不加 `Secure`。
 
-**单一全局桶**：`internal/core/auth/ratelimit.go` 的 `LoginLimiter` 实现，口径取 `security.login_rate_limit`——**60s 窗口内 5 次失败即锁定 300s**（与 [CORE](./CORE.md) §2.3 / [DATA-MODEL](./DATA-MODEL.md) §3 同口径）。单管理员体系下只有一个账号，key 固定 `"admin"`；接口保留 key 参数，后续要做 per-IP 桶按客户端标识分桶即可，无需改类型。**不做 per-IP 桶**：UDS 下 `RemoteAddr` 恒为 local，per-IP 桶退化成全局桶，多一层分桶无实际收益，M1 起只维护全局桶。
+`kore_csrf` 与会话 cookie 使用同一判据（登录时从已写出的 `kore_session` 解析，保持一致）。
 
-判定顺序：`Allow("admin")` 在口令校验**之前**，锁定期内连正确口令也拒（避免用正确口令探测解锁时机），返回 429 `E_RATELIMIT` 且 `Retry-After` 给剩余秒数（向上取整、最小 1）；口令错 `RecordFailure`，成功 `RecordSuccess` 清零。锁定到期后计数一并清零，重新从零累计。
+**为什么不再按回环 Host 判 `Secure`**：回环访问没有网络嗅探面，加不加 `Secure` 不改变泄漏风险；而加了会让 curl / 非浏览器客户端在 `http://127.0.0.1` 下拿到 cookie 后不回传，等于把本机自动化路径弄坏。安全收益为零，破坏面真实存在，故 auto 只看传输方式。
 
-**实现约束**：零 ticker / 零 AfterFunc / 零后台 goroutine（G-19），过期条目在判定路径上惰性清理，空闲零开销；**状态只在进程内存，重启清零**（限速状态持久化排在 M3，见 §10 附则）。`security.login_rate_limit.*` 可 SIGHUP 热更，已累计计数与进行中的锁定不变。
+**`X-Forwarded-Proto` 的可伪造性**（选择 `auto` 的已知代价）：内核只监听 UDS 与回环，能连进来的只有本机进程与同机反代；非本机对端的转发头一律不采信。转发头只能**加** `Secure`、不能**减**——请求本身是 TLS 时伪造 `http` 仍是 `Secure`（有反例用例）。伪造 `https` 的最坏后果是浏览器在纯 HTTP 下拒绝回传 cookie（自己登不上，fail-secure），不构成会话泄漏。残余风险是反代自身若把客户端传入的头原样透传：那也只影响"加不加 Secure"，不影响"该加时被拿掉"。反代必须**覆盖写**该头（nginx `proxy_set_header X-Forwarded-Proto $scheme`）。
 
-**未落地项（如实标注）**：~~`auth.login` / `ratelimit.hit` 审计事件尚未实现~~——**登录审计已落地**：成功写 `login.success`（`result=ok`，detail=`{ip,user_agent,session_id_prefix}`），失败写 `login.failed`（`result=denied`，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`）。IP 只保留前 3 段、UA 截断 100 字符、会话只留 8 字符前缀，**口令任何形式都不进审计**；限速命中不再只靠进程 WARN，可按 `action=login.failed` 从审计库追溯暴力破解。
+**显式两值**：`true` 恒加 `Secure`——经纯 HTTP 访问时浏览器会丢弃 cookie，表现为"口令正确却立刻掉线"，启动日志给 INFO 提示；`false` 恒不加——即使经 HTTPS 反代也不加，启动日志给 WARN。
+
+**HTTP over network（本次 P1 的场景）**：反代没终结 TLS、用户直接 `http://域名` 访问时，`auto` 必须**不**加 `Secure`（加了就彻底登不上），此时浏览器↔反代这一段明文可被同网段嗅探 7 天会话令牌。内核在检测到"非回环 Host + 未解析出 Secure + 确实对外暴露（TCP 监听或带反代转发头）"时打一次 `WARN`（每进程一次），提示去反代开 TLS 并透传 `X-Forwarded-Proto: https`。这是有意的取舍：**可用性不能让位于一个假的安全属性**，修复责任在入口。
+
+### 3.5 登录限速（P1 DoS 修复后口径）
+
+**单一全局桶 + 递增延迟，无锁定期**：`internal/core/auth/ratelimit.go` 的 `LoginLimiter` 实现，口径取 `security.login_rate_limit`（默认 `attempts=5` / `window=60s` / `lock=300s`）。单管理员体系下只有一个账号，key 固定 `"admin"`；接口保留 key 参数。**不做 per-IP 桶**：UDS 与本机回环下 `RemoteAddr` 恒为 local（全机同 IP），per-IP 桶退化成全局桶，多一层无收益。
+
+判定顺序：**先校验口令，再对错误口令施加惩罚**——正确口令在任何时候都直接 200（并清零），不存在"锁定期内连正确口令也拒"的硬锁。这一改动修复「任意本地进程 5 次错口令即可永久锁死管理员」的 P1 DoS（`8d7368e` 实测：单桶 key=`admin`、无 IP 维度、锁定期内正确口令也 429、每 60s 重复即永久锁死）。
+
+**惩罚数字表**（连续失败 n，成功或有 `lock` 静默即归零）：
+
+| n | 本次错误口令的应答延迟 | 响应 |
+| --- | --- | --- |
+| 1–5 | 0 | 401 `E_UNAUTHORIZED`（容忍手误） |
+| 6 | 1s | 429 `E_RATELIMIT` |
+| 7 | 2s | 429 `E_RATELIMIT` |
+| 8 | 4s | 429 `E_RATELIMIT` |
+| 9 | 8s | 429 `E_RATELIMIT` |
+| 10 | 16s | 429 `E_RATELIMIT` |
+| ≥11 | 30s（封顶） | 429 `E_RATELIMIT` |
+| 任意 | **正确口令 0s** | 200（立即放行） |
+
+延迟由服务端在应答前施加；429 带 `Retry-After` = 下一次错误口令将被延迟的秒数（向上取整、最小 1）。进入惩罚后不会因"等过一个窗口"重新白拿 5 次猜测：惩罚模式只由登录成功或静默超过 `lock` 退出。
+
+**防爆破 vs 防 DoS 的平衡（如实说明）**：两者天然冲突——UDS/本机回环下没有可区分攻击者与管理员的客户端身份，唯一的判别器就是口令本身，因此"不校验就拒绝"必然误伤正确口令。本实现选择"校验后对错误口令收费"：① 串行爆破被压到 1/30s（≈120 次/小时，原硬锁口径约 60 次/小时，同数量级）；② 并行爆破由 `BeginVerify` **单飞串行化 PBKDF2 校验**，猜测吞吐上限 ≈ 1/单次哈希耗时，不随并发连接数放大；③ 正确口令始终 0 延迟放行，管理员不会被锁死。**残余风险**：攻击者持续灌登录请求仍可占用校验队列让管理员登录变慢、消耗哈希 CPU（这是"管理员必须随时能登入"的必然代价，见 §10 附则）；彻底根治需独立恢复通道（root 直改配置 / CLI 重置），v1 不做。
+
+**实现约束**：零 ticker / 零 AfterFunc / 零后台 goroutine（G-19），过期条目在判定路径上惰性清理，空闲零开销；**状态只在进程内存，重启清零**（限速状态持久化排在 M3，见 §10 附则）。`security.login_rate_limit.*` 可 SIGHUP 热更，已累计的连续失败与惩罚等级不变。
+
+**未落地项（如实标注）**：~~`auth.login` / `ratelimit.hit` 审计事件尚未实现~~——**登录审计已落地**：成功写 `login.success`（`result=ok`，detail=`{ip,user_agent,session_id_prefix}`），失败写 `login.failed`（`result=denied`，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`；进入惩罚的错误口令记 `rate_limited`）。IP 只保留前 3 段、UA 截断 100 字符、会话只留 8 字符前缀，**口令任何形式都不进审计**；可按 `action=login.failed` 从审计库追溯暴力破解。
 
 ## 4. CSRF
 

@@ -42,7 +42,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 
 | `server.tls` | bool | `false` | MVP 固定 off；置 true 启动拒绝并提示走反向代理 |
 | `auth.admin_password_hash` | string | `""` | 空 = 首次启动生成 24 字符随机口令、写回哈希并置 `auth.initialized=true`；非空必须是 §3.3 的 PBKDF2 存储串 |
 | `auth.session_ttl` | duration | `168h`（7 天） | 1m–720h；未显式配置时 168h。**滑动续期阈值 = `min(24h, ttl/2)`**（7 天→24h、12h→6h、1h→30m）：仅当剩余寿命低于阈值才把 `expires_at` 推到 `now+ttl` 并重发 cookie（相邻续期至少间隔 `ttl/2`，避免每次鉴权写盘）；**绝对上限 30 天**（`created+30d`，续期不得越过）；改后需重启内核生效（SIGHUP 不热更）；**不做 300s 下限**（下限只是 GUI 滑块的 UX 护栏，手写 YAML 不需要；短 TTL 不降低安全性，只会让配置者更频繁重登——裁决见 `.agents/LOG/DECISIONS.md`） |
-| `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` = TLS 或回环 Host 时给会话 cookie 加 `Secure`，否则不加并 WARN |
+| `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` 逐请求判定：`r.TLS != nil` **或** 本机对端（UDS/loopback）透传 `X-Forwarded-Proto: https` 时加 `Secure`，纯 HTTP 不加（加了会登不上）。`true` 恒加（纯 HTTP 登不上，启动 INFO）；`false` 恒不加（HTTPS 下也不加，启动 WARN） |
 | `auth.initialized` | bool | `false` | 首次生成口令后由内核置 `true`；`true` 时启动不再打印临时口令。重置 = 人工置 `false` 并清空 `auth.admin_password_hash`；`initialized=true` 但哈希为空视为不一致，拒绝启动 |
 | `paths.state_dir` | string | `/var/lib/kore` | 必须可写；含 `state.db`、`plugins/`、`tasks/` |
 | `paths.log_dir` | string | `/var/log/kore` | 必须可写；含插件日志子目录 |
@@ -62,7 +62,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 
 | `store.allow_unsigned` | bool | `false`（零值，**不在 `Default()` 中设置**） | 仅显式配置；为 `true` 时允许未签名/验签失败的索引（M2 索引级 ed25519 签名）；与 `plugins.allow_unsigned`（插件包签名，M4）完全独立，勿混用 |
 | `security.login_rate_limit.attempts` | int | `5` | 1–20；窗口内失败次数 |
 | `security.login_rate_limit.window` | duration | `60s` | 10s–1h |
-| `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；触发后锁定 IP 时长 |
+| `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；连续失败后惩罚等级的记忆窗口（静默超过即归零，不再表示"锁定时长"） |
 | `audit.invoke_all` | bool | `false` | false = 只审计按插件 capabilities 需要 admin 的写/管理类 invoke（只读类不审计，防日志爆炸）；true = 审计全部 invoke（调试用）；SIGHUP 可热更 |
 | `audit.retention` | duration | `"2160h"`（90 天） | 24h–8760h；审计记录保留期，早于 `now - retention` 的记录由内置清理任务删除（§11）；需重启生效 |
 | `audit.clean_enabled` | bool | `true` | false = 不注册按龄清理内置任务（回到"审计无界增长"状态）；需重启生效 |

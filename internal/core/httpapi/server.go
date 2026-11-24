@@ -300,8 +300,10 @@ type Server struct {
 	//（幂等请求首次下发后稳定复用，避免并发下发互相覆盖 cookie 的竞态）。
 	localCSRFMu         sync.Mutex
 	localCSRFTokenValue string
-	mu                  sync.Mutex
-	listeners           []net.Listener
+	// cookieWarnOnce 让"明文 HTTP 暴露在非回环地址"的告警每个进程只打一次。
+	cookieWarnOnce sync.Once
+	mu             sync.Mutex
+	listeners      []net.Listener
 }
 
 // New 构造 Server 并注册路由；此时尚未绑定任何监听地址。
@@ -334,6 +336,8 @@ func New(opts Options, transport platform.Transport) *Server {
 		// 本机未登录也是 401）；这里只在幂等请求上补发 kore_csrf 令牌、不放行请求
 		// （详见 csrf_local.go）。仅本机通道补发，远程仍必须登录换会话后才拿到令牌。
 		handler = server.withLocalCSRF(handler)
+		// 最外层：只读判定 + 一次性 WARN，不改变请求处理结果。
+		handler = server.withCookieTransportWarning(handler)
 	}
 	server.httpServer = &http.Server{
 		Handler:           server.withRequestID(handler),

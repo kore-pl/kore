@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,18 +52,105 @@ type Manager struct {
 	store        *store.Store
 	passwordHash string
 	ttl          time.Duration
-	secure       bool
+	// cookiePolicy 取 auto / true / false（auth.cookie_secure 原值）。
+	// auto 需要请求上下文（TLS 或反代声明的 X-Forwarded-Proto），因此
+	// 不在构造期把"是否 Secure"固化成一个 bool——那正是 P1 的根因。
+	cookiePolicy string
 	// slideWrites 记录 Slide 实际写库次数；仅供测试观测写放大，生产路径不读。
 	slideWrites atomic.Int64
 }
 
+// auth.cookie_secure 的三个取值（文档见 docs/DATA-MODEL.md §3）。
+const (
+	// CookiePolicyAuto 按每个请求的传输方式判定是否加 Secure（默认）。
+	CookiePolicyAuto = "auto"
+	// CookiePolicyTrue 恒加 Secure（经纯 HTTP 访问会登不上，属显式选择）。
+	CookiePolicyTrue = "true"
+	// CookiePolicyFalse 恒不加 Secure（显式退出保护）。
+	CookiePolicyFalse = "false"
+)
+
 // NewManager 构造会话管理器；ttl<=0 时取 DefaultTTL。
 // passwordHash 为空时 Verify 一律失败（拒绝空口令登录）。
+// secure 只表达"恒加 / 恒不加"；需要按传输自动判定的生产路径用 NewManagerWithPolicy。
 func NewManager(s *store.Store, passwordHash string, ttl time.Duration, secure bool) *Manager {
+	policy := CookiePolicyFalse
+	if secure {
+		policy = CookiePolicyTrue
+	}
+	return NewManagerWithPolicy(s, passwordHash, ttl, policy)
+}
+
+// NewManagerWithPolicy 构造会话管理器，按 auth.cookie_secure 三值语义下发 cookie。
+// policy 非法时退回 auto（默认值，且不会静默关掉保护）。
+func NewManagerWithPolicy(s *store.Store, passwordHash string, ttl time.Duration, policy string) *Manager {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Manager{store: s, passwordHash: passwordHash, ttl: ttl, secure: secure}
+	switch policy {
+	case CookiePolicyAuto, CookiePolicyTrue, CookiePolicyFalse:
+	default:
+		policy = CookiePolicyAuto
+	}
+	return &Manager{store: s, passwordHash: passwordHash, ttl: ttl, cookiePolicy: policy}
+}
+
+// CookieSecure 返回本次请求的 cookie 是否应带 Secure 属性。
+//
+// auto 的判据（按可信度从强到弱）：
+//  1. r.TLS != nil：直连 TLS。当前 server.tls 被配置层拒绝（固定由反代终结），
+//     保留该分支是为了将来内核自己终结 TLS 时不用改这里。
+//  2. 对端是本机通道（UDS / loopback TCP）且 X-Forwarded-Proto 声明 https：
+//     内核只监听 UDS 与 127.0.0.1，HTTPS 必然由同机反向代理终结并把 scheme
+//     透传进来；非本机对端的转发头不采信（攻破 socket 权限的本地进程本来就能
+//     直接读 state.db，不构成新的信任边界）。
+//
+// 注意 X-Forwarded-Proto 只能**加**Secure 不能**减**：请求本身是 TLS 时，
+// 伪造 "http" 也不会把 Secure 拿掉（见 cookie_secure_test.go 的反例用例）。
+// 伪造 "https" 的最坏后果是浏览器拒绝在纯 HTTP 回传 cookie → 自己登不上，
+// 属 fail-secure 方向，不会泄漏会话。
+func (m *Manager) CookieSecure(r *http.Request) bool {
+	switch m.cookiePolicy {
+	case CookiePolicyTrue:
+		return true
+	case CookiePolicyFalse:
+		return false
+	}
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	if !isLocalPeer(r.RemoteAddr) {
+		return false
+	}
+	return forwardedHTTPS(r)
+}
+
+// isLocalPeer 判定对端是否本机通道：UDS 的 RemoteAddr 为 "@"（Linux 抽象命名
+// 空间）或空；TCP 则要求源地址是回环。
+func isLocalPeer(remoteAddr string) bool {
+	if remoteAddr == "" || strings.HasPrefix(remoteAddr, "@") {
+		return true
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// forwardedHTTPS 读取 X-Forwarded-Proto 的第一个值（反代链最左端是客户端侧
+// 的原始 scheme），大小写不敏感。
+func forwardedHTTPS(r *http.Request) bool {
+	raw := r.Header.Get("X-Forwarded-Proto")
+	if raw == "" {
+		return false
+	}
+	first, _, _ := strings.Cut(raw, ",")
+	return strings.EqualFold(strings.TrimSpace(first), "https")
 }
 
 // TTL 返回当前生效的会话时长（配置显式值或默认 7 天）。
@@ -289,20 +377,22 @@ func (m *Manager) ReconcilePasswordFingerprint() (bool, error) {
 }
 
 // SetCookie 把 token 写入 HttpOnly 会话 cookie（Max-Age 与 Expires 同步）。
-func (m *Manager) SetCookie(w http.ResponseWriter, token string) {
+// Secure 按本次请求的传输方式解析（cookie_secure=auto 时逐请求判定）。
+func (m *Manager) SetCookie(w http.ResponseWriter, r *http.Request, token string) {
 	now := time.Now()
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: token, Path: "/",
-		HttpOnly: true, Secure: m.secure, SameSite: http.SameSiteStrictMode,
+		HttpOnly: true, Secure: m.CookieSecure(r), SameSite: http.SameSiteStrictMode,
 		MaxAge: int(m.ttl.Seconds()), Expires: now.Add(m.ttl),
 	})
 }
 
-// ClearCookie 清除会话 cookie（MaxAge=-1）。
-func (m *Manager) ClearCookie(w http.ResponseWriter) {
+// ClearCookie 清除会话 cookie（MaxAge=-1）；Secure 与下发时使用同一判据，
+// 否则浏览器可能留下一个清不掉的 cookie。
+func (m *Manager) ClearCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: "", Path: "/",
-		HttpOnly: true, Secure: m.secure, SameSite: http.SameSiteStrictMode,
+		HttpOnly: true, Secure: m.CookieSecure(r), SameSite: http.SameSiteStrictMode,
 		MaxAge: -1,
 	})
 }

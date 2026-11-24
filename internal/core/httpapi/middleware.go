@@ -250,7 +250,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (auth.Sess
 		return sess, nil
 	}
 	if renewed {
-		s.auth.SetCookie(w, cookie.Value)
+		s.auth.SetCookie(w, r, cookie.Value)
 		return next, nil
 	}
 	return sess, nil

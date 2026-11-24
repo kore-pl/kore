@@ -20,13 +20,14 @@ import (
 //     覆盖，后发的 POST 头与 cookie 可能不同步；稳定令牌让这个竞态无害。
 //   - 远程（非本机）请求一律不下发：远程仍必须登录换会话，令牌只随登录下发。
 //   - cookie 属性与登录下发的一致：非 HttpOnly（双提交要求前端可读）、Path=/、
-//     SameSite=Strict；Secure 跟随本请求是否 TLS（本机 HTTP 场景为 false）。
+//     SameSite=Strict；Secure 走与会话 cookie 相同的判据（auth.cookie_secure：
+//     auto = TLS 或反代透传 X-Forwarded-Proto: https；纯 HTTP 本机场景为 false）。
 func (s *Server) withLocalCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isSafeMethod(r.Method) && !hasCSRFCookie(r) {
 			if local, blocked := s.resolveLocal(r); !blocked && local.isLocal() {
 				if token, err := s.localCSRFToken(); err == nil {
-					writeCSRFCookie(w, token, r.TLS != nil, 0)
+					writeCSRFCookie(w, token, s.auth.CookieSecure(r), 0)
 				}
 			}
 		}

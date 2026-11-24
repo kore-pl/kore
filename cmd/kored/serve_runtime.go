@@ -71,6 +71,7 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		slog.Error("配置快照缺失，无法装配插件目录")
 		return nil, exitConfig
 	}
+	warnCookieTransport(cfg.snapshot)
 	root := cfg.snapshot.Paths.PluginDir
 	if root == "" {
 		root = filepath.Join(cfg.StateDir, "plugins")
@@ -139,8 +140,10 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		credential:    credentialSvc,
 		pluginRootDir: root,
 		channelSocket: channelSocket,
-		auth: auth.NewManager(db, cfg.snapshot.Auth.AdminPasswordHash, cfg.snapshot.Auth.SessionTTL,
-			cfg.snapshot.Auth.CookieSecure == "true"),
+		// cookie_secure 三值语义（auto 逐请求判定）由 auth.Manager 持有：
+		// 旧实现把 auto 折成 false（== "true"），TLS 场景也不带 Secure（P1）。
+		auth: auth.NewManagerWithPolicy(db, cfg.snapshot.Auth.AdminPasswordHash,
+			cfg.snapshot.Auth.SessionTTL, cfg.snapshot.Auth.CookieSecure),
 	}
 	// 改口令 → 全局吊销（ADR-0041）：`kored admin-password set` 只改配置哈希，
 	// 旧会话仍在 bbolt 里；这里按口令指纹比对，变化即删除全部会话。
@@ -490,5 +493,38 @@ func (s *service) StopAll() {
 		if err := s.manager.Stop(context.Background(), view.ID); err != nil {
 			slog.Warn("停止插件失败", "plugin_id", view.ID, "err", err)
 		}
+	}
+}
+
+// warnCookieTransport 在启动时把 cookie_secure 的实际取舍讲清楚。
+//
+// 为什么需要（P1 的可用性侧）：cookie_secure=true 在纯 HTTP 下会让浏览器丢弃
+// 会话 cookie，表现为"口令正确但立刻掉线"；auto 在反代没终结 TLS 时只能不加
+// Secure（加了就登不上），残余风险是同网段可嗅探会话令牌。两种情况都必须让
+// 运维在日志里看到，而不是上线后自己猜。
+func warnCookieTransport(snap *coreconfig.Snapshot) {
+	if snap == nil {
+		return
+	}
+	policy := snap.Auth.CookieSecure
+	if policy == auth.CookiePolicyTrue {
+		slog.Info("cookie_secure=true：会话 cookie 恒带 Secure；经纯 HTTP 访问会被浏览器丢弃（登不上），请确认入口已终结 TLS")
+		return
+	}
+	if snap.Server.Addr == "" {
+		// UDS-only：本机 Unix socket 无网络传输面，auto 下没有可告警的暴露路径。
+		return
+	}
+	if snap.Server.TLS {
+		return // 配置层当前拒绝，保留分支便于将来内核自终结 TLS。
+	}
+	switch policy {
+	case auth.CookiePolicyFalse:
+		slog.Warn("cookie_secure=false：即使经 HTTPS 反向代理访问，会话 cookie 也不带 Secure；仅建议纯本机调试使用",
+			"addr", snap.Server.Addr)
+	default:
+		slog.Warn("已开启 TCP 监听但内核不终结 TLS：纯 HTTP 请求的会话 cookie 不带 Secure（浏览器才不会丢 cookie）",
+			"addr", snap.Server.Addr,
+			"hint", "在反向代理终结 TLS 并透传 X-Forwarded-Proto: https，auto 会据此加 Secure；直接暴露到网络请勿使用明文 HTTP")
 	}
 }

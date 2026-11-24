@@ -126,6 +126,8 @@ http://127.0.0.1:8787/
 4. 口令错误 5 次（60 秒窗口内）会锁 300 秒，别硬试。
 
 > 安全边界：`/` 与 `/assets/` 前缀在鉴权白名单内（面板静态壳无敏感数据，未登录也能加载登录界面）；白名单只认前缀一条、不枚举文件名。所有管理 API 仍强制会话校验，不因静态托管削弱。不要把 `server.addr` 改成 `0.0.0.0` 或把 `cookie_secure` 关掉暴露到不安全网络。
+>
+> 对外暴露（反代 / 隧道）：`cookie_secure: "auto"` 只有在反代**终结 TLS 并覆盖写 `X-Forwarded-Proto: https`** 时才给会话 cookie 加 `Secure`；反代只是明文 HTTP 转发时内核会打一次 WARN（同网段可嗅探 7 天会话令牌）。细节见 [docs/SECURITY.md](docs/SECURITY.md) §3.4。
 
 ## 停止
 
