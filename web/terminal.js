@@ -105,7 +105,15 @@
       'font-size:var(--kore-font-12);color:var(--kore-text-2);background:var(--kore-bg-0);cursor:pointer}' +
       '.term-tab.is-active{color:var(--kore-text-1);border-color:var(--kore-info);background:var(--kore-bg-2)}' +
       '.term-tab-x,.term-tab-add,.term-fbtn{min-height:44px;min-width:44px;flex:0 0 auto;' +
-      'display:inline-flex;align-items:center;justify-content:center}'
+      'display:inline-flex;align-items:center;justify-content:center}' +
+      // 错误文案折叠区（USABILITY §4 / G-33）：原始错误只在展开后出现，窄屏不撑破工具栏
+      '.term-status{min-width:0;overflow-wrap:anywhere}' +
+      '.term-err-details{display:block;max-width:100%;margin-top:4px;font-size:var(--kore-font-12);color:var(--kore-text-3)}' +
+      '.term-err-details summary{cursor:pointer}' +
+      '.term-err-details pre{margin:4px 0 0;padding:6px 8px;max-width:100%;box-sizing:border-box;' +
+      'white-space:pre-wrap;word-break:break-all;' +
+      'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--kore-bg-0);' +
+      'border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}'
     ].join('');
     var style = el('style', null, CSS);
     style.id = 'kore-terminal-extra-css';
@@ -584,6 +592,33 @@
       status.textContent = text;
       status.className = 'term-status ' + (tone === 'fail' ? 'term-fail' : tone === 'ok' ? 'term-ok' : 'muted');
     }
+    // 错误文案三件套（USABILITY §4 / G-33）：白话「什么错了。怎么办：动作」+ 可折叠原始错误。
+    // 错误码统一走主壳 KoreUI.failureOf（dns.js 同款）；未收录的 code 用调用点的场景白话兜底。
+    // 原始 err.message 只进折叠区，绝不裸露给用户；排障时展开即可看到 [code] + 原文。
+    function sentence(title, action) {
+      var t = String(title || '').replace(/[\s。：:；;，,、]+$/, '');
+      var a = String(action || '').replace(/^\s*怎么办\s*[：:]?\s*/, '').replace(/[\s。；;]+$/, '');
+      if (!t) t = '操作未完成';
+      if (!a) a = '按提示修正后重试；仍不成功请刷新页面，或到「日志」页查看插件日志。';
+      return t + '。怎么办：' + a + '。';
+    }
+    function errorNode(err, title, action) {
+      var f = (window.KoreUI && window.KoreUI.failureOf) ? window.KoreUI.failureOf(err) : null;
+      var wrap = el('span', null, sentence(f && f.mapped ? f.title : title, f && f.mapped ? f.action : action));
+      var raw = err && (err.message || (typeof err === 'string' ? err : ''));
+      if (raw) {
+        var d = el('details', 'term-err-details');
+        d.appendChild(el('summary', null, '查看原始错误（排障用）'));
+        d.appendChild(el('pre', null, (err && err.code ? '[' + err.code + '] ' : '') + String(raw)));
+        wrap.appendChild(d);
+      }
+      return wrap;
+    }
+    function setError(title, action, err) {
+      status.className = 'term-status term-fail';
+      status.textContent = '';
+      status.appendChild(errorNode(err, title, action));
+    }
     function setFoot() {
       if (!S.session) { foot.textContent = '点击屏幕后直接输入；Enter 执行、Ctrl+C 中断。'; return; }
       var base = '会话 ' + S.session + ' · ' + S.shell + ' · 进程 ' + S.pid + ' · ' + S.cols + '×' + S.rows;
@@ -680,7 +715,7 @@
         s.reconnecting = false;
         if (destroyed) return;
         if (aerr.code === 'E_NOTFOUND' || aerr.code === 'E_CONFLICT' || aerr.code === 'E_UNAUTHORIZED') { expireSession(T); return; }
-        if (active === T) { setStatus('重连失败：' + aerr.message + '（可点「重连」再试）', 'fail'); retry.hidden = false; }
+        if (active === T) { setError('重连失败', '点「重连」再试；反复失败请刷新页面', aerr); retry.hidden = false; }
       });
     }
     function closeSession() { closeTab(active); } // 关闭当前标签（见下方多标签实现）
@@ -704,9 +739,11 @@
         if (active === T) {
           retry.hidden = false;
           // 会话数上限（默认 4）：给出可操作出路，而不是甩一个错误码。
-          setStatus(err.code === 'E_RATELIMIT'
-            ? '会话数已达上限（最多 ' + (S.maxSessions || 4) + ' 个）：先关闭一个已有标签或会话'
-            : '创建会话失败：' + err.message, 'fail');
+          if (err.code === 'E_RATELIMIT') {
+            setError('会话数已达上限（最多 ' + (S.maxSessions || 4) + ' 个）', '先关闭一个已有标签或会话再试', err);
+          } else {
+            setError('创建会话失败', '检查终端服务后点「重连」重试；反复失败请到「日志」页查看插件日志', err);
+          }
         }
       });
     }
@@ -765,7 +802,7 @@
         showSess(left);
       }, function (err) {
         if (destroyed) return;
-        setStatus('关闭会话失败：' + err.message, 'fail');
+        setError('关闭会话失败', '刷新页面后重试；反复失败请到「日志」页查看插件日志', err);
       });
     }
     // terminal.attach：接管存活会话 → 用回放窗口重建屏幕 → 继续增量读。
@@ -808,7 +845,7 @@
         s.connecting = false; busy = false;
         if (active === T) { retry.hidden = false;
           // 会话可能已被空闲回收 / 归属不符：说明原因并自动新建，不让用户卡住。
-          setStatus('恢复会话失败（' + err.message + '），已为你新建会话', 'fail');
+          setError('恢复会话失败', '点「重连」再试；已为你新建会话', err);
         }
         connect(T);
       });
@@ -878,7 +915,7 @@
         S.histCursor = -1; renderHist();
       }, function (err) {
         if (destroyed) return;
-        S.histLoading = false; S.histError = err.message; renderHist();
+        S.histLoading = false; S.histError = err; renderHist();
       });
     }
     function clearHistory() {
@@ -891,7 +928,7 @@
         loadHistory();
       }, function (err) {
         if (destroyed) return;
-        S.clearArmed = false; S.histError = err.message; renderHist();
+        S.clearArmed = false; S.histError = err; renderHist();
       });
     }
     function renderHist() {
@@ -927,7 +964,9 @@
         '再点一次「确认清空？」删除全部输入历史；点「收起」放弃。'));
       if (S.histMsg) box.appendChild(el('div', 'term-hist-ok', S.histMsg));
       if (S.histError) {
-        box.appendChild(el('div', 'term-hist-err', '读取失败：' + S.histError));
+        var eb = el('div', 'term-hist-err');
+        eb.appendChild(errorNode(S.histError, '输入历史读取失败', '点「刷新」重试；反复失败请到「日志」页查看插件日志'));
+        box.appendChild(eb);
         histHost.appendChild(box); return;
       }
       if (S.histLoading) { box.appendChild(el('div', 'muted', '正在读取…')); histHost.appendChild(box); return; }
@@ -986,7 +1025,7 @@
       if (!S.session || !term) return;
       var payload = text.replace(/\r\n/g, '\r').replace(/\n/g, '\r');
       invoke('terminal.write', { params: { session_id: S.session, data: b64enc(new TextEncoder().encode(payload)) } })
-        .catch(function (err) { if (err.code === 'E_NOTFOUND') expireSession(); else setStatus('发送失败：' + err.message, 'fail'); });
+        .catch(function (err) { if (err.code === 'E_NOTFOUND') expireSession(); else setError('发送失败', '点「重连」恢复会话后重试', err); });
     }
     function onKey(ev) {
       if (ev.isComposing) return;
