@@ -33,6 +33,9 @@ const pluginsPath = "/api/v1/plugins"
 // authPasswordPath 是在线改口令端点；前端 PW_ENDPOINT 与之逐字对齐。
 const authPasswordPath = "/api/v1/auth/password"
 
+// snapshotsPath 是配置快照（时光机）端点前缀；与 handlers_snapshots.go 共用。
+const snapshotsPath = "/api/v1/snapshots"
+
 // 改口令请求校验口径（与 web/settings.js 的 PW_MIN_LEN=12 对齐）。
 const (
 	// passwordMinLen 是新口令最小长度（人话下限，与 CLI 24 位随机口令同口径取保守值）。
@@ -107,7 +110,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+alertsPath, s.handleAlertsWrite)
 	s.mux.HandleFunc("POST "+alertsPath+"/{id}/seen", s.handleAlertSeen)
 	s.mux.HandleFunc(alertsPath+"/", s.handleNotFound)
+	// 通知通道（ADR-0054，用户显式配置的出站推送）：列表 system:read，写/删/测试 system:admin。
+	s.mux.HandleFunc("GET "+webhookPath, s.handleWebhookList)
+	s.mux.HandleFunc("POST "+webhookPath, s.handleWebhookCreate)
+	s.mux.HandleFunc("DELETE "+webhookPath+"/{id}", s.handleWebhookDelete)
+	s.mux.HandleFunc("POST "+webhookPath+"/{id}/test", s.handleWebhookTest)
+	s.mux.HandleFunc(webhookPath+"/", s.handleNotFound)
 	// 定时任务（ADR-0019）：列表 / 创建 / 立即执行 / 删除；能力要求 system:admin。
+	// 配置快照（时光机）：列表/创建/删除/差异预览/回滚。精确路由在前，/{id} 兜底在后（go-build-api）。
+	s.mux.HandleFunc("GET "+snapshotsPath, s.handleSnapshotsList)
+	s.mux.HandleFunc("POST "+snapshotsPath, s.handleSnapshotsCreate)
+	s.mux.HandleFunc("GET "+snapshotsPath+"/{id}/diff", s.handleSnapshotsDiff)
+	s.mux.HandleFunc("POST "+snapshotsPath+"/{id}/rollback", s.handleSnapshotsRollback)
+	s.mux.HandleFunc("DELETE "+snapshotsPath+"/{id}", s.handleSnapshotsDelete)
 	s.mux.HandleFunc("GET "+schedulerTasksPath, s.handleSchedulerList)
 	s.mux.HandleFunc("POST "+schedulerTasksPath, s.handleSchedulerCreate)
 	s.mux.HandleFunc("POST "+schedulerTasksPath+"/{id}/run", s.handleSchedulerRun)

@@ -123,6 +123,9 @@ type Options struct {
 	// Alerts 是告警中心持久层（alerts bucket）；nil 时 alerts/* 端点回 501、
 	// 各检查点埋点静默跳过。由 cmd/kored 注入（本包不 import store，G-01）。
 	Alerts AlertSink
+	// Webhooks 是通知通道注册表；nil 时 webhook/* 端点回 501、出站投递跳过。
+	// 默认由 New 自建空注册表（用户未配置 = 零出站，G-10/G-19）。
+	Webhooks *webhookRegistry
 	// ChannelSocket 是插件 → 内核 root-action 的**独立通道** UDS（ADR-0018 方案①）；
 	// 空串表示不启用。通道只接受插件 bearer + SO_PEERCRED(uid,pid) 双校验过的
 	// root-action 请求，不放宽主 socket /run/kore/kore.sock（仍 0600 root）。
@@ -300,6 +303,8 @@ type Server struct {
 	scheduler      *scheduler.Service
 	// alerts 是告警中心持久层；nil 时端点 501、埋点跳过。
 	alerts AlertSink
+	// webhooks 是用户配置的通知通道注册表；默认空表 = 零出站。
+	webhooks *webhookRegistry
 	// channelServer 是独立通道 socket 的服务端；nil 表示未启用通道。
 	channelServer *http.Server
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
@@ -326,6 +331,10 @@ func New(opts Options, transport platform.Transport) *Server {
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
 		taskEvents: opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
+		webhooks: opts.Webhooks,
+	}
+	if server.webhooks == nil {
+		server.webhooks = newWebhookRegistry()
 	}
 	server.auditInvokeAll.Store(opts.AuditInvokeAll)
 	if server.capResolver == nil {

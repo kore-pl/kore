@@ -82,7 +82,11 @@ func (s *Server) recordAlert(severity, source, title, detail string) {
 	}
 	if _, err := s.alerts.PutAlert(severity, source, title, detail); err != nil {
 		slog.Warn("告警写入失败", "title", title, "err", err)
+		return
 	}
+	// 通知通道（ADR-0054）：只在告警落库成功后派发，事件驱动、零常驻轮询；
+	// 未配置任何通道时 dispatchAlert 立即返回，出站恒 0（G-10/G-19）。
+	s.webhooks.dispatchAlert(source, title, detail)
 }
 
 // noteDeniedAlert 是 auditDenied 的告警埋点：capability.denied / root.action 拒绝
