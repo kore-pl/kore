@@ -1,9 +1,10 @@
 /* kore 主壳 · 防火墙（web/firewall.js）——零框架 / 零 CDN / 无外链。
    调用形态：POST /api/v1/invoke/firewall/firewall.<action>（插件 id 与业务域名一致）。
-   只读：firewall.status / firewall.rules；写：allowPort / denyPort / deleteRule。
+   只读：firewall.status / firewall.rules；写：allowPort / denyPort / deleteRule / enable / disable。
    写操作两步走：先 dry_run=true 预览真实 argv，确认后再 dry_run=false 执行；
-   available=false（非系统管理员）时真实写按钮禁用，但保留只读状态与黄底说明。
-   本页不启用/禁用防火墙，SSH 端口保护同时在前端提示与服务端拦截两层生效。 */
+   available=false（非系统管理员）时真实写按钮禁用，但保留只读状态与可操作降级提示。
+   一键启用/停用带 SSH 放行强校验：默认入站非放行且未放行 SSH 端口时，启用前强警告并要求确认，
+   防止把自己锁在外面；SSH 保护同时在前端提示与服务端拦截两层生效。插件版本 0.2.6。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/firewall/', TIMEOUT_MS = 15000;
@@ -13,7 +14,8 @@
     return { root: null, status: null, statusError: '', statusCode: '', statusHint: '',
       rules: [], rulesError: '', rulesErrorCode: '', rulesErrorHint: '',
       rulesLoaded: false, canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
-      deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false };
+      deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false,
+      switchPreview: null, switchError: '', switchBusy: false, switchRiskAck: false, switchEnable: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -62,30 +64,26 @@
     add(h, el('span', 'panel-title', title));
     return { panel: p, head: h, meta: add(h, el('span', 'panel-meta', metaText || '')) };
   }
-  // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
-  // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会出现空白 / undefined。
-  function errorView(err) {
-    var f = window.KoreUI && window.KoreUI.failureOf ? window.KoreUI.failureOf(err) : null;
-    if (!f || !f.mapped) {
-      return { mapped: false, title: '', action: '', detail: String((err && err.message) || err || '') };
-    }
-    return f;
-  }
+  // 错误文案唯一来源是主壳 KoreUI.errorText（web/app.js）：归一成「什么错了。怎么办：动作」白话单行串。
+  // 它内部走 failureOf 的 ERROR_VIEW 映射表，未收录 code 回退通用「怎么办」——不会出现空白 / undefined，
+  // 也不会把内部 err.message / detail 裸铺首屏。KoreUI 未挂载（独立测试）时回退本地白话串。
   function failureText(err, verb) {
-    var f = errorView(err);
-    if (f.mapped) return f.title; // 同一 code 在任何页面都是这一句
-    return verb + '失败：' + ((err && err.message) || '原因未知') +
-      (err && err.hint ? '（' + err.hint + '）' : '') + '。请点「刷新」重试，反复失败时检查系统管理员权限或查看运行手册';
+    if (window.KoreUI && typeof window.KoreUI.errorText === 'function') {
+      return window.KoreUI.errorText(err, verb + '失败');
+    }
+    var msg = String((err && err.message) || '原因未知').replace(/^E_[A-Z_]+[:：]\s*/, '');
+    var hint = err && err.hint ? String(err.hint) : '';
+    return (msg || verb + '失败') + '。怎么办：' + (hint || '请点「刷新」重试，反复失败时检查系统管理员权限或查看运行手册') + '。';
   }
   // failureBlock：状态 / 列表级错误卡片（统一标题 + 可执行下一步 + 原始错误折叠）。
-  // 管理员权限缺失只给一条指引，不把原始英文错误铺在首屏。
+  // 管理员权限缺失只给一条指引，不把原始英文错误铺在首屏；detail 只进折叠区，不直接上屏。
   function failureBlock(err, cmd) {
-    var f = errorView(err), box = el('div', 'fw-callout-warn fw-root-guide');
+    var f = window.KoreUI && typeof window.KoreUI.failureOf === 'function'
+      ? window.KoreUI.failureOf(err) : { mapped: false };
+    var box = el('div', 'fw-callout-warn fw-root-guide');
     box.setAttribute('role', 'status');
     add(box, el('div', 'fw-callout-title', f.mapped ? f.title : '操作失败'));
-    add(box, el('p', 'fw-callout-text', f.mapped
-      ? f.action
-      : '原因：' + ((err && err.message) || '原因未知') + (err && err.hint ? '（' + err.hint + '）' : '') + '。请点「刷新」重试，反复失败时以系统管理员身份运行后刷新本页，或打开运行手册查看提权步骤'));
+    add(box, el('p', 'fw-callout-text', f.mapped ? f.action : failureText(err, '读取')));
     if (cmd) add(box, el('pre', 'fw-cmd', cmd));
     var raw = (err && err.message) ? String(err.message) : '';
     if (raw) {
@@ -142,27 +140,36 @@
       var cell = add(grid, el('div', 'fw-stat'));
       add(cell, el('span', 'fw-stat-label', item[0])); add(cell, el('span', 'fw-stat-value', item[1]));
     });
-    // 开关不在本页：firewall 0.2.4 仅暴露 status/rules/allowPort/denyPort/deleteRule，
-    // 没有 enable/disable 方法。按状态给可操作指引，不伪造一个点了必然失败的按钮。
+    // 一键启用/停用（firewall.enable / firewall.disable，0.2.6 已提供，system:admin）。
+    // 两步走：点按钮先 dry_run=true 预览真实命令，确认后才 dry_run=false 执行。
+    // SSH 保护：默认入站为拒绝且未检测到 SSH 放行规则时，启用前给强警告并要求勾选确认。
     if (st.available && st.backend === 'ufw') {
-      if (!st.enabled) {
-        var off = add(box, el('div', 'fw-callout-warn'));
-        add(off, el('div', 'fw-callout-title', '防火墙当前未启用，规则不会生效'));
-        add(off, el('p', 'fw-callout-text',
-          '在服务器上执行下面的命令启用；启用前请确认 SSH 端口（默认 22/tcp）已放行，否则启用后可能断开远程连接。'));
-        add(off, el('pre', 'fw-cmd', 'sudo ufw enable'));
-        add(off, el('p', 'fw-callout-text', '本页暂不提供一键启用/停用；操作完成后点「刷新」查看最新状态。'));
-      } else {
-        var offGuide = add(box, el('details', 'fw-details'));
-        add(offGuide, el('summary', null, '如何停用防火墙'));
-        add(offGuide, el('p', 'fw-callout-text', '停用会影响全机出入站，执行前请确认 SSH 端口已放行：'));
-        add(offGuide, el('pre', 'fw-cmd', 'sudo ufw disable'));
-        add(offGuide, el('p', 'fw-callout-text', '本页暂不提供一键开关；操作完成后点「刷新」查看最新状态。'));
+      var sw = add(box, el('div', 'fw-callout-warn fw-switch'));
+      add(sw, el('div', 'fw-callout-title', st.enabled ? '防火墙已启用' : '防火墙未启用，规则不会生效'));
+      add(sw, el('p', 'fw-callout-text', st.enabled
+        ? '停用会失去全机包过滤保护。确认要停用请点下面的按钮，先看命令预览再决定是否执行。'
+        : '启用会让规则开始生效。启用前必须确认 SSH 端口（默认 22/tcp）已放行，否则可能把你锁在外面、无法再连接服务器。'));
+      var swOps = add(sw, el('div', 'fw-ops'));
+      var swBtn = add(swOps, el('button', 'btn ' + (st.enabled ? 'fw-danger' : 'btn-primary'),
+        st.enabled ? '一键停用防火墙' : '一键启用防火墙'));
+      swBtn.type = 'button';
+      swBtn.disabled = !S.canWrite || S.switchBusy;
+      swBtn.title = S.canWrite ? '先预览命令，确认后才真正执行'
+        : '需要系统管理员权限；下方有提权的可操作提示';
+      on(swBtn, function () { startSwitch(!st.enabled); });
+      if (!S.canWrite) {
+        add(sw, el('p', 'fw-callout-text', '当前没有系统管理员权限，开关按钮已禁用；按下方提示提权后刷新即可使用。'));
       }
     }
     if (!st.available) {
       S.statusHost.appendChild(failureBlock({ code: st.error_code, message: st.error, hint: st.hint },
         st.error_code === 'E_NEED_ROOT' ? 'sudo systemctl restart kore' : ''));
+      // 已知边界（ADR-0018）：非 root 且无 root-action 通道时状态不可读。不报缺口，给可操作降级提示。
+      var down = add(S.statusHost, el('div', 'fw-callout-warn'));
+      add(down, el('div', 'fw-callout-title', '只读降级：无法读取防火墙状态'));
+      add(down, el('p', 'fw-callout-text', st.hint
+        ? st.hint + ' 完成提权后点面板右上角「刷新」，即可读取状态并使用一键开关。'
+        : '以管理员身份（root）运行 Kore 后，点面板右上角「刷新」即可读取状态并使用一键开关。'));
     }
     var can = S.canWrite;
     // 状态说了算：能写才解锁表单，否则一律禁用（权限不足时不再让用户白填一遍）。
@@ -317,6 +324,95 @@
     var port = Math.trunc(Number(S.portInput.value));
     S.sshWarn.hidden = port !== 22;
   }
+  // 检测 SSH 是否在规则里放行：22/tcp，或服务端 KORE_SSH_PORT 配置的端口。
+  // 放行判定只看当前已读到的规则（in + allow + tcp + 端口覆盖 22）；读不到规则时按"未确认放行"处理（fail-closed）。
+  function sshAllowed() {
+    if (!S.rulesLoaded || S.rulesError) return false;
+    return S.rules.some(function (r) {
+      if (r.action !== 'allow' || r.direction === 'out') return false;
+      if (r.proto && r.proto !== 'tcp' && r.proto !== 'any') return false;
+      var raw = String(r.port === null || r.port === undefined ? '' : r.port).trim();
+      if (raw === '' || raw === 'any') return true; // 全端口放行覆盖 22
+      return raw.split(',').some(function (piece) {
+        piece = piece.trim(); var range = piece.split(':');
+        if (range.length === 2) { var lo = Number(range[0]), hi = Number(range[1]); return 22 >= lo && 22 <= hi; }
+        return Number(piece) === 22;
+      });
+    });
+  }
+  // 一键开关：先 dry_run=true 预览真实 argv，展示给用户看，确认后才 dry_run=false 真执行。
+  function startSwitch(enable) {
+    if (!S.canWrite || S.switchBusy) return;
+    S.switchError = ''; S.switchPreview = null; S.switchEnable = !!enable; S.switchRiskAck = false;
+    paintSwitch();
+    invoke(enable ? 'firewall.enable' : 'firewall.disable', { dry_run: true }).then(function (data) {
+      if (S.destroyed) return;
+      S.switchPreview = data; paintSwitch();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.switchError = failureText(err, enable ? '启用预览' : '停用预览'); paintSwitch();
+    });
+  }
+  // 启用前的 SSH 强警告：默认入站非 allow 且未确认放行 22 时，必须勾选确认才能继续。
+  function switchRisky() {
+    return S.switchEnable && !!S.status && S.status.available && S.status.default_in !== 'allow' && !sshAllowed();
+  }
+  function paintSwitch() {
+    if (!S.switchHost) return;
+    S.switchHost.textContent = '';
+    if (S.switchError) S.switchHost.appendChild(notice(S.switchError));
+    if (!S.switchPreview) return;
+    var enable = S.switchEnable;
+    var box = add(S.switchHost, el('div', 'fw-preview ' + (enable ? '' : 'fw-delete-confirm')));
+    add(box, el('div', 'fw-preview-title', (enable ? '一键启用' : '一键停用') + '：将执行的命令（预览，尚未执行）'));
+    add(box, el('pre', 'fw-cmd', (S.switchPreview.command || []).join(' ')));
+    if (enable) {
+      if (switchRisky()) {
+        var warn = add(box, el('div', 'fw-callout-warn'));
+        add(warn, el('div', 'fw-callout-title', '高风险：SSH 端口可能未放行'));
+        add(warn, el('p', 'fw-callout-text',
+          '当前默认入站为「' + (S.status.default_in || '拒绝') + '」，且规则里未确认放行 SSH 端口（22/tcp）。' +
+          '此时启用防火墙，很可能把你锁在服务器外面、远程连接立刻断开。强烈建议先在「添加规则」放行 22/tcp，再来启用。'));
+        var lab = add(warn, el('label', 'field-check'));
+        var ack = add(lab, el('input')); ack.type = 'checkbox'; ack.checked = S.switchRiskAck;
+        add(lab, el('span', null, '我确认已有其它登录方式（如服务器控制台），仍要启用'));
+        ack.addEventListener('change', function () {
+          S.switchRiskAck = ack.checked;
+          if (ok) ok.disabled = !S.canWrite || S.switchBusy || switchRisky();
+        });
+      } else {
+        add(box, el('p', 'fw-preview-note', '已确认 SSH 端口放行，或默认入站为放行；启用后远程连接应保持可用。'));
+      }
+    } else {
+      add(box, el('p', 'fw-preview-note', '停用会失去全机包过滤保护；确认后才执行。'));
+    }
+    var ops = add(box, el('div', 'fw-ops'));
+    var ok = add(ops, el('button', 'btn ' + (enable ? 'btn-primary' : 'fw-danger'),
+      enable ? '确认启用' : '确认停用'));
+    ok.type = 'button'; ok.disabled = !S.canWrite || S.switchBusy || switchRisky();
+    var cancel = add(ops, el('button', 'btn btn-ghost', '取消'));
+    cancel.type = 'button';
+    on(cancel, function () { S.switchPreview = null; S.switchError = ''; S.switchRiskAck = false; paintSwitch(); });
+    on(ok, function () { execSwitch(ok); });
+  }
+  function execSwitch(btn) {
+    if (!S.canWrite || S.switchBusy || !S.switchPreview) return;
+    if (switchRisky() && !S.switchRiskAck) return;
+    S.switchBusy = true; btn.disabled = true; paintStatus();
+    var enable = S.switchEnable, method = enable ? 'firewall.enable' : 'firewall.disable';
+    invoke(method, { dry_run: false }).then(function (data) {
+      if (S.destroyed) return;
+      S.switchBusy = false;
+      S.notice = (enable ? '已启用防火墙' : '已停用防火墙') + '：' + (data.command || []).join(' ');
+      S.switchPreview = null; S.switchError = ''; S.switchRiskAck = false;
+      paintNotice(); paintSwitch(); loadStatus(); loadRules();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.switchBusy = false;
+      S.switchError = failureText(err, enable ? '启用' : '停用');
+      paintSwitch(); paintStatus();
+    });
+  }
   function loadStatus() {
     S.statusError = ''; S.statusCode = ''; S.statusHint = ''; paintStatus();
     invoke('firewall.status', {}).then(function (data) {
@@ -331,11 +427,11 @@
     S.rulesLoaded = false; S.rulesError = ''; S.rulesErrorCode = ''; S.rulesErrorHint = ''; paintRules();
     invoke('firewall.rules', {}).then(function (data) {
       if (S.destroyed) return;
-      S.rules = data.rules || []; S.rulesLoaded = true; paintRules();
+      S.rules = data.rules || []; S.rulesLoaded = true; paintRules(); paintSwitch();
     }, function (err) {
       if (S.destroyed) return;
       S.rulesError = err.message; S.rulesErrorCode = err.code || ''; S.rulesErrorHint = err.hint || '';
-      S.rulesLoaded = true; paintRules();
+      S.rulesLoaded = true; paintRules(); paintSwitch();
     });
   }
   function render(container) {
@@ -350,6 +446,7 @@
     var refresh = add(status.meta, el('button', 'btn btn-ghost', '刷新')); refresh.type = 'button';
     on(refresh, function () { loadStatus(); loadRules(); });
     S.statusHost = add(status.panel, el('div', 'fw-status'));
+    S.switchHost = add(status.panel, el('div', 'fw-switch-host'));
     var rules = panel('规则（只读）', ''); add(S.root, rules.panel); S.rulesCount = add(rules.meta, el('span', null, ''));
     S.rulesHost = add(rules.panel, el('div', 'fw-rules')); S.deleteHost = add(rules.panel, el('div', 'fw-delete-host'));
     var formP = panel('添加规则', '先预览，再执行'); add(S.root, formP.panel);
@@ -376,7 +473,7 @@
     S.previewHost = add(formP.panel, el('div', 'fw-preview-host'));
     // fail-closed：状态回来前先禁用表单，避免"打开就能填、点提交才知道没权限"。
     setFormLocked(true);
-    paintStatus(); paintRules(); paintPreview(); loadStatus(); loadRules();
+    paintStatus(); paintRules(); paintPreview(); paintSwitch(); loadStatus(); loadRules();
     return { destroy: function () { S.destroyed = true; } };
   }
   window.KoreFirewall = { render: render };
