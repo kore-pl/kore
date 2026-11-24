@@ -29,7 +29,7 @@
   // 会话状态：单实例；切走视图由 destroy() 清监听，不残留。
   var S = { root: null, year: 0, month: 0, tasks: [], groups: {}, byId: {},
     loading: false, loaded: false, error: '', sourceNotes: [], detail: null,
-    clickHandler: null, navHandler: null, destroyed: false };
+    clickHandler: null, navHandler: null, destroyed: false, gen: 0 };
 
   /* ---------- 小工具 ---------- */
   function el(tag, cls, text) {
@@ -215,26 +215,44 @@
     });
   }
 
-  /* ---------- 数据加载：两源独立成败，一个失败不影响另一个 ---------- */
+  /* ---------- 数据加载：两源独立成败，一个失败不影响另一个 ----------
+     loading 由 load() 自己置位/复位——render() 不得预置 S.loading，否则
+     load() 的幂等 guard 会把自己锁死（R22 真机 bug）。gen 代际号确保切视图/
+     destroy 后回来的旧请求不会污染新实例状态。 */
   function load() {
-    if (S.loading) return Promise.resolve();
-    S.loading = true; S.error = ''; S.sourceNotes = [];
-    var sched = getJSON(SCHED_API).then(function (data) {
+    if (S.loading || S.loaded) return;
+    var gen = S.gen;
+    function fresh() { return !S.destroyed && S.gen === gen; }
+    S.loading = true; S.loaded = false; S.error = ''; S.sourceNotes = []; S.tasks = [];
+    paint();                             // 置位 loading 后立即画「正在读取任务…」壳
+
+    var sched, cron;
+    try { sched = getJSON(SCHED_API); } catch (e) { sched = Promise.reject(e); }
+    sched = sched.then(function (data) {
+      if (!fresh()) return;
       var list = (data && data.tasks) || [];
       list.forEach(function (t) { S.tasks.push(normalizeScheduler(t)); });
       S.sourceNotes.push('内核调度任务 ' + list.length + ' 条');
     }).catch(function (err) {
-      S.sourceNotes.push('内核调度任务读取失败：' + (err && err.message ? err.message : '未知'));
+      if (!fresh()) return;
+      S.error = err && err.message ? err.message : '未知错误';
+      S.sourceNotes.push('内核调度任务读取失败：' + S.error);
     });
-    var cron = invoke('cron.list', {}).then(function (data) {
+
+    try { cron = invoke('cron.list', {}); } catch (e) { cron = Promise.reject(e); }
+    cron = cron.then(function (data) {
+      if (!fresh()) return;
       var list = (data && data.tasks) || (data && data.entries) || [];
       list.forEach(function (e) { S.tasks.push(normalizeCrontab(e)); });
       S.sourceNotes.push('系统计划任务 ' + list.length + ' 条');
     }).catch(function () {
       // 插件未装 / 无 crontab 权限：不报错给用户，空态自然会说明。
+      if (!fresh()) return;
       S.sourceNotes.push('系统计划任务不可用（插件未装或无权读取）');
     });
+
     return Promise.all([sched, cron]).then(function () {
+      if (!fresh()) return;              // 旧请求：已切走/已卸载，丢弃
       S.loading = false; S.loaded = true;
       reindex(); paint();
     });
@@ -430,27 +448,36 @@
   /* ---------- 生命周期 ---------- */
   function render(container) {
     if (!container) return;
+    // 同一容器重复 render（如切走再切回未 destroy）：只重绘，不再发请求。
+    if (!S.destroyed && S.root && S.root.parentNode === container) {
+      paint();
+      if (!S.loading && !S.loaded) load();
+      return;
+    }
     destroy();
     S.destroyed = false;
+    S.gen++;
     var now = new Date();
     S.year = now.getFullYear(); S.month = now.getMonth();
     S.tasks = []; S.groups = {}; S.byId = {}; S.detail = null;
-    S.loading = true; S.loaded = false;
+    S.loading = false; S.loaded = false; S.error = ''; S.sourceNotes = [];
     S.root = el('div', 'kore-calendar'); S.root.id = 'kore-calendar';
     container.appendChild(S.root);
     injectCss();
     S.clickHandler = onClick;
     S.root.addEventListener('click', S.clickHandler);
-    paint();
-    load();
+    paint();                             // 先画 loading 壳
+    load();                              // loading 由 load() 置位 → 请求真正发出
   }
   function destroy() {
     S.destroyed = true;
+    S.gen++;                             // 作废在途请求，回来不污染
+    S.loading = false; S.loaded = false;
     closeDetail();
     if (S.root && S.clickHandler) { try { S.root.removeEventListener('click', S.clickHandler); } catch (e) {} }
     if (S.root && S.root.parentNode) { try { S.root.parentNode.removeChild(S.root); } catch (e) {} }
     S.root = null; S.clickHandler = null; S.tasks = []; S.groups = {}; S.byId = {};
   }
 
-  window.KoreCalendar = { render: render, destroy: destroy };
+  window.KoreCalendar = { render: render, destroy: destroy, _test: { S: S, load: load, paint: paint } };
 })();
