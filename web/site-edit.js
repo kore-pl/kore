@@ -2,15 +2,20 @@
    由 web/sites.js 首次渲染建站向导/打开站点详情时懒加载，导出
    window.KoreSiteEdit.renderWizard(host, ctx) 与 render(host, ctx, data)。
    向导一次收齐域名 + 根目录（自动填 /var/www/<域名>）+ SSL + 伪静态，内部串行
-   create → bindSSL → setRewrite 并逐步回显。data 是 site.get 的完整摘要；编辑器覆盖：
-     SSL bindSSL/unbindSSL、伪静态 setRewrite（当前值取自 getRewrite）、
-     反向代理 setProxy/unsetProxy（与伪静态互斥）、重定向 setRedirect/unsetRedirect、
-     默认文档 setIndex。
+   create → bindSSL → setRewrite →（PHP 模板时）setPHP 并逐步回显。data 是 site.get 的完整摘要；
+   编辑器覆盖：SSL bindSSL/unbindSSL、伪静态 setRewrite（当前值取自 getRewrite）、
+   PHP-FPM getPHP/setPHP/unsetPHP（wordpress/laravel/thinkphp/discuz 依赖，版本来自
+   getPHP.available 动态填充）、反向代理 setProxy/unsetProxy（与伪静态互斥）、
+   重定向 setRedirect/unsetRedirect、默认文档 setIndex。
    每个写操作只展示插件真实返回（changed/applied/test_passed/reloaded/ssl_bound/
    rewrite_cleared/proxy_cleared），写入成功后由 ctx.after() 重新拉 site.get。 */
 (function () {
   'use strict';
   var TEMPLATES = ['none', 'wordpress', 'laravel', 'thinkphp', 'discuz', 'nextjs'];
+  // 与后端 isPHPRewriteTemplate（../kore-plugin-site/php.go:79）同一枚举：这四个模板
+  // 必须配 PHP-FPM，否则 nginx 当静态处理、页面永远 404。判定只认这四个，不认 nextjs/none。
+  var PHP_TEMPLATES = ['wordpress', 'laravel', 'thinkphp', 'discuz'];
+  function isPHPTemplate(name) { return PHP_TEMPLATES.indexOf(name) >= 0; }
   function certBase(file) { return String(file || '').replace(/\.(crt|pem)$/i, ''); }
   function autoRoot(domain) { return domain ? '/var/www/' + domain : ''; }
   function paintSteps(host, steps) {
@@ -41,7 +46,7 @@
     var panel = add(host, el('section', 'panel'));
     var head = add(panel, el('div', 'panel-head'));
     add(head, el('span', 'panel-title', '建站向导'));
-    add(head, el('span', 'panel-meta', '一次提交：create → bindSSL → setRewrite'));
+    add(head, el('span', 'panel-meta', '一次提交：create → bindSSL → setRewrite（PHP 模板再接 setPHP）'));
     var form = add(panel, el('form', 'site-form site-wizard'));
     var w = { rootTouched: false, certs: [], certLoaded: false, certError: '' };
     var domainField = add(form, el('label', 'field'));
@@ -80,6 +85,23 @@
       var opt = add(w.rewrite, el('option', null, name === 'none' ? 'none（默认，不启用）' : name));
       opt.value = name;
     });
+    // PHP-FPM 表单：选 wordpress/laravel/thinkphp/discuz 才显示。建站阶段站点尚未落盘，
+    // getPHP.available 无从读取，故这里给「auto 自动检测」+ 可选手填 socket，不硬编码版本；
+    // 真正的版本下拉（来自 getPHP.available）在编辑器伪静态面板提供。
+    w.phpBox = add(form, el('div', 'wizard-php'));
+    w.phpBox.hidden = !isPHPTemplate(w.rewrite.value);
+    add(w.phpBox, el('p', 'field-hint', '所选模板需要 PHP-FPM 才能访问；不配置页面会一直 404。版本填 auto 会自动选用已检测到的最高版本；如未检测到，可先留空建站，再到站点详情里选版本。'));
+    var phpVerField = add(w.phpBox, el('label', 'field'));
+    add(phpVerField, el('span', 'field-label', 'PHP 版本（auto = 自动检测）'));
+    w.phpVersion = add(phpVerField, el('input', 'field-input'));
+    w.phpVersion.type = 'text'; w.phpVersion.value = 'auto'; w.phpVersion.placeholder = 'auto'; w.phpVersion.autocomplete = 'off';
+    w.phpVersion.setAttribute('data-field', 'php-version');
+    var phpSockField = add(w.phpBox, el('label', 'field'));
+    add(phpSockField, el('span', 'field-label', 'FPM socket（可选，留空自动检测）'));
+    w.phpSocket = add(phpSockField, el('input', 'field-input'));
+    w.phpSocket.type = 'text'; w.phpSocket.placeholder = '/run/php/php-fpm.sock'; w.phpSocket.autocomplete = 'off';
+    w.phpSocket.setAttribute('data-field', 'php-socket');
+    w.rewrite.addEventListener('change', function () { w.phpBox.hidden = !isPHPTemplate(w.rewrite.value); });
     var submit = add(form, el('button', 'btn btn-primary site-submit', '创建站点并应用'));
     submit.type = 'submit'; submit.setAttribute('data-action', 'wizard-submit');
     var stepsHost = add(panel, el('div', 'wizard-steps-host'));
@@ -174,12 +196,29 @@
           }, function (r) { return 'ssl_bound=' + r.ssl_bound + '；force_https=' + r.force_https; });
         });
       }
+      var needPHP = isPHPTemplate(w.rewrite.value);
       if (w.rewrite.value !== 'none') {
         chain = chain.then(function () {
           return runStep('设置伪静态 setRewrite', function () {
             return ctx.invoke('site.setRewrite', { domain: domain, template: w.rewrite.value });
           }, function (r) {
             return 'template=' + r.template + (r.proxy_cleared ? '；已自动清除反向代理（互斥）' : '');
+          });
+        });
+      }
+      // 伪静态是 PHP 模板时串一步 setPHP；失败即停并原样展示后端 message（含"先设 none"怎么办）。
+      if (needPHP) {
+        chain = chain.then(function () {
+          return runStep('启用 PHP-FPM setPHP', function () {
+            var params = { domain: domain };
+            var ver = w.phpVersion.value.trim();
+            var sock = w.phpSocket.value.trim();
+            if (ver) params.php_version = ver;
+            if (sock) params.socket = sock;
+            return ctx.invoke('site.setPHP', params);
+          }, function (r) {
+            return 'version=' + (r.php_version || 'auto') + '；socket=' + (r.php_socket || '自动检测') +
+              (r.php_socket_verified ? '（已验证）' : r.php_hint ? '（' + r.php_hint + '）' : '');
           });
         });
       }
@@ -195,6 +234,7 @@
         ctx.setStatus('已创建 ' + domain + '，共 ' + steps.length + ' 步全部成功', 'ok');
         w.domain.value = ''; w.root.value = ''; w.rootTouched = false; w.badge.hidden = true;
         w.ssl.checked = false; w.sslBox.hidden = true; w.rewrite.value = 'none';
+        w.phpBox.hidden = true; w.phpVersion.value = 'auto'; w.phpSocket.value = '';
         ctx.after(domain);
       });
     });
@@ -355,9 +395,95 @@
     ctx.invoke('site.getRewrite', { domain: domain }).then(function (r) {
       rwSel.value = r.template || 'none';
       rwNote.textContent = '当前：' + (r.template || 'none') + (r.enabled ? '' : '（站点已停用，配置仍可读）');
+      syncPHPPanel();
     }, function (err) {
       rwNote.textContent = 'getRewrite 读取失败：' + ctx.errText(err) + '；下拉暂用 site.get 的值';
       rwNote.className = 'field-hint row-note-fail';
+    });
+    // ---------------- PHP-FPM（伪静态依赖 PHP 的四个模板）----------------
+    // 版本选项来自 getPHP.available 动态填充，不硬编码版本号；未检测到候选时保留 auto
+    // 并给出人话提示。setPHP/unsetPHP 走 ctx.invoke，错误原样展示，不吞 message。
+    var phpPanel = panel('PHP-FPM', 'getPHP / setPHP / unsetPHP');
+    var phpForm = add(phpPanel, el('form', 'site-edit-form'));
+    var phpNote = add(phpForm, el('p', 'field-hint', '读取当前 PHP 状态与本机可用版本中…'));
+    var phpVerBox = add(phpForm, el('label', 'field'));
+    add(phpVerBox, el('span', 'field-label', 'PHP 版本'));
+    var phpVer = add(phpVerBox, el('select', 'field-input'));
+    phpVer.setAttribute('data-field', 'php-version');
+    var phpSockBox = add(phpForm, el('label', 'field'));
+    add(phpSockBox, el('span', 'field-label', 'FPM socket（可选，留空自动检测）'));
+    var phpSock = add(phpSockBox, el('input', 'field-input'));
+    phpSock.type = 'text'; phpSock.placeholder = '/run/php/php-fpm.sock'; phpSock.autocomplete = 'off';
+    phpSock.setAttribute('data-field', 'php-socket');
+    var phpOps = add(phpForm, el('div', 'site-edit-ops'));
+    var phpState = { available: [], enabled: false, version: '', socket: '', hint: '' };
+    function paintPHPOptions() {
+      phpVer.textContent = '';
+      var autoOpt = add(phpVer, el('option', null, 'auto（自动检测最高版本）'));
+      autoOpt.value = 'auto';
+      phpState.available.forEach(function (c) {
+        var label = c.version ? c.version : '默认';
+        var opt = add(phpVer, el('option', null, label + ' · ' + (c.socket || '')));
+        opt.value = c.version || '';
+      });
+      phpVer.value = phpState.version || 'auto';
+      phpSock.value = phpState.socket || '';
+    }
+    function paintPHPNote() {
+      if (phpState.enabled) {
+        phpNote.textContent = '当前已启用 PHP ' + (phpState.version || 'auto') +
+          '（socket ' + (phpState.socket || '自动检测') + '）；换版本或 socket 后点保存即可切换。';
+        phpNote.className = 'field-hint';
+      } else if (phpState.available.length) {
+        phpNote.textContent = '当前未启用 PHP；本机检测到 ' + phpState.available.length +
+          ' 个 FPM socket，选版本后点保存。';
+        phpNote.className = 'field-hint';
+      } else {
+        phpNote.textContent = phpState.hint ||
+          '本机未检测到可用的 PHP-FPM socket。请先安装 php-fpm（如 php8.2-fpm），或在下方手填 socket 路径后保存。';
+        phpNote.className = 'field-hint';
+      }
+    }
+    action(phpOps, '保存 PHP 设置', 'btn-primary', 'php-save', function () {
+      var params = { domain: domain };
+      var ver = phpVer.value;
+      if (ver && ver !== 'auto') params.php_version = ver;
+      var sock = phpSock.value.trim();
+      if (sock) params.socket = sock;
+      run('保存 PHP 设置', ctx.invoke('site.setPHP', params), function (r) {
+        return 'php_enabled=' + r.php_enabled + '；version=' + (r.php_version || 'auto') +
+          '；socket=' + (r.php_socket || '自动检测') +
+          (r.php_socket_verified ? '（已验证）' : r.php_hint ? '（' + r.php_hint + '）' : '');
+      });
+    });
+    action(phpOps, '关闭 PHP', 'btn-ghost', 'php-unset', function () {
+      // 后端在 PHP 伪静态模板仍启用时返回 E_INVALID 并带"先 setRewrite none"的怎么办；
+      // run() 原样展示 message，不吞错误、不在这里自作主张改伪静态。
+      run('关闭 PHP', ctx.invoke('site.unsetPHP', { domain: domain }), function (r) {
+        return 'php_enabled=' + r.php_enabled;
+      });
+    });
+    function syncPHPPanel() {
+      // 非 PHP 模板（none / nextjs 等）不显示 PHP 表单，避免误导。
+      var show = isPHPTemplate(rwSel.value);
+      phpPanel.hidden = !show;
+      phpPanel.style.display = show ? '' : 'none';
+    }
+    rwSel.addEventListener('change', syncPHPPanel);
+    paintPHPOptions();
+    paintPHPNote();
+    syncPHPPanel();
+    ctx.invoke('site.getPHP', { domain: domain }).then(function (r) {
+      phpState.available = Array.isArray(r.available) ? r.available : [];
+      phpState.enabled = !!r.php_enabled;
+      phpState.version = r.php_version || '';
+      phpState.socket = r.php_socket || '';
+      phpState.hint = r.hint || '';
+      paintPHPOptions();
+      paintPHPNote();
+    }, function (err) {
+      phpNote.textContent = 'PHP 状态读取失败：' + ctx.errText(err) + '；仍可手填 socket 后保存';
+      phpNote.className = 'field-hint row-note-fail';
     });
     // ---------------- 反向代理 ----------------
     var pxPanel = panel('反向代理', 'setProxy / unsetProxy');

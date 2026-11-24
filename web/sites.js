@@ -26,6 +26,9 @@
     }
     return fallback;
   }
+  // PHP 伪静态模板判定，与后端 isPHPRewriteTemplate（php.go:79）对齐：
+  // 这四个模板依赖 PHP-FPM，站点详情里给出人话提示，避免只显示模板名让人以为不用配。
+  function isPHPTemplate(name) { return ['wordpress', 'laravel', 'thinkphp', 'discuz'].indexOf(name) >= 0; }
   function cookie(name) {
     var parts = document.cookie ? document.cookie.split(';') : [];
     for (var i = 0; i < parts.length; i++) {
@@ -74,6 +77,7 @@
     if (/证书|私钥|cert_path|key_path/.test(msg)) return '证书与私钥必须是存在的绝对路径，且与证书域名匹配。';
     if (/upstream/.test(msg)) return '反代只接受 http://host:port，不支持 https 或带路径的地址。';
     if (/template/.test(msg)) return '伪静态只支持 none / wordpress / laravel / thinkphp / discuz / nextjs。';
+    if (/PHP-FPM|php_version|socket|PHP 伪静态|依赖 PHP/.test(msg)) return '这是 PHP 模板必须要 PHP-FPM 才能访问：请在 PHP-FPM 面板选一个已检测到的版本保存；若提示要先切回 none，请先把伪静态改成 none 再关闭 PHP。';
     if (/from_path|to_url|code/.test(msg)) return '重定向只允许 / 开头的来源路径与 http(s):// 或站内 / 目标，code 为 301/302。';
     if (/docker|container/.test(msg)) return '容器模式需要填运行中的容器名，并确认 conf.d 已挂载到宿主目录；不确定就先用默认的自动检测模式。';
     if (/nginx_mode|host_conf_dir|docker_conf_dir/.test(msg)) return '连接配置决定插件去哪里读写 nginx 片段；改错会让站点操作失败，保存前请对照宿主的 nginx 配置。';
@@ -697,7 +701,14 @@
       sslCell.appendChild(chip('na', '未绑定'));
     }
     table.appendChild(row('SSL', sslCell));
-    table.appendChild(row('伪静态', (d.rewrite && d.rewrite.template) || 'none'));
+    var rwTemplate = (d.rewrite && d.rewrite.template) || 'none';
+    var rwCell = el('span', null, rwTemplate);
+    if (isPHPTemplate(rwTemplate)) {
+      rwCell.appendChild(el('span', 'muted', d.php && d.php.enabled
+        ? ' · PHP ' + (d.php.version || 'auto') + ' 已启用'
+        : ' · 未启用 PHP（页面会 404，请在下方 PHP-FPM 面板配置）'));
+    }
+    table.appendChild(row('伪静态', rwCell));
     table.appendChild(row('反向代理', d.proxy && d.proxy.enabled
       ? el('span', 'mono', d.proxy.upstream + (d.proxy.ws ? ' · WebSocket' : ''))
       : '未启用'));
