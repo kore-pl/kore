@@ -22,7 +22,11 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 APP       ?= kored
-VERSION   ?= 0.1.0
+# VERSION 是内核**唯一**的版本声明：`make build` 经 LDFLAGS -X main.version 注入，
+# `kored version`、插件安装时的 requires_kore 判定都读它。
+# 0.1.1 = 首个含 file_write 受控写（ADR-0052 K3）的内核版本；使用 file_write 的插件
+# 必须声明 requires_kore 下界 ≥0.1.1（自洽断言：make version-check，G-14）。
+VERSION   ?= 0.1.1
 CMD       ?= ./cmd/kored
 BIN       ?= ./bin/kored
 # 零侵入安装（ADR-0023）：默认 PREFIX=/opt/kore → 二进制 <install>/bin/kored，
@@ -61,7 +65,7 @@ IDLE_CPU_MS_MAX ?= 60
 GOROUTINES_MAX  ?= 20
 FD_MAX          ?= 64
 
-.PHONY: help build cross cross-build cross-vet compat-info vet test race race-full pluginapi-race web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check check clean fmt
+.PHONY: help build cross cross-build cross-vet compat-info vet test race race-full pluginapi-race web-dist frontend mem idle budget-check docs-check secret-check repo-check canonical-check log-check wt-check oss-check case-check store-check presets-check version-check check clean fmt
 
 help: ## 显示本帮助（默认目标）
 	@echo "$(APP) $(VERSION) — 极简内核驱动 · 插件定义能力 · 资源零侵占"
@@ -408,6 +412,70 @@ store-check: ## 插件仓规范门禁（G-17：三件套 + info.json 必填 9 �
 
 presets-check: ## 预设一致性门禁（G-18：id / 版本区间可解析 + 常驻 RSS ≤48 MiB + 同时常驻 ≤3 + 包体积 + G-20：索引↔仓库 depth_level 一致性 / out_of_box 不含 non-production / 判据① 边界用例 go test 真跑）
 	@bash scripts/presets-check.sh
+
+# ── G-14 协议兼容自洽（版本断言 · 2026-11-24）──
+# 为什么单独成一个目标而不并进 make check 21 段：它是**跨仓**判据（依赖 ../kore-plugin-*），
+# 独立 clone 时必须能 SKIP；且它只回答「版本声明彼此打不打架」，不重复 store-check 的字段校验。
+# 三条断言：
+#   ① Makefile VERSION == cmd/kored/main.go 的内置默认值（否则 `go run` 与 `make build` 报不同版本）；
+#   ② VERSION ∈ 每个插件 info.json 的 requires_kore 区间（下界含、上界不含，与
+#      internal/core/installer/requires.go 的语义一致：插件装了跑不起来，是安装期就该拒的事）；
+#   ③ 声明 file_write 的插件，requires_kore 下界必须 ≥0.1.1——0.1.1 是首个含受控写的内核版本，
+#      声明了却不抬下界，等于允许装到旧内核上、运行时才 E_INVALID（2026-11-24 G-14 事故的成因）。
+.PHONY: version-check
+
+version-check: ## G-14 自洽：内核 VERSION ↔ 24 插件 requires_kore（file_write 插件下界 ≥0.1.1）
+	@cur=$$(sed -n 's/^VERSION[[:space:]]*?=[[:space:]]*//p' Makefile); \
+	mver=$$(sed -n 's/^var version = "\(.*\)"/\1/p' cmd/kored/main.go); \
+	echo "[RUN ] version-check（G-14：内核 VERSION=$$cur ↔ 插件 requires_kore）"; \
+	if [ -z "$$cur" ]; then echo "[FAIL] Makefile 中读不到 VERSION ?= X.Y.Z"; exit 1; fi; \
+	if [ "$$cur" != "$$mver" ]; then \
+	  echo "[FAIL] Makefile VERSION=$$cur 与 cmd/kored/main.go 内置默认 $$mver 不一致：go run 与 make build 会报不同版本"; \
+	  exit 1; \
+	fi; \
+	if [ ! -d ../kore-plugin-site ]; then \
+	  echo "[SKIP] 未检出 ../kore-plugin-*（$$(pwd)/../）：跨仓 requires_kore 断言跳过，不阻断独立 clone"; \
+	  exit 0; \
+	fi; \
+	awk -v cur="$$cur" ' \
+	function cmp(a, b,   x, y, i) { \
+	  split(a, x, "."); split(b, y, "."); \
+	  for (i = 1; i <= 3; i++) { \
+	    if (x[i] + 0 > y[i] + 0) return 1; \
+	    if (x[i] + 0 < y[i] + 0) return -1; \
+	  } \
+	  return 0; \
+	} \
+	FNR == 1 { order[++n] = FILENAME } \
+	match($$0, /"requires_kore"[ \t]*:[ \t]*"[^"]*"/) { \
+	  s = substr($$0, RSTART, RLENGTH); sub(/.*"[ \t]*:[ \t]*"/, "", s); sub(/"$$/, "", s); rk[FILENAME] = s; \
+	} \
+	/"file_write"[ \t]*:/ { fw[FILENAME] = 1 } \
+	END { \
+	  bad = 0; fails = 0; \
+	  if (n == 0) { print "[FAIL] 没有扫到任何 ../kore-plugin-*/info.json"; exit 1 } \
+	  for (i = 1; i <= n; i++) { \
+	    f = order[i]; name = f; sub(/.*kore-plugin-/, "", name); sub(/\/info.json$$/, "", name); \
+	    r = rk[f]; \
+	    if (r == "") { printf "[FAIL] %-24s 缺 requires_kore（G-14 必填）\n", name; bad = 1; fails++; continue } \
+	    lower = ""; upper = ""; \
+	    if (match(r, />=?[ \t]*[0-9]+\.[0-9]+\.[0-9]+/)) { t = substr(r, RSTART, RLENGTH); gsub(/[>= \t]/, "", t); lower = t } \
+	    if (match(r, /<[ \t]*[0-9]+\.[0-9]+\.[0-9]+/)) { t = substr(r, RSTART, RLENGTH); gsub(/[< \t]/, "", t); upper = t } \
+	    if (lower == "") { printf "[FAIL] %-24s requires_kore=%s 解析不出下界（需 >=X.Y.Z <A.B.C）\n", name, r; bad = 1; fails++; continue } \
+	    verdict = "OK"; \
+	    if (cmp(cur, lower) < 0) { printf "[FAIL] %-24s requires_kore=%s 下界高于内核 %s（装上也只会 E_UNSUPPORTED）\n", name, r, cur; bad = 1; fails++; verdict = "FAIL" } \
+	    if (upper != "" && cmp(cur, upper) >= 0) { printf "[FAIL] %-24s requires_kore=%s 上界不高于内核 %s（区间已不含当前内核）\n", name, r, cur; bad = 1; fails++; verdict = "FAIL" } \
+	    if ((f in fw) && cmp(lower, "0.1.1") < 0) { printf "[FAIL] %-24s 声明 file_write 但下界 %s < 0.1.1（受控写自 0.1.1 起才有内核支持）\n", name, lower; bad = 1; fails++; verdict = "FAIL" } \
+	    if (verdict == "OK") printf "[ OK ] %-24s %-20s%s\n", name, r, ((f in fw) ? "  ← file_write" : ""); \
+	    total++; \
+	  } \
+	  if (bad == 0) { \
+	    printf "[ OK ] version-check: 内核 VERSION=%s 覆盖 %d 个插件，全部落在 requires_kore 区间内\n", cur, total; \
+	  } else { \
+	    printf "[FAIL] version-check: 内核 VERSION=%s 有 %d 项不自洽（%d 个插件已核对）\n", cur, fails, total; \
+	  } \
+	  exit bad; \
+	}' ../kore-plugin-*/info.json
 
 # ── 索引 → 市场页派生一致性（第 16 段·market 子检查，阻断级 · 2026-11-24 接入 kore 侧）──
 # 判据本体在索引仓：kore-plugins/scripts/build-market.sh --check —— 只读、逐字节比对

@@ -128,6 +128,12 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 
 判定顺序（kore 加载插件时）：`requires_kore` 可解析 → kore 版本落在区间内 → `protocol` 主版本匹配 → 才继续 hello；任一不满足回 `E_UNSUPPORTED`，不降级、不猜。
 
+**当前内核版本 = `0.1.1`**（`Makefile` 的 `VERSION` 是唯一真源，`make build` 注入 `main.version`，`cmd/kored/main.go` 的默认值必须与它相同）。0.1.1 是首个含 [`file_write`](./PLUGIN-PROTOCOL.md) 受控写（ADR-0052 K3）的内核版本，因此：
+
+- 声明了 `file_write` 的插件**必须**把下界抬到 `">=0.1.1 <0.2.0"`（当前仅 `kore-plugin-site`）；留在 `>=0.1.0` 等于允许装到没有受控写的内核上，装得上、跑到写文件时才 `E_INVALID`。
+- 不声明 `file_write` 的插件保持 `">=0.1.0 <0.2.0"` 即可：协议仍是 `kore.plugin.v1`，exec 动作的声明与请求形状未变（SDK 侧是加法：`RootAction.FileWrite` 为 `omitempty`）。
+- 自洽断言：`make version-check`（G-14）——校验 `Makefile VERSION` ↔ `cmd/kored/main.go` 默认值 ↔ 24 个插件 `requires_kore` 区间，并对 `file_write` 插件额外断言下界 ≥0.1.1；跨仓判据，独立 clone 时 SKIP。
+
 ## 6. 仓库创建清单（里程碑分区）
 
 | 里程碑 | 仓库 | 交付物 | 明确不做 |

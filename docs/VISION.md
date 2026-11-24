@@ -10,7 +10,7 @@
 | 作用 | 回答"为什么做 kore""做到什么程度算成功""什么明确不做" |
 | 不作用 | 不写模块规格（见 [CORE.md](./CORE.md)）、不写组件与数据流（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不定义术语（见 [GLOSSARY.md](./GLOSSARY.md)） |
 | 状态 | draft。M0 定稿前允许修订；M1 开工后修改须走 ADR |
-| 版本基线 | MVP 0.1.0；Go module 路径 `github.com/pengtang1024/kore`（仓库归属 `kore-pl`）；多仓库项目（插件各有独立仓库）；本次交付 = M0（仅 `kore` 仓库：纯文档 + 骨架，无业务代码） |
+| 版本基线 | MVP 0.1.1（`Makefile` 的 `VERSION` 是唯一真源；0.1.1 = 首个含 `file_write` 受控写的内核版本）；Go module 路径 `github.com/pengtang1024/kore`（仓库归属 `kore-pl`）；多仓库项目（插件各有独立仓库）；本次交付 = M0（仅 `kore` 仓库：纯文档 + 骨架，无业务代码） |
 
 一句话定位：**kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座。**
 它不是"大而全面板"，是**薄壳调度内核**——内核只定规则（插件生命周期 / 权限校验 / 消息路由 / 资源隔离），不内置任何运维功能。
