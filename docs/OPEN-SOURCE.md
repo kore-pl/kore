@@ -44,7 +44,7 @@ DCO 的声明文本固定为：`Signed-off-by: 名字 <邮箱>`，含义是"我�
 
 **除了 `LICENSE`，每个仓库还必须自带一整套开源资产**（贡献指南、披露政策、行为准则、agent 入口、`.github` 模板与 CI）——逐格的现状与规范见 §3、§4。
 
-**仓库地址与权威源**（ADR-0024）：三仓的**仓库地址**一律 `github.com/kore-pl/<repo>`（公开镜像）与 `gitee.com/kore-pl/<repo>`（国内镜像），**唯一权威源是自建 Gitea `gitea.iouf.cn/kore-pl/<repo>`**——日常提交、PR、issue、tag 都在 Gitea，GitHub 只做公开镜像。**module 路径仍是 `github.com/pengtang1024/...`**（ADR-0024 决策 C），与仓库地址分开写。
+**仓库地址与权威源**（ADR-0024）：三仓的**仓库地址**一律 `github.com/kore-pl/<repo>`（公开镜像）与 `gitee.com/pengtang1024/<repo>`（国内镜像，与 [GITEE-MIRROR.md](./GITEE-MIRROR.md) §1 及真实 `gitee` remote 一致），**唯一权威源是自建 Gitea `gitea.iouf.cn/kore-pl/<repo>`**——日常提交、PR、issue、tag 都在 Gitea，GitHub 只做公开镜像。**module 路径仍是 `github.com/pengtang1024/...`**（ADR-0024 决策 C），与仓库地址分开写。
 
 **SDK 单独发布**：`pkg/pluginapi` 是独立 module（`github.com/pengtang1024/kore/pkg/pluginapi`），用子目录 tag（`pkg/pluginapi/v0.x.y`）发版；协议版本号与内核 `kore.plugin.v1` 对齐，插件只依赖 SDK tag，不依赖内核 tag。
 

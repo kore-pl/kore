@@ -26,7 +26,7 @@
 | `kore-plugin-backup` | 一次性插件（M2） | `github.com/pengtang1024/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同模板行（模板渲染） | 同上 |
 | `kore-plugin-sdk-rust` / `-starlark` | 非 Go SDK（M4 可选） | 同名 | 帧编解码 + hello 示例 | crate/包 | 建仓即套用九件套 | tag |
 
-**仓库地址 vs module 路径**（[ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md) 决策 C）：**仓库地址**一律 `github.com/kore-pl/<repo>`（公开镜像）与 `gitee.com/kore-pl/<repo>`（国内镜像），**权威源是自建 Gitea `gitea.iouf.cn/kore-pl/<repo>`**；**module 路径保持 `github.com/pengtang1024/...`**。两件事分开写，不混用。
+**仓库地址 vs module 路径**（[ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md) 决策 C）：**仓库地址**一律 `github.com/kore-pl/<repo>`（公开镜像）与 `gitee.com/pengtang1024/<repo>`（国内镜像，与 [GITEE-MIRROR.md](./GITEE-MIRROR.md) §1 及真实 `gitee` remote 一致），**权威源是自建 Gitea `gitea.iouf.cn/kore-pl/<repo>`**；**module 路径保持 `github.com/pengtang1024/...`**。两件事分开写，不混用。
 
 「开源资产」列的口径是**自包含**：该仓根目录自己带 `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` / `CODE_OF_CONDUCT.md` / `CHANGELOG.md` / `AGENTS.md` / `.github`（PR 模板 + issue 模板三件 + `ci.yml`）/ README 开源段，规则见 §3 的 R9，逐文件硬要求见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
 
