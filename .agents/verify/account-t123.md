@@ -112,3 +112,18 @@ POST login {username:"admin",password:<原口令>} → HTTP=200 {"authenticated"
 ## 9. 一句话结论
 
 **T1（config 账号+冷字段+默认 admin）、T2（两行凭据+老格式迁移+三判据守门）、T3（账号校验底层函数+登录表单账号框+白话文案）三块全部落地；登录已改为账号+密码且账号错/口令错分文案；老单行凭据实例升级后自动包装为两行、原口令仍能 200 登录——全部门禁与隔离实例真机证据见第 5 节。**
+
+## 10. resume-account-core 接手复核附录（2026-11-25）
+
+> 归属: resume-account-core · 背景: 接手失败卡 account-core 的半成品；核实过程中发现原 account-core 并发完成了同名提交（`b1f7e59` T1 / `ee724d5` T2 / `b5480a6` T3 / `445e2e0` 本报告+截图），其工作树内容与我的续接修改一致，无需改写历史或追加重复提交。本附录补录独立复核证据并明确写域协商结果。
+
+| 复核项 | 结果（命令 + 退出码） |
+| --- | --- |
+| T1 半成品 | `git diff` 核实 config 4 文件字段解析/校验/归一本就完整；`go test -timeout 200s ./internal/core/config/...` exit 0；`Attempts` 默认 5→1 由原卡补入 HEAD（`git show HEAD:internal/core/config/types.go` 确认） |
+| T2 半成品 | 核实 `admin_password.go` + 未跟踪 `credential_format.go` 属账号核心（非 brute-force）；编译错误 `too many arguments in call to writeInitialAdminCredentialFile` 已在 HEAD 修好（`git show HEAD:cmd/kored/admin_password.go` 确认为完整内容写入）；`go test ./cmd/kored/...` exit 0 |
+| T3 半成品 | `web/app.js` 在接手时已是 M（原卡未提交改动），brute-force 明确确认从未写它；我按契约对齐 DOM id（`kore-captcha-image` / `kore-captcha-refresh` / `kore-captcha-answer`）、`res.retryAfter` 取值、账号框「已自动检测」标注；HEAD 已含全部改动，工作树本写域干净 |
+| 最终门禁（HEAD） | `go test -timeout 200s ./internal/core/config/... ./internal/core/auth/... ./cmd/kored/...` exit 0（3 包 ok）；`go vet` 三包 exit 0；`node --check web/app.js` exit 0；`bash scripts/secret-check.sh` exit 0；`bash scripts/docs-check.sh` exit 0（1 WARN 不阻断） |
+| 隔离真机（我独立复跑） | 全新安装 18899：凭据两行 0600 + `admin` + 口令 **200**、错账号 **401**「账号或口令错误」、错口令 **401**「密码错误，请输入右侧验证码」、captcha 端点 **200**；老一行凭据 18898：升级后两行 0600、hash 字节未变、`admin` + 原口令 **200**。两实例均已停，临时目录/脚本已删（G-29/G-30） |
+| 写域协商 | 开工 `send_message` brute-force，约定 web/app.js 由我统一合并账号框+验证码 UI、它只做 httpapi/ 与 auth 验证码/限速；它确认从未写 app.js、给出接口契约并委托我改 config `Attempts` 默认 5→1；账号错 message 口径双方核对一致。我的提交不含 httpapi/**、auth/captcha.go、auth/ratelimit.go、serve_boot.go |
+
+**结论：三块均已落地；登录为账号+密码；老凭据迁移通过；与 brute-force 写域协商完毕、无重叠冲突。**
