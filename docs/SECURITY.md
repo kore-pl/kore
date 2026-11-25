@@ -88,9 +88,10 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 
 ### 3.3 会话
 
-- 服务端存 bbolt `sessions`：key 为 token 的 `sha256`（64 位小写 hex，明文 token 不落库），value 为 `"<expiryUnixNano> <createdUnixNano>"` 两段纳秒戳（旧单整数格式仍可读）；bucket 内另有保留键 `password-fingerprint`（存 `sha256(admin_password_hash)`，启动时比对以决定是否全局吊销）。
+- 服务端存 bbolt `sessions`：key 为 token 的 `sha256`（64 位小写 hex，明文 token 不落库），value 为 `"<expiry> <created> <lastSeen> <b64url(ip)> <b64url(ua)>"`（旧两段 / 单段格式仍可读）；bucket 内另有保留键 `password-fingerprint`（存 `sha256(admin_password_hash)`，启动时比对以决定是否全局吊销）。
+- **会话元信息（最后活跃 / 来源 IP / UA 摘要）只用于展示与人工判断，不参与鉴权**：`auth.Touch` 按 5 分钟节流写回，`GET /api/v1/security/sessions` 把它列给管理员看（可踢单个会话、可一键全踢但保留当前会话）；`DELETE .../sessions/{id}` 拒绝踢当前会话（退出当前登录走登出）。元信息写失败只 WARN、不拒绝请求。
 - TTL **默认 168h（7 天）滑动**：仅当剩余寿命低于 `min(24h, ttl/2)` 时把 `expiry` 推到 `now+ttl` 并重发 cookie（相邻两次续期至少间隔 `ttl/2`，避免每次鉴权写盘）；绝对上限 **30 天**（`created+30d`，续期不得越过），到点强制重新登录。`auth.session_ttl` 可配置，取值 1m–720h。
-- **不绑定 UA/IP**：会话与客户端指纹无关，全仓无 `ua_hash` / `last_seen` 字段；持有 token 即可重放（残余风险见 §1.3）。
+- **不绑定 UA/IP**：会话与客户端指纹无关（元信息只记录、不比对、不拦截新 IP 的 cookie 复用）；持有 token 即可在其它浏览器重放（残余风险见 §1.3），管理员只能在账户与安全中心看到「来源网段变了」并手动踢下线。
 - cookie：`kore_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=<ttl 秒数>`（默认 604800），`Secure` 见 3.4。
 - 登出：删除服务端记录 + `Set-Cookie: kore_session=; Max-Age=0; Path=/`；服务端删除是唯一失效依据，不依赖浏览器。
 

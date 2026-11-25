@@ -443,12 +443,15 @@ func (s *Server) loginStats() loginStats {
 	if len(rows) > 0 {
 		out.lastSuccessAt = auditAt(rows[0].Key)
 		out.lastSuccessIP = rows[0].Detail["ip"]
-		// 新网段：最新一次成功的网段在更早的成功记录里没出现过（30 天内首次出现）。
-		out.newNetwork = out.lastSuccessIP != ""
-		for i := 1; i < len(rows); i++ {
-			if rows[i].Detail["ip"] == out.lastSuccessIP {
-				out.newNetwork = false
-				break
+		// 新网段：**已有多条成功记录**，且最新一次的网段在更早的记录里没出现过。
+		// 只有一次登录（全新实例）不算异常——否则首登即"可疑"，纯属假警报。
+		if len(rows) > 1 && out.lastSuccessIP != "" {
+			out.newNetwork = true
+			for i := 1; i < len(rows); i++ {
+				if rows[i].Detail["ip"] == out.lastSuccessIP {
+					out.newNetwork = false
+					break
+				}
 			}
 		}
 	}
@@ -556,6 +559,9 @@ func buildLoginRecords(okRows, failRows []AuditRecordView, limit int) []loginRec
 			failByNetwork[item.view.Detail["ip"]]++
 		}
 	}
+	// 只有"此前已有过其它网段成功登录"才谈得上"新网段"——首次登录（历史为空）
+	// 不是异常，把它标成异常会让全新实例一登录就报红，属于假警报。
+	sawAnySuccess := false
 
 	out := make([]loginRecordView, 0, len(all))
 	for _, item := range all {
@@ -567,8 +573,11 @@ func buildLoginRecords(okRows, failRows []AuditRecordView, limit int) []loginRec
 		if item.ok {
 			if ip != "" && !seenNetwork[ip] {
 				seenNetwork[ip] = true
-				flags = append(flags, "new_network")
+				if sawAnySuccess {
+					flags = append(flags, "new_network")
+				}
 			}
+			sawAnySuccess = true
 			reason = "登录成功"
 		} else {
 			if failByNetwork[ip] >= loginFailBurstThreshold {
