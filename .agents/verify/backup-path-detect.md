@@ -1,5 +1,5 @@
 > 状态: done · 归属: feat-backup-path-detect · 更新: 2026-11-25 · 里程碑: M0–M5
-> 功能卡：backup-path-detect（竞品清单条目 10，P1）· 依据 [docs/USABILITY.md](../docs/USABILITY.md) §5「备份页：备份源路径列表仍需手填」
+> 功能卡：backup-path-detect（竞品清单条目 10，P1）· 依据 [docs/USABILITY.md](../../docs/USABILITY.md) §5「备份页：备份源路径列表仍需手填」
 
 # 备份源自动检测（打开即已填好 + 「已自动检测」）
 
@@ -7,10 +7,10 @@
 
 | 依据 | 改造前事实（path:line） |
 | --- | --- |
-| [docs/USABILITY.md:76](../docs/USABILITY.md) §5 第 2 行 | 「备份页｜备份源路径列表仍需手填（目录与白名单已可界面配置）｜违反 1」 |
-| [docs/USABILITY.md:37](../docs/USABILITY.md) 原则②判据 | 「页面首次打开时，可自动填的字段已填好，并标注「已自动检测」」 |
-| [docs/USABILITY.md:34](../docs/USABILITY.md) | 探测结果必须可见可改、带来源、用户改过的值不得被下一次探测覆盖 |
-| [docs/USABILITY.md:33](../docs/USABILITY.md) | 探测不到时给「怎么办」，不是丢一个空输入框 |
+| [docs/USABILITY.md:76](../../docs/USABILITY.md) §5 第 2 行 | 「备份页｜备份源路径列表仍需手填（目录与白名单已可界面配置）｜违反 1」 |
+| [docs/USABILITY.md:37](../../docs/USABILITY.md) 原则②判据 | 「页面首次打开时，可自动填的字段已填好，并标注「已自动检测」」 |
+| [docs/USABILITY.md:34](../../docs/USABILITY.md) | 探测结果必须可见可改、带来源、用户改过的值不得被下一次探测覆盖 |
+| [docs/USABILITY.md:33](../../docs/USABILITY.md) | 探测不到时给「怎么办」，不是丢一个空输入框 |
 | web/backups.js:1259（改造前 :1044） | 备份源是空 textarea，占位符写死示例路径 /var/www/site 与 /etc/kore（同时是原则①「不得用示例路径占位」的违反） |
 | web/backups.js:1293（改造前 :1070） | 「定时备份的路径」同样是空 textarea + 示例 /var/www，从来自动填过 |
 | kore-plugin-backup/internal/backupop/preset.go:256-305 | 插件侧早就有只读探测（autoSitePaths / existingAllowed），但只喂给「预设展开」，页面上完全看不出「这是探测出来的」 |
