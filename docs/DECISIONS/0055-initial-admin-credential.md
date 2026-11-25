@@ -107,3 +107,36 @@ git check-ignore -v data/initial-admin-credential                               
 ### 7.3 未验证项
 
 隔离实例的 SIGHUP 全链路以 `ApplyCredentialSnapshot` 单测 + `serve_signals.go` 调用点覆盖；真实 systemd 实例的信号注入属运行态，按 G-29 未碰主实例。
+
+## 8. 凭据生命周期：首次安装 vs 更新安装（2026-11-25 事故修订）
+
+> 触发：site 0.8.2 离线升级安装时 `ensureInitialAdminCredential` 覆盖了共享 `data/initial-admin-credential`，文件口令与配置哈希不匹配、用户登不上（见 [.agents/verify/site-082-release.md](../../.agents/verify/site-082-release.md) §7、[.agents/verify/admin-credential-fix.md](../../.agents/verify/admin-credential-fix.md)）。本节为 append-only 口径更正，与前文冲突处以本节为准。
+
+### 8.1 行为对照表（写死）
+
+| 场景 | 判据 | 生成凭据 | 写配置哈希 / initialized / must_change | 写凭据文件 | 终端 / 日志输出 |
+| --- | --- | --- | --- | --- | --- |
+| **首次安装**（全新实例） | 无 `admin_password_hash`、`auth.initialized` 非 true、本实例凭据文件不存在 | ✅ 一次性 | ✅ 同一次原子写 | ✅ `<state_dir>/initial-admin-credential`（0600） | TTY 明文一次 + 路径；非 TTY 只打印路径（G-30） |
+| **更新 / 升级安装**（已有实例） | 已有哈希 / `initialized=true` / 凭据文件已存在，任一为真 | ❌ 绝不 | ❌ 一个字节都不改 | ❌ 一个字节都不写 | ❌ 一行都不打 |
+
+### 8.2 为什么更新安装绝不能变
+
+1. **锁死用户**：更新安装会重写哈希，但用户手里 / 会话里 / 凭据文件里的口令仍对应旧哈希 → 新哈希无法登录、旧哈希已被覆盖，用户被关在门外（真实事故：离线升级覆盖共享凭据文件后登录 401）。
+2. **破坏会话**：哈希与 `must_change_password` 的变化经 SIGHUP / 重启同步时会 `RevokeAll` 吊销全部会话；升级安装顺手改哈希等于把正在用的所有会话一次性踢掉。
+3. **一次性语义**：凭据文件是「首次安装交付载体 + 首登改密后消费删除」的运行态资产，升级重装不该让它复活或轮换。
+
+### 8.3 落点绑定实例
+
+凭据文件路径为 `<本次 --config 解析出的 state_dir>/initial-admin-credential`（默认 portable profile 的 `state_dir` = `<install>/data`，与既有文档路径一致；自定义 `state_dir` 的隔离实例各写各的）。历史条件下 `state_dir` 与 `InstallRoot()/data` 脱钩，导致隔离安装按 `--config` 判哈希、却写到共享 `InstallRoot()/data` 的凭据文件——这就是 0.8.2 事故的触发路径。修正后判定与落点都以本次实例为准，绝不跨实例覆盖。
+
+### 8.4 首登改密口径更正（append-only）
+
+前文 §3.4 / §4 / §5 / §7 写「首登强制改密 / 受限会话 403 闸门」是 2026-11-25 早期实现口径。**现行口径：首登改密是建议（可跳过），不是必选项。** `auth.must_change_password` 字段保留用于提示与审计，但不再作为强制访问闸门——所有管理端点对已登录会话放行，改密通过首屏非阻断提示引导（代码侧由独立的 must-change-fix 卡落地，本文只写口径）。
+
+### 8.5 账号 + 密码方向（ADR-0057 草案，实现待落地）
+
+用户口径：「登录应该是账号加密码」。方向已由 [ADR-0057 草案（login-account-model）](../../.agents/verify/login-account-model.md)（commit `0b80dae`）定稿为 draft：固定单账号 `admin` + `auth.admin_username` 配置字段，凭据文件从「口令一行」改为两行 `username` / `password`。**凭据文件生命周期口径不变**：首次安装生成、0600、gitignore、首登改密（或将来账号+密码改密）后消费删除；**更新安装仍绝不覆盖**。当前实现仍按既有单管理员口令交付，账号字段与两行格式**待 ADR-0057 正式落地后实现**，本节不自行先改代码或预写正式 ADR 正文。
+
+### 8.6 回归证据
+
+实现与验证见 [.agents/verify/credential-lifecycle.md](../../.agents/verify/credential-lifecycle.md)。

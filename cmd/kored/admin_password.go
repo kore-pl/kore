@@ -235,25 +235,33 @@ func generateAdminPassword(n int) (string, error) {
 }
 
 // ensureInitialAdminCredential 是 ADR-0055 的统一入口：install --package（打开 state.db
-// 前）与 serve bootstrap 共用同一个函数。已有哈希则一行不打、一字节不写（升级行为不变）。
+// 前）与 serve bootstrap 共用同一个函数。
 //
-// 触发条件：auth.admin_password_hash 为空。生成链路复用既有实现：
-// generateAdminPassword(24) → auth.HashPassword(PBKDF2) → writeAdminBootstrapHash
-// （原子 0600，同一次写里把 auth.must_change_password=true 落盘）。
+// 凭据生命周期（2026-11-25 离线升级覆盖共享凭据文件事故修正）：
+//   - 首次安装（无哈希、initialized 非 true、本实例凭据文件不存在）→ 生成一次性凭据并落盘；
+//   - 更新 / 升级安装（已有哈希、initialized=true 或本实例凭据文件已存在）→ 完全跳过：
+//     不改哈希、不写凭据文件、不置 must_change、不打印任何字节。
+//
+// 生成链路复用既有实现：generateAdminPassword(24) → auth.HashPassword(PBKDF2) →
+// writeAdminBootstrapHash（原子 0600，同一次写里把 auth.must_change_password=true 落盘）。
+//
+// 凭据文件落点绑定本次实例的 state_dir（<state_dir>/initial-admin-credential）：
+// 默认 portable profile 的 state_dir 就是 <install>/data，路径与文档一致；自定义
+// state_dir 的隔离实例各写各的，绝不覆盖共享 install/data 下那份凭据文件。
 //
 // 双通道交付（G-30）：
-//   - 一次性凭据文件 <install>/data/initial-admin-credential（0600，gitignore，运行态资产，
-//     消费后删）——非 TTY 场景的唯一交付载体；
+//   - 一次性凭据文件（0600，gitignore，运行态资产，消费后删）——非 TTY 唯一交付载体；
 //   - TTY 从当前终端打印一次明文 + 文件路径；非 TTY 绝不打印明文，只打印路径提示。
 //
-// 明文不入 config/state/日志/审计/仓库。无用户名：kore 单管理员（G-11）。
-func ensureInitialAdminCredential(path string, stderr io.Writer) {
+// 方向（待新 ADR 落地）：登录形态改为账号 + 密码，凭据文件将含账号与密码；当前实现
+// 仍按既有单管理员口令交付，本函数不自行设计账号字段（G-11 / 等 ADR）。
+func ensureInitialAdminCredential(path, stateDir string, stderr io.Writer) {
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(stderr, "提示：尚未设置管理员口令，且未解析到配置文件路径；请执行 `kored admin-password --generate --config <path>` 后重试。")
 		return
 	}
-	if data, err := os.ReadFile(path); err == nil && hashPresentInConfig(string(data)) {
-		return // 已有哈希：静默，不覆盖
+	if credentialInitialized(path, stateDir) {
+		return // 更新安装：静默跳过，不生成、不覆盖、不打印
 	}
 	plain, err := generateAdminPassword(adminPasswordLength)
 	if err != nil {
@@ -270,7 +278,7 @@ func ensureInitialAdminCredential(path string, stderr io.Writer) {
 		fmt.Fprintf(stderr, "首启凭据写入配置失败: %v\n请手动执行 `kored admin-password --generate --config %s`（同样只显示一次）。\n", err, path)
 		return
 	}
-	credPath, err := writeInitialAdminCredentialFile(plain)
+	credPath, err := writeInitialAdminCredentialFile(stateDir, plain)
 	if err != nil {
 		fmt.Fprintf(stderr, "初始凭据文件写入失败: %v；请手动执行 `kored admin-password --generate --config %s`。\n", err, path)
 		return
@@ -279,26 +287,56 @@ func ensureInitialAdminCredential(path string, stderr io.Writer) {
 		fmt.Fprintln(stderr, "================ Kore 初始管理员凭据（只显示这一次）================")
 		fmt.Fprintf(stderr, "管理员口令: %s\n", plain)
 		fmt.Fprintf(stderr, "一次性凭据文件: %s（权限 0600，首次登录改密后自动删除）\n", credPath)
-		fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；首次登录必须先设置一个新口令。")
+		fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；建议登录后设置一个新口令（可选，不强制）。")
 		fmt.Fprintln(stderr, "======================================================================")
 		return
 	}
 	// 非 TTY：绝不打印明文，只给路径（ADR-0055 §3 / G-30）。
 	fmt.Fprintf(stderr, "初始管理员凭据已生成，请在自己的终端读取：%s（权限 0600）。\n", credPath)
-	fmt.Fprintln(stderr, "打开面板输入该口令，首次登录必须先设置一个新口令；改密成功后该文件会自动删除。")
+	fmt.Fprintln(stderr, "打开面板输入该口令，建议登录后设置一个新口令（可选，不强制）；改密成功后该文件会自动删除。")
+}
+
+// credentialInitialized 判断本实例是否已初始化（= 更新安装，必须完全跳过凭据生成）。
+// 三个判据任一为真即视为已初始化：
+//  1. auth.admin_password_hash 非空；
+//  2. auth.initialized 显式为 true（哈希缺失但已初始化的异常配置也要保护）；
+//  3. 本实例凭据文件 <state_dir>/initial-admin-credential 已存在（历史事故里哈希判定
+//     落在 --config、凭据文件却落在共享 InstallRoot()/data，导致升级覆盖；文件存在兜底）。
+//
+// 只读判定，不写任何文件；权威 YAML 解析由 config.Load 承担，这里走行级粗判避免对畸形配置写回。
+func credentialInitialized(configPath, stateDir string) bool {
+	if data, err := os.ReadFile(configPath); err == nil {
+		doc := string(data)
+		if hashPresentInConfig(doc) || authInitializedInConfig(doc) {
+			return true
+		}
+	}
+	return fileExists(initialAdminCredentialPath(stateDir))
 }
 
 // hashPresentInConfig 从原始 YAML 文本粗判是否已有非空 admin_password_hash。
-// 只用于「已有哈希一行不打一字节不写」的守门；权威解析由 config.Load 承担。
 func hashPresentInConfig(doc string) bool {
+	return authKeyPresent(doc, "admin_password_hash", func(v string) bool {
+		return v != "" && v != "null" && v != "~"
+	})
+}
+
+// authInitializedInConfig 粗判 auth.initialized 是否为 true。
+func authInitializedInConfig(doc string) bool {
+	return authKeyPresent(doc, "initialized", func(v string) bool {
+		return strings.EqualFold(v, "true")
+	})
+}
+
+// authKeyPresent 在 YAML 文本里找 key，交给谓词判值；找不到返回 false。
+func authKeyPresent(doc, key string, present func(string) bool) bool {
 	for _, line := range strings.Split(doc, "\n") {
 		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "admin_password_hash:") {
+		if !strings.HasPrefix(t, key+":") {
 			continue
 		}
-		v := strings.TrimSpace(strings.TrimPrefix(t, "admin_password_hash:"))
-		v = strings.Trim(v, "\"'")
-		return v != "" && v != "null" && v != "~"
+		v := strings.TrimSpace(strings.TrimPrefix(t, key+":"))
+		return present(strings.Trim(v, "\"'"))
 	}
 	return false
 }
@@ -308,10 +346,9 @@ func firstRunBootstrap(cfg *config, stderr io.Writer) {
 	if cfg == nil || cfg.snapshot == nil {
 		return
 	}
-	if strings.TrimSpace(cfg.snapshot.Auth.AdminPasswordHash) != "" {
-		return // 已有哈希：保持 ADR-0043 升级行为，一行不打、一字节不写
-	}
-	ensureInitialAdminCredential(cfg.snapshot.Source, stderr)
+	// 凭据生命周期守门交给统一入口（哈希 / initialized / 凭据文件任一存在即跳过），
+	// 不在这里重复判定——避免与 install 路径的判据漂移（离线升级覆盖事故根因）。
+	ensureInitialAdminCredential(cfg.snapshot.Source, cfg.snapshot.Paths.StateDir, stderr)
 	// 内存快照同步更新，避免本进程仍用旧快照启动鉴权。
 	if snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: cfg.snapshot.Source}); err == nil {
 		cfg.snapshot.Auth.AdminPasswordHash = snap.Auth.AdminPasswordHash
@@ -320,18 +357,33 @@ func firstRunBootstrap(cfg *config, stderr io.Writer) {
 	}
 }
 
-// initialAdminCredentialPathFn 是凭据文件路径的注入点：生产取 <install>/data，
-// 测试可指向 t.TempDir()，避免把运行态资产写进共享工作区（G-29）。
-var initialAdminCredentialPathFn = func() string {
-	return filepath.Join(coreconfig.InstallRoot(), "data", "initial-admin-credential")
+// initialAdminCredentialPathFn 是凭据文件路径的注入点（测试可指向 t.TempDir()）。
+// 生产落点绑定本次实例的 state_dir：<state_dir>/initial-admin-credential。
+// 默认 portable profile 的 state_dir = <install>/data，路径与 ADR-0055 文档一致；
+// 自定义 state_dir 的隔离实例各写各的，绝不覆盖共享 install/data 下那份凭据文件。
+var initialAdminCredentialPathFn = func(stateDir string) string {
+	base := strings.TrimSpace(stateDir)
+	if base == "" {
+		base = coreconfig.InstallRoot()
+	}
+	candidate := filepath.Join(base, "initial-admin-credential")
+	// 兼容既有实例：state_dir 自定义（如 .kore-local-state）而凭据文件按旧口径落在
+	// <install>/data 时，优先认已存在的那份，消费时删对文件、判定时不误判为首次安装。
+	legacy := filepath.Join(coreconfig.InstallRoot(), "data", "initial-admin-credential")
+	if candidate != legacy && fileExists(legacy) && !fileExists(candidate) {
+		return legacy
+	}
+	return candidate
 }
 
-// initialAdminCredentialPath 返回一次性凭据文件的路径（install/data 下，运行态资产）。
-func initialAdminCredentialPath() string { return initialAdminCredentialPathFn() }
+// initialAdminCredentialPath 返回本实例一次性凭据文件的绝对路径（运行态资产）。
+func initialAdminCredentialPath(stateDir string) string {
+	return initialAdminCredentialPathFn(stateDir)
+}
 
 // writeInitialAdminCredentialFile 把明文口令写入 0600 的一次性凭据文件。
-func writeInitialAdminCredentialFile(plain string) (string, error) {
-	path := initialAdminCredentialPath()
+func writeInitialAdminCredentialFile(stateDir, plain string) (string, error) {
+	path := initialAdminCredentialPath(stateDir)
 	if err := atomicWrite0600(path, plain+"\n"); err != nil {
 		return "", err
 	}
@@ -341,12 +393,11 @@ func writeInitialAdminCredentialFile(plain string) (string, error) {
 // ConsumeInitialAdminCredential 在首登改密成功后删除一次性凭据文件（消费后删）。
 // 文件不存在是幂等成功；删除失败不阻断改密结果。
 func ConsumeInitialAdminCredential() {
-	path := initialAdminCredentialPath()
+	path := initialAdminCredentialPath("")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "警告: 删除一次性凭据文件失败: %v\n", err)
 	}
 }
-
 
 // writeAdminBootstrapHash 把哈希、auth.initialized=true 与 auth.must_change_password=true
 // 在同一次原子写里落盘（ADR-0055 §2）。

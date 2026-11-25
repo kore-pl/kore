@@ -28,6 +28,8 @@ kore 是**单管理员、Web 面板管理**的产品（[AGENTS.md](AGENTS.md) G-
 
 ### 2.1 首次凭据：安装期统一交付，读凭据文件 + 首登改密
 
+> **凭据生命周期口径（2026-11-25 事故修订，[ADR-0055 §8](docs/DECISIONS/0055-initial-admin-credential.md)）**：**首次安装**（无哈希 / 未初始化）才生成一次性凭据；**更新 / 升级安装绝不重新生成、绝不覆盖凭据文件或哈希**（既不改哈希、不写凭据文件、不置标志、不打印）——覆盖会让文件口令与配置哈希不匹配、把用户锁在门外并吊销现有会话。首登改密是**建议（可跳过）**，不是必选项。方向：登录将改为**账号 + 密码**，凭据文件将含账号与密码（细节以新 ADR 为准，此处不预设字段）。
+
 > **2026-11-25 更新（[ADR-0055](docs/DECISIONS/0055-initial-admin-credential.md)，commit `99754fd`）**：凭据交付已从「serve 首启 TTY 打印一次」升级为**安装期统一入口 `ensureInitialAdminCredential`**：`kored install --package` 与 serve bootstrap 共用同一函数，安装完成时即生成一次性凭据文件 `<install>/data/initial-admin-credential`（0600，已 gitignore）。TTY 下在终端打印明文口令 **+ 文件路径**；**非 TTY（systemd / journald / 重定向 / CI）只打印文件路径，绝不打印明文**——请在自己的终端读该文件。首次登录必须改密，改密成功后凭据文件被删除、旧会话吊销。下方 2026-11-23 的「首启 TTY 打印 / 非 TTY 只给 CLI 指引」为 serve bootstrap 兜底形态的历史描述，**与新口径冲突时以本段为准**。
 
 

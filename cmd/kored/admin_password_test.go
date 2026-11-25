@@ -281,7 +281,7 @@ func TestFirstRunBootstrapGeneratesOneTimeCredential(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	credPath := filepath.Join(t.TempDir(), "initial-admin-credential")
 	oldPathFn := initialAdminCredentialPathFn
-	initialAdminCredentialPathFn = func() string { return credPath }
+	initialAdminCredentialPathFn = func(string) string { return credPath }
 	defer func() { initialAdminCredentialPathFn = oldPathFn }()
 	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, true)
@@ -347,7 +347,7 @@ func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	credPath := filepath.Join(t.TempDir(), "initial-admin-credential")
 	oldPathFn := initialAdminCredentialPathFn
-	initialAdminCredentialPathFn = func() string { return credPath }
+	initialAdminCredentialPathFn = func(string) string { return credPath }
 	defer func() { initialAdminCredentialPathFn = oldPathFn }()
 	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, false)
@@ -522,5 +522,100 @@ func TestAdminPasswordAndServeResolveSameConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), hash) {
 		t.Fatal("serve 解析到的哈希不在 admin-password 写入的文件里")
+	}
+}
+
+// TestCredentialLifecycleGuard 覆盖凭据生命周期守门三判据：已有哈希 / initialized=true /
+// 本实例凭据文件已存在，任一为真都必须完全跳过（不写哈希、不写凭据文件、不打印）。
+func TestCredentialLifecycleGuard(t *testing.T) {
+	cases := []struct {
+		name     string
+		config   string
+		credFile bool
+	}{
+		{"hash_present", "auth:\n  admin_password_hash: \"pbkdf2-sha256$600000$YQ==$Yg==\"\n", false},
+		{"initialized_true", "auth:\n  initialized: true\n", false},
+		{"credential_file_present", "server:\n  addr: \"127.0.0.1:1\"\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			cfg := filepath.Join(root, "config.yaml")
+			if err := os.WriteFile(cfg, []byte(tc.config), 0o600); err != nil {
+				t.Fatalf("写配置失败: %v", err)
+			}
+			cred := filepath.Join(root, "state", "initial-admin-credential")
+			if err := os.MkdirAll(filepath.Dir(cred), 0o700); err != nil {
+				t.Fatalf("建状态目录失败: %v", err)
+			}
+			if tc.credFile {
+				if err := os.WriteFile(cred, []byte("existing-credential"), 0o600); err != nil {
+					t.Fatalf("写凭据文件失败: %v", err)
+				}
+			}
+			beforeCfg, _ := os.ReadFile(cfg)
+			var beforeCred []byte
+			if tc.credFile {
+				beforeCred, _ = os.ReadFile(cred)
+			}
+			withAdminFakes(t, false)
+			var stderr bytes.Buffer
+			ensureInitialAdminCredential(cfg, filepath.Join(root, "state"), &stderr)
+			afterCfg, _ := os.ReadFile(cfg)
+			if !bytes.Equal(beforeCfg, afterCfg) {
+				t.Fatalf("更新安装不得改动配置哈希/must_change: before=%q after=%q", beforeCfg, afterCfg)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("更新安装不得打印任何字节: %q", stderr.String())
+			}
+			if tc.credFile {
+				afterCred, _ := os.ReadFile(cred)
+				if !bytes.Equal(beforeCred, afterCred) {
+					t.Fatalf("更新安装不得覆盖凭据文件: before=%q after=%q", beforeCred, afterCred)
+				}
+			} else if fileExists(cred) {
+				t.Fatal("更新安装不得新建凭据文件")
+			}
+		})
+	}
+}
+
+// TestFirstInstallWritesCredentialUnderStateDir 覆盖首次安装：无哈希配置生成 0600 凭据文件，
+// 落点在本次 state_dir 下（不碰共享 InstallRoot/data），配置哈希与 must_change 落盘。
+func TestFirstInstallWritesCredentialUnderStateDir(t *testing.T) {
+	root := t.TempDir()
+	cfg := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("server:\n  addr: \"127.0.0.1:1\"\n"), 0o600); err != nil {
+		t.Fatalf("写配置失败: %v", err)
+	}
+	stateDir := filepath.Join(root, "state")
+	withAdminFakes(t, false)
+	var stderr bytes.Buffer
+	ensureInitialAdminCredential(cfg, stateDir, &stderr)
+	cred := filepath.Join(stateDir, "initial-admin-credential")
+	info, err := os.Stat(cred)
+	if err != nil {
+		t.Fatalf("首次安装应在 state_dir 下生成凭据文件: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("凭据文件权限应为 0600，实际 %04o", got)
+	}
+	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: cfg})
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if snap.Auth.AdminPasswordHash == "" || !snap.Auth.MustChangePassword || !snap.Auth.Initialized {
+		t.Fatal("首次安装应写哈希 + initialized + must_change_password")
+	}
+	plain, err := os.ReadFile(cred)
+	if err != nil {
+		t.Fatalf("读凭据文件失败: %v", err)
+	}
+	ok, err := auth.VerifyPassword(snap.Auth.AdminPasswordHash, strings.TrimSpace(string(plain)))
+	if err != nil || !ok {
+		t.Fatalf("凭据文件口令与配置哈希不匹配: ok=%v err=%v", ok, err)
+	}
+	if strings.Contains(stderr.String(), strings.TrimSpace(string(plain))) {
+		t.Fatal("非 TTY 输出泄露了明文口令")
 	}
 }

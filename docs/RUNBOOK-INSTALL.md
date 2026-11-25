@@ -311,7 +311,7 @@ disable kore → rm /etc/systemd/system/kore.service → daemon-reload
 
 kore 是单管理员模型，没有"找回"流程：口令哈希在配置文件的 `auth.admin_password_hash`，重置 = 生成新哈希并重启。
 
-> **2026-11-25 更新（[ADR-0055](DECISIONS/0055-initial-admin-credential.md)，commit `99754fd`；[ADR-0056](DECISIONS/0056-self-restart.md)，commit `93fd441`）**：重置**不再必须重启**——`admin-password --generate/--set` 写回哈希与 `auth.must_change_password=true` 后，向运行中的 kored 发 `SIGHUP` 即可让新哈希在内存 `auth.Manager` 生效并吊销旧会话（仅在真变化时踢会话），**SIGHUP 同步免重启**。重启仍是兜底，并可用 ADR-0056 的自服务入口 `kored restart --reason "..."` 或 `POST /api/v1/system/restart`（需 system:admin + reason-bound confirm）提交。下方 §7.1 的 `sudo systemctl restart kore` 是**保守路径（可停服务时）**，与新口径不冲突；**不可停服务时走 SIGHUP 路径**。初始安装期凭据见 [QUICKSTART](../QUICKSTART.md) §2.1：`kored install --package` 生成 0600 一次性凭据文件 `<install>/data/initial-admin-credential`，非 TTY 只打印路径不打明文，首登改密后文件删除。
+> **2026-11-25 更新（[ADR-0055](DECISIONS/0055-initial-admin-credential.md)，commit `99754fd`；[ADR-0056](DECISIONS/0056-self-restart.md)，commit `93fd441`）**：重置**不再必须重启**——`admin-password --generate/--set` 写回哈希与 `auth.must_change_password=true` 后，向运行中的 kored 发 `SIGHUP` 即可让新哈希在内存 `auth.Manager` 生效并吊销旧会话（仅在真变化时踢会话），**SIGHUP 同步免重启**。重启仍是兜底，并可用 ADR-0056 的自服务入口 `kored restart --reason "..."` 或 `POST /api/v1/system/restart`（需 system:admin + reason-bound confirm）提交。下方 §7.1 的 `sudo systemctl restart kore` 是**保守路径（可停服务时）**，与新口径不冲突；**不可停服务时走 SIGHUP 路径**。初始安装期凭据见 [QUICKSTART](../QUICKSTART.md) §2.1：`kored install --package` 生成 0600 一次性凭据文件 `<install>/data/initial-admin-credential`，非 TTY 只打印路径不打明文，首登改密后文件删除。 **凭据生命周期（[ADR-0055 §8](DECISIONS/0055-initial-admin-credential.md)）**：首次安装生成一次性凭据；**更新 / 升级安装绝不重新生成、绝不覆盖凭据文件或哈希**（否则文件口令与哈希失配会锁死用户、吊销会话）。首登改密为**建议可跳过**；登录方向为账号 + 密码（细节待新 ADR）。
 
 ### 7.1 正常路径（服务可停、有 shell）
 
