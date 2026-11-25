@@ -35,7 +35,7 @@ func metricsSetup(t *testing.T, resolver CapabilityResolver, c MetricsCollector)
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var cookie string
 	for _, v := range rec.Result().Cookies() {
 		if v.Name == auth.CookieName {

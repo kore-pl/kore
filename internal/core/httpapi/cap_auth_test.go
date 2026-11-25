@@ -81,7 +81,7 @@ func capSetupWithRecorder(t *testing.T, resolver CapabilityResolver, auditor Cap
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"cap-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"cap-password"}`)))
 	var cookie string
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == auth.CookieName {

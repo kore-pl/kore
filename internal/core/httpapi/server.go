@@ -81,6 +81,11 @@ type Options struct {
 	// 生产必装配：cmd/kored 按 security.login_rate_limit 注入，缺装配等于
 	// 文档承诺的 429/Retry-After 不存在（见 docs/SECURITY §3.5）。
 	LoginLimiter *auth.LoginLimiter
+	// AdminUsername 是固定单管理员账号标识符（ADR-0057）；空时归一为 auth.DefaultAdminUsername。
+	AdminUsername string
+	// Captchas 是登录失败后的本地图形验证码状态（ADR-0057 T4）；nil 时端点回 501。
+	// 由 New 自建：challenge 只在进程内存，重启失效。
+	Captchas *auth.CaptchaStore
 	// Market 是软件商店后端；nil 表示 store/* 端点回 501 E_UNSUPPORTED。
 	Market *market.Service
 	// CapabilityResolver 解析请求的 subject 与其 granted capabilities；
@@ -299,6 +304,9 @@ type Server struct {
 	auth           *auth.Manager
 	passwordWriter PasswordWriter
 	loginLimiter   *auth.LoginLimiter
+	// captchas / adminUsername 是 ADR-0057 登录失败防护与账号标识符。
+	captchas       *auth.CaptchaStore
+	adminUsername  string
 	market         *market.Service
 	capResolver    CapabilityResolver
 	capAuditor     CapabilityAuditor
@@ -349,7 +357,9 @@ func New(opts Options, transport platform.Transport) *Server {
 		opts: opts, transport: transport, mux: http.NewServeMux(),
 		auth: opts.Auth, passwordWriter: opts.PasswordWriter,
 		loginLimiter: opts.LoginLimiter, market: opts.Market,
-		capResolver: opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
+		captchas:      opts.Captchas,
+		adminUsername: opts.AdminUsername,
+		capResolver:   opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
@@ -357,6 +367,12 @@ func New(opts Options, transport platform.Transport) *Server {
 		configWriter:   opts.ConfigWriter,
 		taskEvents:     opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
 		webhooks: opts.Webhooks,
+	}
+	if server.captchas == nil {
+		server.captchas = auth.NewCaptchaStore()
+	}
+	if strings.TrimSpace(server.adminUsername) == "" {
+		server.adminUsername = auth.DefaultAdminUsername
 	}
 	if server.webhooks == nil {
 		server.webhooks = newWebhookRegistry()
@@ -369,6 +385,9 @@ func New(opts Options, transport platform.Transport) *Server {
 		server.capResolver = defaultCapabilityResolver
 	}
 	server.routes()
+	// 验证码公开端点（ADR-0057 T4）：独立注册，不写 handlers.go 的 routes()（并行写域）。
+	// 用 Go 1.22 ServeMux 精确路径，不与 /api/v1/auth/ 兜底冲突。
+	server.mux.HandleFunc("GET "+captchaPath, server.handleCaptcha)
 	// 自服务重启（ADR-0056）：独立注册，不写 handlers.go 的 routes()（并行写域）。
 	server.registerRestartRoutes()
 	// 日志告警路由（R23）：不写 handlers.go 的 routes()（并行写域），在此独立注册；
@@ -386,6 +405,8 @@ func New(opts Options, transport platform.Transport) *Server {
 	// 仅装配鉴权时挂 CSRF/auth；M0 探活骨架（auth==nil）保持裸路由。
 	handler := http.Handler(server.mux)
 	if server.auth != nil {
+		// 验证码端点在登录前可读：isPublicPath 已放行 GET /api/v1/auth/captcha
+		//（account-core 代改 middleware.go，写域交接见 .agents/verify/account-t4-bruteforce.md）。
 		handler = server.withAuth(handler)
 		handler = server.withCSRF(handler)
 		// 本机通道同样要过登录（ADR-0043：withAuth 对全部 /api/v1/* 一律会话校验，

@@ -1,6 +1,8 @@
 package auth_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +22,7 @@ const rateKey = "admin"
 func postLogin(handler http.Handler, password string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
-		strings.NewReader(`{"password":"`+password+`"}`)))
+		strings.NewReader(`{"username":"admin","password":"`+password+`"}`)))
 	return rec
 }
 
@@ -82,27 +84,48 @@ func TestLoginPenaltySuccessAndIdleReset(t *testing.T) {
 }
 
 // TestLoginCorrectPasswordDuringPenaltyHTTP 是 P1 DoS 的核心回归用例：
-// 连续 5 次错口令（含第 6 次被递增延迟限制）之后，**正确口令必须立即登录成功**，
-// 攻击者无法用错口令把管理员永久锁死。
+// ADR-0057 T4 后宽容次数 1：第 1 次错口令 0s（触发验证码），第 2 次起 1s 惩罚。
+// 正确口令即使处于惩罚期也立即登录成功，攻击者无法把管理员锁死。
 func TestLoginCorrectPasswordDuringPenaltyHTTP(t *testing.T) {
 	db := newStore(t)
+	caps := auth.NewCaptchaStore()
 	s := httpapi.New(httpapi.Options{
 		Auth:         auth.NewManager(db, makeHash(t, testPassword), 0, false),
-		LoginLimiter: auth.NewLoginLimiter(5, time.Minute, 5*time.Minute),
+		LoginLimiter: auth.NewLoginLimiter(1, time.Minute, 5*time.Minute),
+		Captchas:     caps,
 	}, nil)
 	handler := s.Handler()
 
-	for i := 1; i <= 5; i++ {
-		if rec := postLogin(handler, "wrong-password"); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("第 %d 次错口令状态码 = %d，期望 401", i, rec.Code)
-		}
+	// 首次错口令：401 + 触发挑战态，0s。
+	if rec := postLogin(handler, "wrong-password"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("第 1 次错口令状态码 = %d，期望 401", rec.Code)
 	}
-	// 第 6 次错口令进入惩罚：1s 后返回 429 + Retry-After（下一次 2s）。
+	// 辅助：从公开端点取验证码，用文本加法题答案过挑战（一次性）。
+	answerWrongWithCaptcha := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil))
+		var body struct {
+			ID       string `json:"captcha_id"`
+			Question string `json:"text_question"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		var a, b int
+		if _, err := fmt.Sscanf(body.Question, "%d + %d = ?", &a, &b); err != nil {
+			t.Fatal(err)
+		}
+		payload := fmt.Sprintf(`{"username":"admin","password":"wrong-password","captcha_id":%q,"captcha_answer":"%d"}`, body.ID, a+b)
+		out := httptest.NewRecorder()
+		handler.ServeHTTP(out, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(payload)))
+		return out
+	}
+	// 第 2 次错口令（带验证码）进入惩罚：1s 后 429 + Retry-After（下一次 2s）。
 	start := time.Now()
-	rec := postLogin(handler, "wrong-password")
+	rec := answerWrongWithCaptcha()
 	elapsed := time.Since(start)
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("第 6 次错口令状态码 = %d，期望 429；body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("第 2 次错口令状态码 = %d，期望 429；body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "E_RATELIMIT") {
 		t.Fatalf("429 响应体缺少 E_RATELIMIT: %s", rec.Body.String())
@@ -111,12 +134,27 @@ func TestLoginCorrectPasswordDuringPenaltyHTTP(t *testing.T) {
 		t.Fatalf("Retry-After = %q，期望下一次惩罚 2 秒", got)
 	}
 	if elapsed < 900*time.Millisecond {
-		t.Fatalf("第 6 次错口令只耗时 %v，递增延迟未生效（爆破未被限制）", elapsed)
+		t.Fatalf("第 2 次错口令只耗时 %v，递增延迟未生效（爆破未被限制）", elapsed)
 	}
 
-	// 关键断言：惩罚期间正确口令立刻通过，且不等待惩罚延迟。
+	// 关键断言：惩罚期间正确口令立刻通过（也需带验证码），且不等待惩罚延迟。
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil))
+	var ch struct {
+		ID       string `json:"captcha_id"`
+		Question string `json:"text_question"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	var a, b int
+	if _, err := fmt.Sscanf(ch.Question, "%d + %d = ?", &a, &b); err != nil {
+		t.Fatal(err)
+	}
+	goodPayload := fmt.Sprintf(`{"username":"admin","password":%q,"captcha_id":%q,"captcha_answer":"%d"}`, testPassword, ch.ID, a+b)
 	start = time.Now()
-	rec = postLogin(handler, testPassword)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(goodPayload)))
 	elapsed = time.Since(start)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("惩罚期间正确口令状态码 = %d，期望 200（管理员被锁死）；body=%s",

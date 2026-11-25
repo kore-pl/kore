@@ -63,7 +63,7 @@ func newLocalTestServer(t *testing.T, ttl time.Duration) *Server {
 func loginTokenForTest(t *testing.T, srv *Server) string {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
-		strings.NewReader(`{"password":"`+localTestPassword+`"}`))
+		strings.NewReader(`{"username":"admin","password":"`+localTestPassword+`"}`))
 	req.RemoteAddr = "203.0.113.9:5555"
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -210,7 +210,7 @@ func TestSessionSlideRenewsCookie(t *testing.T) {
 	}, localTestTransport{})
 
 	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
-		strings.NewReader(`{"password":"`+localTestPassword+`"}`))
+		strings.NewReader(`{"username":"admin","password":"`+localTestPassword+`"}`))
 	login.RemoteAddr = "203.0.113.9:5555"
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, login)

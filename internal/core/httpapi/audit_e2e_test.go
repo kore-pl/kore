@@ -97,7 +97,7 @@ func TestAuditQueryEndToEnd(t *testing.T) {
 	// 登录取 session cookie（真实 auth 签发）。
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var cookie string
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == auth.CookieName {
@@ -146,7 +146,7 @@ func TestAuditQueryEndToEnd(t *testing.T) {
 	}, nil)
 	lowRec := httptest.NewRecorder()
 	lowSrv.Handler().ServeHTTP(lowRec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var lowCookie string
 	for _, c := range lowRec.Result().Cookies() {
 		if c.Name == auth.CookieName {

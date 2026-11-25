@@ -114,7 +114,7 @@ func auditSetup(t *testing.T, resolver CapabilityResolver, lister AuditLister) (
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var cookie string
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == auth.CookieName {

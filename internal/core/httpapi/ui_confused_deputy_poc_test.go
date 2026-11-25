@@ -145,7 +145,7 @@ func TestUIConfusedDeputy(t *testing.T) {
 	// 登录拿真实 session cookie（与浏览器同构）。
 	loginRec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(loginRec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"`+pocPassword+`"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"`+pocPassword+`"}`)))
 	var sessionCookie string
 	for _, c := range loginRec.Result().Cookies() {
 		if c.Name == auth.CookieName {

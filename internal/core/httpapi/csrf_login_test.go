@@ -43,7 +43,7 @@ func csrfLogin(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"csrf-pass"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"csrf-pass"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("登录状态码 %d: %s", rec.Code, rec.Body.String())
 	}

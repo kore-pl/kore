@@ -85,13 +85,32 @@ func newAuditHTTPServer(t *testing.T, caps map[string][]string, tweak func(*Serv
 // auditLoginRequest 发一次登录请求（固定来源 IP 与 UA，验证脱敏与截断）。
 func auditLoginRequest(t *testing.T, srv *Server, password string) *httptest.ResponseRecorder {
 	t.Helper()
-	body := fmt.Sprintf(`{"password":%q}`, password)
+	body := fmt.Sprintf(`{"username":"admin","password":%q}`, password)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
 	req.RemoteAddr = "192.168.1.100:54321"
 	req.Header.Set("User-Agent", "audit-test-agent")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	return rec
+}
+
+// auditLoginWithCaptcha 取一次验证码并带答案发登录请求（挑战态下的真链路）。
+func auditLoginWithCaptcha(t *testing.T, srv *Server, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil))
+	var body captchaBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var a, b int
+	if _, err := fmt.Sscanf(body.TextQuestion, "%d + %d = ?", &a, &b); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"username":"admin","password":%q,"captcha_id":%q,"captcha_answer":"%d"}`, password, body.ID, a+b)
+	out := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(out, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(payload)))
+	return out
 }
 
 // auditLoginCookies 登录并取会话/CSRF cookie；失败即终止用例。
@@ -191,7 +210,7 @@ func TestLoginAuditRateLimited(t *testing.T) {
 	}
 	recorder.reset()
 	// max=1：第 2 次错口令进入惩罚模式，1s 延迟后 429 并记 rate_limited。
-	if rec := auditLoginRequest(t, srv, "wrong-password"); rec.Code != http.StatusTooManyRequests {
+	if rec := auditLoginWithCaptcha(t, srv, "wrong-password"); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("惩罚模式下错口令应 429 E_RATELIMIT，实际 %d", rec.Code)
 	}
 	events := recorder.byAction(auditActionLoginFailed)
@@ -200,7 +219,7 @@ func TestLoginAuditRateLimited(t *testing.T) {
 	}
 	assertNoPassword(t, events[0])
 	// 正确口令在惩罚期间仍能登录：错口令不能把管理员锁死。
-	if rec := auditLoginRequest(t, srv, "audit-password"); rec.Code != http.StatusOK {
+	if rec := auditLoginWithCaptcha(t, srv, "audit-password"); rec.Code != http.StatusOK {
 		t.Fatalf("惩罚期间正确口令应 200，实际 %d", rec.Code)
 	}
 }

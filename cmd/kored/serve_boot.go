@@ -77,6 +77,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Auth:              svc.auth,
 		PasswordWriter:    passwordWriterFor(cfg),
 		LoginLimiter:      loginLimiter(cfg),
+		AdminUsername:     adminUsername(cfg),
 		Market:            buildMarket(cfg, svc, events),
 		TaskEvents:        events,
 		AuditLister:       &auditListerFromStore{db: svc.db},
@@ -321,6 +322,15 @@ func closeStore(state storeCloser) {
 type storeCloser interface {
 	// Close 关闭状态库，重复调用幂等。
 	Close() error
+}
+
+// adminUsername 返回固定单管理员账号标识符（ADR-0057 T1/T3）。
+// 配置快照缺失或字段为空时归一为 auth.DefaultAdminUsername，老实例无需写盘即可用 admin 登录。
+func adminUsername(cfg config) string {
+	if cfg.snapshot != nil {
+		return cfg.snapshot.Auth.AdminUsername
+	}
+	return auth.DefaultAdminUsername
 }
 
 // loginLimiter 按配置装配登录失败限速器（docs/SECURITY §3.5 / CORE §2.3）。

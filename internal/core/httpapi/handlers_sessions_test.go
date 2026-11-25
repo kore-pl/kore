@@ -18,7 +18,7 @@ import (
 // loginWithCookies 走真实登录端点拿会话与 CSRF cookie（写操作要用双提交头）。
 func loginWithCookies(t *testing.T, srv *Server) (session, csrfc *http.Cookie) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"password": "correct-horse-battery"})
+	body, _ := json.Marshal(map[string]string{"username":"admin","password": "correct-horse-battery"})
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 	req.RemoteAddr = "203.0.113.7:5555"
 	req.Header.Set("Content-Type", "application/json")

@@ -8,8 +8,9 @@ import (
 
 // 登录失败限速默认口径（docs/SECURITY §3.5、DATA-MODEL security.login_rate_limit）。
 const (
-	// DefaultMaxFailures 是免延迟的失败次数（也是一个 "burst window" 内的阈值）。
-	DefaultMaxFailures = 5
+	// DefaultMaxFailures 是免延迟的失败次数（ADR-0057 T4：宽容 5→1）。
+	// 第 1 次口令错误 0s（触发验证码），第 2 次起 1s→2s→4s→8s→16s→30s。
+	DefaultMaxFailures = 1
 	// DefaultWindow 是失败计数窗口：窗口内失败达到 MaxFailures 即进入惩罚模式。
 	DefaultWindow = 60 * time.Second
 	// DefaultLockout 是惩罚等级的记忆窗口：连续失败后安静这么久，惩罚等级归零。
@@ -102,8 +103,9 @@ func (l *LoginLimiter) BeginVerify(ctx context.Context) (release func(), ok bool
 
 // RecordFailure 记一次错误口令，返回本次应答前应等待的延迟（正确口令不会走到这里）。
 //
-// 延迟阶梯：连续失败数 n ≤ max 时为 0（容忍手误）；n = max+k（k≥1）时为
-// min(PenaltyCap, PenaltyBase·2^(k-1))。延迟由调用方在应答前施加，正确口令
+// 延迟阶梯（ADR-0057 T4）：连续失败数 n ≤ max 时为 0（容忍一次手误，同时
+// 触发图形验证码）；n = max+k（k≥1）时为 min(PenaltyCap, PenaltyBase·2^(k-1))，
+// 即 1s→2s→4s→8s→16s→30s 封顶。延迟由调用方在应答前施加，正确口令
 // 不经过本方法，所以永远不等待。
 func (l *LoginLimiter) RecordFailure(key string) time.Duration {
 	l.mu.Lock()
@@ -160,7 +162,7 @@ func (l *LoginLimiter) RecordSuccess(key string) {
 }
 
 // PenaltyFor 返回连续失败 strikes 次的错误口令本次应延迟的时长（纯函数，供测试
-// 与文档的数字表核对；strikes ≤ DefaultMaxFailures 时为 0）。
+// 与文档的数字表核对；strikes ≤ DefaultMaxFailures（现为 1）时为 0）。
 func PenaltyFor(maxFailures, strikes int) time.Duration {
 	if maxFailures <= 0 {
 		maxFailures = DefaultMaxFailures

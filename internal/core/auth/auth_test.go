@@ -69,7 +69,7 @@ func request(t *testing.T, s *httpapi.Server, method, path, body, cookie string)
 // login 返回登录响应（含 cookie）。
 func login(t *testing.T, s *httpapi.Server, password string) *httptest.ResponseRecorder {
 	t.Helper()
-	return request(t, s, http.MethodPost, "/api/v1/auth/login", `{"password":"`+password+`"}`, "")
+	return request(t, s, http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+password+`"}`, "")
 }
 
 // cookieValue 从登录响应里取出会话 cookie。

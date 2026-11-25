@@ -56,7 +56,7 @@ func newFileWriteServer(t *testing.T, action pluginapi.RootAction, dir string) (
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var session, csrf string
 	for _, c := range rec.Result().Cookies() {
 		switch c.Name {

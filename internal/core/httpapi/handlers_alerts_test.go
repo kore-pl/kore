@@ -84,7 +84,7 @@ func alertsAuthServer(t *testing.T, resolver CapabilityResolver, sink *fakeAlert
 	}, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"audit-password"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"audit-password"}`)))
 	var session, csrf string
 	for _, v := range rec.Result().Cookies() {
 		switch v.Name {
@@ -240,15 +240,29 @@ func TestLoginStreakAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	caps := auth.NewCaptchaStore()
 	srv := New(Options{
-		Auth:   auth.NewManager(db, auditHash(t), 0, false),
-		Alerts: sink,
+		Auth: auth.NewManager(db, auditHash(t), 0, false), Alerts: sink, Captchas: caps,
 	}, nil)
 	tryLogin := func(password string) {
 		t.Helper()
+		body := `{"username":"admin","password":"` + password + `"}`
+		if caps.Required() {
+			capRec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(capRec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil))
+			var ch captchaBody
+			if err := json.Unmarshal(capRec.Body.Bytes(), &ch); err != nil {
+				t.Fatal(err)
+			}
+			var a, b int
+			if _, err := fmt.Sscanf(ch.TextQuestion, "%d + %d = ?", &a, &b); err != nil {
+				t.Fatal(err)
+			}
+			body = fmt.Sprintf(`{"username":"admin","password":%q,"captcha_id":%q,"captcha_answer":"%d"}`, password, ch.ID, a+b)
+		}
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-			"/api/v1/auth/login", strings.NewReader(`{"password":"`+password+`"}`)))
+			"/api/v1/auth/login", strings.NewReader(body)))
 		_ = rec
 	}
 	tryLogin("wrong")

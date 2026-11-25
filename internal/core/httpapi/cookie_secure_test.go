@@ -29,7 +29,7 @@ func cookieTestServer(t *testing.T, policy string) *Server {
 func newCookieLoginRequest(t *testing.T, tlsOn bool, remote, xfp string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
-		strings.NewReader(`{"password":"csrf-pass"}`))
+		strings.NewReader(`{"username":"admin","password":"csrf-pass"}`))
 	req.RemoteAddr = remote
 	if tlsOn {
 		req.TLS = &tls.ConnectionState{}

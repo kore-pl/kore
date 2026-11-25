@@ -74,7 +74,7 @@ func passwordLogin(t *testing.T, s *Server, password string, expectOK bool) *htt
 	t.Helper()
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/auth/login", strings.NewReader(`{"password":"`+password+`"}`)))
+		"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`)))
 	if expectOK && rec.Code != http.StatusOK {
 		t.Fatalf("登录应成功，实际 %d: %s", rec.Code, rec.Body.String())
 	}

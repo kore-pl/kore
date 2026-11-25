@@ -18,10 +18,16 @@ const loginRateKey = "admin"
 
 // loginRequest / sessionBody 是登录与会话查询的显式请求/响应结构。
 type loginRequest struct {
+	// Username 是管理员账号标识符（ADR-0057，默认 admin；不是秘密，只识别账号）。
+	Username string `json:"username"`
 	// Password 是管理员明文口令（仅内存，不写日志）。
 	Password string `json:"password"`
 	// OTP 是可选的两步验证码（6 位动态码或恢复码）；2FA 未开启时忽略。
 	OTP string `json:"otp"`
+	// CaptchaID / CaptchaAnswer 是一次性图形验证码的挑战 id 与用户答案。
+	// 仅在 captcha.required=true（首次口令错误后）才要求；其余时刻忽略。
+	CaptchaID     string `json:"captcha_id"`
+	CaptchaAnswer string `json:"captcha_answer"`
 }
 
 // sessionBody 是 GET /api/v1/auth/session 的响应体。
@@ -32,14 +38,16 @@ type sessionBody struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// handleLogin 校验口令，成功签发会话并下发 cookie。
+// handleLogin 校验账号 + 口令，成功签发会话并下发 cookie。
 //
-// 限速（docs/SECURITY §3.5，P1 DoS 修复）：**先校验口令、再对错误口令施加递增
-// 延迟**，不存在"锁定期"——因此任意本地进程无法用错口令把管理员永久锁死，正确
-// 口令在任何时候都短路放行。错误口令连续失败达到阈值后按 1s→2s→4s→…→30s
-// 递增延迟，把串行爆破压到 1/30s；并行爆破另由 BeginVerify 单飞限制猜测吞吐。
-// 计数口径为连续失败次数，成功登录清零、静默超过 security.login_rate_limit.lock
-// 后清零。
+// 校验顺序（ADR-0057 T3/T4）：账号 → 验证码（挑战态才要）→ 口令 → OTP → 签发。
+// 账号错与口令错都回同一句"账号或口令不正确"式文案，避免身份枚举；
+// 账号错**不**动限速桶与 captcha 标记（既不 RecordFailure 也不 RecordSuccess）。
+//
+// 限速（docs/SECURITY §3.5，P1 DoS 修复 + ADR-0057 T4 宽容 5→1）：
+// **先校验口令、再对错误口令施加递增延迟**；第 1 次错误 0s（但触发验证码），
+// 第 2 次起 1s→2s→4s→8s→16s→30s 封顶。不存在"锁定期"，正确口令任何时候
+// 都 0 延迟短路放行（攻击者无法把管理员锁死）；成功清零 strike 与 captcha 标记。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -49,8 +57,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", "")
 		return
 	}
+	// 账号字段：显式必填（ADR-0057 T3）；只做身份识别，不查库、不枚举、不按输入分桶。
+	if strings.TrimSpace(req.Username) == "" {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请输入账号", "")
+		return
+	}
+	if !auth.CheckAdminUsername(req.Username, s.adminUsername) {
+		// 账号错不清零也不累加限速状态（与"账号错不清零计数"裁决一致）。
+		s.recordLoginFailed(r, loginRateKey, "wrong_username")
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "账号或口令错误", "")
+		return
+	}
 	// 登录来源 IP 白名单（用户主动开启才生效；fail-closed：读配置失败按拒绝处理）。
-	// 先于口令校验：不在允许列表的请求连口令都不试，不泄露"口令是否正确"。
+	// 先于验证码与口令校验：不在允许列表的请求连口令都不试，不泄露"口令是否正确"。
 	if s.auth != nil && s.auth.Security() != nil {
 		allowed, err := s.auth.Security().IPAllowed(auth.ClientIP(r))
 		if err != nil {
@@ -63,6 +82,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeLoginDenied(w)
 			return
 		}
+	}
+	// 验证码挑战态（首次口令错误后置位，成功登录才清）：
+	// 缺 / 错 / 过期都不进口令校验，也不记一次口令失败（防错验证码推高延时 DoS 管理员）。
+	if s.captchas != nil && s.captchas.Required() {
+		if strings.TrimSpace(req.CaptchaID) == "" || strings.TrimSpace(req.CaptchaAnswer) == "" {
+			s.recordCaptchaFailed(r, "missing")
+			s.recordLoginFailed(r, loginRateKey, "captcha_required")
+			writeCaptchaRequired(w, "captcha_required")
+			return
+		}
+		result := s.captchas.Verify(req.CaptchaID, req.CaptchaAnswer)
+		if result != auth.CaptchaOK {
+			reason := captchaDetailReason(result)
+			s.recordCaptchaFailed(r, reason)
+			s.recordLoginFailed(r, loginRateKey, reason)
+			writeCaptchaInvalid(w, reason)
+			return
+		}
+		s.recordCaptchaPassed(r)
 	}
 	// 口令校验：单飞串行化 PBKDF2，避免修掉硬锁后并行连接把猜测吞吐放大 N 倍。
 	var (
@@ -90,6 +128,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				next = s.loginLimiter.NextPenalty(loginRateKey)
 			}
 		}
+		// 第一次口令错误即置验证码要求（fail-secure：持续到一次成功登录）。
+		if s.captchas != nil {
+			s.captchas.Require()
+		}
 		reason := "wrong_password"
 		if penalty > 0 {
 			reason = "rate_limited"
@@ -99,20 +141,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if penalty > 0 {
 			// Retry-After 给"下一次错误尝试将被延迟的秒数"（向上取整、最小 1）。
 			seconds := int64((next + time.Second - 1) / time.Second)
-			if seconds < 1 {
-				seconds = 1
-			}
-			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+			retryAfterHeader(w, seconds)
 			slog.Warn("登录错误口令惩罚延迟", "key", loginRateKey, "delay_ms", penalty.Milliseconds(),
 				"retry_after_s", seconds)
 			if !s.loginLimiter.Wait(r.Context(), penalty) {
 				return
 			}
 			writeError(w, http.StatusTooManyRequests, pluginapi.E_RATELIMIT,
-				"登录失败次数过多，请稍后重试", "")
+				"尝试太频繁，请 "+strconv.FormatInt(seconds, 10)+" 秒后再试", "")
 			return
 		}
-		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "口令错误", "")
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "密码错误，请输入右侧验证码", "")
 		return
 	}
 	// 两步验证：口令正确后仍须 OTP 才能签发会话；未开启 2FA 时原流程完全不变。
@@ -152,6 +191,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.loginLimiter != nil {
 		s.loginLimiter.RecordSuccess(loginRateKey)
+	}
+	// 成功登录清验证码挑战态与内存 challenge（草案：只由成功或 CLI 重置清）。
+	if s.captchas != nil {
+		s.captchas.Clear()
 	}
 	s.auth.SetCookie(w, r, token)
 	// 双提交要求前端能读到与 X-Kore-CSRF 头同名比对的值，故 kore_csrf

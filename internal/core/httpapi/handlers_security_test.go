@@ -70,7 +70,7 @@ func securityJSON(t *testing.T, v any) []byte {
 // 默认流程兼容：未开 2FA/白名单时口令登录直接签发会话。
 func TestSecurityLoginDefaultCompatible(t *testing.T) {
 	srv, _ := securityTestServer(t)
-	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(securityJSON(t, map[string]string{"password": "correct-horse-battery"})))
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(securityJSON(t, map[string]string{"username":"admin","password": "correct-horse-battery"})))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -90,14 +90,14 @@ func TestSecurityLogin2FA(t *testing.T) {
 	if err := sec.EnableTOTP(code); err != nil {
 		t.Fatal(err)
 	}
-	body := securityJSON(t, map[string]string{"password": "correct-horse-battery"})
+	body := securityJSON(t, map[string]string{"username":"admin","password": "correct-horse-battery"})
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusPreconditionRequired || !strings.Contains(rec.Body.String(), code2FARequired) {
 		t.Fatalf("应 428 E_2FA_REQUIRED，实际 %d: %s", rec.Code, rec.Body.String())
 	}
-	body = securityJSON(t, map[string]string{"password": "correct-horse-battery", "otp": currentTestTOTP(t, enroll.Secret)})
+	body = securityJSON(t, map[string]string{"username": "admin", "password": "correct-horse-battery", "otp": currentTestTOTP(t, enroll.Secret)})
 	req = httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -112,7 +112,7 @@ func TestSecurityLoginIPDenied(t *testing.T) {
 	if err := sec.SetIPAllow(auth.IPAllowState{Enabled: true, CIDRs: []string{"192.168.1.0/24"}}); err != nil {
 		t.Fatal(err)
 	}
-	body := securityJSON(t, map[string]string{"password": "correct-horse-battery"})
+	body := securityJSON(t, map[string]string{"username":"admin","password": "correct-horse-battery"})
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 	req.RemoteAddr = "203.0.113.9:1234"
 	rec := httptest.NewRecorder()
