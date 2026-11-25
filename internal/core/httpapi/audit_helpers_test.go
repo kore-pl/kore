@@ -34,25 +34,57 @@ func (auditTestBackend) Stats(context.Context) (SupervisorStats, error) {
 	return SupervisorStats{}, nil
 }
 
-// auditTestLister 返回固定记录，支持 action 过滤与 limit 截断。
+// auditTestLister 返回固定记录，按 action/subject/plugin/result/target/keyword 过滤，
+// 支持 offset/limit 分页；OffHours 不在此替身里按时间判断（改由 cmd/kored 适配层测试覆盖），
+// 仅回显到 last 供 handler 透传断言。
 type auditTestLister struct {
 	rows []AuditRecordView
 	last AuditQuery
 }
 
-func (l *auditTestLister) ListAudit(q AuditQuery) ([]AuditRecordView, error) {
+func (l *auditTestLister) ListAudit(q AuditQuery) (AuditPage, error) {
 	l.last = q
 	out := make([]AuditRecordView, 0, len(l.rows))
 	for _, r := range l.rows {
 		if q.Action != "" && r.Action != q.Action {
 			continue
 		}
+		if q.Subject != "" && r.Subject != q.Subject {
+			continue
+		}
+		if q.Plugin != "" && r.Plugin != q.Plugin {
+			continue
+		}
+		if q.Result == "failed" {
+			if r.Result == "ok" {
+				continue
+			}
+		} else if q.Result != "" && r.Result != q.Result {
+			continue
+		}
+		if q.Target != "" && !strings.Contains(strings.ToLower(r.Target), strings.ToLower(q.Target)) {
+			continue
+		}
+		if q.Keyword != "" {
+			hay := strings.ToLower(r.Action + " " + r.Target + " " + r.Subject + " " + r.Plugin)
+			if !strings.Contains(hay, strings.ToLower(q.Keyword)) {
+				continue
+			}
+		}
 		out = append(out, r)
-		if len(out) >= q.Limit {
-			break
+	}
+	total := len(out)
+	if q.Offset > 0 {
+		if q.Offset >= len(out) {
+			out = out[:0]
+		} else {
+			out = out[q.Offset:]
 		}
 	}
-	return out, nil
+	if q.Limit > 0 && len(out) > q.Limit {
+		out = out[:q.Limit]
+	}
+	return AuditPage{Records: out, Total: total}, nil
 }
 
 // auditHash 生成测试用口令哈希。

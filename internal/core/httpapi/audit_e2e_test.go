@@ -19,10 +19,10 @@ import (
 // 与 cmd/kored/audit.go 的适配器同口径，测试内独立实现以覆盖 httpapi 层。
 type auditListerFromStore struct{ db *store.Store }
 
-func (l *auditListerFromStore) ListAudit(q AuditQuery) ([]AuditRecordView, error) {
+func (l *auditListerFromStore) ListAudit(q AuditQuery) (AuditPage, error) {
 	rows, err := l.db.ListAudit(store.AuditFilter{Action: q.Action})
 	if err != nil {
-		return nil, err
+		return AuditPage{}, err
 	}
 	lower := q.Since.UnixNano()
 	out := make([]AuditRecordView, 0, len(rows))
@@ -39,11 +39,12 @@ func (l *auditListerFromStore) ListAudit(q AuditQuery) ([]AuditRecordView, error
 			Key: rec.Key, Subject: rec.Subject, Action: rec.Action, Plugin: rec.Plugin,
 			Target: rec.Target, Result: rec.Result, Detail: rec.Detail,
 		})
-		if len(out) >= q.Limit {
-			break
-		}
 	}
-	return out, nil
+	total := len(out)
+	if q.Limit > 0 && len(out) > q.Limit {
+		out = out[:q.Limit]
+	}
+	return AuditPage{Records: out, Total: total}, nil
 }
 
 // TestAuditQuerySinceKeyFilter 验证 since 下界过滤按 key 纳秒比较正确（真实 store 数据）。
@@ -62,13 +63,13 @@ func TestAuditQuerySinceKeyFilter(t *testing.T) {
 		}
 	}
 	lister := &auditListerFromStore{db: db}
-	rows, err := lister.ListAudit(AuditQuery{Since: time.Unix(0, 0), Limit: 100})
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("since=epoch 应返回 2 条，实际 %d err=%v", len(rows), err)
+	page, err := lister.ListAudit(AuditQuery{Since: time.Unix(0, 0), Limit: 100})
+	if err != nil || len(page.Records) != 2 || page.Total != 2 {
+		t.Fatalf("since=epoch 应返回 2 条（total=2），实际 %d total=%d err=%v", len(page.Records), page.Total, err)
 	}
-	rows, err = lister.ListAudit(AuditQuery{Since: time.Now().Add(time.Hour), Limit: 100})
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("未来 since 应过滤全部，实际 %d err=%v", len(rows), err)
+	page, err = lister.ListAudit(AuditQuery{Since: time.Now().Add(time.Hour), Limit: 100})
+	if err != nil || len(page.Records) != 0 {
+		t.Fatalf("未来 since 应过滤全部，实际 %d err=%v", len(page.Records), err)
 	}
 }
 

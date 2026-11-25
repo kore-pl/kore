@@ -22,17 +22,39 @@ type auditListerFromStore struct {
 	db *store.Store
 }
 
-// ListAudit 按 since 下界（Key 前缀为 unix 纳秒）过滤，按需倒序，再按 limit 截断。
+// ListAudit 按 since 下界（Key 前缀为 unix 纳秒）与只读筛选条件过滤，按需倒序，
+// 再按 offset/limit 分页；Total 是分页前的命中总数（前端「共 N 条」与翻页用）。
 // store.ListAudit 按 key 升序列出；audit key 为 %020d-%06d（纳秒+序号）。
-func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) ([]httpapi.AuditRecordView, error) {
+// 本轮只加查询侧筛选，不碰写入路径与存储结构（G-29 之外也不动历史数据）。
+func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) (httpapi.AuditPage, error) {
 	rows, err := l.db.ListAudit(store.AuditFilter{Action: q.Action})
 	if err != nil {
-		return nil, err
+		return httpapi.AuditPage{}, err
 	}
 	lower := fmt.Sprintf("%020d", q.Since.UnixNano())
+	keyword := strings.ToLower(q.Keyword)
+	target := strings.ToLower(q.Target)
 	out := make([]httpapi.AuditRecordView, 0, len(rows))
 	for _, rec := range rows {
 		if rec.Key != "" && rec.Key[:min(len(rec.Key), 20)] < lower {
+			continue
+		}
+		if q.Subject != "" && rec.Subject != q.Subject {
+			continue
+		}
+		if q.Plugin != "" && rec.Plugin != q.Plugin {
+			continue
+		}
+		if !auditResultMatch(q.Result, rec.Result) {
+			continue
+		}
+		if target != "" && !strings.Contains(strings.ToLower(rec.Target), target) {
+			continue
+		}
+		if keyword != "" && !auditKeywordMatch(rec, keyword) {
+			continue
+		}
+		if q.OffHours && !auditOffHoursKey(rec.Key) {
 			continue
 		}
 		out = append(out, httpapi.AuditRecordView{
@@ -40,15 +62,72 @@ func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) ([]httpapi.AuditR
 			Target: rec.Target, Result: rec.Result, Detail: rec.Detail,
 		})
 	}
+	total := len(out)
 	if q.Desc {
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 			out[i], out[j] = out[j], out[i]
 		}
 	}
+	if q.Offset > 0 {
+		if q.Offset >= len(out) {
+			out = out[:0]
+		} else {
+			out = out[q.Offset:]
+		}
+	}
 	if q.Limit > 0 && len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
-	return out, nil
+	return httpapi.AuditPage{Records: out, Total: total}, nil
+}
+
+// auditResultMatch 判定结果筛选：空表示不限；failed 表示「非成功」（denied + error）。
+func auditResultMatch(filter, result string) bool {
+	switch filter {
+	case "":
+		return true
+	case "failed":
+		return result != store.AuditResultOK
+	default:
+		return result == filter
+	}
+}
+
+// auditKeywordMatch 关键字检索：动作 / 目标 / 操作者 / 插件 / detail 键与值，全部小写子串匹配。
+// 只读派生，不新建索引（审计量受保留策略约束，保持零迁移）。
+func auditKeywordMatch(rec store.AuditRecord, keyword string) bool {
+	if strings.Contains(strings.ToLower(rec.Action), keyword) ||
+		strings.Contains(strings.ToLower(rec.Target), keyword) ||
+		strings.Contains(strings.ToLower(rec.Subject), keyword) ||
+		strings.Contains(strings.ToLower(rec.Plugin), keyword) {
+		return true
+	}
+	for k, v := range rec.Detail {
+		if strings.Contains(strings.ToLower(k), keyword) || strings.Contains(strings.ToLower(v), keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// auditOffHoursKey 判断记录是否落在非工作时间：主机本地时间 18:00–次日 09:00 或周六日。
+// 键里没有可解析时间戳时按「不是非工作时间」处理（不猜年龄）。
+func auditOffHoursKey(key string) bool {
+	ts, ok := parseKeyTS(key)
+	if !ok {
+		return false
+	}
+	return auditOffHoursAt(time.Unix(0, ts))
+}
+
+// auditOffHoursAt 是「非工作时间」的唯一判据（本地时区）：工作日 09:00–18:00 之外、或周末。
+func auditOffHoursAt(at time.Time) bool {
+	local := at.Local()
+	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+		return true
+	}
+	hour := local.Hour()
+	return hour < 9 || hour >= 18
 }
 
 // auditStateDir 取状态目录：优先 KORE_STATE_DIR 环境变量（与 serve 同源）。
@@ -117,15 +196,15 @@ func runAudit(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = db.Close() }()
 	lister := &auditListerFromStore{db: db}
-	rows, err := lister.ListAudit(httpapi.AuditQuery{Since: since, Action: opts.action, Limit: opts.limit})
+	page, err := lister.ListAudit(httpapi.AuditQuery{Since: since, Action: opts.action, Limit: opts.limit})
 	if err != nil {
 		fmt.Fprintf(stderr, "audit: 查询失败: %v\n", err)
 		return exitStore
 	}
 	if opts.csv {
-		writeAuditCSV(stdout, rows)
+		writeAuditCSV(stdout, page.Records)
 	} else {
-		writeAuditText(stdout, rows)
+		writeAuditText(stdout, page.Records)
 	}
 	return exitOK
 }

@@ -174,11 +174,93 @@ func TestAuditListerOrder(t *testing.T) {
 	}
 	l := &auditListerFromStore{db: db}
 	asc, err := l.ListAudit(httpapi.AuditQuery{Since: time.Unix(0, 0), Limit: 2})
-	if err != nil || len(asc) != 2 || asc[0].Action != "audit.one" || asc[1].Action != "audit.two" {
+	if err != nil || len(asc.Records) != 2 || asc.Records[0].Action != "audit.one" || asc.Records[1].Action != "audit.two" {
 		t.Fatalf("升序前 2 条不符合预期: %+v err=%v", asc, err)
 	}
+	if asc.Total != 3 {
+		t.Fatalf("分页前 total 应为 3，实际 %d", asc.Total)
+	}
 	desc, err := l.ListAudit(httpapi.AuditQuery{Since: time.Unix(0, 0), Desc: true, Limit: 2})
-	if err != nil || len(desc) != 2 || desc[0].Action != "audit.three" || desc[1].Action != "audit.two" {
+	if err != nil || len(desc.Records) != 2 || desc.Records[0].Action != "audit.three" || desc.Records[1].Action != "audit.two" {
 		t.Fatalf("降序前 2 条不符合预期: %+v err=%v", desc, err)
+	}
+}
+
+// TestAuditListerFiltersAndTotal 装配层只读筛选 + 分页 total（真实 store 记录）。
+func TestAuditListerFiltersAndTotal(t *testing.T) {
+	db, err := store.Open(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("打开状态库失败: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	records := []store.AuditRecord{
+		{Subject: "admin", Action: "invoke.site.site.create", Plugin: "site", Target: "site/site.create",
+			Result: store.AuditResultOK, Detail: map[string]string{"duration_ms": "12"}},
+		{Subject: "admin", Action: "invoke.site.site.create", Plugin: "site", Target: "site/site.create",
+			Result: store.AuditResultError, Detail: map[string]string{"duration_ms": "31", "error_code": "E_INTERNAL"}},
+		{Subject: "system", Action: "plugin.crash", Plugin: "site", Result: store.AuditResultError},
+		{Subject: "admin", Action: "login.failed", Result: store.AuditResultDenied,
+			Detail: map[string]string{"ip": "10.0.0.x", "reason": "wrong_password"}},
+	}
+	for _, rec := range records {
+		if err := db.PutAudit(rec); err != nil {
+			t.Fatalf("写审计失败: %v", err)
+		}
+	}
+	l := &auditListerFromStore{db: db}
+	epoch := time.Unix(0, 0)
+	cases := []struct {
+		name string
+		q    httpapi.AuditQuery
+		want int
+	}{
+		{"全部", httpapi.AuditQuery{Since: epoch, Limit: 100}, 4},
+		{"按操作者", httpapi.AuditQuery{Since: epoch, Subject: "admin", Limit: 100}, 3},
+		{"按插件", httpapi.AuditQuery{Since: epoch, Plugin: "site", Limit: 100}, 3},
+		{"失败含被拒", httpapi.AuditQuery{Since: epoch, Result: "failed", Limit: 100}, 3},
+		{"只要被拒", httpapi.AuditQuery{Since: epoch, Result: "denied", Limit: 100}, 1},
+		{"目标子串", httpapi.AuditQuery{Since: epoch, Target: "site.create", Limit: 100}, 2},
+		{"关键字匹配 detail", httpapi.AuditQuery{Since: epoch, Keyword: "wrong_password", Limit: 100}, 1},
+		{"关键字匹配 IP", httpapi.AuditQuery{Since: epoch, Keyword: "10.0.0", Limit: 100}, 1},
+		{"关键字不区分大小写", httpapi.AuditQuery{Since: epoch, Keyword: "e_internal", Limit: 100}, 1},
+		{"组合筛选", httpapi.AuditQuery{Since: epoch, Subject: "admin", Result: "error", Limit: 100}, 1},
+	}
+	for _, c := range cases {
+		page, err := l.ListAudit(c.q)
+		if err != nil {
+			t.Fatalf("%s 查询失败: %v", c.name, err)
+		}
+		if page.Total != c.want || len(page.Records) != c.want {
+			t.Fatalf("%s 应命中 %d 条，实际 total=%d len=%d", c.name, c.want, page.Total, len(page.Records))
+		}
+	}
+	page, err := l.ListAudit(httpapi.AuditQuery{Since: epoch, Limit: 2, Offset: 1})
+	if err != nil || page.Total != 4 || len(page.Records) != 2 {
+		t.Fatalf("分页应 total=4 len=2，实际 total=%d len=%d err=%v", page.Total, len(page.Records), err)
+	}
+	page, err = l.ListAudit(httpapi.AuditQuery{Since: epoch, Limit: 2, Offset: 4})
+	if err != nil || page.Total != 4 || len(page.Records) != 0 {
+		t.Fatalf("越界 offset 应空页但保留 total=4，实际 total=%d len=%d err=%v", page.Total, len(page.Records), err)
+	}
+}
+
+// TestAuditOffHoursAt 非工作时间判据（本地时间）：工作日 09:00–18:00 之外、或周末。
+func TestAuditOffHoursAt(t *testing.T) {
+	cases := []struct {
+		name string
+		at   time.Time
+		want bool
+	}{
+		{"周一上午", time.Date(2024, 1, 1, 10, 0, 0, 0, time.Local), false},
+		{"周一凌晨", time.Date(2024, 1, 1, 8, 59, 0, 0, time.Local), true},
+		{"周一午夜前", time.Date(2024, 1, 1, 23, 0, 0, 0, time.Local), true},
+		{"周一刚下班", time.Date(2024, 1, 1, 18, 0, 0, 0, time.Local), true},
+		{"周六中午", time.Date(2024, 1, 6, 12, 0, 0, 0, time.Local), true},
+		{"周日中午", time.Date(2024, 1, 7, 12, 0, 0, 0, time.Local), true},
+	}
+	for _, c := range cases {
+		if got := auditOffHoursAt(c.at); got != c.want {
+			t.Fatalf("%s（%s）应 %v，实际 %v", c.name, c.at.Format("2006-01-02 15:04"), c.want, got)
+		}
 	}
 }

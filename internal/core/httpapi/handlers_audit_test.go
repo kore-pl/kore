@@ -131,3 +131,72 @@ func TestAuditQueryNoTicker(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditQueryNewFilterPassthrough 新增只读筛选透传到取数层（subject/plugin/result/target/q/offhours/offset）。
+func TestAuditQueryNewFilterPassthrough(t *testing.T) {
+	lister := &auditTestLister{rows: []AuditRecordView{
+		{Key: "0001-000000", Subject: "admin", Action: "invoke.site.site.create", Plugin: "site", Target: "site/site.create", Result: "error"},
+		{Key: "0002-000000", Subject: "system", Action: "plugin.crash", Plugin: "site", Result: "error"},
+	}}
+	ts, cookie := auditSetup(t, adminResolver, lister)
+	query := "?since=2020-01-01T00%3A00%3A00Z&subject=admin&plugin=site&result=failed&target=site%2F&q=create&offhours=1&offset=2"
+	status, body := auditRequest(t, ts, cookie, query)
+	if status != http.StatusOK {
+		t.Fatalf("组合筛选应 200，实际 %d body=%s", status, body)
+	}
+	got := lister.last
+	if got.Subject != "admin" || got.Plugin != "site" || got.Result != "failed" || got.Target != "site/" ||
+		got.Keyword != "create" || !got.OffHours || got.Offset != 2 {
+		t.Fatalf("新筛选参数未完整透传: %+v", got)
+	}
+}
+
+// TestAuditQueryPagingAndTotal 响应回显 offset 与筛选后的 total；分页只影响当前页条数。
+func TestAuditQueryPagingAndTotal(t *testing.T) {
+	lister := &auditTestLister{rows: []AuditRecordView{
+		{Key: "0001-000000", Subject: "admin", Action: "a.one", Result: "ok"},
+		{Key: "0002-000000", Subject: "admin", Action: "a.two", Result: "ok"},
+		{Key: "0003-000000", Subject: "admin", Action: "a.three", Result: "ok"},
+	}}
+	ts, cookie := auditSetup(t, adminResolver, lister)
+	status, body := auditRequest(t, ts, cookie, "?since=2020-01-01T00%3A00%3A00Z&limit=1&offset=1&order=desc")
+	if status != http.StatusOK {
+		t.Fatalf("分页查询应 200，实际 %d body=%s", status, body)
+	}
+	var got auditListBody
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("响应不是合法 JSON: %v body=%s", err, body)
+	}
+	if got.Total != 3 || got.Count != 1 || len(got.Records) != 1 || got.Offset != 1 || got.Limit != 1 {
+		t.Fatalf("分页回显不符合预期: %+v", got)
+	}
+	if lister.last.Desc != true || lister.last.Offset != 1 {
+		t.Fatalf("分页参数未透传: %+v", lister.last)
+	}
+}
+
+// TestAuditQueryFilterValidation 非法筛选值 400 且说明改哪里（不静默忽略）。
+func TestAuditQueryFilterValidation(t *testing.T) {
+	ts, cookie := auditSetup(t, adminResolver, &auditTestLister{})
+	base := "?since=2020-01-01T00%3A00%3A00Z"
+	long := strings.Repeat("长", auditMaxFilterChars+1)
+	cases := []struct {
+		query string
+		want  string
+	}{
+		{base + "&result=bogus", "result"},
+		{base + "&offset=-1", "offset"},
+		{base + "&limit=0", "limit"},
+		{base + "&q=" + long, "过长"},
+		{base + "&subject=" + long, "过长"},
+	}
+	for _, c := range cases {
+		status, body := auditRequest(t, ts, cookie, c.query)
+		if status != http.StatusBadRequest {
+			t.Fatalf("查询 %q 应 400，实际 %d body=%s", c.query, status, body)
+		}
+		if !strings.Contains(string(body), c.want) {
+			t.Fatalf("拒绝信息应含 %q，实际 %s", c.want, body)
+		}
+	}
+}
