@@ -143,6 +143,11 @@ func TestOrchestratorSharesM1ResultStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("M1 StartUpgrade 失败: %v", err)
 	}
+	// 必须等异步替换链跑完再让 t.TempDir 清理：u.run 会在后台写 stateDir
+	// （upgrade-result.json）与 .prev，否则与 RemoveAll 竞态（unlinkat: directory not empty）。
+	if final := waitUpgradeJob(t, m1, m1Job.ID); final.State != jobStateSuccess {
+		t.Fatalf("M1 异步任务未成功: %+v", final)
+	}
 
 	// 进程内路径：同一份 updater 实现、经编排入口调用。
 	_, oldBin2, newBin2, stateDir2 := newUpgradeTestFixture(t)
@@ -154,6 +159,10 @@ func TestOrchestratorSharesM1ResultStructure(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("编排 StartUpgrade 失败: %v", err)
+	}
+	// 同样等编排的异步链完成（复用测试内已有原语），避免 stateDir2 写与 TempDir cleanup 竞态。
+	if final := waitOrchestrationPhase(t, orch, orchRes.Job.ID); final.Phase != phaseCommitted {
+		t.Fatalf("编排异步任务未 committed: %q（reason=%s）", final.Phase, final.Reason)
 	}
 
 	// 两条路径的结果字段集与字段类型必须一致（同一结果结构，不复制字段）。
