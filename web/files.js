@@ -154,6 +154,46 @@
     });
   }
   // batchMove 走 file.batch 的 move：一条请求搬多个，逐项成功/失败分组交代。
+  // showInfo 走 file.stat 后端真实属性（size/mode/owner/mod_time/is_dir/is_symlink），
+  // 一次请求把条目详情摆到用户面前；不重复造表，只读、零副作用。
+  function showInfo(entry) {
+    var path = entry && entry.path ? entry.path : (S.path || '.');
+    var mask = el('div', 'kore-modal');
+    mask.setAttribute('role', 'dialog'); mask.setAttribute('aria-modal', 'true');
+    var box = add(mask, el('div', 'kore-modal-box'));
+    add(box, el('div', 'kore-modal-title', tr('files.info.title', '文件属性')));
+    var body = add(box, el('div', 'kore-modal-text'));
+    add(body, el('p', null, tr('files.info.loading', '正在读取属性：{path}…', { path: disp(path) })));
+    var ops = add(box, el('div', 'kore-modal-actions'));
+    var closeBtn = add(ops, el('button', 'btn btn-primary', tr('files.action.close', '关闭')));
+    closeBtn.type = 'button';
+    function close() { document.removeEventListener('keydown', esc); if (mask.parentNode) mask.parentNode.removeChild(mask); }
+    function esc(ev) { if (ev.key === 'Escape') close(); }
+    on(closeBtn, close);
+    mask.addEventListener('click', function (ev) { if (ev.target === mask) close(); });
+    document.addEventListener('keydown', esc);
+    document.body.appendChild(mask);
+    invoke('file.stat', { path: path }).then(function (data) {
+      if (!mask.parentNode) return;
+      body.textContent = '';
+      var rows = [
+        [tr('files.info.path', '路径'), disp(data.path || path)],
+        [tr('files.info.type', '类型'), data.is_dir ? tr('files.kind.dir', '目录') : (data.is_symlink ? tr('files.kind.link', '链接') : tr('files.kind.file', '文件'))],
+        [tr('files.col.size', '大小'), fmtSize(data.size)],
+        [tr('files.col.mode', '权限'), data.mode || '—'],
+        [tr('files.info.owner', '所有者'), data.owner ? (data.owner.uid + ':' + data.owner.gid) : '—'],
+        [tr('files.col.modified', '修改时间'), fmtTime(data.mod_time)]
+      ];
+      var table = add(body, el('table', 'files-info-table'));
+      rows.forEach(function (row) {
+        var trNode = add(table, el('tr'));
+        add(trNode, el('th', null, row[0])); add(trNode, el('td', null, row[1]));
+      });
+    }, function (err) {
+      if (!mask.parentNode) return;
+      body.textContent = tr('files.info.fail', '读取属性失败：') + errText(err) + ' ' + hintFor('stat', err);
+    });
+  }
   function batchMove() {
     var entries = checkedEntries();
     if (!entries.length) { setStatus(tr('files.batch.moveTo.noSel', '请先勾选要移动的条目'), 'fail'); return; }
@@ -241,6 +281,7 @@
     var single = targetEntry();
     if (S.renameBtn) S.renameBtn.disabled = !single;
     if (S.copyBtn) S.copyBtn.disabled = !single;
+    if (S.infoBtn) S.infoBtn.disabled = !single;
     if (S.trashRestoreBtn) S.trashRestoreBtn.disabled = !trashCheckedIds().length;
     if (S.trashPurgeBtn) S.trashPurgeBtn.disabled = !trashCheckedIds().length;
     if (S.selectAll) {
@@ -357,6 +398,7 @@
       if (!entry.is_dir && isArchive(entry.name)) opList.push([tr('files.op.extract', '解压'), 'files-extract', 'extract', function () { runL2('extract', entry); }]);
       opList.push([tr('files.op.rename', '改名'), 'files-rename', 'rename', function () { startRename(entry, name); }]);
       opList.push([tr('files.op.copyToMenu', '复制到…'), 'files-copy', 'copy', function () { runL2('copy', entry); }]);
+      opList.push([tr('files.info.title', '属性'), 'files-info', 'stat', function () { showInfo(entry); }]);
       opList.push([tr('files.op.chmod', '权限'), 'files-chmod', 'chmod', function () { runL2('chmod', entry); }]);
       opList.push([tr('files.op.move', '移动'), 'files-move', 'move', function () { runL2('move', entry); }]);
       opList.push([tr('files.op.delete', '删除'), 'files-del', 'delete', function () { removeEntry(entry); }]);
@@ -990,6 +1032,11 @@
       if (!entry) { setStatus(tr('files.selectForCopy', '请先勾选或点选一个文件，再点「复制到」'), 'fail'); return; }
       runL2('copy', entry);
     });
+    // 单条操作「属性」：只读展示后端真实属性，点选一条即可（勾选或预览条目）。
+    S.infoBtn = add(actions, el('button', 'btn btn-ghost', tr('files.info.title', '属性')));
+    S.infoBtn.type = 'button'; S.infoBtn.disabled = true;
+    S.infoBtn.setAttribute('data-action', 'stat-selected');
+    on(S.infoBtn, function () { showInfo(targetEntry()); });
 
     // 搜索：两个预设（按文件名 / 按内容），不让人写复杂语法。
     // 按文件名把裸关键词自动包成 *关键词*；只有写了通配符（* ? [）才原样使用。
