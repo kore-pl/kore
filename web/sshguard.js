@@ -1,23 +1,42 @@
 /* kore 主壳 · SSH 防护（web/sshguard.js）——零框架 / 零 CDN / 无外链。
    调用形态：POST /api/v1/invoke/ssh-guard/ssh-guard.<verb>（方法名必须带域前缀）。
-   读：status / attempts / ban.list；写：ban.add（不可回滚，需一次性 confirm 令牌）/ ban.remove。
-   真实契约（照插件 0.3.0，别凭空加参数）：
+   读：status / attempts / ban.list / whitelist；写：ban.add（不可回滚，需一次性 confirm 令牌）/
+       ban.remove / whitelist.add / whitelist.remove / config.set。
+   真实契约（照插件 0.4.0，别凭空加参数）：
+   · ban.list 收 {limit, offset, address, source}，每条给 address / source / rule / banned_at /
+     banned_at_source / remaining_s / whitelisted；applied 恒 false（只读）。
    · ban.add 只收 {ip, confirm}——**没有时长参数**，封禁时长由 fail2ban 的 bantime 决定；
      confirm 必须先用 GET /api/v1/plugins/ssh-guard/root-action/fail2ban-banip/confirm-token 换一次性令牌。
    · ban.remove 只收 {ip}，是恢复性动作、不需要令牌。
+   · whitelist 只读；whitelist.add / whitelist.remove 收 {ip, note?}，是保护性配置（不需要 confirm 令牌），
+     页面负责"明确提示 + 二次确认"。白名单 IP 的 ban.add 会被插件直接拒绝（E_CONFLICT，防误封自己）。
+   · config.set 收 {bantime_s}：fail2ban 的 bantime 插件读不到，运维填了才能算出封禁剩余时长。
    降级：fail2ban 未装/未运行或本进程拿不到日志 → 只读模式（黄底说明需要什么），写按钮从一开始就禁用。 */
 (function () {
   'use strict';
-  var API = '/api/v1/invoke/ssh-guard/', TOKEN_API = '/api/v1/plugins/ssh-guard/root-action/fail2ban-banip/confirm-token';
+  // 方法名必须带域前缀：内核 validateMethod 要求点分方法的域 == 路径里的插件 id
+  // （internal/core/httpapi/handlers_invoke.go:81），所以 API 常量直接含 'ssh-guard.'。
+  // 漏掉前缀时 status（无点）能过，但 ban.list / whitelist.add / config.get 会被
+  // 判成"域与插件不一致"回 E_INVALID——本页曾经因此整块功能不可用。
+  var API = '/api/v1/invoke/ssh-guard/ssh-guard.', TOKEN_API = '/api/v1/plugins/ssh-guard/root-action/fail2ban-banip/confirm-token';
   var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   var WINDOWS = [{ v: '24h', label: tr('sshguard.window.24h', '最近 24 小时') }, { v: '7d', label: tr('sshguard.window.7d', '最近 7 天') }];
 
   function fresh() {
     return { root: null, status: null, statusError: '', statusCode: '', statusHint: '',
       attempts: null, attemptsLoaded: false, attemptsError: '', win: '24h',
-      bans: [], bansLoaded: false, bansError: '', bansCode: '', bansHint: '', bansNote: '', bansSource: '', bansAvailable: false,
-      ip: '', busy: false, notice: '', noticeTone: '', confirmUnban: '', banMsg: '', banTone: '',
-      tokenMsg: '', readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false,
+      bans: [], bansLoaded: false, bansError: '', bansCode: '', bansHint: '', bansNote: '', bansSource: '',
+      bansAvailable: false, bansWhitelisted: 0, bansTotal: 0, bansEngine: '',
+      // sel 是"已勾选待批量解封"的地址集合（对象当 Set 用，值恒 true）
+      sel: {}, selAll: false,
+      // 批量封禁：一行一个 IP（也接受逗号/空格分隔），逐条执行并汇总结果
+      banTargets: '', banMsg: '', banTone: '', banProgress: '', busy: false, confirmUnban: '',
+      // 白名单（自保）：wl 是 whitelist 结果；wlPending 是"等用户二次确认"的 IP
+      wl: null, wlLoaded: false, wlError: '', wlCode: '', wlHint: '', wlIp: '', wlPending: '', wlMode: '',
+      wlMsg: '', wlTone: '', wlBusy: false,
+      // 封禁时长（fail2ban bantime，秒；0 = 未知）：填了才能算剩余时长
+      bantimeMin: '', btMsg: '', btTone: '', btBusy: false,
+      readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false,
       // 加固建议（suggest）：只生成建议，前端没有任何「应用」写操作
       sugPw: false, sugRoot: false, sugBusy: false, sugResult: null, sugError: '', sugHint: '', sugMsg: '', sugTone: '' };
   }
@@ -99,6 +118,41 @@
     if (left >= 1440) return Math.floor(left / 1440) + tr('sshguard.remain.days', ' 天 ') + (left % 1440 >= 60 ? Math.floor((left % 1440) / 60) + tr('sshguard.remain.hours', ' 小时') : '');
     if (left >= 60) return Math.floor(left / 60) + ' 小时 ' + (left % 60) + tr('sshguard.remain.minutes', ' 分钟');
     return left + tr('sshguard.remain.minutes', ' 分钟');
+  }
+  // remainSecs：把后端给的剩余秒数说成人话（0 秒 = 已到 fail2ban 的 bantime，等下一次清理）。
+  function remainSecs(secs) {
+    if (secs === null || secs === undefined) return '';
+    var n = Number(secs);
+    if (!isFinite(n) || n < 0) return '';
+    if (n === 0) return tr('sshguard.remain.due', '已到时长上限，等 fail2ban 清理');
+    if (n >= 86400) return Math.floor(n / 86400) + tr('sshguard.remain.days', ' 天 ') + Math.floor((n % 86400) / 3600) + tr('sshguard.remain.hours', ' 小时');
+    if (n >= 3600) return Math.floor(n / 3600) + tr('sshguard.remain.hours', ' 小时') + ' ' + Math.floor((n % 3600) / 60) + tr('sshguard.remain.minutes', ' 分钟');
+    if (n >= 60) return Math.floor(n / 60) + tr('sshguard.remain.minutes', ' 分钟');
+    return n + tr('sshguard.unit.secs', ' 秒');
+  }
+  // banTimeText：封禁时刻 + 来源标注（observed=本插件亲测、log=日志推断），推断必须标明。
+  function banTimeText(item) {
+    if (!item.banned_at) return '—';
+    var base = fmtTime(item.banned_at);
+    if (item.banned_at_source === 'log') return base + tr('sshguard.ban.atInferred', '（推断）');
+    return base;
+  }
+  // kindBars：失败类型分布（自绘横条，数值+单位常显，不依赖 hover；G-32「每个数据点可读」）。
+  function kindBars(kinds, failed) {
+    var box = el('div', 'sg-kinds');
+    add(box, el('span', 'sg-cell-label sg-kinds-title',
+      tr('sshguard.kinds.title', '失败类型分布（共 ') + (failed || 0) + tr('sshguard.kinds.total', ' 次失败）')));
+    kinds.forEach(function (k) {
+      var row = add(box, el('div', 'sg-kind'));
+      add(row, el('span', 'sg-kind-name', k.label || k.kind || '—'));
+      var track = add(row, el('span', 'sg-bar sg-bar-wide'));
+      var fill = add(track, el('span', 'sg-bar-fill'));
+      fill.style.width = Math.max(4, Math.min(100, k.ratio || 0)) + '%';
+      var text = (k.count || 0) + tr('sshguard.unit.times', ' 次') + ' · ' + (k.ratio || 0) + '%';
+      var val = add(row, el('span', 'sg-kind-val', text));
+      val.setAttribute('title', (k.label || k.kind || '') + tr('sshguard.sep.colon', '：') + text);
+    });
+    return box;
   }
   // 错误文案唯一来源是主壳 KoreUI.failureOf（web/app.js 的 ERROR_VIEW 映射表）。
   // 未收录的 code 原样回退本视图既有通用文案，保证映射表没跟上时不会空白 / undefined。
@@ -225,7 +279,7 @@
         p.hint || ''));
     }
     if (st.note) add(S.statusHost, el('p', 'field-hint', st.note));
-    paintBans(); paintBanForm();
+    paintWhitelist(); paintBans(); paintBanForm();
   }
   function hidePanels(hidden) {
     var flag = hidden === undefined ? true : !!hidden;
@@ -259,6 +313,9 @@
       else verdict = tr('sshguard.verdict.spread', '失败分散在 {n} 个 IP：{note}', { n: tops.length, note: a.failed > 100 ? tr('sshguard.verdict.heavy', '量偏大，建议封 Top IP。') : tr('sshguard.verdict.light', '量不大，先观察。') });
     }
     add(S.attemptsHost, el('p', 'sg-verdict', verdict));
+    if ((a.kinds || []).length) {
+      S.attemptsHost.appendChild(kindBars(a.kinds, a.failed));
+    }
     if ((a.timeline_hourly || []).length && (a.failed || 0) > 0) {
       S.attemptsHost.appendChild(svgTimeline(a.timeline_hourly));
     }
@@ -341,18 +398,193 @@
     return box;
   }
 
-  // ---- ③ 封禁名单 ----
-  function sourceLabel() {
-    if (S.bansSource === tr('sshguard.cell.fail2ban', 'fail2ban')) return tr('sshguard.source.fail2ban', 'fail2ban 封禁');
-    if (S.bansSource) return tr('sshguard.source.inferredPrefix', '日志推断（') + S.bansSource + '）';
+  // ---- ③ 白名单（自保）----
+  // 产品口径：fail2ban 封的是"来源 IP"，而管理员的出口 IP 正是同一个维度——误封一次
+  // 就把自己锁在门外。白名单是插件侧的封禁前置门：命中的 IP 在 ban.add 里被直接拒绝
+  // （后端硬拦，前端这里只是把"会发生什么"提前讲清楚）。"你的 IP"取自成功登录日志。
+  function whitelistSet() {
+    var set = {};
+    var entries = (S.wl && S.wl.entries) || [];
+    for (var i = 0; i < entries.length; i++) { if (entries[i] && entries[i].ip) set[entries[i].ip] = entries[i]; }
+    return set;
+  }
+  function wlChip(ok) {
+    return chip(ok ? 'ok' : 'warn', ok ? tr('sshguard.wl.inList', '已在白名单') : tr('sshguard.wl.notInList', '不在白名单'));
+  }
+  // askWhitelist 打开"明确提示 + 二次确认"：绝不因为一次点击就改白名单。
+  function askWhitelist(ip, mode, note) {
+    S.wlPending = ip || ''; S.wlMode = mode || 'add'; S.wlNote = note || '';
+    S.wlMsg = ''; paintWhitelist();
+  }
+  function submitWhitelist() {
+    if (!S.wlPending || S.wlBusy || S.destroyed) return;
+    var ip = S.wlPending, mode = S.wlMode;
+    S.wlBusy = true; S.wlMsg = ''; S.wlTone = ''; paintWhitelist();
+    var payload = mode === 'remove' ? { ip: ip } : { ip: ip, note: S.wlNote || tr('sshguard.wl.manualNote', '手动填写') };
+    invoke(mode === 'remove' ? 'whitelist.remove' : 'whitelist.add', payload).then(function (r) {
+      if (S.destroyed) return;
+      S.wlBusy = false; S.wlPending = '';
+      var added = !!(r && r.added), removed = !!(r && r.removed);
+      S.wlMsg = mode === 'remove'
+        ? (removed ? tr('sshguard.wl.removed', '已从白名单移除 ') + ip : tr('sshguard.wl.removeNoop', '这个 IP 本来不在白名单里：') + ip)
+        : (added ? tr('sshguard.wl.added', '已加入白名单 ') + ip + tr('sshguard.wl.addedTail', '（这个地址不会再被封禁）') : tr('sshguard.wl.addNoop', '这个 IP 早在白名单里：') + ip);
+      if (r && r.note) S.wlMsg += tr('sshguard.sep.semicolon', '；') + r.note;
+      S.wlTone = (r && (added || removed)) ? 'ok' : '';
+      S.wl = (r && r.whitelist) || S.wl;
+      paintWhitelist(); loadBans();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.wlBusy = false; S.wlMsg = failureText(err, mode === 'remove' ? tr('sshguard.wl.removeWord', '移出白名单') : tr('sshguard.wl.addWord', '加入白名单'));
+      S.wlTone = 'fail'; paintWhitelist();
+    });
+  }
+  function paintWlMsg() {
+    if (!S.wlMsgHost) return;
+    S.wlMsgHost.textContent = S.wlMsg || '';
+    S.wlMsgHost.className = 'sg-msg' + (S.wlTone === 'fail' ? ' is-fail' : (S.wlTone === 'ok' ? ' is-ok' : ''));
+  }
+  function paintWhitelist() {
+    if (!S.wlHost) return;
+    S.wlHost.textContent = '';
+    if (S.wlMeta) S.wlMeta.textContent = (S.wlLoaded && S.wl) ? (S.wl.count + tr('sshguard.unit.ips', ' 个')) : '';
+    paintWlMsg();
+    if (S.wlError) {
+      S.wlHost.appendChild(failureBlock({ code: S.wlCode, message: S.wlError, hint: S.wlHint }, ''));
+      return;
+    }
+    if (!S.wlLoaded) { add(S.wlHost, el('div', 'sg-loading', tr('sshguard.wl.loading', '正在读取白名单…'))); return; }
+    var w = S.wl || {}, entries = w.entries || [], candidates = w.candidates || [];
+
+    // ① 当前 IP 判定（口径写在页面上，不让人误以为这是浏览器 IP）
+    var top = add(S.wlHost, el('div', 'sg-wl-top'));
+    if (w.current_ip) {
+      top.appendChild(wlChip(!!w.current_whitelisted));
+      add(top, el('span', 'sg-cell-label', tr('sshguard.wl.currentPrefix', '你最近一次 SSH 登录的 IP：')));
+      add(top, el('span', 'sg-mono sg-wl-ip', w.current_ip));
+      var seenAt = candidates.length ? fmtTime(candidates[0].last_seen) : '—';
+      add(top, el('span', 'sg-cell-label', tr('sshguard.wl.lastSeenPrefix', '（最后成功登录 ') + seenAt + tr('sshguard.wl.lastSeenSuffix', '）')));
+      if (!w.current_whitelisted) {
+        var addCurrent = add(top, el('button', 'btn btn-primary',
+          tr('sshguard.wl.addCurrent', '把 ') + w.current_ip + tr('sshguard.wl.addCurrentTail', ' 加入白名单')));
+        addCurrent.type = 'button'; addCurrent.disabled = S.wlBusy;
+        on(addCurrent, function () { askWhitelist(w.current_ip, 'add', tr('sshguard.wl.candNote', '最近一次成功 SSH 登录的 IP')); });
+      }
+    } else {
+      top.appendChild(chip('warn', tr('sshguard.wl.unknownChip', '读不到你的登录 IP')));
+      add(top, el('p', 'sg-callout-text', tr('sshguard.wl.unknownWhy',
+        '插件读不到 SSH 登录日志（当前来源：') + (w.log_source || 'none') +
+        tr('sshguard.wl.unknownWhyTail', '），没法自动认出你的 IP。请在下面「手动添加」里填你自己的出口 IP。')));
+    }
+    add(S.wlHost, el('p', 'field-hint', tr('sshguard.wl.caveat',
+      '白名单按 IP 精确匹配，防的是「把自己封在门外」。上面的 IP 是按 SSH 登录日志推算的：如果你不是从这台机器 SSH 过来的（比如只用浏览器打开面板），请手动填你的出口 IP。')));
+
+    // ② 自锁告警：白名单里的 IP 却仍被封着 → 给一键解封
+    var locked = w.banned_whitelisted || [];
+    if (locked.length) {
+      var lockBox = guideBox(tr('sshguard.wl.lockTitle', '白名单里有 IP 仍被封禁（这就是会把自己锁在门外的情况）'),
+        [tr('sshguard.wl.lockLine', '这些地址在白名单里，但 fail2ban 还封着：') + locked.join(tr('sshguard.sep.comma', '、'))],
+        [], '');
+      S.wlHost.appendChild(lockBox);
+      var unlockBtn = add(lockBox, el('button', 'btn btn-primary', tr('sshguard.wl.unbanAll', '解封这些 IP')));
+      unlockBtn.type = 'button'; unlockBtn.disabled = S.readOnly || S.busy;
+      if (S.readOnly) unlockBtn.title = S.readOnlyWhy;
+      on(unlockBtn, function () { unbanMany(locked); });
+    }
+
+    // ③ 二次确认区（明确提示：会 / 不会发生什么，以及怎么撤销）
+    if (S.wlPending) {
+      var confirmBox = add(S.wlHost, el('div', 'sg-callout sg-callout-warn sg-wl-confirm'));
+      confirmBox.setAttribute('role', 'alertdialog');
+      var adding = S.wlMode !== 'remove';
+      add(confirmBox, el('div', 'sg-callout-title',
+        (adding ? tr('sshguard.wl.confirmAdd', '确定把 ') : tr('sshguard.wl.confirmRemove', '确定把 ')) + S.wlPending +
+        (adding ? tr('sshguard.wl.confirmAddTail', ' 加入白名单？') : tr('sshguard.wl.confirmRemoveTail', ' 移出白名单？'))));
+      add(confirmBox, el('p', 'sg-callout-text', adding
+        ? tr('sshguard.wl.confirmAddText', '加入后这个 IP 不会再被本页封禁——这是防误封自己的保护。请确认它就是你自己的出口 IP；加错了可以随时移除。')
+        : tr('sshguard.wl.confirmRemoveText', '移出后它会重新进入自动封禁范围。如果你可能从这个 IP 登录，先别移除，否则下一次误封会把你锁在门外。')));
+      var cOps = add(confirmBox, el('div', 'sg-ops'));
+      var okBtn = add(cOps, el('button', 'btn btn-primary', adding ? tr('sshguard.wl.doAdd', '确认加入') : tr('sshguard.wl.doRemove', '确认移除')));
+      okBtn.type = 'button'; okBtn.disabled = S.wlBusy;
+      on(okBtn, submitWhitelist);
+      var cancelBtn = add(cOps, el('button', 'btn btn-ghost', tr('sshguard.btn.cancel', '取消')));
+      cancelBtn.type = 'button';
+      on(cancelBtn, function () { S.wlPending = ''; paintWhitelist(); });
+    }
+
+    // ④ 候选 IP：最近成功登录过这台机器的来源（可一键加入）
+    var entrySet = whitelistSet(), extra = [];
+    for (var c = 0; c < candidates.length; c++) {
+      if (candidates[c] && candidates[c].ip && !entrySet[candidates[c].ip]) extra.push(candidates[c]);
+    }
+    if (extra.length) {
+      add(S.wlHost, el('span', 'sg-cell-label', tr('sshguard.wl.candTitle', '最近成功登录的 IP（选出你自己的那条加入）')));
+      var cwrap = add(S.wlHost, el('div', 'sg-table-wrap'));
+      var ctable = add(cwrap, el('table', 'plugin-table sg-table'));
+      var chtr = add(add(ctable, el('thead')), el('tr'));
+      [tr('sshguard.col.ip', 'IP 地址'), tr('sshguard.wl.colLastLogin', '最后成功登录'), tr('sshguard.wl.colCount', '成功次数'), tr('sshguard.col.actions', '操作')]
+        .forEach(function (t) { add(chtr, el('th', null, t)); });
+      var cbody = add(ctable, el('tbody'));
+      extra.forEach(function (cand) {
+        var row = add(cbody, el('tr'));
+        add(row, el('td', 'sg-mono', cand.ip)).setAttribute('data-label', tr('sshguard.col.ip', 'IP 地址'));
+        add(row, el('td', null, fmtTime(cand.last_seen))).setAttribute('data-label', tr('sshguard.wl.colLastLogin', '最后成功登录'));
+        add(row, el('td', 'sg-num', String(cand.success || 0) + tr('sshguard.unit.times', ' 次'))).setAttribute('data-label', tr('sshguard.wl.colCount', '成功次数'));
+        var candOps = add(row, el('td', 'sg-ops')); candOps.setAttribute('data-label', tr('sshguard.col.actions', '操作'));
+        var candBtn = add(candOps, el('button', 'btn btn-ghost', tr('sshguard.wl.addThis', '加入白名单')));
+        candBtn.type = 'button'; candBtn.disabled = S.wlBusy;
+        on(candBtn, function () { askWhitelist(cand.ip, 'add', tr('sshguard.wl.candNote', '最近一次成功 SSH 登录的 IP')); });
+      });
+    }
+
+    // ⑤ 白名单清单
+    if (!entries.length) {
+      S.wlHost.appendChild(emptyBlock(tr('sshguard.wl.empty',
+        '白名单是空的：现在一旦你的 IP 被封，就只能从别的地址进来解封。建议先把你自己正在用的 IP 加进来。'),
+        tr('sshguard.wl.emptyAction', '加我当前的 IP'), function () { if (w.current_ip) askWhitelist(w.current_ip, 'add', tr('sshguard.wl.candNote', '最近一次成功 SSH 登录的 IP')); else if (S.wlInput) S.wlInput.focus(); }));
+      return;
+    }
+    var wrap = add(S.wlHost, el('div', 'sg-table-wrap'));
+    var table = add(wrap, el('table', 'plugin-table sg-table sg-table-lg'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    [tr('sshguard.col.ip', 'IP 地址'), tr('sshguard.wl.colAddedAt', '加入时间'), tr('sshguard.wl.colNote', '备注'), tr('sshguard.col.actions', '操作')]
+      .forEach(function (t) { add(htr, el('th', null, t)); });
+    var tbody = add(table, el('tbody'));
+    entries.forEach(function (entry) {
+      var row = add(tbody, el('tr'));
+      add(row, el('td', 'sg-mono', entry.ip)).setAttribute('data-label', tr('sshguard.col.ip', 'IP 地址'));
+      add(row, el('td', null, fmtTime(entry.added_at))).setAttribute('data-label', tr('sshguard.wl.colAddedAt', '加入时间'));
+      add(row, el('td', null, entry.note || '—')).setAttribute('data-label', tr('sshguard.wl.colNote', '备注'));
+      var ops = add(row, el('td', 'sg-ops')); ops.setAttribute('data-label', tr('sshguard.col.actions', '操作'));
+      var rmBtn = add(ops, el('button', 'btn btn-ghost', tr('sshguard.wl.remove', '移出白名单')));
+      rmBtn.type = 'button'; rmBtn.disabled = S.wlBusy;
+      on(rmBtn, function () { askWhitelist(entry.ip, 'remove', ''); });
+    });
+    if (w.note) add(S.wlHost, el('p', 'field-hint', w.note));
+  }
+
+  // ---- ④ 封禁名单 ----
+  // 一条记录要回答四件事：谁被拦、凭什么、什么时候封的、还剩多久（读不到就说读不到）。
+  function sourceText(item) {
+    if (item && item.source === 'fail2ban') return tr('sshguard.source.fail2ban', 'fail2ban 封禁');
+    if (item && item.source === 'log') return tr('sshguard.source.inferredShort', '日志推断（未真封）');
     return tr('sshguard.source.unknown', '未知');
   }
   // 推断名单里的 IP 并没有真的被 fail2ban 封禁，解封按钮必须禁用并说明。
   function bansAreInferred() { return !!S.bansSource && S.bansSource !== tr('sshguard.cell.fail2ban', 'fail2ban'); }
+  function selectedBans() {
+    var out = [];
+    (S.bans || []).forEach(function (b) { if (b && b.address && S.sel[b.address]) out.push(b.address); });
+    return out;
+  }
+  function clearSelection() { S.sel = {}; S.selAll = false; }
+  function toggleSelect(address, on_) {
+    if (on_) S.sel[address] = true; else delete S.sel[address];
+    paintBans();
+  }
   function paintBans() {
     if (!S.bansHost) return;
     S.bansHost.textContent = '';
-    S.bansMeta.textContent = S.bansLoaded ? (S.bans.length + ' 个') : '';
+    if (S.bansMeta) S.bansMeta.textContent = S.bansLoaded ? (S.bans.length + ' 个') : '';
     if (S.bansError) {
       S.bansHost.appendChild(failureBlock({ code: S.bansCode, message: S.bansError, hint: S.bansHint },
         S.bansCode === 'E_NEED_ROOT' ? tr('sshguard.cmd.restartKore', 'sudo systemctl restart kore') : ''));
@@ -362,83 +594,182 @@
     if (!S.bans.length) {
       S.bansHost.appendChild(emptyBlock(S.readOnly
         ? tr('sshguard.bans.emptyReadonly', '没有封禁记录。自动封禁未启用时，这里不会出现新条目。')
-        : tr('sshguard.bans.emptyOk', '当前没有封禁任何 IP。上面「手动封禁」填一个地址即可。')));
+        : tr('sshguard.bans.emptyOk', '当前没有封禁任何 IP。下面「手动封禁」填一个地址即可。')));
       return;
     }
-    if (bansAreInferred()) {
+    var inferred = bansAreInferred();
+    if (inferred) {
       S.bansHost.appendChild(guideBox(tr('sshguard.guide.inferredTitle', '下面是「可疑 IP」而不是封禁名单'),
         [tr('sshguard.guide.inferredLine1', '当前没有运行中的 fail2ban，插件只能从登录日志里按阈值挑出可疑来源；这些 IP 并没有被真正封禁。'),
-         tr('sshguard.guide.inferredLine2', '要真正封禁，请先启动 fail2ban，再用上面的「封禁此 IP」。')],
+         tr('sshguard.guide.inferredLine2', '要真正封禁，请先启动 fail2ban，再用下面的「手动封禁」。')],
         [tr('sshguard.cmd.enableFail2ban', 'sudo systemctl enable --now fail2ban')], S.bansNote));
     } else if (S.bansNote) {
       add(S.bansHost, el('p', 'field-hint', S.bansNote));
     }
+
+    // 批量操作条：勾选 → 批量解封（逐条执行，有失败就逐条报出来）
+    var sel = selectedBans();
+    var bar = add(S.bansHost, el('div', 'sg-bulk'));
+    var selectAllLabel = add(bar, el('label', 'sg-checkwrap'));
+    var selectAll = add(selectAllLabel, el('input', 'sg-check'));
+    selectAll.type = 'checkbox';
+    selectAll.checked = !!S.bans.length && sel.length === S.bans.length;
+    selectAll.setAttribute('aria-label', tr('sshguard.bans.selectAll', '全选当前封禁名单'));
+    on(selectAll, function () {
+      if (selectAll.checked) { S.bans.forEach(function (b) { if (b && b.address) S.sel[b.address] = true; }); }
+      else { clearSelection(); }
+      paintBans();
+    }, 'change');
+    add(selectAllLabel, el('span', 'sg-cell-label', tr('sshguard.bans.selectAllLabel', '全选')));
+    add(bar, el('span', 'sg-cell-label', sel.length
+      ? (tr('sshguard.bans.selectedPrefix', '已选 ') + sel.length + tr('sshguard.unit.items', ' 个'))
+      : tr('sshguard.bans.selectHint', '勾选左侧方框可批量解封')));
+    var bulkUnban = add(bar, el('button', 'btn sg-danger', tr('sshguard.btn.unbanSelected', '批量解封')));
+    bulkUnban.type = 'button';
+    bulkUnban.disabled = !sel.length || S.readOnly || S.busy || inferred;
+    if (S.readOnly) bulkUnban.title = S.readOnlyWhy;
+    if (inferred) bulkUnban.title = tr('sshguard.bans.inferredTitle', '这是从日志推断的可疑 IP，并没有真的被封禁；需要封禁请用下面的「手动封禁」');
+    on(bulkUnban, function () { unbanMany(selectedBans()); });
+
     var wrap = add(S.bansHost, el('div', 'sg-table-wrap'));
-    var table = add(wrap, el('table', 'plugin-table sg-table'));
+    var table = add(wrap, el('table', 'plugin-table sg-table sg-table-lg'));
     var htr = add(add(table, el('thead')), el('tr'));
-    [tr('sshguard.label.ip', 'IP 地址'), '来源', '原因', '操作'].forEach(function (t) { add(htr, el('th', null, t)); });
+    add(htr, el('th', 'sg-col-check', ''));
+    [tr('sshguard.col.ip', 'IP 地址'), tr('sshguard.col.source', '来源'), tr('sshguard.col.rule', '触发规则'),
+      tr('sshguard.col.bannedAt', '封禁时间'), tr('sshguard.col.remaining', '剩余时长'), tr('sshguard.col.actions', '操作')]
+      .forEach(function (t) { add(htr, el('th', null, t)); });
     var tbody = add(table, el('tbody'));
     S.bans.forEach(function (b) {
+      var address = b.address || '';
       var rowNode = add(tbody, el('tr'));
-      add(rowNode, el('td', 'sg-mono', b.address || '—')).setAttribute('data-label', tr('sshguard.col.ip', 'IP 地址'));
-      add(rowNode, el('td', null, sourceLabel())).setAttribute('data-label', tr('sshguard.col.source', '来源'));
-      add(rowNode, el('td', null, b.reason || '—')).setAttribute('data-label', tr('sshguard.col.reason', '原因'));
+      if (b.whitelisted) rowNode.className = 'sg-row-wl';
+      var checkCell = add(rowNode, el('td', 'sg-col-check'));
+      var checkWrap = add(checkCell, el('label', 'sg-checkwrap'));
+      var box = add(checkWrap, el('input', 'sg-check'));
+      box.type = 'checkbox'; box.checked = !!S.sel[address];
+      box.setAttribute('aria-label', tr('sshguard.bans.selectOne', '选择 ') + address);
+      on(box, function () { toggleSelect(address, box.checked); }, 'change');
+      var ipCell = add(rowNode, el('td', 'sg-mono', address || '—'));
+      ipCell.setAttribute('data-label', tr('sshguard.col.ip', 'IP 地址'));
+      if (b.whitelisted) {
+        var wlBadge = chip('warn', tr('sshguard.bans.wlChip', '白名单'));
+        wlBadge.className += ' sg-inline-chip';
+        ipCell.appendChild(wlBadge);
+      }
+      add(rowNode, el('td', null, sourceText(b))).setAttribute('data-label', tr('sshguard.col.source', '来源'));
+      add(rowNode, el('td', 'sg-rule', b.rule || b.reason || '—')).setAttribute('data-label', tr('sshguard.col.rule', '触发规则'));
+      add(rowNode, el('td', null, banTimeText(b))).setAttribute('data-label', tr('sshguard.col.bannedAt', '封禁时间'));
+      var remain = '—';
+      if (b.source === 'fail2ban') {
+        remain = (b.remaining_s === null || b.remaining_s === undefined)
+          ? tr('sshguard.bans.remainUnknown', '未知（填「封禁时长」后可算）')
+          : remainSecs(b.remaining_s);
+      }
+      add(rowNode, el('td', 'sg-num', remain)).setAttribute('data-label', tr('sshguard.col.remaining', '剩余时长'));
       var ops = add(rowNode, el('td', 'sg-ops cell-ops')); ops.setAttribute('data-label', tr('sshguard.col.actions', '操作'));
-      if (S.confirmUnban === b.address) {
+      if (S.confirmUnban === address) {
         add(ops, el('span', 'sg-cell-label', tr('sshguard.bans.confirmUnban', '确定解封？')));
         var yes = add(ops, el('button', 'btn sg-danger', tr('sshguard.btn.confirm', '确认'))); yes.type = 'button';
         var no = add(ops, el('button', 'btn btn-ghost', tr('sshguard.btn.cancel', '取消'))); no.type = 'button';
         on(no, function () { S.confirmUnban = ''; paintBans(); });
-        on(yes, function () { S.confirmUnban = ''; unban(b.address, yes); });
+        on(yes, function () { S.confirmUnban = ''; unban(address, yes); });
       } else {
         var btn = add(ops, el('button', 'btn sg-danger', tr('sshguard.btn.unban', '解封'))); btn.type = 'button';
-        btn.disabled = S.readOnly || S.busy || bansAreInferred();
+        btn.disabled = S.readOnly || S.busy || inferred;
         if (S.readOnly) btn.title = S.readOnlyWhy;
-        if (bansAreInferred()) btn.title = tr('sshguard.bans.inferredTitle', '这是从日志推断的可疑 IP，并没有真的被封禁；需要封禁请用上面的「封禁此 IP」');
-        on(btn, function () { S.confirmUnban = b.address; paintBans(); });
+        if (inferred) btn.title = tr('sshguard.bans.inferredTitle', '这是从日志推断的可疑 IP，并没有真的被封禁；需要封禁请用下面的「手动封禁」');
+        on(btn, function () { S.confirmUnban = address; paintBans(); });
       }
     });
-    if (S.bansNote) add(S.bansHost, el('p', 'field-hint', S.bansNote));
+    if (S.bansWhitelisted) {
+      add(S.bansHost, el('p', 'field-hint', tr('sshguard.bans.wlWarn',
+        '名单里有 ') + S.bansWhitelisted + tr('sshguard.bans.wlWarnTail', ' 个 IP 在白名单里却仍被封着：先去上面「白名单」用一键解封，否则它们下次还会被封。')));
+    }
   }
 
-  // ---- ④ 手动封禁 ----
+  // ---- ⑤ 手动封禁（支持批量）----
   function paintBanForm() {
     if (!S.banHint) return;
     var disabled = S.readOnly || S.busy;
-    [S.ipInput, S.banBtn].forEach(function (n) { if (n) n.disabled = disabled; });
+    [S.ipInput, S.banBtn, S.btInput, S.btBtn].forEach(function (n) { if (n) n.disabled = disabled || (n === S.btBtn && S.btBusy); });
     S.banHint.textContent = S.readOnly
       ? S.readOnlyWhy + tr('sshguard.ban.hintNeed', ' 需要：fail2ban 在运行 + kored 以 root 启动（提权通道）。')
-      : tr('sshguard.ban.hintFlow', '封禁走内核提权通道执行 fail2ban-client；不可回滚，页面会先申请一次性确认令牌再提交。');
+      : tr('sshguard.ban.hintFlow', '封禁走内核提权通道执行 fail2ban-client；不可回滚，每个 IP 都会先申请一次性确认令牌再提交。白名单里的 IP 会被插件直接拒绝（防误封自己）。');
+    if (S.btHint) {
+      S.btHint.textContent = tr('sshguard.bt.hint', 'fail2ban 的 bantime 插件读不到，所以默认不显示「剩余时长」。在宿主执行 fail2ban-client get sshd bantime 查到秒数后填进来，封禁清单就能算出还剩多久。');
+    }
+  }
+  // parseTargets 把多行/逗号/空格分隔的目标拆成去重的 IP 列表（一行一个最直观，其他分隔也接受）。
+  function parseTargets(raw) {
+    var parts = String(raw || '').split(/[\s,;\u3001\uFF0C\uFF1B]+/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var ip = parts[i].trim();
+      if (ip && out.indexOf(ip) < 0) out.push(ip);
+    }
+    return out;
+  }
+  function looksLikeIP(ip) {
+    return /^[0-9A-Fa-f:.]+$/.test(ip) && (ip.indexOf(':') >= 0 || ip.indexOf('.') >= 0);
   }
   function submitBan() {
     if (S.readOnly || S.busy) return;
-    var ip = (S.ipInput.value || '').trim();
-    if (!ip) { S.banMsg = tr('sshguard.err.ipEmpty', '请填一个 IP 地址（例如 203.0.113.7）'); S.banTone = 'fail'; paintBanMsg(); S.ipInput.focus(); return; }
-    if (!/^[0-9A-Fa-f:.]+$/.test(ip) || ip.indexOf(':') < 0 && ip.indexOf('.') < 0) {
-      S.banMsg = tr('sshguard.err.ipFormat', 'IP 格式不对：只接受纯 IPv4 / IPv6 地址（不支持网段）'); S.banTone = 'fail'; paintBanMsg(); return;
+    var ips = parseTargets(S.ipInput ? S.ipInput.value : '');
+    if (!ips.length) {
+      S.banMsg = tr('sshguard.err.ipEmpty', '请填一个 IP 地址（例如 203.0.113.7）'); S.banTone = 'fail';
+      paintBanMsg(); if (S.ipInput) S.ipInput.focus(); return;
     }
-    S.busy = true; S.banMsg = tr('sshguard.status.token', '正在申请一次性确认令牌…'); S.banTone = ''; paintBanForm(); paintBanMsg();
-    request(TOKEN_API, undefined, 'GET').then(function (tok) {
-      var token = tok && (tok.token || tok.confirm || tok.confirm_token);
-      if (!token) throw new Error(tr('sshguard.err.noToken', '内核没有返回确认令牌'));
-      S.banMsg = tr('sshguard.status.banning', '正在封禁 ') + ip + '…'; paintBanMsg();
-      return invoke('ban.add', { ip: ip, confirm: token });
-    }).then(function (r) {
+    var bad = ips.filter(function (ip) { return !looksLikeIP(ip); });
+    if (bad.length) {
+      S.banMsg = tr('sshguard.err.ipFormat', 'IP 格式不对：只接受纯 IPv4 / IPv6 地址（不支持网段）') + tr('sshguard.sep.colon', '：') + bad.slice(0, 3).join(tr('sshguard.sep.comma', '、'));
+      S.banTone = 'fail'; paintBanMsg(); return;
+    }
+    // 白名单前置提示：真正拦截在后端（E_CONFLICT），这里先挡住，省掉一轮令牌申请与失败。
+    var set = whitelistSet();
+    var blocked = ips.filter(function (ip) { return !!set[ip]; });
+    if (blocked.length) {
+      S.banMsg = tr('sshguard.err.whitelisted', '这些 IP 在白名单里，封禁会被拒绝（防止把你自己锁在门外）：') + blocked.join(tr('sshguard.sep.comma', '、')) + tr('sshguard.err.whitelistedTail', '。请先到「白名单」移除，再封禁。');
+      S.banTone = 'fail'; paintBanMsg(); return;
+    }
+    S.busy = true; S.banTone = '';
+    var ok = 0, failed = [], index = 0;
+    function finish() {
       if (S.destroyed) return;
       S.busy = false;
-      if (r && r.applied) {
-        S.banMsg = '已封禁 ' + (r.ip || ip) + (r.verified ? tr('sshguard.ban.verified', '（已回读封禁清单确认生效）') : tr('sshguard.ban.unverifiedPrefix', '（已执行，但回读未确认：') + (r.note || tr('sshguard.ban.refreshNote', '请手动刷新名单核对')) + '）');
-        S.banTone = r.verified ? 'ok' : 'warn';
-        S.ipInput.value = '';
-      } else {
-        S.banMsg = tr('sshguard.ban.noResult', '没有确认到封禁结果') + (r && r.note ? tr('sshguard.sep.colon', '：') + r.note : ''); S.banTone = 'fail';
-      }
-      paintBanMsg(); paintBanForm(); loadBans(); loadStatus();
-    }, function (err) {
-      if (S.destroyed) return;
-      S.busy = false; S.banMsg = failureText(err, tr('sshguard.word.ban', '封禁')); S.banTone = 'fail';
-      paintBanForm(); paintBanMsg();
-    });
+      var head = ok ? (tr('sshguard.ban.batchDone', '已封禁 ') + ok + tr('sshguard.unit.items', ' 个') + (failed.length ? tr('sshguard.ban.batchPartial', '，失败 ') + failed.length + tr('sshguard.unit.items', ' 个') : ''))
+        : tr('sshguard.ban.batchNone', '一个都没封成功');
+      S.banMsg = head + (failed.length ? tr('sshguard.sep.colon', '：') + failed.join(tr('sshguard.sep.semicolon', '；')) : '');
+      S.banTone = ok ? (failed.length ? '' : 'ok') : 'fail';
+      if (ok && S.ipInput) S.ipInput.value = '';
+      paintBanMsg(); paintBanForm(); loadBans(); loadStatus(); loadWhitelist();
+    }
+    function step() {
+      if (index >= ips.length) { finish(); return; }
+      var ip = ips[index++];
+      S.banMsg = tr('sshguard.status.banning', '正在封禁 ') + ip + tr('sshguard.ban.progress', '（') + index + '/' + ips.length + tr('sshguard.ban.progressTail', '）…');
+      paintBanMsg();
+      request(TOKEN_API, undefined, 'GET').then(function (tok) {
+        var token = tok && (tok.token || tok.confirm || tok.confirm_token);
+        if (!token) throw new Error(tr('sshguard.err.noToken', '内核没有返回确认令牌'));
+        return invoke('ban.add', { ip: ip, confirm: token });
+      }).then(function (r) {
+        if (r && r.applied) {
+          ok++;
+          if (!r.verified) failed.push(ip + tr('sshguard.sep.colon', '：') + (r.note || tr('sshguard.ban.refreshNote', '已执行，但回读未确认')));
+        } else {
+          failed.push(ip + tr('sshguard.sep.colon', '：') + ((r && r.note) || tr('sshguard.ban.noResult', '没有确认到封禁结果')));
+        }
+        step();
+      }, function (err) {
+        // 白名单拒绝（E_CONFLICT）要说清楚"该改哪里"，不能被通用冲突文案盖过去。
+        var why = (err && err.code === 'E_CONFLICT')
+          ? tr('sshguard.err.wlRefused', '这个 IP 在白名单里，封禁被拒绝（防止把你锁在门外）——请先到「白名单」移除它')
+          : failureText(err, tr('sshguard.word.ban', '封禁'));
+        failed.push(ip + tr('sshguard.sep.colon', '：') + why);
+        step();
+      });
+    }
+    step();
   }
   function unban(ip, btn) {
     if (S.readOnly || S.busy) return;
@@ -448,12 +779,69 @@
       if (S.destroyed) return;
       S.busy = false;
       S.banMsg = tr('sshguard.unban.done', '已解封 ') + ip + (r && r.verified ? tr('sshguard.unban.verified', '（已回读确认）') : '');
-      S.banTone = 'ok'; paintBanMsg(); paintBans(); loadStatus();
+      S.banTone = 'ok'; paintBanMsg(); paintBans(); loadStatus(); loadWhitelist();
     }, function (err) {
       if (S.destroyed) return;
       S.busy = false; S.banMsg = failureText(err, tr('sshguard.btn.unban', '解封')); S.banTone = 'fail';
       paintBanMsg(); paintBans();
     });
+  }
+  // unbanMany 逐条解封（fail2ban-client 一次只接受一个 banip/unbanip 追加参数，
+  // 所以批量必须串行；有失败就逐条列出，不做"看起来全成功"的合并汇总）。
+  function unbanMany(ips) {
+    if (!ips || !ips.length || S.readOnly || S.busy) return;
+    S.busy = true; S.banTone = '';
+    S.banMsg = tr('sshguard.status.unbanningMany', '正在解封 ') + ips.length + tr('sshguard.unit.items', ' 个 IP…');
+    paintBanMsg(); paintBans(); paintBanForm();
+    var ok = 0, failed = [], index = 0;
+    function step() {
+      if (index >= ips.length) {
+        if (S.destroyed) return;
+        S.busy = false;
+        S.banMsg = tr('sshguard.unban.done', '已解封 ') + ok + tr('sshguard.unit.items', ' 个') +
+          (failed.length ? tr('sshguard.ban.batchPartial', '，失败 ') + failed.length + tr('sshguard.unit.items', ' 个') + tr('sshguard.sep.colon', '：') + failed.join(tr('sshguard.sep.semicolon', '；')) : '');
+        S.banTone = ok ? (failed.length ? '' : 'ok') : 'fail';
+        clearSelection(); paintBanMsg(); paintBans(); paintBanForm(); loadBans(); loadStatus(); loadWhitelist();
+        return;
+      }
+      var ip = ips[index++];
+      S.banMsg = tr('sshguard.status.unbanning', '正在解封 ') + ip + tr('sshguard.ban.progress', '（') + index + '/' + ips.length + tr('sshguard.ban.progressTail', '）…');
+      paintBanMsg();
+      invoke('ban.remove', { ip: ip }).then(function () { ok++; step(); }, function (err) {
+        failed.push(ip + tr('sshguard.sep.colon', '：') + failureText(err, tr('sshguard.btn.unban', '解封')));
+        step();
+      });
+    }
+    step();
+  }
+  // saveBantime 把运维填的 fail2ban bantime（分钟）写进插件配置：之后封禁清单才能算剩余时长。
+  function saveBantime() {
+    if (!S.btInput || S.btBusy) return;
+    var raw = (S.btInput.value || '').trim();
+    var minutes = raw === '' ? 0 : parseInt(raw, 10);
+    if (!/^[0-9]*$/.test(raw) || isNaN(minutes) || minutes < 0 || minutes > 525600) {
+      S.btMsg = tr('sshguard.bt.bad', '请填 0–525600 的整数分钟（0 表示未知、不推算剩余时长）');
+      S.btTone = 'fail'; paintBtMsg(); return;
+    }
+    S.btBusy = true; S.btMsg = tr('sshguard.bt.saving', '正在保存封禁时长…'); S.btTone = ''; paintBtMsg(); paintBanForm();
+    invoke('config.set', { bantime_s: minutes * 60 }).then(function (r) {
+      if (S.destroyed) return;
+      S.btBusy = false;
+      var secs = (r && r.bantime_s) || 0;
+      S.btMsg = secs > 0
+        ? (tr('sshguard.bt.saved', '已保存：fail2ban 封禁时长 ') + Math.round(secs / 60) + tr('sshguard.bt.savedTail', ' 分钟（封禁清单会据此算剩余时长）'))
+        : tr('sshguard.bt.cleared', '已清除封禁时长：封禁清单不再显示剩余时长');
+      S.btTone = 'ok'; paintBtMsg(); loadBans();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.btBusy = false; S.btMsg = failureText(err, tr('sshguard.bt.word', '保存封禁时长')); S.btTone = 'fail';
+      paintBtMsg(); paintBanForm();
+    });
+  }
+  function paintBtMsg() {
+    if (!S.btMsgHost) return;
+    S.btMsgHost.textContent = S.btMsg || '';
+    S.btMsgHost.className = 'sg-msg' + (S.btTone === 'fail' ? ' is-fail' : (S.btTone === 'ok' ? ' is-ok' : ''));
   }
   function paintBanMsg() {
     if (!S.banMsgHost) return;
@@ -597,7 +985,9 @@
   // ---- 加载 ----
   function sinceISO() {
     var h = S.win === '7d' ? 24 * 7 : 24;
-    return new Date(Date.now() - h * 3600 * 1000).toISOString();
+    // 后端按 RFC3339 严格解析（time.Parse(time.RFC3339)），带毫秒的 toISOString()
+    // 会被判非法（E_INVALID）——所以这里裁掉毫秒，只留秒级 'YYYY-MM-DDTHH:MM:SSZ'。
+    return new Date(Date.now() - h * 3600 * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
   }
   function loadStatus() {
     S.statusError = ''; S.statusCode = ''; S.statusHint = ''; paintStatus();
@@ -615,20 +1005,37 @@
   }
   function loadBans() {
     S.bansLoaded = false; S.bansError = ''; S.bansCode = ''; S.bansHint = ''; paintBans();
-    // 数据源是 bans（fail2ban 真实 jail 列表；没有 fail2ban 时是日志推断的可疑 IP）。
-    // ban.list 是恒空桩（handleBanList 硬编码空数组），接了只会永远显示「没有封禁记录」。
-    invoke('bans', {}).then(function (d) {
+    // 数据源是 ban.list（插件 0.4.0 起为真实实现）：fail2ban 活跃时是 jail 当前封禁，
+    // 没有 fail2ban 时是日志推断的可疑 IP（source 字段逐条标明，不混为一谈）。
+    invoke('ban.list', { limit: 100 }).then(function (d) {
       if (S.destroyed) return;
       S.bans = (d && d.bans) || [];
       S.bansSource = (d && d.source) || '';
       S.bansAvailable = !!(d && d.available);
+      S.bansEngine = (d && d.engine) || '';
       S.bansNote = (d && d.note) || '';
+      S.bansWhitelisted = (d && d.whitelisted) || 0;
+      S.bansTotal = (d && d.total) || S.bans.length;
+      // 勾选集只保留仍存在的地址（避免解封后批量按钮还记着旧 IP）
+      var keep = {};
+      S.bans.forEach(function (b) { if (b && b.address && S.sel[b.address]) keep[b.address] = true; });
+      S.sel = keep;
       S.bansLoaded = true; paintBans();
     }, function (err) {
       if (S.destroyed) return; S.bansError = err.message; S.bansCode = err.code || ''; S.bansHint = err.hint || ''; S.bansLoaded = true; paintBans();
     });
   }
-  function refreshAll() { loadStatus(); loadAttempts(); loadBans(); }
+  function loadWhitelist() {
+    S.wlLoaded = false; S.wlError = ''; S.wlCode = ''; S.wlHint = ''; paintWhitelist();
+    invoke('whitelist', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.wl = d || null; S.wlLoaded = true;
+      paintWhitelist();
+    }, function (err) {
+      if (S.destroyed) return; S.wlError = err.message; S.wlCode = err.code || ''; S.wlHint = err.hint || ''; S.wlLoaded = true; paintWhitelist();
+    });
+  }
+  function refreshAll() { loadStatus(); loadAttempts(); loadWhitelist(); loadBans(); }
 
   function injectCSS() {
     if (document.getElementById('kore-sg-css')) return;
@@ -672,6 +1079,33 @@
       '.sg-tip-val{color:var(--kore-text-1);}',
       '.sg-chart-label{display:block;color:var(--kore-text-3);font-size:var(--kore-font-12);}',
       '.sg-msg{min-height:18px;color:var(--kore-text-3);font-size:var(--kore-font-12);}',
+      /* 白名单（自保）：当前 IP 判定 + 二次确认 + 手动添加行 */
+      '.sg-wl-top{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.sg-wl-top .sg-callout-text{flex:1 1 100%;margin:var(--kore-space-1) 0 0;}',
+      '.sg-wl-ip{font-size:var(--kore-font-14);word-break:break-all;}',
+      '.sg-wl-form{display:grid;grid-template-columns:minmax(0,2fr) auto;gap:var(--kore-space-3);align-items:end;padding:var(--kore-space-3) var(--kore-space-4) 0;}',
+      '.sg-wl-confirm{margin:var(--kore-space-2) var(--kore-space-4) 0;}',
+      '.sg-inline-chip{margin-left:var(--kore-space-2);vertical-align:middle;}',
+      '.sg-row-wl{background:var(--kore-warning-bg);}',
+      /* 封禁名单：批量选择 + 新列 */
+      '.sg-bulk{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4);border-bottom:1px solid var(--kore-border-2);}',
+      '.sg-checkwrap{display:inline-flex;align-items:center;justify-content:center;gap:var(--kore-space-1);min-height:44px;min-width:44px;cursor:pointer;}',
+      '.sg-check{width:20px;height:20px;flex:0 0 auto;}',
+      '.sg-col-check{width:52px;text-align:center;}',
+      '.sg-rule{max-width:320px;}',
+      /* 失败类型分布（自绘横条，数值常显） */
+      '.sg-kinds{display:grid;gap:var(--kore-space-1);padding:var(--kore-space-2) var(--kore-space-4) var(--kore-space-3);}',
+      '.sg-kinds-title{display:block;margin-bottom:var(--kore-space-1);}',
+      '.sg-kind{display:grid;grid-template-columns:minmax(120px,1fr) 140px minmax(84px,auto);align-items:center;gap:var(--kore-space-2);font-size:var(--kore-font-12);}',
+      '.sg-kind-name{color:var(--kore-text-2);word-break:break-word;}',
+      '.sg-kind-val{color:var(--kore-text-1);white-space:nowrap;font-variant-numeric:tabular-nums;}',
+      '.sg-bar-wide{width:100%;}',
+      /* 批量封禁输入 + 封禁时长 */
+      '.sg-textarea{min-height:84px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);}',
+      '.sg-form-single{grid-template-columns:minmax(0,1fr);}',
+      '.sg-bt{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) 0;margin-top:var(--kore-space-3);border-top:1px solid var(--kore-border-2);}',
+      '.sg-bt-field{flex:0 1 220px;min-width:180px;}',
+      '.sg-preset-inline{padding:0;}',
       '.sg-msg.is-fail{color:var(--kore-danger);}',
       '.sg-msg.is-ok{color:var(--kore-success);}',
       '.sg-empty{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-4);color:var(--kore-text-3);font-size:var(--kore-font-13);}',
@@ -703,6 +1137,17 @@
       '.sg-risk-rollback{margin:var(--kore-space-1) 0 0;color:var(--kore-text-1);font-size:var(--kore-font-12);word-break:break-word;}',
       '@media (max-width:639px){',
       '.sg-grid,.sg-form,.sg-sug-form{grid-template-columns:1fr;}',
+      '.sg-wl-form{grid-template-columns:1fr;}',
+      '.sg-kind{grid-template-columns:1fr;gap:2px;}',
+      /* 手机端把宽表拆成"标签 + 值"卡片，避免 7 列表格横向溢出 */
+      '.sg-table-lg thead{display:none;}',
+      '.sg-table-lg,.sg-table-lg tbody,.sg-table-lg tr,.sg-table-lg td{display:block;width:100%;}',
+      '.sg-table-lg tr{padding:var(--kore-space-2) 0;border-top:1px solid var(--kore-border-2);}',
+      '.sg-table-lg td{display:grid;grid-template-columns:88px minmax(0,1fr);gap:var(--kore-space-2);padding:var(--kore-space-1) 0;border:0;}',
+      '.sg-table-lg td::before{content:attr(data-label);color:var(--kore-text-3);font-size:var(--kore-font-12);}',
+      '.sg-table-lg td.sg-col-check{grid-template-columns:auto;justify-content:start;padding:0;}',
+      '.sg-table-lg td.sg-col-check::before{content:none;}',
+      '.sg-bulk .btn{width:100%;}',
       '.sg-sug .btn,.sg-sug-form-ops .btn{min-height:44px;width:100%;}',
       '.sg .panel-head{flex-wrap:wrap;row-gap:var(--kore-space-1);}',
       '}'
@@ -718,7 +1163,7 @@
     S.root = add(container, el('section', 'sg'));
     var head = add(S.root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', tr('sshguard.title', 'SSH 防护')));
-    add(head, el('p', 'view-sub', tr('sshguard.subtitle', '看看谁在试密码、封掉它，并管理当前的封禁名单。')));
+    add(head, el('p', 'view-sub', tr('sshguard.subtitle', '看看谁在试密码、封掉它、管好白名单——别把你自己封在门外。')));
 
     // ① 状态
     var st = panel(tr('sshguard.panel.status', '防护状态'), tr('sshguard.panel.statusMeta', '只读探测，不修改 sshd 配置'));
@@ -739,31 +1184,65 @@
     });
     S.attemptsHost = add(att.panel, el('div', 'sg-attempts'));
 
-    // ③ 封禁名单
+    // ③ 白名单（自保）—— 放在封禁名单之前：先讲清"谁会免于被封"，再谈封谁
+    var wlp = panel(tr('sshguard.panel.wl', '白名单（防止把自己封掉）'), '');
+    add(S.root, wlp.panel); S.wlPanel = wlp.panel;
+    S.wlMeta = add(wlp.meta, el('span', null, ''));
+    S.wlHost = add(wlp.panel, el('div', 'sg-wl'));
+    var wlForm = add(wlp.panel, el('div', 'sg-wl-form'));
+    var wlField = add(wlForm, el('label', 'field'));
+    add(wlField, el('span', 'field-label', tr('sshguard.wl.manualLabel', '手动添加 IP（填你自己的出口 IP）')));
+    S.wlInput = add(wlField, el('input', 'field-input'));
+    S.wlInput.type = 'text'; S.wlInput.placeholder = '203.0.113.7'; S.wlInput.maxLength = 45;
+    S.wlInput.setAttribute('autocomplete', 'off'); S.wlInput.setAttribute('spellcheck', 'false');
+    S.wlBtn = add(wlForm, el('button', 'btn btn-ghost', tr('sshguard.wl.manualBtn', '加入白名单')));
+    S.wlBtn.type = 'button';
+    on(S.wlBtn, function () {
+      var ip = (S.wlInput.value || '').trim();
+      if (!ip) { S.wlMsg = tr('sshguard.err.ipEmpty', '请填一个 IP 地址（例如 203.0.113.7）'); S.wlTone = 'fail'; paintWlMsg(); S.wlInput.focus(); return; }
+      if (!looksLikeIP(ip)) { S.wlMsg = tr('sshguard.err.ipFormat', 'IP 格式不对：只接受纯 IPv4 / IPv6 地址（不支持网段）'); S.wlTone = 'fail'; paintWlMsg(); return; }
+      askWhitelist(ip, 'add', tr('sshguard.wl.manualNote', '手动填写'));
+    });
+    S.wlMsgHost = add(wlp.panel, el('p', 'sg-msg', ''));
+
+    // ④ 封禁名单
     var bans = panel(tr('sshguard.panel.bans', '封禁名单'), ''); add(S.root, bans.panel); S.bansPanel = bans.panel;
     S.bansMeta = add(bans.meta, el('span', null, ''));
     S.bansHost = add(bans.panel, el('div', 'sg-bans'));
 
-    // ④ 手动封禁
-    var form = panel(tr('sshguard.panel.manualBan', '手动封禁'), tr('sshguard.panel.banMeta', '封禁持续到你手动解封'));
+    // ⑤ 手动封禁（支持批量）+ 封禁时长（fail2ban bantime）
+    var form = panel(tr('sshguard.panel.manualBan', '手动封禁'), tr('sshguard.panel.banMeta', '一行一个 IP，可批量'));
     add(S.root, form.panel); S.formPanel = form.panel;
-    var grid = add(form.panel, el('div', 'sg-form'));
-    S.ipInput = el('input', 'field-input'); S.ipInput.type = 'text';
-    S.ipInput.placeholder = '203.0.113.7'; S.ipInput.maxLength = 45;
-    S.ipInput.setAttribute('autocomplete', 'off'); S.ipInput.setAttribute('spellcheck', 'false');
+    var grid = add(form.panel, el('div', 'sg-form sg-form-single'));
     var ipField = add(grid, el('label', 'field'));
-    add(ipField, el('span', 'field-label', tr('sshguard.label.ip', 'IP 地址'))); add(ipField, S.ipInput);
-    var ttlField = add(grid, el('label', 'field'));
-    add(ttlField, el('span', 'field-label', tr('sshguard.label.banDuration', '封禁时长')));
-    add(ttlField, el('span', 'sg-cell-value', tr('sshguard.ban.duration', '持续到你手动解封')));
-    add(form.panel, el('p', 'field-hint',
-      tr('sshguard.ban.note', 'fail2ban 的 ban.add 没有时长参数：封禁会一直生效，直到你在上面的名单里手动解封。需要自动到期请改 fail2ban 的 bantime。')));
+    add(ipField, el('span', 'field-label', tr('sshguard.ipTargets', '要封禁的 IP（一行一个，也接受逗号/空格分隔）')));
+    S.ipInput = add(ipField, el('textarea', 'field-input sg-textarea'));
+    S.ipInput.rows = 3;
+    S.ipInput.placeholder = '203.0.113.7\n198.51.100.9';
+    S.ipInput.maxLength = 2000;
+    S.ipInput.setAttribute('autocomplete', 'off'); S.ipInput.setAttribute('spellcheck', 'false');
     var ops = add(form.panel, el('div', 'sg-form-ops'));
-    S.banBtn = add(ops, el('button', 'btn btn-primary', tr('sshguard.btn.banThisIp', '封禁这个 IP'))); S.banBtn.type = 'button';
+    S.banBtn = add(ops, el('button', 'btn btn-primary', tr('sshguard.btn.banThisIp', '封禁这些 IP'))); S.banBtn.type = 'button';
     on(S.banBtn, submitBan);
     S.banMsgHost = add(ops, el('span', 'sg-msg', ''));
     S.banHint = add(form.panel, el('p', 'field-hint', ''));
-    on(S.ipInput, function (e) { if (e.key === 'Enter') submitBan(); }, 'keydown');
+    // 封禁时长：插件的 ban.add 没有时长参数，时长由宿主 fail2ban 的 bantime 决定；
+    // 这里让运维把那个秒数填进来，封禁清单才能把"剩余时长"算成具体分钟。
+    var btRow = add(form.panel, el('div', 'sg-bt'));
+    var btField = add(btRow, el('label', 'field sg-bt-field'));
+    add(btField, el('span', 'field-label', tr('sshguard.bt.label', 'fail2ban 封禁时长（分钟，0 = 未知）')));
+    S.btInput = add(btField, el('input', 'field-input'));
+    S.btInput.type = 'number'; S.btInput.min = '0'; S.btInput.max = '525600';
+    S.btInput.placeholder = tr('sshguard.bt.placeholder', '例如 10');
+    var btPresets = add(btRow, el('div', 'sg-preset-row sg-preset-inline'));
+    [['10', tr('sshguard.bt.m10', '10 分钟')], ['60', tr('sshguard.bt.h1', '1 小时')], ['1440', tr('sshguard.bt.d1', '1 天')]].forEach(function (p) {
+      var pb = add(btPresets, el('button', 'btn btn-ghost sg-preset', p[1])); pb.type = 'button';
+      on(pb, function () { if (S.btInput) { S.btInput.value = p[0]; saveBantime(); } });
+    });
+    S.btBtn = add(btRow, el('button', 'btn btn-ghost', tr('sshguard.bt.save', '保存封禁时长'))); S.btBtn.type = 'button';
+    on(S.btBtn, saveBantime);
+    S.btMsgHost = add(form.panel, el('p', 'sg-msg', ''));
+    S.btHint = add(form.panel, el('p', 'field-hint', ''));
 
     // ⑤ 加固建议（只读生成，不下发）
     var sug = panel(tr('sshguard.panel.suggest', '加固建议'), tr('sshguard.panel.suggestMeta', '只生成建议，不自动下发'));
@@ -793,7 +1272,14 @@
     S.sugHost = add(sug.panel, el('div', 'sg-sug-result'));
     paintSuggestResult();
 
-    paintStatus(); paintAttempts(); paintBans(); paintBanForm(); paintBanMsg();
+    paintStatus(); paintAttempts(); paintWhitelist(); paintBans(); paintBanForm();
+    paintBanMsg(); paintWlMsg(); paintBtMsg();
+    // 封禁时长回读：config.get 的 bantime_s 预填输入框（缺省 0 = 未知则不填）
+    invoke('config.get', {}).then(function (d) {
+      if (S.destroyed || !S.btInput) return;
+      var secs = (d && d.bantime_s) || 0;
+      if (secs > 0) S.btInput.value = String(Math.round(secs / 60));
+    }, function () { /* 只读配置读不到不阻塞页面：留空即可 */ });
     refreshAll();
     return { destroy: function () { S.destroyed = true; } };
   }
