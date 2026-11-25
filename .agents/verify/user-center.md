@@ -37,7 +37,9 @@
 2. 快捷动作行：改口令（本页内联弹层，实时强度条 + 三次校验）、开启/关闭两步验证、生成令牌、管理白名单、退出登录（后四项经 `window.__koreSettingsTab='security' + KoreShell.navigate('settings/settings')` 跳到既有 security.js，不重复实现）。
 3. 会话表：登录时间 / 来源 / 设备（UA 摘要）/ 最后活跃 / 到期时间 / 操作；当前会话打「当前」标并禁止踢；非当前行「踢下线」；右上「一键全踢（保留当前）」。
 4. 登录记录表：时间 / 来源网段 / 结果 / 原因（人话：口令错误、两步验证码错误、来源网络不在允许列表…）/ 设备 / 异常标签。
-5. 空状态与错误态都带下一步按钮（G-33 A5）；零轮询（只在进入与点「刷新」时取数）；写过 CSRF 双提交。
+5. 空状态与错误态都带下一步按钮（G-33 A5）；零轮询（只在进入与点「刷新」时取数）；写请求一律带 CSRF 双提交。
+6. **真机点击验证抓到一个真 bug 并已修**：DELETE 请求没有 body，最初只在「有 body」时才加 `X-Kore-CSRF`
+   头 → 点「踢下线」一律 401 CSRF 校验失败。修复后点击实测：会话行 3 → 2、`DELETE /api/v1/security/sessions/{id} -> 200`。
 
 ## 4. 证据（命令 + 退出码）
 
@@ -62,6 +64,14 @@ cd kore && GOCACHE=<ws>/.gocache GOTMPDIR=/tmp/kt TMPDIR=/tmp/kt go test -timeou
   （全仓 16 包）全部 ok，0 个 --- FAIL                                              → exit=0
 bash scripts/docs-check.sh: 5 pass / 1 warn（SECURITY.md 行数，存量）/ 0 fail         → exit=0
 bash scripts/usability-check.sh：无 user-center 相关新增项（A5/A6/A7 均未命中本页）     → exit=1（存量为 waf/search 既有 FAIL，与本卡无关）
+
+# 隔离实例 + Playwright 真机点击（非 mock，同一实例同一份真实数据）
+[INFO] 点击“踢下线”：行 3 -> 2；DELETE /api/v1/security/sessions/{id} -> 200
+[OK] 踢下线生效
+[OK] 改口令弹层已打开，强度提示：新口令强度：很强
+[OK] Esc 关闭弹层
+  （安全端点请求：GET /security/overview 200 · GET /security/sessions 200 ·
+    GET /security/login-records 200 · DELETE /security/sessions/{id} 200）        → exit=0
 bash scripts/secret-check.sh: 0 FAIL / 22 处匹配（占位写法均合规）                     → exit=0
 ```
 

@@ -158,11 +158,16 @@
   }
   function request(url, method, body) {
     var headers = { 'Accept': 'application/json' };
-    var init = { method: method || 'GET', credentials: 'same-origin', cache: 'no-store', headers: headers };
-    if (body !== undefined) {
-      headers['Content-Type'] = 'application/json';
+    var verb = method || 'GET';
+    var init = { method: verb, credentials: 'same-origin', cache: 'no-store', headers: headers };
+    // 写请求必须带双提交头——**不看有没有 body**：DELETE（踢下线）同样要过 withCSRF，
+    // 只在带 body 时才加头会让「踢下线」一律 401 CSRF 校验失败。
+    if (verb !== 'GET' && verb !== 'HEAD') {
       var token = csrf();
       if (token) headers['X-Kore-CSRF'] = token;
+    }
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
     }
     var ctrl = window.AbortController ? new AbortController() : null;
