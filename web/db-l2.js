@@ -594,9 +594,244 @@
     };
   }
 
+
+  // ── PostgreSQL 备份 / 恢复 / 备份文件 ────────────────────────────────────────
+  // 与 db-mysql 的「导出 / 导入」同口径：同一备份根目录（KORE_DB_EXPORT_DIR，缺省
+  // <状态目录>/exports）、同样的「文件必须在备份目录内」规则，切库时操作习惯不变。
+  // 后端 5 个方法：db-postgres.backup / restore / backupList / backupDelete / backupDownload
+  // （契约见 kore-plugin-db-postgres/internal/pgop/backup.go）。
+  // 下载按 4 MiB 分块取 base64 再拼 Blob：单帧有 8 MiB 上限，整包塞进一次响应会失败。
+  var BACKUP_CHUNK = 4 * 1024 * 1024;
+  function humanSize(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MiB';
+    return (n / 1073741824).toFixed(2) + ' GiB';
+  }
+  function timeLabel(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function base64Bytes(b64) {
+    var bin = atob(String(b64 || ''));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  // saveBackup：分块拉完整个备份 → Blob → 触发浏览器另存；status 是进度行。
+  function saveBackup(ctx, file, status) {
+    var chunks = [], offset = 0, total = Math.max(1, Number(file.size_bytes) || 1);
+    function next() {
+      return ctx.invoke(m(ctx, 'backupDownload'), {
+        file_path: file.file_path, offset: offset, limit: BACKUP_CHUNK
+      }).then(function (r) {
+        if (r && r.data_base64) chunks.push(base64Bytes(r.data_base64));
+        offset = r && typeof r.next_offset === 'number' ? r.next_offset : total;
+        if (status) status.textContent = '下载中… ' + Math.min(100, Math.round((offset / total) * 100)) + '%';
+        if (r && r.eof) return null;
+        return next();
+      });
+    }
+    return next().then(function () {
+      var blob = new Blob(chunks, { type: 'application/octet-stream' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = file.file_name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+      if (status) status.textContent = '已下载 ' + file.file_name + '（' + humanSize(file.size_bytes) + '）。';
+    }, function (err) {
+      if (status) status.textContent = '下载失败：' + ctx.errText(err) + ' 怎么办：' + hintFor(ctx, err);
+    });
+  }
+
+  // ── 备份：custom 归档（推荐，单文件内置压缩）或 sql 纯文本（可 gzip）──
+  function openBackup(ctx, name) {
+    dialog(ctx, {
+      title: '备份数据库（PostgreSQL）',
+      text: '把 ' + name + ' 备份成备份目录里的一个文件，之后可随时「恢复」回来。',
+      fields: [
+        { key: 'format', label: '备份格式', type: 'select', value: 'custom', options: [
+            { value: 'custom', label: 'custom 归档（推荐：单文件 / 内置压缩 / 恢复最快）' },
+            { value: 'sql', label: 'sql 纯文本（可阅读，可自动 gzip）' } ],
+          hint: '不确定就用 custom。' },
+        { key: 'compress', label: '压缩', type: 'select', value: '6', options: [
+            { value: '6', label: '默认（级别 6）' },
+            { value: '9', label: '最高（级别 9，慢）' },
+            { value: '0', label: '不压缩（文件更大）' } ],
+          hint: 'custom 由 pg_dump 压缩，sql 由本页 gzip。' },
+        { key: 'tables', label: '只备份这些表（可选）', required: false, mono: true,
+          placeholder: '留空 = 整库；多张用逗号分隔，如 public.orders,public.users',
+          hint: '支持 schema.表名，只允许字母、数字与下划线；留空备份整库。' },
+        { key: 'schemaOnly', label: '只备份结构（可选）', type: 'checkgroup', required: false,
+          options: [{ value: 'yes', label: '不含数据，只要建表 / 索引语句' }] },
+        { key: 'path', label: '文件名（可选）', required: false, mono: true,
+          hint: '留空自动生成 <库名>-<时间戳>.<后缀>（格式与压缩决定后缀）。文件必须落在备份目录内，可填相对文件名。' }
+      ],
+      okLabel: '开始备份',
+      onSubmit: function (v) {
+        var params = {
+          instance: ctx.instance || '', database: name,
+          format: v.format, compress: Number(v.compress)
+        };
+        if (v.path) params.file_path = v.path;
+        if (v.tables) {
+          var list = String(v.tables).split(/[,\s]+/).filter(function (t) { return !!t; });
+          if (list.length) params.tables = list;
+        }
+        if (v.schemaOnly && v.schemaOnly.length) params.schema_only = true;
+        return ctx.invoke(m(ctx, 'backup'), params);
+      },
+      onDone: function (r) {
+        ctx.notice('已备份到 ' + (r && r.file_path ? r.file_path : '') +
+          '（' + humanSize(r && r.size_bytes) + (r && r.compression ? '，' + r.compression : '') + '）。' +
+          '下载或恢复：工具栏「备份文件」。', 'ok');
+      }
+    });
+  }
+
+  // ── 恢复：必须显式确认；缺省恢复前自动快照目标库；目标库不存在可自动创建 ──
+  function openRestore(ctx, preselect) {
+    ctx.notice('正在读取备份文件…', 'warn');
+    return ctx.invoke(m(ctx, 'backupList'), { limit: 100 }).then(function (data) {
+      var files = (data && data.backups) || [];
+      if (!files.length) {
+        ctx.notice('备份目录里还没有备份文件：先在库行点「备份」生成一份，再回来恢复。', 'warn');
+        return;
+      }
+      var options = files.map(function (f) {
+        return { value: f.file_path, label: f.file_name + '（' + humanSize(f.size_bytes) + '，' + timeLabel(f.modified_at) + '）' };
+      });
+      var target = ctx.selectedDb || (ctx.dbs && ctx.dbs.length ? ctx.dbs[0] : '');
+      ctx.notice('已读取 ' + files.length + ' 份备份文件，选好要恢复的文件后点「确认恢复」。', 'ok');
+      dialog(ctx, {
+        title: '恢复备份（PostgreSQL）', danger: true, okLabel: '确认恢复',
+        text: '把备份文件恢复到指定数据库，用于回滚到备份时刻的状态。',
+        warn: '恢复会先删除目标库里的同名对象再重建（pg_restore --clean --if-exists，全程单事务），' +
+          '过程失败会整体回滚；成功则覆盖现有对象，不可撤销。建议保留「恢复前自动快照」。',
+        fields: [
+          { key: 'file', label: '备份文件', type: 'select', value: preselect || files[0].file_path, options: options,
+            hint: '列表来自备份目录（与 MySQL 共用同一根），已按文件头跳过 MySQL 的 dump。' },
+          { key: 'database', label: '恢复到哪个库', value: target, mono: true,
+            hint: '库名只允许字母、数字、下划线，1–63 位；库不存在时勾选下面的「自动创建」。',
+            validate: function (v) { return PG_NAME_RE.test(v) ? '' : '库名只允许字母/数字/下划线，1–63 位'; } },
+          { key: 'snapshot', label: '恢复前自动快照（推荐）', type: 'checkgroup', required: false, value: ['yes'],
+            options: [{ value: 'yes', label: '先把目标库完整备份一份，恢复出错还能回到恢复前' }],
+            hint: '快照文件名 <库>-prerestore-<时间戳>.dump，留在备份目录里。' },
+          { key: 'create', label: '目标库不存在时自动创建（可选）', type: 'checkgroup', required: false,
+            options: [{ value: 'yes', label: '自动 CREATE DATABASE 后再恢复' }] }
+        ],
+        onSubmit: function (v) {
+          return ctx.invoke(m(ctx, 'restore'), {
+            instance: ctx.instance || '', database: v.database, file_path: v.file, confirm: true,
+            snapshot: !!(v.snapshot && v.snapshot.length),
+            create_database: !!(v.create && v.create.length)
+          });
+        },
+        onDone: function (r) {
+          ctx.loadDbs();
+          var snap = r && r.snapshot && r.snapshot.file_path ? '；恢复前快照：' + r.snapshot.file_path : '';
+          ctx.notice('已恢复到「' + (r && r.database ? r.database : '') + '」' + snap + '。建议在 SQL 控制台抽查关键表行数。', 'ok');
+        }
+      });
+    }, function (err) {
+      ctx.notice('读取备份文件失败：' + ctx.errText(err) + ' 怎么办：' + hintFor(ctx, err), 'warn');
+    });
+  }
+
+  // ── 备份文件：列表 / 下载 / 恢复 / 删除（列表来自插件备份目录）──
+  function confirmDeleteBackup(ctx, file, reload) {
+    dialog(ctx, {
+      title: '删除备份文件', danger: true, okLabel: '永久删除',
+      text: '将删除备份文件 ' + file.file_name + '（' + humanSize(file.size_bytes) + '），不可恢复。',
+      warn: '如果这是唯一一份回滚点，删除后无法再恢复到该时间点；需要的话先「备份」一份新的。',
+      fields: [],
+      typed: { expect: file.file_name, label: '要删除的备份文件名（请手动输入）' },
+      onSubmit: function () {
+        return ctx.invoke(m(ctx, 'backupDelete'), { file_path: file.file_path, confirm: true });
+      },
+      onDone: function () {
+        ctx.notice('备份文件「' + file.file_name + '」已删除。', 'ok');
+        if (reload) reload();
+      }
+    });
+  }
+
+  function openBackups(ctx) {
+    var mask = mk(document.body, 'div', 'kore-modal');
+    mask.setAttribute('role', 'dialog');
+    mask.setAttribute('aria-modal', 'true');
+    var box = mk(mask, 'div', 'kore-modal-box');
+    mk(box, 'div', 'kore-modal-title', '备份文件（PostgreSQL）');
+    var dirNote = mk(box, 'p', 'kore-modal-text', '正在读取备份目录…');
+    var status = mk(box, 'p', 'db-l2-note', '');
+    var body = mk(box, 'div', 'db-l2-files');
+    var ops = mk(box, 'div', 'kore-modal-actions');
+    var refresh = button(ops, 'btn-ghost', '刷新', function () { load(); });
+    button(ops, 'btn-ghost', '关闭', function () { close(); });
+    function close() {
+      document.removeEventListener('keydown', esc);
+      if (mask.parentNode) mask.parentNode.removeChild(mask);
+    }
+    function esc(ev) { if (ev.key === 'Escape') close(); }
+    document.addEventListener('keydown', esc);
+    mask.addEventListener('click', function (ev) { if (ev.target === mask) close(); });
+
+    function paint(files, dir, hint) {
+      body.textContent = '';
+      dirNote.textContent = '目录：' + (dir || '—') + (hint ? '。' + hint : '');
+      if (!files.length) {
+        mk(body, 'p', 'db-l2-note', '还没有备份文件：关闭本窗口后在库行点「备份」。');
+        return;
+      }
+      // 两列布局：左列文件名 + 「大小 · 时间」副行，右列操作。
+      // 弹窗在手机上只有一屏宽，四列会把操作按钮挤出可视区（曾有截图证据）。
+      var table = mk(body, 'table', 'db-l2-files-table');
+      var htr = mk(mk(table, 'thead'), 'tr');
+      ['文件', '操作'].forEach(function (h) { mk(htr, 'th', null, h); });
+      var tbody = mk(table, 'tbody');
+      files.forEach(function (f) {
+        var tr = mk(tbody, 'tr');
+        var nameCell = mk(tr, 'td', 'db-l2-file-cell');
+        mk(nameCell, 'span', 'db-l2-file-name', f.file_name);
+        mk(nameCell, 'span', 'db-l2-file-meta', humanSize(f.size_bytes) + ' · ' + timeLabel(f.modified_at));
+        var td = mk(tr, 'td', 'db-l2-row-ops');
+        button(td, 'btn-ghost', '下载', function () {
+          status.textContent = '准备下载 ' + f.file_name + '…';
+          saveBackup(ctx, f, status);
+        });
+        button(td, 'btn-ghost', '恢复', function () { close(); openRestore(ctx, f.file_path); });
+        button(td, 'btn-ghost', '删除', function () { confirmDeleteBackup(ctx, f, load); });
+      });
+    }
+    function load() {
+      body.textContent = '';
+      status.textContent = '';
+      mk(body, 'p', 'db-l2-note', '正在读取备份文件…');
+      refresh.disabled = true;
+      ctx.invoke(m(ctx, 'backupList'), { limit: 100 }).then(function (data) {
+        refresh.disabled = false;
+        paint((data && data.backups) || [], data && data.dir, (data && data.hint) || '');
+      }, function (err) {
+        refresh.disabled = false;
+        body.textContent = '';
+        var errBox = mk(body, 'div', 'db-l2-error');
+        mk(errBox, 'p', null, ctx.errText(err));
+        mk(errBox, 'p', 'field-hint', '怎么办：' + hintFor(ctx, err));
+        button(body, 'btn-ghost', '重试', load);
+      });
+    }
+    load();
+  }
+
   window.KoreDbL2 = {
     mountUsers: mountUsers, openCreateDb: openCreateDb, confirmDropDb: confirmDropDb,
     openExport: openExport, openImport: openImport, confirmDropUser: confirmDropUser,
-    openChangePassword: openChangePassword
+    openChangePassword: openChangePassword,
+    openBackup: openBackup, openRestore: openRestore, openBackups: openBackups
   };
 })();

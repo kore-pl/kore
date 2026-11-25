@@ -243,7 +243,22 @@
     '.db-slow-sql{display:block;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:help}' +
     '.db-slow-hint{margin:var(--kore-space-1) 0;padding:var(--kore-space-2) var(--kore-space-3);color:var(--kore-danger);border:1px solid var(--kore-danger);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);line-height:1.5}' +
     '.db-slow-raw{margin:var(--kore-space-1) 0 0;color:var(--kore-text-3);font-size:var(--kore-font-12);word-break:break-word}' +
-    '@media (max-width:640px){.db-slow-table{display:block;overflow-x:auto}.db-slow-sql{max-width:18ch}}';
+    '.db-l2-files{max-height:52vh;overflow:auto;margin:var(--kore-space-2) 0}' +
+    '.db-l2-files-table{width:100%;border-collapse:collapse;font-size:var(--kore-font-13)}' +
+    '.db-l2-files-table th{text-align:left;color:var(--kore-text-2);font-weight:600;padding:var(--kore-space-1) var(--kore-space-2);white-space:nowrap}' +
+    '.db-l2-files-table td{padding:var(--kore-space-1) var(--kore-space-2);border-top:1px solid var(--kore-border-1);vertical-align:middle}' +
+    '.db-l2-file-name{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+    'font-size:var(--kore-font-12);line-height:1.45;word-break:break-all}' +
+    '.db-l2-file-meta{display:block;color:var(--kore-text-3);font-size:var(--kore-font-12);white-space:nowrap}' +
+    '.db-l2-files-table .db-l2-row-ops{white-space:nowrap}' +
+    '.db-l2-file-time{color:var(--kore-text-3);white-space:nowrap}' +
+    '@media (max-width:640px){.db-slow-table{display:block;overflow-x:auto}.db-slow-sql{max-width:18ch}' +
+    '.db-l2-files{max-height:46vh}.db-l2-files-table thead{display:none}' +
+    '.db-l2-files-table,.db-l2-files-table tbody,.db-l2-files-table tr,.db-l2-files-table td{display:block;width:auto}' +
+    '.db-l2-files-table tr{padding:var(--kore-space-1) 0;border-top:1px solid var(--kore-border-1)}' +
+    '.db-l2-files-table td{border:0;padding:0 var(--kore-space-1)}' +
+    '.db-l2-files-table .db-l2-row-ops{display:flex;gap:var(--kore-space-1);flex-wrap:wrap;padding-top:var(--kore-space-1)}' +
+    '.db-l2-files-table .db-l2-row-ops .btn{min-height:var(--kore-touch);flex:1 1 auto}}';
   function ensureL2Style() {
     if (document.getElementById('kore-db-l2-style')) return;
     var style = document.createElement('style');
@@ -559,11 +574,15 @@
       add(main, el('span', 'db-db-op', tr('db.db.showTables', 'SHOW TABLES')));
       on(main, function () { useDb(name); });
       var ops = add(row, el('div', 'db-row-ops'));
-      if (!isPg()) { // export 是 db-mysql 专属：PG info.json 无该方法，不给必然失败的入口
-        add(ops, l2Btn(tr('db.action.export', '导出'), function () {
+      // 两域都提供备份入口，但方法不同：MySQL 是 export（mysqldump 纯 SQL），
+      // PG 是 backup（pg_dump custom 归档 / SQL，见 db-postgres 0.4.0 新增方法面）。
+      add(ops, isPg()
+        ? l2Btn(tr('db.action.backup', '备份'), function () {
+          withL2(function (mod, ctx) { mod.openBackup(ctx, name); });
+        })
+        : l2Btn(tr('db.action.export', '导出'), function () {
           withL2(function (mod, ctx) { mod.openExport(ctx, name); });
         }));
-      }
       // 系统库行不给删除入口：后端对各自的系统库在任何 confirm 下都返回 E_UNAUTHORIZED，
       // 前端先按域名单隐藏，避免留一条必然失败的路径（PG: postgres/template0/template1）。
       var systemDbs = isPg() ? PG_SYSTEM_DBS : SYSTEM_DBS;
@@ -801,7 +820,14 @@
     headOps.appendChild(l2Btn(tr('db.action.createDb', '新建数据库'), function () {
       withL2(function (mod, ctx) { mod.openCreateDb(ctx); });
     }));
-    if (!isPg()) {
+    if (isPg()) {
+      headOps.appendChild(l2Btn(tr('db.action.restore', '恢复备份'), function () {
+        withL2(function (mod, ctx) { mod.openRestore(ctx); });
+      }));
+      headOps.appendChild(l2Btn(tr('db.action.backupFiles', '备份文件'), function () {
+        withL2(function (mod, ctx) { mod.openBackups(ctx); });
+      }));
+    } else {
       headOps.appendChild(l2Btn(tr('db.action.import', '导入'), function () {
         withL2(function (mod, ctx) { mod.openImport(ctx); });
       }));
@@ -816,7 +842,8 @@
       : '系统库（mysql / information_schema / performance_schema / sys）只读展示，不提供删除入口';
     if (isPg()) {
       add(dbPanel, el('p', 'db-pg-note',
-        '写操作已开放（建库 / 用户与授权）；SQL 控制台仍只读，导入导出为 MySQL 专属。'));
+        '写操作已开放（建库 / 用户与授权 / 备份 / 恢复）；SQL 控制台仍只读。' +
+        '库行「备份」生成备份文件，工具栏「恢复备份 / 备份文件」还原、下载或删除。'));
     }
     sysToggle.addEventListener('change', function () {
       S.includeSystem = sysBox.checked;
