@@ -566,6 +566,10 @@
         if (f.min !== undefined) input.min = f.min;
         if (f.max !== undefined) input.max = f.max;
         if (f.placeholder) input.placeholder = f.placeholder;
+        // 连接配置全是路径 / 主机 / 命令，手机键盘不许自动大写与纠错
+        input.setAttribute('autocapitalize', 'off');
+        input.setAttribute('autocorrect', 'off');
+        input.setAttribute('spellcheck', 'false');
       }
       var current = values[f.key];
       if (current === undefined || current === null) {
@@ -654,6 +658,11 @@
     var newDomain = add(domainField, el('input', 'field-input'));
     newDomain.type = 'text';
     newDomain.autocomplete = 'off';
+    // 手机键盘：域名要能直接打出 . / -，且不能被自动大写（例：Demo.Kore.Test 不是合法域名）
+    newDomain.setAttribute('autocapitalize', 'off');
+    newDomain.setAttribute('autocorrect', 'off');
+    newDomain.setAttribute('spellcheck', 'false');
+    newDomain.setAttribute('inputmode', 'url');
     newDomain.value = suggestCloneDomain(d.domain);
     newDomain.setAttribute('data-field', 'clone-domain');
     var copyLine = add(form, el('label', 'field field-check'));
@@ -668,6 +677,10 @@
     var newRoot = add(rootField, el('input', 'field-input'));
     newRoot.type = 'text';
     newRoot.autocomplete = 'off';
+    newRoot.setAttribute('autocapitalize', 'off');
+    newRoot.setAttribute('autocorrect', 'off');
+    newRoot.setAttribute('spellcheck', 'false');
+    newRoot.setAttribute('inputmode', 'url');
     newRoot.value = d.root ? String(d.root).replace(/\/+$/, '') + '-clone' : '';
     newRoot.setAttribute('data-field', 'clone-root');
     copyRoot.addEventListener('change', function () {

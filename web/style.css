@@ -2337,3 +2337,105 @@ button:disabled, .btn:disabled {
   .db-auto-actions { width: 100%; }
   .db-auto-actions .btn { flex: 1 1 120px; min-height: var(--kore-touch); }
 }
+
+/* ===== 手机体验专项（mobile-polish，裁决41 落地补强）=====
+   依据：390×844 实机尺寸审计（隔离实例 + Playwright，2026-11-25），每条规则上方写改前实测值。
+   口径：只做 CSS 覆盖（不改 DOM、不改 shell.js / 各视图注入的样式源）；对脚本注入的同名类
+        用「叠类名 / 叠元素」提特异性压过，不用 !important。断点沿用 §3.1 的三段（<640px）。 */
+@media (max-width: 639px) {
+  /* —— 顶栏动作条（改前：内容宽 474px / 容器 366px）
+     「帮助」「新手引导」「主题」被推到屏幕外，手机没有可见滚动条 → 等于按钮不存在。
+     隐藏两个纯桌面入口：快捷键面板是 Ctrl/Cmd+K 的说明（触摸屏无意义），帮助面板三项
+     （回到概览 / 搜索 / 查看所有功能）在手机上分别由 tab bar、搜索按钮、「更多」直达，
+     文档链接在「设置 → 关于」也在。其余 8 个控件一屏内可达（实测 338px ≤ 366px）。 */
+  body #kore-shortcut-trigger { display: none; }
+  body #kore-help-trigger { display: none; }
+  .kore-topbar .conn { flex-wrap: nowrap; overflow-x: visible; width: 100%; padding: 8px 0 0; }
+  /* 状态灯是指示器不是按钮，收窄不损命中区（两个 44px 的灯占掉 88px） */
+  .kore-topbar .conn .status-ico { width: 28px; min-width: 28px; }
+  .kore-topbar .conn .kore-theme-select { min-height: var(--kore-touch); }
+
+  /* —— 二级 tab 条（改前：安全 8 个 tab 共 570px 挤在 366px 里，只有前 5 个可见，且不会
+     自动滚动到当前 tab → 用户既看不到全部入口，也不知道自己在哪一页）。换行后全部可见。 */
+  .kore-hub-tabs.kore-hub-tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 0; }
+  .kore-hub-tabs.kore-hub-tabs .kore-hub-tab { min-height: var(--kore-touch); min-width: var(--kore-touch); }
+
+  /* —— 表单控件字号（改前：继承 13px）
+     iOS Safari 对 <16px 的输入控件聚焦时自动放大整页，键盘弹起后提交按钮被顶出视口，
+     用户要手动缩回去才能提交。16px 是唯一可靠的关闭方式（不改 viewport 的缩放能力）。 */
+  .kore-shell .view input, .kore-shell .view select, .kore-shell .view textarea,
+  .kore-modal .view input, .kore-modal .view select,
+  .login-card input, .login-card select { font-size: 16px; }
+
+  /* —— 触摸下限（改前：.btn-ghost 32px / 数据库工具条 15 个按钮 32px / sshguard 时长预设 28px）
+     各视图注入样式把按钮钉在 28–32px；叠两个类名压过它们的 (0,2,0)。 */
+  .view .btn.btn, .kore-modal .btn.btn { min-height: var(--kore-touch); min-width: var(--kore-touch); }
+  .cell-ops .btn, .rt-table .rt-ver-btn { min-width: var(--kore-touch); }
+  .rt-table .rt-ver-btn { min-height: var(--kore-touch); }
+
+  /* —— 复选框（改前 18×18）：放大到 22px，命中区更接近手指宽度；整行仍可点开 */
+  input[type="checkbox"] { width: 22px; height: 22px; }
+
+  /* —— 弹层（改前：垂直居中、无 max-height）
+     长表单在 390×844 上顶部被裁，软键盘弹起时底部「确定」不可见。改顶部对齐 + 内部滚动
+     + 底部刘海安全区，动作按钮始终可达。 */
+  .kore-modal { align-items: flex-start; padding: var(--kore-space-2); padding-bottom: calc(var(--kore-space-2) + env(safe-area-inset-bottom, 0px)); }
+  .kore-modal-box {
+    max-height: calc(100vh - var(--kore-space-4));
+    max-height: calc(100dvh - var(--kore-space-4));
+    overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  }
+
+  /* —— .rows 键值表（概览「系统信息」/ 站点编辑等，改前表格右缘 393px > 视口 390px 被裁 3px）
+     .rows 是 width:100% + 左右 margin，100% 按容器宽算、margin 再加 → 必然超出容器；
+     小屏把左右外边距收到 0（内边距由 th/td 自带），表格不再被裁。 */
+  .view .rows.rows, .kore-modal .rows.rows { margin-left: 0; margin-right: 0; }
+
+  /* —— 运行环境详情键值表（.rt-kv 左列 130px 在 390px 上把「进程守护」挤成两行） */
+  .rt-kv.rt-kv { grid-template-columns: 96px minmax(0, 1fr); }
+
+  /* —— 触摸反馈：移动端默认高亮在深色主题下几乎不可见；touch-action 去掉 300ms 双击缩放等待，
+     长按控件不再弹系统菜单（长按=选中文字/系统菜单，对按钮是误触）。 */
+  button, .btn, .kore-nav-item, .kore-hub-tab {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(0, 0, 0, .12);
+    -webkit-touch-callout: none;
+  }
+  button:active, .btn:active, .kore-hub-tab:active, .kore-nav-item:active { transform: translateY(1px); }
+
+  /* —— 底部 tab bar：「更多」是菜单入口而不是第 6 个目的地，用一条竖线点明层级 */
+  .kore-nav > .kore-nav-more { box-shadow: inset 1px 0 0 var(--kore-border-1); }
+
+  /* —— Redis 键列表（改前：.redis-table{min-width:480px} 在 366px 容器里横向拖两屏，
+     「类型 / TTL」要拖过去才看得到）。转卡片，列名走 redis.js 补的 data-label。 */
+  .redis-key-host { overflow-x: visible; }
+  .redis-table.redis-table { min-width: 0; }
+  .redis-table.redis-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .redis-table.redis-table, .redis-table.redis-table tbody, .redis-table.redis-table tr, .redis-table.redis-table td { display: block; width: 100%; }
+  .redis-table.redis-table tbody tr {
+    position: relative;
+    padding: var(--kore-space-2) var(--kore-space-3) var(--kore-space-2) 44px;
+    border-top: 1px solid var(--kore-border-2);
+  }
+  .redis-table.redis-table td { display: flex; align-items: center; gap: var(--kore-space-2); padding: 2px 0; border: 0; }
+  .redis-table.redis-table td::before { content: attr(data-label); flex: 0 0 52px; color: var(--kore-text-3); font-size: var(--kore-font-12); }
+  .redis-table.redis-table td.redis-check-cell { position: absolute; left: var(--kore-space-3); top: var(--kore-space-2); width: auto; padding: 0; }
+  .redis-table.redis-table td.redis-check-cell::before { content: none; }
+  .redis-table.redis-table td.redis-key { word-break: break-all; }
+
+  /* —— 运行环境四张表（改前：.rt-table{min-width:520px} 在 366px 容器里横向滚，
+     版本 / 虚拟环境 / 守护应用 / 项目扫描都要拖动）。转卡片，列名由 runtimes.js 按表头自动补。 */
+  .rt-scroll.rt-scroll { overflow-x: visible; }
+  .rt-table.rt-table { min-width: 0; }
+  .rt-table.rt-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rt-table.rt-table, .rt-table.rt-table tbody, .rt-table.rt-table tr, .rt-table.rt-table td { display: block; width: 100%; }
+  .rt-table.rt-table tbody tr { padding: var(--kore-space-2) var(--kore-space-3) var(--kore-space-3); border-top: 1px solid var(--kore-border-2); }
+  .rt-table.rt-table td { display: flex; align-items: flex-start; gap: var(--kore-space-3); padding: 2px 0; border: 0; }
+  .rt-table.rt-table td::before { content: attr(data-label); flex: 0 0 64px; color: var(--kore-text-3); font-size: var(--kore-font-12); }
+  /* 首列（版本 / 环境名 / 应用名）当卡片标题，不复述列名；展开行的整格详情也不带列名 */
+  .rt-table.rt-table td:first-child { font-weight: 600; }
+  .rt-table.rt-table td:first-child::before, .rt-table.rt-table td[colspan]::before { content: none; }
+  .rt-table.rt-table .rt-row-btns { width: 100%; }
+  .rt-table.rt-table .rt-row-btns .btn { flex: 1 1 auto; min-height: var(--kore-touch); }
+}
+

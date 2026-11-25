@@ -126,6 +126,10 @@
       add(field, el('span', 'field-label', label));
       input = add(field, el('input', 'field-input'));
       input.type = 'text'; input.autocomplete = 'off';
+      // 手机键盘默认句首大写 + 自动纠错，会把 "var" 改成 "Var"、把路径纠成英文单词；文件名/路径必须关掉
+      input.setAttribute('autocapitalize', 'off');
+      input.setAttribute('autocorrect', 'off');
+      input.setAttribute('spellcheck', 'false');
     } else {
       add(box, el('p', 'kore-modal-text', text || ''));
     }
@@ -961,6 +965,9 @@
     add(cell, el('span', 'files-kind', entry.is_dir ? tr('files.kind.dir', '目录') : tr('files.kind.file', '文件')));
     var input = add(cell, el('input', 'field-input files-rename-input'));
     input.type = 'text'; input.value = entry.name;
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('spellcheck', 'false');
     input.setAttribute('aria-label', tr('files.rename.newNameAria', '新名称（同目录改名）'));
     var ops = add(cell, el('span', 'files-rename-ops'));
     var save = add(ops, el('button', 'btn btn-primary', tr('files.action.save', '保存'))); save.type = 'button';

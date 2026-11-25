@@ -451,8 +451,12 @@
         if (box.checked) S.checked[entry.key] = true; else delete S.checked[entry.key];
         row.classList.toggle('is-selected', box.checked); paintDeleteBtn();
       });
-      add(row, el('td', 'redis-key', entry.key)); add(row, el('td', 'redis-type', entry.type || '—'));
-      add(row, el('td', 'redis-ttl', fmtTTL(entry.ttl_s))); on(row, function () { loadKeyDetail(entry); });
+      // data-label：<640px 转卡片后列名靠 td::before 复原（style.css「手机体验专项」），
+      // 不补的话手机上只剩值、看不出哪格是类型/哪格是 TTL。
+      add(row, el('td', 'redis-key', entry.key)).dataset.label = tr('redis.col.key', '键名');
+      add(row, el('td', 'redis-type', entry.type || '—')).dataset.label = tr('redis.col.type', '类型');
+      add(row, el('td', 'redis-ttl', fmtTTL(entry.ttl_s))).dataset.label = tr('redis.col.ttl', 'TTL');
+      on(row, function () { loadKeyDetail(entry); });
       row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); loadKeyDetail(entry); } });
     });
     paintKeyFooter();

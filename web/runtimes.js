@@ -758,6 +758,24 @@
       b.addEventListener('click', function () { if (tab === t.id) return; tab = t.id; paintBar(); ensureLoaded(tab); paintBody(); });
     });
   }
+  // labelCells：手机卡片模式（<640px，见 style.css「手机体验专项」）靠 td::before{content:attr(data-label)}
+  // 复原列名，这里按 thead 顺序把表头文案补到每个数据格。文案与表头同源（同一 tr() 键），
+  // 切英文两边不会漂移。四张表统一次调用，新增表不用各自记得补。
+  function labelCells(root) {
+    var tables = root.querySelectorAll('table.rt-table');
+    for (var i = 0; i < tables.length; i++) {
+      var heads = tables[i].querySelectorAll('thead th');
+      var rows = tables[i].querySelectorAll('tbody tr');
+      for (var r = 0; r < rows.length; r++) {
+        var cells = rows[r].children;
+        // 展开行是单个 colspan 单元格（版本详情 / 守护日志），不是列，跳过
+        if (cells.length === 1 && cells[0].hasAttribute('colspan')) continue;
+        for (var c = 0; c < cells.length && c < heads.length; c++) {
+          if (!cells[c].getAttribute('data-label')) cells[c].setAttribute('data-label', (heads[c].textContent || '').trim());
+        }
+      }
+    }
+  }
   function paintBody() {
     if (!bodyBox) return;
     bodyBox.textContent = '';
@@ -769,6 +787,7 @@
     if (t.domain === 'runtime-python') bodyBox.appendChild(venvPanel(t, s));
     if (s.versions && s.versions.length) bodyBox.appendChild(projectsPanel(t, s));
     bodyBox.appendChild(doctorPanel(t, s));
+    labelCells(bodyBox);
   }
   function render(container) {
     if (!container || container.nodeType !== 1) return { destroy: function () {} };
