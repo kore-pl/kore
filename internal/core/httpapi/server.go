@@ -362,6 +362,8 @@ func New(opts Options, transport platform.Transport) *Server {
 	// 日志告警路由（R23）：不写 handlers.go 的 routes()（并行写域），在此独立注册；
 	// Go 1.22 ServeMux 按最长前缀匹配，与注册顺序无关，"/" 兜底不会吞掉更具体的路径。
 	server.registerLogAlertRoutes()
+	// 站点迁移只读扫描（竞品清单条目 7）：同策略独立注册，不写 handlers.go 的 routes()。
+	server.registerSiteImportRoutes()
 	// 主壳静态三件套：精确路径注册，优先于 routes() 里的 "/" 404 兜底。
 	// 面板壳无敏感数据，走鉴权白名单（middleware.isPublicPath）；API 仍全量鉴权。
 	server.staticRoutes()

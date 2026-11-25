@@ -2305,6 +2305,7 @@
     batch: ['KoreBatch', '/assets/batch.js', 'nav.batch', '批量操作'],
     snapshot: ['KoreSnapshot', '/assets/snapshot.js', 'nav.snapshot', '配置快照'],
     migrate: ['KoreMigrate', '/assets/migrate.js', 'nav.migrate', '配置迁移'],
+    'site-migrate': ['KoreSiteMigrate', '/assets/site-migrate.js', 'nav.siteMigrate', '站点迁移'],
     webhook: ['KoreWebhook', '/assets/webhook.js', 'nav.webhook', '通知通道'],
     // R23 第二批 8 个新视图：统一登记懒加载 sub（一级菜单仍 10 项，G-33 A6）。
     // 每项 = [全局名, 脚本, i18n 键, 中文兜底]；带连字符的键必须加引号（否则被解析成减法表达式）。
@@ -2327,6 +2328,7 @@
     {
       id: 'sites', label: '网站', views: [
         { sub: 'sites', label: '网站', labelKey: 'nav.sites', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
+        { sub: 'site-migrate' },
         { sub: 'runtimes' },
         { sub: 'appdeploy' },
         { sub: 'container' },
