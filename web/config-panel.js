@@ -1,8 +1,10 @@
 /* kore 主壳 · 插件统一配置面板（web/config-panel.js）——零框架 / 零 CDN / 无外链。
    POST /api/v1/invoke/<id>/<id>.config.get|set（docs/PLUGIN-CONFIG.md）。
    window.KoreConfig.open(container, pluginId, opts)：按 schema.fields 渲染
-   string/int/bool/select/list；每字段 label + 一行 help；sensitive 用 password 不回显；
-   保存成功提示「已保存，立即生效」，restart_required 时提示「需重启 kored 生效」；
+   string/int/bool/select/list；每字段 label + 一行 help + 默认值提示（与默认不同会标出来）；
+   sensitive 用 password 不回显；schema 标了 advanced 的字段折叠进「高级设置」可展开；
+   字段 ≥6 个时给搜索框按标签 / 帮助过滤；关闭前有未保存改动会拦一次；
+   保存成功提示「已保存，立即生效」并回报本次改了几项；restart_required 时提示「需重启 kored 生效」；
    「恢复默认值」只回填表单；opts.onSaved 在热生效后回调刷新数据。 */
 (function () {
   'use strict';
@@ -18,6 +20,25 @@
     '.cfg-auto{display:inline-flex;align-items:center;margin-left:6px;padding:0 7px;color:var(--kore-success);background:rgba(63,185,80,.12);border:1px solid var(--kore-success);border-radius:999px;font-size:11px;font-weight:500;vertical-align:1px}',
     '.cfg-note{margin:0 0 2px;padding:8px 10px;color:var(--kore-text-2);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12)}',
     '.cfg-auto-hint{color:var(--kore-success)}',
+    // 默认值提示：默认值本身 + 当前是否仍是默认（与默认不同就标「已改」），避免用户以为空白就是没设过。
+    '.cfg-default{margin:0;color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.6}',
+    '.cfg-default-changed{color:var(--kore-warning)}',
+    // 搜索：字段多时才出现；输入即过滤，命中数在右侧，回车不提交任何东西。
+    '.cfg-search{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 2px}',
+    '.cfg-search .cfg-input{flex:1 1 220px;min-width:0}',
+    '.cfg-search-count{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+    '.cfg-search-empty{margin:0;padding:10px 12px;color:var(--kore-text-2);background:var(--kore-bg-2);border:1px dashed var(--kore-border-2);border-radius:var(--kore-radius-control);font-size:var(--kore-font-12)}',
+    // 高级项：默认折叠、点开即见；折叠标题给条数与用途，不像「更多」那样含糊。
+    '.cfg-adv{border-top:1px dashed var(--kore-border-2);margin-top:2px}',
+    '.cfg-adv summary{display:flex;align-items:center;min-height:var(--kore-touch);padding:10px 0;color:var(--kore-text-2);font-size:var(--kore-font-12);cursor:pointer}',
+    '.cfg-adv summary:hover{color:var(--kore-text-1)}',
+    '.cfg-adv .cfg-field{padding-top:8px}',
+    // 未保存改动的确认：页面内浮层，不用 window.confirm（阻断原生弹窗、样式也不统一）。
+    '.cfg-confirm{position:fixed;inset:0;z-index:910;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--kore-overlay)}',
+    '.cfg-confirm-box{width:100%;max-width:420px;padding:16px;background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container);box-shadow:var(--kore-shadow)}',
+    '.cfg-confirm-title{margin:0 0 8px;color:var(--kore-text-1);font-size:var(--kore-font-15);font-weight:600}',
+    '.cfg-confirm-text{margin:0 0 12px;color:var(--kore-text-2);font-size:var(--kore-font-13);line-height:1.6}',
+    '.cfg-confirm-ops{display:flex;justify-content:flex-end;gap:8px}',
     '.cfg-toast{position:fixed;top:12px;left:50%;z-index:900;transform:translateX(-50%);max-width:min(92vw,560px);padding:10px 16px;color:var(--kore-text-1);background:var(--kore-bg-2);border:1px solid var(--kore-success);border-radius:var(--kore-radius-control);box-shadow:var(--kore-shadow);font-size:var(--kore-font-13)}',
     // 空态 / 失败态：白话标题 + 怎么办 + 下一步按钮；技术错误码只进折叠区（USABILITY §4）。
     '.cfg-state{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:18px 14px;text-align:left}',
@@ -25,7 +46,7 @@
     '.cfg-state-detail{margin:0;color:var(--kore-text-2);font-size:var(--kore-font-13);line-height:1.7;overflow-wrap:anywhere;white-space:normal}',
     '.cfg-state-code{max-width:100%;color:var(--kore-text-3);font-size:var(--kore-font-12)}.cfg-state-code pre{margin:6px 0 0;padding:8px;color:var(--kore-text-3);background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control);overflow-wrap:anywhere;white-space:pre-wrap}',
     '.cfg-state-actions{display:flex;flex-wrap:wrap;gap:8px;width:100%}.cfg-state-btn{min-height:var(--kore-touch);padding:8px 14px;white-space:normal;text-align:center}',
-    '@media(max-width:520px){.cfg-state{padding:14px 12px}.cfg-state-detail{line-height:1.8}.cfg-state-btn{flex:1 1 100%;min-height:var(--kore-touch)}}'
+    '@media(max-width:520px){.cfg-state{padding:14px 12px}.cfg-state-detail{line-height:1.8}.cfg-state-btn{flex:1 1 100%;min-height:var(--kore-touch)}.cfg-confirm-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}.cfg-search .cfg-input{flex:1 1 100%}}'
   ].join('');
   function el(tag, cls, text) {
     var node = document.createElement(tag); if (cls) node.className = cls;
@@ -75,6 +96,23 @@
   function toast(text) {
     var node = el('div', 'cfg-toast', text); node.setAttribute('role', 'status'); document.body.appendChild(node);
     setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 8000);
+  }
+  // 默认值 / 当前值的可读写法：布尔说「开启 / 关闭」，列表用顿号连，空值明确写「（空）」。
+  function fmtValue(value) {
+    if (value === null || value === undefined) return '—';
+    if (Array.isArray(value)) return value.length ? value.join('、') : '（空）';
+    if (value === true) return '开启';
+    if (value === false) return '关闭';
+    return String(value);
+  }
+  function sameValue(a, b) {
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+    if (typeof a === 'number' && typeof b === 'number' && !isFinite(a) && !isFinite(b)) return true;
+    return a === b;
   }
   function textInput(field, value, type) {
     var input = el('input', 'cfg-input');
@@ -147,26 +185,43 @@
         reset: function () { masked = false; secret.value = ''; secret.placeholder = field.placeholder || ''; }
       };
     }
-    var input = textInput(field, value, field.type === 'int' ? 'number' : 'text');
+    var inp = textInput(field, value, field.type === 'int' ? 'number' : 'text');
     return {
-      node: input,
+      node: inp,
       read: function () {
-        if (field.type !== 'int') return input.value;
-        var n = Number(input.value);
-        return input.value.trim() === '' || !isFinite(n) ? NaN : Math.trunc(n);
+        if (field.type !== 'int') return inp.value;
+        var n = Number(inp.value);
+        return inp.value.trim() === '' || !isFinite(n) ? NaN : Math.trunc(n);
       },
-      reset: function (def) { input.value = def === undefined || def === null ? '' : String(def); }
+      reset: function (def) { inp.value = def === undefined || def === null ? '' : String(def); }
     };
   }
   function renderField(field, value, autoKeys) {
-    var box = el('div', 'cfg-field'), label = el('label', 'cfg-label', field.label || field.key);
+    var box = el('div', 'cfg-field');
+    box.setAttribute('data-kw', [field.label || field.key, field.help].join(' ').toLowerCase());
+    var label = el('label', 'cfg-label', field.label || field.key);
     if (field.required) add(label, el('span', 'cfg-req', '*'));
     if (autoKeys && autoKeys[field.key]) add(label, el('span', 'cfg-auto', '已自动填入'));
     add(box, label);
     var control = fieldControl(field, value);
     add(box, control.node);
     if (field.help) add(box, el('p', 'cfg-help', field.help));
-    return { field: field, box: box, control: control };
+    // 默认值提示：契约要求每个字段都有 default，这里据实展示，并在用户改动后用颜色标「已改」。
+    var defLine = null;
+    if (field['default'] !== undefined) {
+      defLine = el('p', 'cfg-default');
+      var describe = function () {
+        var defText = field.sensitive ? '已保存（不回显）' : fmtValue(field['default']);
+        var changed = !field.sensitive && !sameValue(control.read(), field['default']);
+        defLine.textContent = '默认：' + defText + (changed ? '（当前已改，保存后生效）' : '（当前使用默认值）');
+        defLine.className = 'cfg-default' + (changed ? ' cfg-default-changed' : '');
+      };
+      describe();
+      add(box, defLine);
+      box.addEventListener('input', describe);
+      box.addEventListener('change', describe);
+    }
+    return { field: field, box: box, control: control, describeDefault: defLine ? describe : null };
   }
   function collect(entries) {
     var values = {};
@@ -244,11 +299,53 @@
     var status = add(panel, el('div', 'cfg-status'));
     status.setAttribute('role', 'status');
     host.insertBefore(panel, host.children[1] || null);
-    function close() {
-      document.removeEventListener('keydown', onKey); if (panel.parentNode) panel.parentNode.removeChild(panel);
+
+    var saved = false;
+    var dirtyProbe = null; // 有未保存改动时返回 true；schema 还没下来时为 null
+    var confirming = false;
+
+    function discardOverlay() {
+      if (confirming) return;
+      confirming = true;
+      var wrap = el('div', 'cfg-confirm');
+      wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true');
+      wrap.setAttribute('aria-label', '有未保存的修改');
+      var box = add(wrap, el('div', 'cfg-confirm-box'));
+      add(box, el('h3', 'cfg-confirm-title', '这些修改还没保存'));
+      add(box, el('p', 'cfg-confirm-text', '关闭后本次改动会丢失；想保留请先点「保存」。'));
+      var ops = add(box, el('div', 'cfg-confirm-ops'));
+      var keep = el('button', 'btn btn-ghost', '继续编辑');
+      keep.type = 'button';
+      var leave = el('button', 'btn', '放弃修改并关闭');
+      leave.type = 'button';
+      add(ops, keep); add(ops, leave);
+      function finish(go) {
+        if (!confirming) return;
+        confirming = false;
+        document.removeEventListener('keydown', onKey);
+        if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        if (go) { saved = true; close(); } else closeBtn.focus();
+      }
+      function onKey(ev) { if (ev.key === 'Escape') finish(false); }
+      keep.addEventListener('click', function () { finish(false); });
+      leave.addEventListener('click', function () { finish(true); });
+      wrap.addEventListener('click', function (ev) { if (ev.target === wrap) finish(false); });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(wrap);
+      keep.focus();
     }
-    function onKey(ev) { if (ev.key === 'Escape') close(); }
-    closeBtn.addEventListener('click', close);
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      if (panel.parentNode) panel.parentNode.removeChild(panel);
+    }
+    function onKey(ev) { if (ev.key === 'Escape') requestClose(); }
+    function requestClose() {
+      if (confirming) return; // Esc 正被浮层处理，不要再叠一层
+      if (saved || !dirtyProbe) { close(); return; }
+      if (dirtyProbe()) { discardOverlay(); return; }
+      close();
+    }
+    closeBtn.addEventListener('click', requestClose);
     document.addEventListener('keydown', onKey);
     var prefill = opts.prefill || {}, autoKeys = opts.autoKeys || {}, focusEntry = null;
     invoke(pluginId, 'get', {}).then(function (data) {
@@ -273,42 +370,120 @@
       }
       body.textContent = '';
       if (opts.autoNote) add(body, el('p', 'cfg-note', opts.autoNote));
+
+      // 字段多时才给搜索：少字段塞搜索框是噪音（USABILITY 原则③ 少即是多）。
+      var searchInput = null, searchCount = null, emptyNote = null, normalWrap = null, advFields = [];
+      if (fields.length >= 6) {
+        var bar = add(body, el('div', 'cfg-search'));
+        searchInput = el('input', 'cfg-input');
+        searchInput.type = 'search';
+        searchInput.placeholder = '搜索设置项（例：端口 / 路径 / 超时）';
+        searchInput.autocomplete = 'off';
+        searchInput.setAttribute('aria-label', '搜索设置项');
+        add(bar, searchInput);
+        searchCount = add(bar, el('span', 'cfg-search-count'));
+        emptyNote = add(body, el('p', 'cfg-search-empty', '没有匹配的设置项；换个关键词试试，或清空搜索看全部。'));
+        emptyNote.style.display = 'none';
+      }
+      normalWrap = add(body, el('div', 'cfg-body-inner'));
+      normalWrap.style.display = 'contents';
       for (var i = 0; i < fields.length; i++) {
         var field = fields[i], current = values[field.key];
         if (current === undefined) current = field['default'];
         if (Object.prototype.hasOwnProperty.call(prefill, field.key)) current = prefill[field.key];
         var entry = renderField(field, current, autoKeys);
-        entries.push(entry); add(body, entry.box);
+        entries.push(entry);
+        if (field.advanced === true) advFields.push(entry);
+        else add(normalWrap, entry.box);
         if (opts.focusKey && field.key === opts.focusKey) focusEntry = entry;
+      }
+      var advBox = null, advSummary = null;
+      if (advFields.length) {
+        var det = el('details', 'cfg-adv');
+        advBox = det;
+        advSummary = add(det, el('summary', null, '高级设置（' + advFields.length + ' 项，点开查看）'));
+        for (var k = 0; k < advFields.length; k++) add(det, advFields[k].box);
+        add(body, det);
+      }
+      function fieldVisible(entry) { return entry.box.style.display !== 'none'; }
+      function filterFields() {
+        if (!searchInput) return;
+        var q = searchInput.value.trim().toLowerCase(), shown = 0;
+        for (var n = 0; n < entries.length; n++) {
+          var hit = !q || (entries[n].box.getAttribute('data-kw') || '').indexOf(q) >= 0;
+          entries[n].box.style.display = hit ? '' : 'none';
+          if (hit) shown++;
+        }
+        if (advBox) {
+          var anyAdv = false;
+          for (var a = 0; a < advFields.length; a++) if (fieldVisible(advFields[a])) { anyAdv = true; break; }
+          advBox.style.display = anyAdv ? '' : 'none';
+          if (q && anyAdv) advBox.open = true;
+          if (!q) advBox.open = false;
+          if (advSummary) advSummary.textContent = '高级设置（' + advFields.length + ' 项，点开查看）';
+        }
+        searchCount.textContent = q
+          ? (shown ? '匹配到 ' + shown + ' 项' : '没有匹配的设置项')
+          : '共 ' + entries.length + ' 项';
+        emptyNote.style.display = q && !shown ? '' : 'none';
+      }
+      if (searchInput) {
+        searchInput.addEventListener('input', filterFields);
+        searchInput.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Escape' && searchInput.value) {
+            searchInput.value = '';
+            filterFields();
+            ev.stopPropagation();
+          }
+        });
+        filterFields();
       }
       if (focusEntry) {
         var focusNode = focusEntry.control.node;
         var inner = focusNode && focusNode.querySelector ? focusNode.querySelector('input,select,textarea') : null;
         (inner || focusNode).focus();
       }
+      // 基线：打开面板时的值快照，用于「关闭前拦未保存改动」和「本次改了几项」。
+      var snapshot = function () { return JSON.stringify(collect(entries).values || {}); };
+      var baseline = snapshot();
+      dirtyProbe = function () { return snapshot() !== baseline; };
+
       var save = el('button', 'btn btn-primary', '保存'), reset = el('button', 'btn btn-ghost', '恢复默认值');
       save.type = 'button'; reset.type = 'button';
       add(actions, save); add(actions, reset);
       reset.addEventListener('click', function () {
-        for (var k = 0; k < entries.length; k++) entries[k].control.reset(entries[k].field['default']);
-        status.className = 'cfg-status'; status.textContent = '已恢复为默认值（尚未保存）';
+        for (var r = 0; r < entries.length; r++) {
+          entries[r].control.reset(entries[r].field['default']);
+          if (entries[r].describeDefault) entries[r].describeDefault();
+        }
+        status.className = 'cfg-status';
+        status.textContent = '已回填为默认值（尚未保存）；确认无误后点「保存」才会生效';
       });
       save.addEventListener('click', function () {
         var result = collect(entries);
         if (result.error) { status.className = 'cfg-status cfg-status-err'; status.textContent = result.error; return; }
+        // 数一下真正改了几项：只比较键值，不改的不算，避免「保存了 8 项」这种虚数。
+        var before = {}, after = result.values, changed = 0;
+        try { before = JSON.parse(baseline); } catch (e) { before = {}; }
+        for (var key in after) {
+          if (!Object.prototype.hasOwnProperty.call(after, key)) continue;
+          if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) changed++;
+        }
         save.disabled = true; reset.disabled = true;
         status.className = 'cfg-status'; status.textContent = '正在保存…';
-        invoke(pluginId, 'set', { values: result.values }).then(function (res) {
+        invoke(pluginId, 'set', { values: after }).then(function (res) {
           save.disabled = false; reset.disabled = false;
           var warnings = res.warnings && res.warnings.length ? '（' + res.warnings.join('；') + '）' : '';
+          var scope = changed ? '，本次修改 ' + changed + ' 项' : '（内容未变）';
+          saved = true;
           if (res.restart_required) {
             status.className = 'cfg-status cfg-status-warn';
-            status.textContent = '已保存，需重启 kored 生效' + warnings;
+            status.textContent = '已保存' + scope + '，需重启 kored 生效' + warnings;
             toast('已保存，需重启 kored 生效');
             return;
           }
           status.className = 'cfg-status cfg-status-ok';
-          status.textContent = '已保存，立即生效' + warnings;
+          status.textContent = '已保存' + scope + '，立即生效' + warnings;
           if (typeof opts.onSaved === 'function') opts.onSaved(res);
           toast('已保存，立即生效');
           setTimeout(close, 500);
