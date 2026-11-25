@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Kore",
+    "description": "Una base de operaciones de servidor mínima, impulsada por un núcleo y definida por plugins, con consumo de recursos casi nulo y propiedad total del usuario: el núcleo delgado solo programa; las funciones están en repositorios de plugins independientes.",
+    "detail": "docs/DETAIL.es.md"
+  }
+}

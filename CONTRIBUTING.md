@@ -76,6 +76,38 @@ bash scripts/plugin-oss-check.sh
 - issue / PR 与日常提交在 Gitea（权威源，[ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md)），GitHub / gitee 是镜像；版本触发收敛到 Gitea Actions。
 - **日常反馈用本地 `make check`**，CI 只做"能否拉取 / 能否构建"的合入兜底；`make idle` / `make budget-check` 需要真实进程，CI 不跑。
 
+## 2.3 Git Flow 分支模型
+
+仓库采用 Git Flow 的两条长期分支 + 短生命周期分支模型。分支名一律小写英文 + 连字符（kebab-case），不用空格、下划线或中文。
+
+| 分支 | 角色 | 从哪开 | 合回哪 |
+| --- | --- | --- | --- |
+| `main` | 发布分支，每个版本在此打 tag；GitHub 默认分支 | — | — |
+| `develop` | 开发集成分支（本地维护，日常改动的目标） | `main` | `main`（经 release） |
+| `feature/*` | 新功能，如 `feature/scheduler-retry` | `develop` | `develop` |
+| `fix/*` | 非紧急修复，如 `fix/csrf-cookie` | `develop` | `develop` |
+| `release/*` | 发布冻结分支，与 tag 同号 `release/v0.1.2` | `develop` | **`main` 和 `develop` 双向** |
+| `hotfix/*` | 已发布版本的紧急修复 | `main` | **`main` 和 `develop` 双向** |
+
+`release/*` 与 `hotfix/*` 必须双向合流：只合 `main` 不合 `develop`，下个版本会把已修好的问题又带回 `main`。合流用 `--no-ff` 保留分支拓扑，合完删除该短生命周期分支。
+
+日常开发从 `develop` 开 `feature/xxx` / `fix/xxx`，改完跑 `make check` 与对应门禁，向 `develop` 提 PR；评审通过、`make check` 全绿后合入。发布走 `release/*` → 双向合入 `main` + `develop`，在 `main` 上打 SSH 签名 tag。
+
+**不 force push、不 rebase、不改写已有 tag、不改 GitHub 默认分支、不 push 普通分支到镜像仓。** 回退一律用追加 revert 提交（`git revert --no-edit <sha>`），不用 `git reset --hard`。
+
+### 签名约定
+
+本仓已按参考仓对齐 SSH 签名配置（`git config --local`，不入库）：
+
+```bash
+gpg.format=ssh
+user.signingkey=/home/pt/.ssh/id_ed25519_github_docker_panel.pub
+tag.gpgSign=true
+gpg.ssh.allowedSignersFile=<repo>/.git/allowed_signers
+```
+
+所有版本 tag 必须 SSH 签名：发布时用 `git tag -s vX.Y.Z -m "中文发布说明"` 显式签名，**切勿用 `git tag -a`**（未签名）；可用 `git tag -v vX.Y.Z` 校验，应见 `Good "git" signature`。提交仍按 DCO 用 `git commit -s`（见 §3 与模板）。
+
 ## 3. 提交规范
 
 - 格式：`type(scope): 中文描述`，type ∈ `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore` / `build`。

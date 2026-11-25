@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Kore",
+    "description": "Eine minimale, kerngetriebene und durch Plugins definierte Server-Betriebsbasis mit nahezu null Ressourcenverbrauch und voller Nutzerhoheit: der schlanke Kernel plant nur, Funktionen liegen in eigenen Plugin-Repositories.",
+    "detail": "docs/DETAIL.de.md"
+  }
+}

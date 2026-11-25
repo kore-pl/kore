@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
+语言：[简体中文](docs/DETAIL.md) · [English](docs/DETAIL.en.md) · [Español](docs/DETAIL.es.md) · [Français](docs/DETAIL.fr.md) · [Deutsch](docs/DETAIL.de.md) · [Русский](docs/DETAIL.ru.md) · [Português](docs/DETAIL.pt.md)
+
 > 状态: draft · 归属: scribe · 更新: 2026-11-21 · 里程碑: M0
 
 **一句话定位**：Kore 是极简内核驱动、插件定义能力、资源零侵占、完全归属使用者的服务器运维基础底座——一个只做调度的薄壳内核，而不是一个功能面面俱到的大面板。
@@ -243,3 +245,7 @@ Kore 由 6 个固定角色的 agent 协作推进：lead 拆解与验收、archit
 - [License](LICENSE) — MIT，版权人 `pengtang1024`
 - [Contributing](CONTRIBUTING.md) — 开发环境、提交规范、PR 要求与 G-01 ~ G-25 门禁清单
 - [Security](SECURITY.md) — 漏洞披露流程；安全设计见 [docs/SECURITY.md](docs/SECURITY.md)
+
+## 支持本项目
+
+如果 Kore 帮你省下了折腾面板的时间，欢迎给仓库点一个 ⭐ star——这是最简单也最直接的鼓励，也让更多人能找到它。想一起改进的话，从 [CONTRIBUTING.md](CONTRIBUTING.md) 入手。

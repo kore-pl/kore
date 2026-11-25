@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Kore",
+    "description": "Une base d’exploitation serveur minimale, pilotée par un noyau et définie par des plugins, avec une empreinte ressources quasi nulle et une propriété totale par l’utilisateur : le noyau minimal ne fait qu’ordonnancer, les fonctions vivent dans des dépôts de plugins indépendants.",
+    "detail": "docs/DETAIL.fr.md"
+  }
+}

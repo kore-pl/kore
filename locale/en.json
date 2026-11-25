@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Kore",
+    "description": "A minimal kernel-driven, plugin-defined server operations foundation with near-zero resource footprint and full user ownership: the thin kernel only schedules, while operations features live in independent plugin repositories.",
+    "detail": "docs/DETAIL.en.md"
+  }
+}

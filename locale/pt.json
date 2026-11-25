@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Kore",
+    "description": "Uma base mínima de operação de servidores, orientada por um núcleo e definida por plugins, com consumo de recursos quase zero e total pertencimento do usuário: o núcleo fino apenas agenda; as funções ficam em repositórios de plugins independentes.",
+    "detail": "docs/DETAIL.pt.md"
+  }
+}
