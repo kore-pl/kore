@@ -85,6 +85,61 @@
     return 0;
   }
 
+  // 大版本号：0.x → 1.x 这类跨大版本升级对插件行为/配置项影响最大，必须在升级前说清。
+  function majorOf(v) { var n = parseInt(String(v || '').split('.')[0], 10); return isFinite(n) ? n : 0; }
+  function isMajorJump(from, to) { return majorOf(to) > majorOf(from); }
+  // 更新说明：索引里若带 changelog / release_notes / update_notes / notes 就展示，
+  // 没有就如实说「未提供」——不编造版本变化（诚实原则，宁缺毋假）。
+  function noteItems(plugin) {
+    var raw = plugin && (plugin.changelog || plugin.release_notes || plugin.update_notes || plugin.notes);
+    if (!raw) return [];
+    if (typeof raw === 'string') raw = raw.split(/\r?\n/);
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    raw.forEach(function (item) {
+      if (item === null || item === undefined) return;
+      var line = '';
+      if (typeof item === 'string') line = item;
+      else if (typeof item === 'object') {
+        var body = item.items || item.notes || item.changes;
+        if (Array.isArray(body)) line = body.join('；');
+        else line = item.text || item.summary || item.title || '';
+      } else { line = String(item); }
+      line = String(line).replace(/^\s*[-*·]\s*/, '').trim();
+      if (line) out.push(line);
+    });
+    return out.slice(0, 12);
+  }
+  // 升级中心样式：写域不含 style.css（多人并行），参照外壳做法注入一次 scoped 样式，
+  // 只引用设计令牌（无硬编码色值），<640px 触摸目标走 --kore-touch。
+  function ensurePluginUpgradeStyle() {
+    if (document.getElementById('kore-plugin-upgrade-css')) return;
+    var css = [
+      '.ver-cell{display:flex;flex-direction:column;gap:var(--kore-space-1);min-width:0}',
+      '.plugin-ver{white-space:nowrap}',
+      '.plugin-major{display:inline-flex;align-items:center;align-self:flex-start;min-height:20px;' +
+        'padding:0 var(--kore-space-2);font-size:var(--kore-font-12);font-weight:600;' +
+        'color:var(--kore-warning);border:1px solid var(--kore-warning);border-radius:var(--kore-radius-control);' +
+        'white-space:nowrap}',
+      '.plugin-notes{margin-top:var(--kore-space-1);font-size:var(--kore-font-12)}',
+      '.plugin-notes>summary{display:flex;align-items:center;min-height:28px;cursor:pointer;color:var(--kore-info)}',
+      '.plugin-notes>summary:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}',
+      '.plugin-notes-list{max-height:140px;overflow:auto;margin:0;padding-left:16px;color:var(--kore-text-2)}',
+      '.plugin-notes-list li{margin:2px 0;overflow-wrap:anywhere}',
+      '.plugin-notes-empty{margin:0;color:var(--kore-text-3);overflow-wrap:anywhere}',
+      '.plugin-risk{margin:2px 0;color:var(--kore-text-2);overflow-wrap:anywhere}',
+      '.plugin-risk.is-major{color:var(--kore-warning);font-weight:600}',
+      '@media (max-width:639px){',
+      '.plugin-notes>summary{min-height:var(--kore-touch)}',
+      '.plugin-notes-list{max-height:none}',
+      '}'
+    ].join('');
+    var st = document.createElement('style');
+    st.id = 'kore-plugin-upgrade-css';
+    st.textContent = css;
+    document.head.appendChild(st);
+  }
+
   // 安装状态：latest（最新）/ upgradable（可升级）/ unindexed（索引未收录）/
   // unknown（老内核未返回 latest_version，不臆造可升级）。
   function pluginUpgradeState(plugin) {
@@ -138,7 +193,9 @@
     var upState = pluginUpgradeState(plugin);
 
     tr.appendChild(cell('插件', idCell));
-    tr.appendChild(cell('版本', plugin.version));
+    var verCell = cell('版本', plugin.version);
+    verCell.className = 'plugin-ver'; // 版本号不折行（0.4.4 不能被挤成两行）
+    tr.appendChild(verCell);
     tr.appendChild(cell('最新版本', latestCell(plugin, upState)));
     tr.appendChild(cell('深度', depthLabel(plugin.depth_level)));
     tr.appendChild(cell('运行方式', lifecycleLabel(plugin.lifecycle)));
@@ -170,7 +227,7 @@
     if (upState === 'upgradable') {
       var upgradeBtn = el('button', 'btn btn-primary plugin-upgrade-btn', '升级');
       upgradeBtn.type = 'button';
-      upgradeBtn.title = '升级到 v' + plugin.latest_version + '（保留配置与启用状态）';
+      upgradeBtn.title = '升级到 v' + plugin.latest_version + '（会重启该插件，配置与启用状态保留）';
       upgradeBtn.addEventListener('click', function () {
         confirmRowUpgrade(plugin, tr, note, upgradeBtn);
       });
@@ -229,9 +286,18 @@
   // 「最新版本」列：可升级黄字 v当前 → v最新；最新灰字；索引未收录淡灰提示。
   function latestCell(plugin, upState) {
     if (upState === 'upgradable') {
+      // 可升级项：版本箭头 + 跨大版本徽标 + 可展开的更新说明（无说明时如实写「未提供」）。
+      var wrap = el('div', 'ver-cell');
       var arrow = el('span', 'ver-upgradable', plugin.version + ' → ' + plugin.latest_version);
       arrow.title = '可升级：当前 v' + plugin.version + '，索引 v' + plugin.latest_version;
-      return arrow;
+      wrap.appendChild(arrow);
+      if (isMajorJump(plugin.version, plugin.latest_version)) {
+        var major = el('span', 'plugin-major', '跨大版本');
+        major.title = '这次升级跨越大版本（如 0.x → 1.x），功能与配置项可能有变化';
+        wrap.appendChild(major);
+      }
+      wrap.appendChild(buildNoteDetails(plugin));
+      return wrap;
     }
     if (upState === 'latest') return el('span', 'ver-latest', plugin.latest_version);
     var latest = plugin.latest_version ? String(plugin.latest_version) : '';
@@ -240,13 +306,37 @@
     return muted;
   }
 
-  // 行内升级确认：先说明"保留配置与启用状态"，确认后才发请求。
+  // 更新说明折叠：原生 details（键盘可达），索引没有说明时如实写「未提供」。
+  function buildNoteDetails(plugin) {
+    var notes = el('details', 'plugin-notes');
+    notes.appendChild(el('summary', null, '更新说明（v' + plugin.latest_version + '）'));
+    var body = el('div', 'plugin-notes-body');
+    var items = noteItems(plugin);
+    if (!items.length) {
+      body.appendChild(el('p', 'plugin-notes-empty',
+        '该插件未提供更新说明（商店索引只记录了版本号）。升级后可在插件日志里查看实际变化。'));
+    } else {
+      var ul = el('ul', 'plugin-notes-list');
+      items.forEach(function (line) { ul.appendChild(el('li', null, line)); });
+      body.appendChild(ul);
+    }
+    notes.appendChild(body);
+    return notes;
+  }
+
+  // 行内升级确认：先说明重启风险与跨大版本影响，确认后才发请求。
   function confirmRowUpgrade(plugin, tr, note, btn) {
     btn.disabled = true;
     note.className = 'row-note row-note-warn';
     note.textContent = '';
-    note.appendChild(document.createTextNode('当前 v' + plugin.version + ' → 新 v' +
-      plugin.latest_version + '；升级会保留配置与启用状态。 '));
+    note.appendChild(el('div', 'plugin-risk', '当前 v' + plugin.version + ' → 新 v' +
+      plugin.latest_version + '；升级会重启该插件，重启期间可能短暂不可用（通常几秒到几十秒）；' +
+      '配置与启用状态会保留。'));
+    if (isMajorJump(plugin.version, plugin.latest_version)) {
+      note.appendChild(el('div', 'plugin-risk is-major',
+        '这是一次跨大版本升级（v' + plugin.version + ' → v' + plugin.latest_version +
+        '）：功能与配置项可能有变化，建议先展开「更新说明」确认后再升级。'));
+    }
     var ok = el('button', 'btn btn-primary', '确认升级');
     ok.type = 'button';
     var cancel = el('button', 'btn btn-ghost', '取消');
@@ -949,6 +1039,7 @@
   }
 
   function renderPluginsView(box) {
+    ensurePluginUpgradeStyle();
     viewNotice(box);
     box.appendChild(renderPluginsPanel());
     // 插件 UI 面板按需出现：只有真有插件声明了 web.entry 才建区块。
@@ -970,6 +1061,7 @@
 
   // 壳缺席的降级单页：系统信息卡 → 插件表 → 插件 UI 面板，顺序与重构前一致。
   function renderLegacy(box) {
+    ensurePluginUpgradeStyle();
     box.appendChild(renderInfoPanel());
     box.appendChild(renderPluginsPanel());
     renderPluginUis(box, { status: 'fulfilled', value: { plugins: state.plugins } });
