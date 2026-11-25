@@ -33,6 +33,9 @@
     ['常驻合计', '≤ 48 MiB', '24 MiB'],
     ['同时常驻插件数', '≤ 3 个', '1–2 个']
   ];
+  // 预算表列名只写一处：表头与手机端 <td data-label> 同源，改文案/切英文不会漂移
+  // （<640px 时 style.css 用 td::before{content:attr(data-label)} 复原列名，缺 label 会只剩数值 + 84px 空白）。
+  var BUDGET_COLS = ['资源项', '硬红线（判未完成）', '目标（争取）'];
   // 关于页常量：来源 docs/ROADMAP.md §5、docs/SCENARIOS.md §2、pkg/pluginapi.Protocol、LICENSE。
   var ABOUT = {
     protocol: 'kore.plugin.v1', license: 'MIT',
@@ -851,17 +854,18 @@
   function buildBudgetTable() {
     var table = el('table', 'settings-table');
     var thead = el('thead'), htr = el('tr');
-    htr.appendChild(el('th', null, '资源项'));
-    htr.appendChild(el('th', null, '硬红线（判未完成）'));
-    htr.appendChild(el('th', null, '目标（争取）'));
+    for (var c = 0; c < BUDGET_COLS.length; c++) htr.appendChild(el('th', null, BUDGET_COLS[c]));
     thead.appendChild(htr);
     table.appendChild(thead);
     var tbody = el('tbody');
     for (var i = 0; i < BUDGET.length; i++) {
       var tr = el('tr');
       tr.appendChild(el('th', null, BUDGET[i][0]));
-      tr.appendChild(el('td', null, BUDGET[i][1]));
-      tr.appendChild(el('td', null, BUDGET[i][2]));
+      // 首列用 th（手机端没有 ::before），数值两列带 data-label 供小屏复原列名。
+      var cur = tr.appendChild(el('td', null, BUDGET[i][1]));
+      cur.setAttribute('data-label', BUDGET_COLS[1]);
+      var tgt = tr.appendChild(el('td', null, BUDGET[i][2]));
+      tgt.setAttribute('data-label', BUDGET_COLS[2]);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);

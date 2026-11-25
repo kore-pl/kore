@@ -22,6 +22,7 @@
 - 语言切换成功后就地提示「已切换为…，立即生效并已记住选择」。
 - 跨页设置只给「去配置」入口（网站 / DNS / 证书 / 站点迁移 / 备份 / 快照 / 迁移 / 漂移 / 告警规则 / 日志告警 / 通知通道），不在本页重复造表单。
 - 导出 `window.KoreSettings.confirmDanger`，供清空日志 / 卸载插件 / 删除站点等视图复用同一套确认层（本轮不改它们的文件）。
+- 资源预算表两个数值列补 `data-label`（列名取自与表头同源的 `BUDGET_COLS`）：<640px 时 `style.css` 用 `td::before{content:attr(data-label)}` 复原列名，此前 label 为空 → 手机每行只剩数值且白占 84px（由 feat-mobile-polish 实测上报，转交本卡修复）。
 
 ### web/config-panel.js（插件统一配置面板，`KoreShell.openConfig` 契约不变）
 - 每字段下方 `默认：X`，与默认不同时标「（当前已改，保存后生效）」并转警示色（`web/config-panel.js:199` renderField）。
@@ -37,7 +38,7 @@
 | 项 | 命令 | 结果 |
 | --- | --- | --- |
 | 语法 | `node --check web/settings.js` / `web/config-panel.js` | exit 0 |
-| 首屏预算 | `make frontend` | 首屏 gzip 81,689 B / 307,200 B，exit 0 |
+| 首屏预算 | `make frontend` | 首屏 gzip 83,182 B / 307,200 B，exit 0（settings.js 懒加载、不计入首屏；数字含并行轨道的首屏改动） |
 | 明文凭据 | `make secret-check` | exit 0 |
 | Go 门禁 | 干净 HEAD 树 + 本卡前端：`go vet ./...` / `go test -timeout 200s ./...` | 均 exit 0（web 包无测试文件） |
 | 真机交互 | playwright + 真实隔离实例，25 条断言 | `[DONE] 全部断言通过`，NODE_EXIT=0 |
@@ -53,6 +54,7 @@
 | `.agents/verify/screenshots/settings-search-desktop-01.png` | 1440×900（搜索「备份」过滤态） |
 | `.agents/verify/screenshots/settings-danger-desktop-01.png` | 1440×900（危险确认，已输入「升级」） |
 | `.agents/verify/screenshots/settings-config-panel-desktop-01.png` | 1440×900（默认值提示 + 高级折叠 + 搜索 + 未保存拦截） |
+| `.agents/verify/screenshots/settings-budget-mobile-01.png` | 390×844（资源预算表小屏列名复原：硬红线 / 目标逐行可见） |
 
 ## 4. 产品定位自评（G-28 三问）
 
