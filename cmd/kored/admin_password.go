@@ -399,7 +399,15 @@ func writeInitialAdminCredentialFile(stateDir, username, plain string) (string, 
 // ConsumeInitialAdminCredential 在首登改密成功后删除一次性凭据文件（消费后删）。
 // 文件不存在是幂等成功；删除失败不阻断改密结果。
 func ConsumeInitialAdminCredential() {
-	path := initialAdminCredentialPath("")
+	consumeInitialAdminCredential("")
+}
+
+// consumeInitialAdminCredential 按实例 state_dir 解析凭据文件落点后删除。
+// 生成侧（ensureInitialAdminCredential/writeInitialAdminCredentialFile）把凭据写在
+// <state_dir>/initial-admin-credential（6a31b34），消费侧必须用同一 state_dir 解析，
+// 否则隔离实例 / 自定义 state_dir 下会删错位置、把一次性凭据留在盘上（G-30）。
+func consumeInitialAdminCredential(stateDir string) {
+	path := initialAdminCredentialPath(stateDir)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "警告: 删除一次性凭据文件失败: %v\n", err)
 	}
@@ -577,7 +585,13 @@ func quoteYAML(value string) string {
 // 切换——配置、内存、reload 三者自然收敛，不引入手动改指针的竞态。
 func passwordWriterFor(cfg config) func(string) error {
 	// 首登改密成功后由 httpapi 回调删除一次性凭据文件（G-30 消费后删）。
-	httpapi.SetCredentialConsumedHook(ConsumeInitialAdminCredential)
+	// 绑定本实例的 state_dir，与生成侧 6a31b34 的落点一致（隔离实例/自定义 state_dir
+	// 下也能删到正确文件）。
+	stateDir := ""
+	if cfg.snapshot != nil {
+		stateDir = cfg.snapshot.Paths.StateDir
+	}
+	httpapi.SetCredentialConsumedHook(func() { consumeInitialAdminCredential(stateDir) })
 	path := ""
 	if cfg.snapshot != nil {
 		path = cfg.snapshot.Source

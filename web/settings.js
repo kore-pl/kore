@@ -902,6 +902,9 @@
      不回显、不拼进 URL；关闭弹层立即清空输入值。 */
   var PW_ENDPOINT = '/api/v1/auth/password'; // 后端已就绪（r10-passwdapi），空串才是降级
   var PW_MIN_LEN = 12;  // 交互骨架下限：与 CLI --generate 的 24 位随机口令同口径，取保守值
+  // ADR-0057 T6：改密请求体显式带账号（与登录表单预填账号同口径）。单账号固定 admin，
+  // 账号是标识符不是秘密；服务端校验请求账号 == 会话账号，不一致拒绝，防误投/越权。
+  var PW_USERNAME = 'admin';
   var pwDialog = null;
 
   function pwStatus(node, text, tone) {
@@ -1006,7 +1009,7 @@
       request(PW_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Kore-CSRF': csrf },
-        body: JSON.stringify({ current_password: oldPw, new_password: newPw })
+        body: JSON.stringify({ username: PW_USERNAME, current_password: oldPw, new_password: newPw })
       }, 15000).then(function (res) {
         ok.disabled = false;
         if (res.ok) {

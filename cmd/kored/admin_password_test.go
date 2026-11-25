@@ -393,6 +393,40 @@ func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	}
 }
 
+// TestConsumeInitialAdminCredentialUsesStateDir 覆盖 6a31b34 落点：
+// 凭据文件写在 <state_dir>/initial-admin-credential，消费钩子绑定同一 state_dir 时
+// 必须删到该文件；旧的无参实现解析到安装根会漏删（反例证明绑定 state_dir 必要）。
+func TestConsumeInitialAdminCredentialUsesStateDir(t *testing.T) {
+	stateDir := t.TempDir()
+	cred := filepath.Join(stateDir, "initial-admin-credential")
+	if err := os.WriteFile(cred, []byte("username: admin\npassword: <REDACTED>\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldPathFn := initialAdminCredentialPathFn
+	initialAdminCredentialPathFn = func(base string) string {
+		if strings.TrimSpace(base) == "" {
+			return filepath.Join(t.TempDir(), "initial-admin-credential") // 安装根另指一处
+		}
+		return filepath.Join(base, "initial-admin-credential")
+	}
+	defer func() { initialAdminCredentialPathFn = oldPathFn }()
+
+	consumeInitialAdminCredential(stateDir)
+	if _, err := os.Stat(cred); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("绑定 state_dir 后凭据文件应删除，stat err=%v", err)
+	}
+
+	// 反例（证明绑定 state_dir 是必要的）：旧的无参消费按安装根解析，
+	// 漏删 state_dir 凭据文件。
+	if err := os.WriteFile(cred, []byte("username: admin\npassword: <REDACTED>\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ConsumeInitialAdminCredential()
+	if _, err := os.Stat(cred); err != nil {
+		t.Fatalf("无参消费不应删到 state_dir 凭据文件（应解析安装根），stat err=%v", err)
+	}
+}
+
 // TestFirstRunBootstrapKeepsExistingHashSilent 覆盖「已有凭据实例行为不变」：
 // 不打印、不写文件、哈希一个字节都不变。
 func TestFirstRunBootstrapKeepsExistingHashSilent(t *testing.T) {

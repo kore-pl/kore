@@ -130,13 +130,13 @@ func TestMustChangeIsNotAnAccessGate(t *testing.T) {
 		}
 	}
 	// 写端点也必须过鉴权而非被闸门拦下：非法请求体得到 400（业务校验），绝不是 403 闸门。
-	badBody := passwordChange(env.server, session, csrf, "{\"current_password\":\"x\"}")
+	badBody := passwordChange(env.server, session, csrf, "{\"username\":\"admin\",\"current_password\":\"x\"}")
 	if badBody.Code != http.StatusBadRequest {
 		t.Fatalf("must_change 下改密请求应按业务校验 400，实际 %d: %s", badBody.Code, badBody.Body.String())
 	}
 
 	// ② 改密端点可用，且成功后清标志 + 吊销旧会话（凭据消费钩子保持不变）。
-	bodyStr := `{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`
+	bodyStr := `{"username":"admin","current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`
 	changeRec := passwordChange(env.server, session, csrf, bodyStr)
 	if changeRec.Code != http.StatusOK {
 		t.Fatalf("must_change 下改密端点应可用，实际 %d: %s", changeRec.Code, changeRec.Body.String())
@@ -175,6 +175,66 @@ const (
 	pwNew = "brand-new-pass-9999"
 )
 
+// TestChangePasswordUsernameValidation 覆盖 ADR-0057 T6 账号校验：
+// 缺账号 → 400「请输入账号」；账号不匹配 → 403「账号不匹配，无法修改口令」；
+// 均不得写回、不得吊销会话、不得切换内存基准（旧口令仍可登录）。
+func TestChangePasswordUsernameValidation(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+		wantMsg    string
+	}{
+		{"missing", `{"current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`,
+			http.StatusBadRequest, pluginapi.E_INVALID, "请输入账号"},
+		{"blank", `{"username":"   ","current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`,
+			http.StatusBadRequest, pluginapi.E_INVALID, "请输入账号"},
+		{"mismatch", `{"username":"root","current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`,
+			http.StatusForbidden, pluginapi.E_UNAUTHORIZED, "账号不匹配，无法修改口令"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := passwordTestServer(t, pwOld)
+			login := passwordLogin(t, env.server, pwOld, true)
+			session := cookieFrom(t, login, auth.CookieName).Value
+			csrf := cookieFrom(t, login, csrfCookieName).Value
+
+			rec := passwordChange(env.server, session, csrf, tc.body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("%s 应 %d，实际 %d: %s", tc.name, tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			eb := parseErrorBody(t, rec)
+			if eb.Code != tc.wantCode || eb.Message != tc.wantMsg {
+				t.Fatalf("%s 错误响应应 code=%s message=%q，实际 code=%s message=%q",
+					tc.name, tc.wantCode, tc.wantMsg, eb.Code, eb.Message)
+			}
+			// 失败不得泄漏任何口令明文（G-30），不得触发写回。
+			if strings.Contains(rec.Body.String(), pwOld) || strings.Contains(rec.Body.String(), pwNew) {
+				t.Fatalf("响应体泄漏口令明文（G-30）: %s", rec.Body.String())
+			}
+			env.mu.Lock()
+			writes := len(env.hashes)
+			env.mu.Unlock()
+			if writes != 0 {
+				t.Fatalf("%s 不应写回，实际写了 %d 次", tc.name, writes)
+			}
+			// 会话未被吊销：旧会话仍可访问受保护端点。
+			probe := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+			req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
+			env.server.Handler().ServeHTTP(probe, req)
+			if probe.Code != http.StatusOK {
+				t.Fatalf("%s 不应吊销会话，探测实际 %d", tc.name, probe.Code)
+			}
+			// 内存基准未切换：旧口令仍可登录。
+			if got := passwordLogin(t, env.server, pwOld, true).Code; got != http.StatusOK {
+				t.Fatalf("%s 后旧口令仍应可登录，实际 %d", tc.name, got)
+			}
+		})
+	}
+}
+
 // TestChangePasswordWrongCurrentReturns401 旧口令错 → 401 E_UNAUTHORIZED + 固定人话文案，
 // 且不回显任何输入（G-30）。
 func TestChangePasswordWrongCurrentReturns401(t *testing.T) {
@@ -183,7 +243,7 @@ func TestChangePasswordWrongCurrentReturns401(t *testing.T) {
 	session := cookieFrom(t, login, auth.CookieName).Value
 	csrf := cookieFrom(t, login, csrfCookieName).Value
 
-	body := `{"current_password":"totally-wrong-pw","new_password":"` + pwNew + `"}`
+	body := `{"username":"admin","current_password":"totally-wrong-pw","new_password":"` + pwNew + `"}`
 	rec := passwordChange(env.server, session, csrf, body)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("旧口令错应 401，实际 %d: %s", rec.Code, rec.Body.String())
@@ -218,8 +278,8 @@ func TestChangePasswordShortOrSameReturns400(t *testing.T) {
 		name string
 		body string
 	}{
-		{"too_short", `{"current_password":"` + pwOld + `","new_password":"short"}`},
-		{"same_as_old", `{"current_password":"` + pwOld + `","new_password":"` + pwOld + `"}`},
+		{"too_short", `{"username":"admin","current_password":"` + pwOld + `","new_password":"short"}`},
+		{"same_as_old", `{"username":"admin","current_password":"` + pwOld + `","new_password":"` + pwOld + `"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,7 +311,7 @@ func TestChangePasswordSuccessRevokesAllAndSwitchesHash(t *testing.T) {
 	session := cookieFrom(t, login, auth.CookieName).Value
 	csrf := cookieFrom(t, login, csrfCookieName).Value
 
-	body := `{"current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`
+	body := `{"username":"admin","current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`
 	rec := passwordChange(env.server, session, csrf, body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("改口令应 200，实际 %d: %s", rec.Code, rec.Body.String())
@@ -309,7 +369,7 @@ func TestChangePasswordWriterFailureKeepsOldPassword(t *testing.T) {
 	session := cookieFrom(t, login, auth.CookieName).Value
 	csrf := cookieFrom(t, login, csrfCookieName).Value
 
-	body := `{"current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`
+	body := `{"username":"admin","current_password":"` + pwOld + `","new_password":"` + pwNew + `"}`
 	rec := passwordChange(env.server, session, csrf, body)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("写回失败应 500，实际 %d: %s", rec.Code, rec.Body.String())
@@ -327,7 +387,7 @@ func TestChangePasswordRequiresCSRF(t *testing.T) {
 	session := cookieFrom(t, login, auth.CookieName).Value
 
 	req := httptest.NewRequest(http.MethodPost, authPasswordPath,
-		strings.NewReader(`{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`))
+		strings.NewReader(`{"username":"admin","current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`))
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
 	// 故意不带 csrf cookie/header。
 	rec := httptest.NewRecorder()
@@ -341,7 +401,7 @@ func TestChangePasswordRequiresCSRF(t *testing.T) {
 func TestChangePasswordRequiresSession(t *testing.T) {
 	env := passwordTestServer(t, pwOld)
 	rec := passwordChange(env.server, "", "",
-		`{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`)
+		`{"username":"admin","current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("未登录应 401，实际 %d: %s", rec.Code, rec.Body.String())
 	}
@@ -360,9 +420,9 @@ func TestChangePasswordNoPlaintextInLogs(t *testing.T) {
 
 	// 成功路径 + 错误口令路径各一次。
 	passwordChange(env.server, session, csrf,
-		`{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`)
+		`{"username":"admin","current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`)
 	passwordChange(env.server, session, csrf,
-		`{"current_password":"wrong-pass-value","new_password":"`+pwNew+`"}`)
+		`{"username":"admin","current_password":"wrong-pass-value","new_password":"`+pwNew+`"}`)
 
 	for _, ev := range capture.events {
 		blob, _ := json.Marshal(ev)

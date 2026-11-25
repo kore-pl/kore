@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -35,9 +36,13 @@ func (s *Server) notePasswordHint(w http.ResponseWriter) {
 }
 
 // changePasswordRequest 是 POST /api/v1/auth/password 的显式请求体（snake_case，
-// 与 web/settings.js 逐字对齐）。两个字段只活在内存里：不写日志、不落审计、
+// 与 web/settings.js 逐字对齐）。三个字段只活在内存里：不写日志、不落审计、
 // 不回显、不拼进错误消息（G-30）。
 type changePasswordRequest struct {
+	// Username 是显式账号标识符（ADR-0057 T6，默认 admin；不是秘密）。
+	// 必填且与会话账号一致才允许改密；单账号下防误投/越权，复用登录侧的
+	// auth.CheckAdminUsername 常量时间比对口径。
+	Username string `json:"username"`
 	// CurrentPassword 是当前明文口令，仅用于 Verify。
 	CurrentPassword string `json:"current_password"`
 	// NewPassword 是新明文口令，校验长度与"不等于旧口令"后即派生哈希。
@@ -72,6 +77,19 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法，请检查后重试", "")
+		return
+	}
+	// 账号校验（ADR-0057 T6）：显式必填，且与会话侧固定单账号一致才允许改密。
+	// 单账号下没有真正的跨账号越权窗口，但显式账号让请求自描述、避免误投；
+	// 复用登录侧 CheckAdminUsername 的常量时间比对口径。账号只做身份识别，
+	// 不查库、不枚举、不写审计 subject（subject 固定 admin）。
+	if strings.TrimSpace(req.Username) == "" {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请输入账号", "")
+		return
+	}
+	if !auth.CheckAdminUsername(req.Username, s.adminUsername) {
+		writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
+			"账号不匹配，无法修改口令", "")
 		return
 	}
 	// 人话校验：先规则、后凭据。新口令太短或与旧口令相同都不是"当前口令错"，
