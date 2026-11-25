@@ -188,6 +188,23 @@ html, body {
 
 .field-input:focus { border-color: var(--kore-info); outline: none; }
 
+.field-help {
+  font-size: var(--kore-font-12);
+  color: var(--kore-text-3);
+  line-height: 1.4;
+}
+
+.kore-captcha-img {
+  width: 150px;
+  height: 50px;
+  align-self: flex-start;
+  border: 1px solid var(--kore-border-1);
+  border-radius: var(--kore-radius-control);
+  background: var(--kore-bg-0);
+}
+
+.kore-captcha-swap { align-self: flex-start; min-height: var(--kore-touch); }
+
 .login-error {
   padding: var(--kore-space-3);
   color: var(--kore-text-1);

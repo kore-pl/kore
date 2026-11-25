@@ -152,6 +152,7 @@ func isRootActionPath(path string) bool {
 // 请求走 /api/v1/*，未登录仍 401——放行只覆盖静态文件本体。
 func isPublicPath(path string) bool {
 	return path == "/-/healthz" || path == "/-/onboarding" || path == "/api/v1/auth/login" ||
+		path == "/api/v1/auth/captcha" || // ADR-0057 T4：登录前可拉取验证码（GET 安全方法，不放宽 CSRF）
 		path == "/" || strings.HasPrefix(path, staticURLPrefix)
 }
 

@@ -40,6 +40,7 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 
 | `server.addr` | string | `""` | 空 = 不监听 HTTP；非空必须是 `host:port`，MVP 只接受 `127.0.0.1:<port>` |
 | `server.socket` | string | `/run/kore/kore.sock` | 主壳 UDS 路径，父目录启动时创建（0700） |
 | `server.tls` | bool | `false` | MVP 固定 off；置 true 启动拒绝并提示走反向代理 |
+| `auth.admin_username` | string | `admin` | ADR-0057：单管理员账号**标识符**（非秘密，不进 state.db）；缺失/空归一 `admin`（老配置无需写盘即可登录），显式值 2–32 位小写字母开头的小写字母/数字/中划线/下划线。**冷字段**：SIGHUP 不热更，改后需重启内核（避免会话/限速主体分叉）。v1 不可经 UI 修改 |
 | `auth.admin_password_hash` | string | `""` | 空 = 首次启动生成 24 字符随机口令、写回哈希并置 `auth.initialized=true`；非空必须是 §3.3 的 PBKDF2 存储串 |
 | `auth.session_ttl` | duration | `168h`（7 天） | 1m–720h；未显式配置时 168h。**滑动续期阈值 = `min(24h, ttl/2)`**（7 天→24h、12h→6h、1h→30m）：仅当剩余寿命低于阈值才把 `expires_at` 推到 `now+ttl` 并重发 cookie（相邻续期至少间隔 `ttl/2`，避免每次鉴权写盘）；**绝对上限 30 天**（`created+30d`，续期不得越过）；改后需重启内核生效（SIGHUP 不热更）；**不做 300s 下限**（下限只是 GUI 滑块的 UX 护栏，手写 YAML 不需要；短 TTL 不降低安全性，只会让配置者更频繁重登——裁决见 `.agents/LOG/DECISIONS.md`） |
 | `auth.cookie_secure` | string | `auto` | `auto` \| `true` \| `false`；`auto` 逐请求判定：`r.TLS != nil` **或** 本机对端（UDS/loopback）透传 `X-Forwarded-Proto: https` 时加 `Secure`，纯 HTTP 不加（加了会登不上）。`true` 恒加（纯 HTTP 登不上，启动 INFO）；`false` 恒不加（HTTPS 下也不加，启动 WARN） |

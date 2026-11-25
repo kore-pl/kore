@@ -100,13 +100,15 @@
       // 不塞进任何业务 JSON 体，免得每个 handler 都改一遍），消费方只读这一个键。
       var hint = res.headers && typeof res.headers.get === 'function'
         ? res.headers.get('X-Kore-Password-Hint') : null;
+      var retryAfter = res.headers && typeof res.headers.get === 'function'
+        ? res.headers.get('Retry-After') : null;
       return res.text().then(function (raw) {
         if (timer !== null) clearTimeout(timer);
         var data = {};
         if (raw) {
           try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; }
         }
-        return { ok: res.ok, status: res.status, data: data, passwordHint: hint === '1' };
+        return { ok: res.ok, status: res.status, data: data, passwordHint: hint === '1', retryAfter: retryAfter };
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -559,10 +561,25 @@
     card.setAttribute('novalidate', 'novalidate');
 
     card.appendChild(el('div', 'login-brand', 'Kore'));
-    card.appendChild(el('div', 'login-sub', '控制台 · 单管理员登录'));
+    card.appendChild(el('div', 'login-sub', '控制台 · 账号登录'));
+
+    var userLabel = el('label', 'field');
+    userLabel.appendChild(el('span', 'field-label', '账号'));
+    var username = document.createElement('input');
+    username.type = 'text';
+    username.id = 'kore-username';
+    username.name = 'username';
+    username.className = 'field-input';
+    username.autocomplete = 'username';
+    username.value = 'admin';
+    username.required = true;
+    username.setAttribute('placeholder', '请输入账号');
+    userLabel.appendChild(username);
+    userLabel.appendChild(el('span', 'field-help', '已自动检测：默认账号 admin，一般不用改'));
+    card.appendChild(userLabel);
 
     var label = el('label', 'field');
-    label.appendChild(el('span', 'field-label', '管理员口令'));
+    label.appendChild(el('span', 'field-label', '口令'));
     var input = document.createElement('input');
     input.type = 'password';
     input.id = 'kore-password';
@@ -589,6 +606,35 @@
     otpLabel.appendChild(otp);
     card.appendChild(otpLabel);
 
+    // 图形验证码：第一次口令错误后由服务端要求，默认隐藏；点「换一张」重新拉取。
+    var captchaLabel = el('label', 'field');
+    captchaLabel.id = 'kore-captcha-field';
+    captchaLabel.hidden = true;
+    captchaLabel.appendChild(el('span', 'field-label', '验证码'));
+    var captchaImg = el('img', 'kore-captcha-img');
+    captchaImg.id = 'kore-captcha-image';
+    captchaImg.alt = '验证码图片';
+    captchaImg.style.cursor = 'pointer';
+    captchaImg.style.height = '44px';
+    captchaImg.style.maxWidth = '100%';
+    captchaImg.style.borderRadius = '4px';
+    captchaLabel.appendChild(captchaImg);
+    var captchaSwap = el('button', 'btn btn-ghost kore-captcha-swap', '换一张');
+    captchaSwap.type = 'button';
+    captchaSwap.id = 'kore-captcha-refresh';
+    captchaLabel.appendChild(captchaSwap);
+    var captcha = document.createElement('input');
+    captcha.type = 'text';
+    captcha.id = 'kore-captcha-answer';
+    captcha.maxLength = 10;
+    captcha.name = 'captcha_answer';
+    captcha.className = 'field-input';
+    captcha.autocomplete = 'off';
+    captcha.setAttribute('placeholder', '请输入图片里的字符');
+    captchaLabel.appendChild(captcha);
+    captchaLabel.appendChild(el('span', 'field-help', '看不清可点「换一张」；终端可用图片标题里的加法题'));
+    card.appendChild(captchaLabel);
+
     var submit = el('button', 'btn btn-primary btn-block', '登录');
     submit.type = 'submit';
     card.appendChild(submit);
@@ -598,11 +644,29 @@
     errBox.setAttribute('role', 'alert');
     if (!message) errBox.hidden = true;
     card.appendChild(errBox);
-    card.appendChild(el('div', 'login-note', '登录失败 5 次/60 秒后锁定 5 分钟；口令仅在本机校验。'));
+    card.appendChild(el('div', 'login-note', '口令连续输错后需要输入验证码并逐步等待；口令仅在本机校验。'));
+
+    var captchaState = { id: '', question: '' };
+    function loadCaptcha() {
+      request('/api/v1/auth/captcha', { method: 'GET' }, LOGIN_TIMEOUT_MS).then(function (res) {
+        if (!res.ok || !res.data) return;
+        captchaState.id = res.data.captcha_id || '';
+        captchaState.question = res.data.text_question || '';
+        if (res.data.image) captchaImg.src = res.data.image;
+        if (captchaState.question) captchaImg.title = '也可以计算：' + captchaState.question;
+      }, function () { /* 拉取失败保留旧图，用户可重试 */ });
+    }
+    function showCaptcha() {
+      captchaLabel.hidden = false;
+      captcha.value = '';
+      loadCaptcha();
+    }
+    captchaSwap.addEventListener('click', loadCaptcha);
+    captchaImg.addEventListener('click', loadCaptcha);
 
     card.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      submitLogin(input, submit, errBox, otpLabel, otp);
+      submitLogin(username, input, submit, errBox, otpLabel, otp, captchaLabel, captcha, captchaState, showCaptcha);
     });
 
     wrap.appendChild(card);
@@ -611,8 +675,14 @@
     input.focus();
   }
 
-  function submitLogin(input, submit, errBox, otpLabel, otp) {
+  function submitLogin(username, input, submit, errBox, otpLabel, otp, captchaLabel, captcha, captchaState, showCaptcha) {
+    var account = username ? (username.value || '').trim() : '';
     var password = input.value || '';
+    if (!account) {
+      showLoginError(errBox, '请输入账号');
+      if (username) username.focus();
+      return;
+    }
     if (!password) {
       showLoginError(errBox, '请输入口令');
       input.focus();
@@ -624,7 +694,13 @@
     request(ENDPOINTS.login, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: password, otp: otp && otpLabel && !otpLabel.hidden ? (otp.value || '') : '' })
+      body: JSON.stringify({
+        username: account,
+        password: password,
+        otp: otp && otpLabel && !otpLabel.hidden ? (otp.value || '') : '',
+        captcha_id: captchaLabel && !captchaLabel.hidden ? (captchaState.id || '') : '',
+        captcha_answer: captchaLabel && !captchaLabel.hidden ? (captcha.value || '') : ''
+      })
     }, LOGIN_TIMEOUT_MS).then(function (res) {
       if (res.ok) {
         // 登录成功：服务端已下发 kore_session(HttpOnly) + kore_csrf，回到探测流程重渲染面板。
@@ -632,26 +708,33 @@
         return;
       }
       var code = (res.data && res.data.code) || '';
+      var msg = (res.data && res.data.message) || '';
+      var retryAfter = parseInt(res.retryAfter || '0', 10);
       if (code === 'E_2FA_REQUIRED' && otpLabel && otp) {
         // 口令正确，只差二次验证：展开输入框，保留口令不清空，等用户输入后重提。
         otpLabel.hidden = false;
-        showLoginError(errBox, res.data && res.data.message ? res.data.message : '请输入 6 位验证码');
+        showLoginError(errBox, msg || '请输入 6 位验证码');
         submit.disabled = false;
         submit.textContent = '登录';
         otp.focus();
         return;
       }
+      // 需要验证码（首次口令错 / 428 / 401 提示验证码）：展开并自动换一张。
+      var needCaptcha = code === 'E_CAPTCHA_REQUIRED' || code === 'E_CAPTCHA_INVALID' ||
+        (res.status === 401 && /验证码/.test(msg));
+      if (needCaptcha && showCaptcha) showCaptcha();
       input.value = '';
       if (otp) otp.value = '';
       if (otpLabel) otpLabel.hidden = true;
       if (code === 'E_2FA_INVALID') showLoginError(errBox, '验证码或恢复码不正确，请重新输入');
       else if (code === 'E_IP_DENIED') showLoginError(errBox, '当前网络地址不在允许登录的范围内，请联系管理员');
-      else if (res.status === 401) showLoginError(errBox, '口令错误，请重试');
-      else if (res.status === 429) showLoginError(errBox, '尝试过于频繁，已被临时锁定，请稍后再试');
+      else if (res.status === 401 && msg === '账号或口令错误') showLoginError(errBox, '账号或口令不正确，请检查后再试');
+      else if (needCaptcha) showLoginError(errBox, msg || '密码错误，请输入右侧验证码');
+      else if (res.status === 429) showLoginError(errBox, retryAfter > 0 ? ('尝试太频繁，请 ' + retryAfter + ' 秒后再试') : '尝试太频繁，请稍后再试');
       else showLoginError(errBox, '登录失败：' + describeError(res));
       submit.disabled = false;
       submit.textContent = '登录';
-      input.focus();
+      if (needCaptcha && captcha) captcha.focus(); else input.focus();
     }, function (err) {
       showLoginError(errBox, '后端未连接：' + errText(err));
       submit.disabled = false;
