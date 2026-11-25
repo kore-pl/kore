@@ -904,7 +904,7 @@ ADR-0041 为 `superseded-in-part`（`9b5d4dc`）；`web/.cache/` 已进 `.gitign
 
 - `make docs-check` exit 0（元信息 / 链接 / 占位词 / 行数 / 关键口径全绿或既有 WARN 不阻断）；`make secret-check` exit 0（0 FAIL / 23 处合规占位）；`bash scripts/log-check.sh` exit 0（8 pass / 0 warn）。
 - commit 精确 pathspec + `[agent:account-docs]` 前缀，**不 push、不触发 CI**；临时文件即建即删。
-- 实现侧证据（非本卡复跑）：T1 `b1f7e59` / T2 `ee724d5` / T3 `b5480a6`+报告 `445e2e0`+复核 `4805511` / T4 `7af792f` / must_change `b6e091b`+`5697b3c`；T5（account-ui）/ T6（account-password）的 commit 以各自报告与 DISPATCH 行为准。
+- 实现侧证据（非本卡复跑）：T1 `b1f7e59` / T2 `ee724d5` / T3 `b5480a6`+报告 `445e2e0`+复核 `4805511` / T4 `7af792f` / must_change `b6e091b`+`5697b3c`；T5 `9aa08cb`（account-ui）/ T6 `82c69bd`（account-password）已 commit，报告与 DISPATCH commit 列已回填。
 
 ### 残留边界（延续 T5，本轮未执行）
 

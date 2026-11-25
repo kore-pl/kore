@@ -60,7 +60,7 @@
 | --- | --- |
 | T1 `b1f7e59` / T2 `ee724d5` / T3 `b5480a6` | [account-t123.md](account-t123.md) §5：`go test -count=1 -timeout 200s ./internal/core/config/... ./internal/core/auth/...` exit 0；`go test ./cmd/kored/...` exit 0；`go vet ./...` exit 0；`go test ./...` 17 包全 ok；`node --check web/app.js` exit 0；`secret-check` / `docs-check` exit 0。隔离实例 18887：新装 admin+正确口令 200 / 错账号 401 / 错口令 401；18888：老单行凭据升级后两行 0600 且原口令 200。§10 接手复核独立复跑门禁与隔离实例 18899/18898 均通过 |
 | T4 `7af792f` | [account-t4-bruteforce.md](account-t4-bruteforce.md) §2：`go vet` auth/httpapi/cmd 三包 exit 0；`go test` auth/httpapi exit 0（auth ok 1.175s / httpapi ok 4.725s）；`config` exit 0；`node --check web/app.js` exit 0；`secret-check` / `docs-check` exit 0。§3 隔离实例 8899：首次错口令 401 → captcha 200（字段 `captcha_id/image/text_question/expires_in`）→ 缺 428 → 正确 200 → 再错 429 + `Retry-After: 2` |
-| T5 / T6 | 报告 `.agents/verify/account-t5-ui.md` / `account-t6-password.md` 由 account-ui / account-password 各自收口；**截至本报告落盘尚未提交**，DISPATCH 行已按 owner / 写域登记、commit 留待各自报告回填，本卡不预写 sha |
+| T5 `9aa08cb` / T6 `82c69bd` | [account-t5-ui.md](account-t5-ui.md)：`node --check web/app.js` exit 0；`make frontend` exit 0（首屏 87258 B ≤ 300 KiB）；`secret-check` / `docs-check` exit 0；隔离实例真浏览器 5 状态实测，5 张双端截图。[account-t6-password.md](account-t6-password.md)：`go vet ./...` exit 0；`go test ./...` 16 包 ok；`node --check` web/settings.js 与 dist 双 exit 0；`diff -q` 逐字一致；`secret-check` exit 0；隔离实例 400/403/200/旧会话 401/新口令 200/凭据删除 cred_after=no。**两笔 commit 已在 T7 后落盘，DISPATCH / ADR §6.1 / HANDOFF 的 commit 列已由 scribe 回填** |
 | G-28 双端 | [account-t123.md](account-t123.md) §6：`login-account-desktop-01.png`（PNG 1440×900）/ `login-account-mobile-01.png`（390×844），不同 viewport 非同图缩放；三问自评「可用」 |
 
 ## 5. G-11 六项不做 + 附加门禁自检
@@ -82,11 +82,11 @@
 
 1. **未复跑 Go 编译 / 测试 / gate**：本卡写域只有文档，未执行任何 Go 命令；第 4 节实现侧命令原文来自各实现报告，不冒充独立复跑（G-09 implementer ≠ verifier）。
 2. **端点计数跨文件漂移（已按 lead 扩域批准同轮收口）**：`docs/CORE.md` §12 按实现把业务 / store 端点数改为 **71**（新增 `GET /api/v1/auth/captcha`）；发现根 `AGENTS.md` §6 与 `README.md` 文档表仍写 **70** 后上报 lead，获**扩域批准**（G-06 硬门禁，属 T7 分内事），已同步两文件为 **71（64 业务 + 7 store）**并纳入本卡精确 pathspec commit；只改端点计数口径与必要引用文字，未动其它段落与门禁判据。`make docs-check` 不检查该数字，门禁 exit 0，但 G-06 口径要求同检查点同步——已满足。
-3. **T5 / T6 commit 未产生**：本报告落盘时 account-ui / account-password 仍在验证，DISPATCH 对应行以「见各自报告」占位；两人承诺不碰本文档卡写域，无覆盖风险。
+3. **T5 / T6 commit 回填（已收口）**：本报告首版落盘时 T5/T6 仍在验证，DISPATCH 以「见各自报告」占位；随后 T5 `9aa08cb`、T6 `82c69bd` 落盘，scribe 以追加小提交回填 DISPATCH / ADR §6.1 / HANDOFF / 本报告的 commit 列，未改任何实现代码或他人报告。
 4. 真实 systemd 下验证码 challenge 跨进程重启行为（按内存态设计、G-29 未碰主实例）；Gitea Actions 服务端启用 / act_runner 注册——同为 ADR-0056 残留 human gate，本卡不验证、不执行。
 
 ## 7. 纪律声明与一句话结论
 
 本卡全程只写文档 / 台账与本报告；commit 用精确 pathspec + `[agent:account-docs]` 前缀，**未 push、未触发 CI、未改代码或运行态、未读取或打印任何真实凭据**；一次性临时文件已删；既有文档 append-only，历史正文零删除。
 
-**ADR-0057 已 accepted 正式落盘，六份下游文档 + AGENTS.md / README.md 端点计数 70→71 同步 + G-23 台账 + HANDOFF 快照同轮收口，docs-check / secret-check / log-check 三条门禁均 exit 0；残留仅为 T5/T6 各自报告的 commit 回填与两项服务端前置未验证项。**
+**ADR-0057 已 accepted 正式落盘，六份下游文档 + AGENTS.md / README.md 端点计数 70→71 同步 + G-23 台账 + HANDOFF 快照同轮收口，docs-check / secret-check / log-check 三条门禁均 exit 0；T5/T6 commit 已回填，残留仅为两项服务端前置未验证项。**

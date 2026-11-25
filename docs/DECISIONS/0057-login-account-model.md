@@ -124,8 +124,8 @@
 | T3 登录账号 + UI | `auth.CheckAdminUsername` 常量时间比较；登录体 `{username,password,otp,captcha_id,captcha_answer}`；账号错 401 统一文案、不动限速桶；账号框预填 + 白话文案 + 验证码 UI 接线 | `b5480a6` [agent:account-core]；验收报告与 PC / 手机双端截图 `445e2e0`；接手独立复核附录 `4805511` |
 | T4 失败防护 | `auth/captcha.go` 本地 PNG + 文本替代 + 内存 challenge；`handlers_captcha.go` 公开端点；428 / 401 / 429 + `Retry-After`；1s→30s；captcha 审计；`Attempts=1` | `7af792f` [agent:brute-force]，[T4 报告](../../.agents/verify/account-t4-bruteforce.md) |
 | must_change 降级 | 403 闸门取消，改 `X-Kore-Password-Hint: 1` 非阻断提示；`X-Kore-CSRF` 双提交与会话保留；启动时从配置初始化标志 | `b6e091b` [agent:resume-must-change]、`5697b3c` [agent:must-change-tail]，[复核报告](../../.agents/verify/must-change-deadlock.md) |
-| T5 UI 文案 / 双端 | 标签统一「账号 / 密码 / 验证码」，账号标「已自动检测」，验证码触发 / 延时白话文案，390px 不挤压、触控 ≥44px | 见 [.agents/LOG/DISPATCH.md](../../.agents/LOG/DISPATCH.md) T5 行（commit 与截图落点按实现报告登记） |
-| T6 改密带账号 | 请求体显式 `{username,current_password,new_password}`；缺账号 400 / 错账号 403；会话 + CSRF 保留；成功后清标志 / 吊销 / 删凭据 / 审计只记元数据 | 见 [.agents/LOG/DISPATCH.md](../../.agents/LOG/DISPATCH.md) T6 行（commit 按实现报告登记） |
+| T5 UI 文案 / 双端 | 标签统一「账号 / 密码 / 验证码」，账号标「已自动检测」，验证码触发 / 延时白话文案，390px 不挤压、触控 ≥44px | `9aa08cb` [agent:account-ui]，[T5 报告](../../.agents/verify/account-t5-ui.md)（5 张双端截图 + make frontend 首屏 87258 B） |
+| T6 改密带账号 | 请求体显式 `{username,current_password,new_password}`；缺账号 400 / 错账号 403；会话 + CSRF 保留；成功后清标志 / 吊销 / 删凭据 / 审计只记元数据 | `82c69bd` [agent:account-password]，[T6 报告](../../.agents/verify/account-t6-password.md)（凭据消费钩子按 state_dir 落点） |
 | T7 文档收口 | 本 ADR 正式落盘 + append-only 修订 + G-23 台账 + HANDOFF 快照 + 三门禁 | [验收报告](../../.agents/verify/account-t7-docs.md)；本批 commit（未 push） |
 
 ### 6.2 草案 → 实现的事实差异（以实现为准）
