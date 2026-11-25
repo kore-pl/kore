@@ -12,8 +12,13 @@
   var API = '/api/v1/invoke/file/';
   var MAX_READ = 1048576;
   var MAX_INLINE = 5 * 1024 * 1024;
+  // 目录列表分批渲染：一次最多 200 行，其余按需「加载更多」。
+  // 后端 file.list 一次返回整目录（无 limit 参数），上万条目的目录若整表渲染，
+  // 每行还带复选框 + 手机端 8 项操作菜单，主线程会被卡住（实测 2000 行 ≈ 1.2 万 DOM 节点）。
+  var LIST_PAGE = 200;
   var S = {
     path: '', entries: [], selected: null, checked: {}, l2: null, l2Ready: null,
+    listShown: LIST_PAGE, moreBtn: null,
     // view: files（目录列表）/ search（搜索结果）/ trash（回收站）
     view: 'files',
     search: { mode: 'name', query: '', result: null, active: false },
@@ -361,7 +366,8 @@
     });
     [tr('files.col.name', '名称'), tr('files.col.size', '大小'), tr('files.col.modified', '修改时间'), tr('files.col.mode', '权限'), tr('files.col.actions', '操作')].forEach(function (label) { add(htr, el('th', null, label)); });
     var body = add(table, el('tbody'));
-    S.entries.forEach(function (entry) {
+    var shown = Math.min(S.listShown || LIST_PAGE, S.entries.length);
+    S.entries.slice(0, shown).forEach(function (entry) {
       var row = add(body, el('tr', 'files-row'));
       row.setAttribute('data-entry-path', entry.path);
       row.tabIndex = 0;
@@ -437,6 +443,22 @@
         });
       }
     });
+    S.moreBtn = null;
+    if (shown < S.entries.length) {
+      // 「加载更多」按整批追加，不重置已缓存的选择；焦点在按钮上时重绘后回填，
+      // 否则键盘用户点一次就掉到 body（列表重绘会销毁旧按钮节点）。
+      var more = add(host, el('div', 'files-list-more'));
+      more.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:var(--kore-space-3,12px);padding:var(--kore-space-3,12px) 0;flex-wrap:wrap;';
+      add(more, el('span', 'panel-meta', tr('files.list.shown', '已显示 {shown} / 共 {total} 项', { shown: shown, total: S.entries.length })));
+      var moreBtn = add(more, el('button', 'btn', tr('files.list.loadMore', '加载更多（剩余 {n} 项）', { n: S.entries.length - shown })));
+      moreBtn.type = 'button';
+      S.moreBtn = moreBtn;
+      on(moreBtn, function () {
+        S.listShown = shown + LIST_PAGE;
+        paintList();
+        if (S.moreBtn) S.moreBtn.focus();
+      });
+    }
     updateSelection();
   }
   // b64ToBytes / bytesToB64 / sha256Hex 是编辑器的最小工具：
@@ -568,6 +590,7 @@
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         return String(a.name).localeCompare(String(b.name), 'zh-CN');
       });
+      S.listShown = LIST_PAGE; // 换目录回到首批，避免上一目录的「已显示」数带过来
       pruneChecked();
       if (S.pendingSelect) {
         S.selected = S.entries.filter(function (e) { return e.path === S.pendingSelect; })[0] || null;
@@ -1089,6 +1112,7 @@
   function render(container) {
     if (!container) return null;
     S.path = ''; S.entries = []; S.selected = null; S.checked = {}; S.renaming = null;
+    S.listShown = LIST_PAGE; S.moreBtn = null;
     S.view = 'files';
     S.search = { mode: S.search && S.search.mode === 'content' ? 'content' : 'name', query: '', result: null, active: false };
     S.trash = { total: 0, entries: [], checked: {}, loading: false };
@@ -1097,5 +1121,15 @@
     build(root); setSearchMode(S.search.mode);
     refresh().then(loadTrashCount);
   }
+  /* G-32 同款验收钩子（列表渲染，非图表）：count() = 已渲染行数，total() = 后端返回总数，
+     page = 单批行数上限。冒烟脚本据此断言「大目录不整表渲染」。 */
+  window.__koreFilesList = {
+    count: function () {
+      var host = S.listHost;
+      return host ? host.querySelectorAll('tr.files-row').length : 0;
+    },
+    total: function () { return S.entries.length; },
+    page: LIST_PAGE
+  };
   window.KoreFiles = { render: render };
 })();

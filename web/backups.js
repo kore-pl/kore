@@ -10,6 +10,9 @@
   'use strict';
   var API = '/api/v1/invoke/backup/';
   var SCHED = '/api/v1/scheduler/tasks';
+  // backup.list 一次返回全部备份（无 limit），保留策略外的历史包会累积；
+  // 列表分批渲染（默认 50 行 + 加载更多），避免上百份备份各带 4 个行内按钮整表铺开。
+  var LIST_PAGE = 50;
   var CRON_PRESETS = [
     { id: 'daily3', label: '每天 3 点', cron: '0 3 * * *' },
     { id: 'sixh', label: '每 6 小时', cron: '0 */6 * * *' },
@@ -34,6 +37,7 @@
       jobs: [], jobsHost: null, jobsMsg: null,
       progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       stats: null, summaryHost: null, listHost: null, count: null,
+      listShown: LIST_PAGE, moreBtn: null,
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
       retPresets: [], retPresetSelected: '',
       verify: { supported: null, version: '' },
@@ -893,7 +897,8 @@
       add(htr, el('th', null, label));
     });
     var body = add(table, el('tbody'));
-    S.backups.forEach(function (b) {
+    var shown = Math.min(S.listShown || LIST_PAGE, S.backups.length);
+    S.backups.slice(0, shown).forEach(function (b) {
       var tr = add(body, el('tr'));
       var name = add(tr, el('td', 'bak-name-cell')); name.dataset.label = '名称';
       add(name, el('span', 'bak-name', b.name || '—'));
@@ -917,6 +922,19 @@
       button(ops, '恢复', 'btn-ghost', function () { openConfirm('restore', b); });
       button(ops, '删除', 'btn-ghost bak-danger', function () { openConfirm('delete', b); });
     });
+    S.moreBtn = null;
+    if (shown < S.backups.length) {
+      var moreBar = add(S.listHost, el('div', 'bak-list-more'));
+      add(moreBar, el('span', 'panel-meta', '已显示 ' + shown + ' / 共 ' + S.backups.length + ' 个'));
+      var moreBtn = add(moreBar, el('button', 'btn', '加载更多（剩余 ' + (S.backups.length - shown) + ' 个）'));
+      moreBtn.type = 'button';
+      S.moreBtn = moreBtn;
+      on(moreBtn, function () {
+        S.listShown = shown + LIST_PAGE;
+        paintList();
+        if (S.moreBtn) S.moreBtn.focus();
+      });
+    }
   }
   function resultTitle(kind) {
     return { create: '创建结果', verify: '校验结果', restore: '恢复结果', delete: '删除结果' }[kind] || '操作结果';
@@ -1108,7 +1126,7 @@
     if (!quiet) setStatus('正在读取备份列表…');
     invoke('backup.list', {}).then(function (data) {
       if (S.destroyed) return;
-      S.backups = data.backups || []; paintList();
+      S.backups = data.backups || []; S.listShown = LIST_PAGE; paintList();
       if (!quiet) setStatus('共 ' + S.backups.length + ' 个备份', 'ok');
     }, function (err) {
       if (S.destroyed) return;
@@ -1180,6 +1198,9 @@
       '.bak-task-table tbody tr + tr{border-top:1px solid var(--kore-border-2);}',
       '.bak-task-table td{padding:var(--kore-space-2) var(--kore-space-3);vertical-align:middle;}',
       '.bak-list-summary{margin:0;padding:var(--kore-space-2) var(--kore-space-4);color:var(--kore-text-2);font-size:var(--kore-font-12);border-bottom:1px solid var(--kore-border-2);}',
+      // 备份列表分批渲染的底部条（随视图注入，不进首屏 style.css）
+      '.bak-list-more{display:flex;align-items:center;justify-content:center;gap:var(--kore-space-3);padding:var(--kore-space-3);flex-wrap:wrap;border-top:1px solid var(--kore-border-2);}',
+      '.bak-list-more .panel-meta{color:var(--kore-text-2);font-size:var(--kore-font-12);}',
       '.bak-ret-ops{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);align-items:end;}',
       '.bak-ret-result{padding:0 var(--kore-space-4) var(--kore-space-3);font-size:var(--kore-font-12);}',
       '.bak-ret-head{margin:0 0 var(--kore-space-2);font-weight:600;color:var(--kore-text-1);}',
@@ -1365,5 +1386,13 @@
     loadList(false); loadStats(); loadTasks(true); loadJobs(true);
     return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
+  /* 验收钩子（同 files.js 的 __koreFilesList）：count() = 已渲染行数，total() = 后端返回总数。 */
+  window.__koreBackupList = {
+    count: function () {
+      return S.listHost ? S.listHost.querySelectorAll('.bak-table tbody tr').length : 0;
+    },
+    total: function () { return S.backups.length; },
+    page: LIST_PAGE
+  };
   window.KoreBackup = { render: render };
 })();
