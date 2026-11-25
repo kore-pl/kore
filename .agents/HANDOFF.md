@@ -859,3 +859,30 @@ ADR-0041 为 `superseded-in-part`（`9b5d4dc`）；`web/.cache/` 已进 `.gitign
 
 本规范不新增 G 编号门禁：它约束的是"记录与交接"的写法，执行判据仍以上表引用的
 [QUALITY-GATES.md](QUALITY-GATES.md) 与根 [AGENTS.md](../AGENTS.md) 为准。
+
+---
+
+## T5 收口快照（2026-11-25，docs-final-sync）
+
+> 只记结论与残留授权边界；逐条证据见 `.agents/verify/` 与 `.agents/LOG/`。本轮只写文档 / 台账，未碰代码、未改运行态、未 push、未触发 CI。
+
+### 三张实现卡（全部 commit、未 push）
+
+| 卡 | commit | 结果 |
+| --- | --- | --- |
+| CI 触发翻转 | `d7d6507` `[agent:ci-trigger-flip]` | 26 仓 GitHub `.github/workflows/ci.yml` `on:` 只含 `workflow_dispatch`（push main/tag、PR 全删）；Gitea `.gitea/workflows/ci.yml` 按 tag `v*`（kore 另含 `pkg/pluginapi/v*`）+ 手动；模板 / 门禁 / 文档同步。**Gitea Actions 服务端启用 / act_runner 注册未验证**（配置就绪 ≠ 端到端可用） |
+| ADR-0055 凭据交付 | `99754fd` `[agent:credential-fix]` | 统一入口 `ensureInitialAdminCredential`；0600 一次性凭据文件 + TTY 明文 / 非 TTY 只给路径；`must_change_password` 闸门 + 首登改密闭环；SIGHUP 同步哈希与标志免重启。go test 4 包全 ok / secret-check 0 FAIL |
+| ADR-0056 自重启 | `93fd441` `[agent:restart-fix]` | `SelfRestart(reason,actor,unit)` + `POST /api/v1/system/restart` + CLI `kored restart` + reason-bound confirm + fail-closed 审计；冷字段 `restart_required`；post_upgrade 补跑。go test 17 包全 ok / go vet exit 0 / secret-check 0 FAIL |
+
+### T5 本卡交付
+
+- 正式 ADR：[0055](../docs/DECISIONS/0055-initial-admin-credential.md) / [0056](../docs/DECISIONS/0056-self-restart.md)（accepted，2026-11-25，草案全文 + 实现复核注记，草案与实现差异以实现报告为准）；ADR-0043 §6 append-only 修订；ADR-0024 §7 CI 口径核对**不重复**。
+- 下游同步：QUICKSTART §2.1（读凭据文件 + 首登改密）、RUNBOOK-INSTALL §7（SIGHUP 免重启）、USABILITY §8.1（白话提示）、CORE §2.3/§2.4（restart 端点 + must_change；端点计数 67→70 同步到 AGENTS.md / README.md）。RUNBOOK 无 CI 触发描述，核对后无需追加。
+- G-23：DECISIONS.md 三笔裁决（CI 翻转含 4 被否选项 / ADR-0055 含 A/B/D/E 否决 / ADR-0056 含 A/B/E/F 否决）；DISPATCH.md T1–T5 派发记录。
+- 门禁：`make docs-check` / `make secret-check` 均 exit 0（0 FAIL）；commit 精确 pathspec + `[agent:docs-final-sync]`，未 push、未触发 CI。
+
+### 残留 human gate（需用户当次明确授权，本轮一律未执行）
+
+1. **安装 / 修改系统级 root 服务**：`/etc/systemd/system/kore.service` + enable（ADR-0023 §3.5 豁免 #1、G-31），把当前 uid=1000 降级形态迁到 `User=root` 目标形态——一次性不可逆系统变更。
+2. **开启远端同步**：`remote_sync.enabled` 默认关闭；即使 Gitea（权威源，可按版本触发 CI）也须当次授权；**GitHub 任何情况下只能 workflow_dispatch 主动触发**，绝不自动 push / tag。
+3. 未验证项：Gitea Actions 服务端启用 / act_runner；真实 systemd 下 marker pending→success 与信号注入（按 G-29 未碰主实例）。

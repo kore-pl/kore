@@ -311,6 +311,8 @@ disable kore → rm /etc/systemd/system/kore.service → daemon-reload
 
 kore 是单管理员模型，没有"找回"流程：口令哈希在配置文件的 `auth.admin_password_hash`，重置 = 生成新哈希并重启。
 
+> **2026-11-25 更新（[ADR-0055](DECISIONS/0055-initial-admin-credential.md)，commit `99754fd`；[ADR-0056](DECISIONS/0056-self-restart.md)，commit `93fd441`）**：重置**不再必须重启**——`admin-password --generate/--set` 写回哈希与 `auth.must_change_password=true` 后，向运行中的 kored 发 `SIGHUP` 即可让新哈希在内存 `auth.Manager` 生效并吊销旧会话（仅在真变化时踢会话），**SIGHUP 同步免重启**。重启仍是兜底，并可用 ADR-0056 的自服务入口 `kored restart --reason "..."` 或 `POST /api/v1/system/restart`（需 system:admin + reason-bound confirm）提交。下方 §7.1 的 `sudo systemctl restart kore` 是**保守路径（可停服务时）**，与新口径不冲突；**不可停服务时走 SIGHUP 路径**。初始安装期凭据见 [QUICKSTART](../QUICKSTART.md) §2.1：`kored install --package` 生成 0600 一次性凭据文件 `<install>/data/initial-admin-credential`，非 TTY 只打印路径不打明文，首登改密后文件删除。
+
 ### 7.1 正常路径（服务可停、有 shell）
 
 ```bash
@@ -321,15 +323,17 @@ kore 是单管理员模型，没有"找回"流程：口令哈希在配置文件�
 #    非交互（Ansible / 容器 entrypoint），从管道读：
 # printf '%s' "$KORE_ADMIN_PW" | /opt/kore/bin/kored admin-password --set --stdin
 
-# 2) 重启内核（admin_password_hash 虽是热更字段，但重启最省事、也清掉旧会话）
-sudo systemctl restart kore
+# 2) 让新哈希生效（ADR-0055：SIGHUP 同步，免重启；仅真变化时吊销旧会话）
+kill -HUP $(pidof kored)          # 或 systemctl reload kore（若 unit 已配 ExecReload）
+#    兜底（可停服务时）：sudo systemctl restart kore
+#    自服务兜底（ADR-0056）：kored restart --reason "reset admin password" --yes
 
 # 3) 验证：新口令能换到会话（200 + 两个 cookie），旧口令 401
 curl -s -o /dev/null -w 'new=%{http_code}\n' -X POST http://127.0.0.1:8787/api/v1/auth/login \
   -H 'Content-Type: application/json' -d '{"password":"<新口令>"}'
 ```
 
-判据：`new=200`；用旧口令复跑同一请求应为 `401`。改完不要忘记：`admin_password_hash` 变化**不会吊销已签发的会话**（配置热更日志会写明），需要立刻踢掉旧会话就重启。
+判据：`new=200`；用旧口令复跑同一请求应为 `401`。**ADR-0055 后**：`SIGHUP` 会把新哈希与 `must_change_password` 同步到内存 `auth.Manager`，字段真变化时自动 `RevokeAll`——旧口令 401、旧会话失效**无需重启**；普通热更不误踢全员。若只改了配置未发信号，旧哈希仍在进程内存中生效。
 
 ### 7.2 配置文件路径怎么找
 

@@ -26,7 +26,10 @@ kore 是**单管理员、Web 面板管理**的产品（[AGENTS.md](AGENTS.md) G-
 
 > 登录一次后，日常使用与 root 特权操作都**不再要求任何密码**（root 动作由以 root 运行的内核完成，见 ADR-0042）；但「不登录就能操作管理 API」已被移除（ADR-0043）——本机 UDS / loopback 与远程同口径，没有会话一律 401。
 
-### 2.1 首次凭据：首启自动生成，只在终端显示一次
+### 2.1 首次凭据：安装期统一交付，读凭据文件 + 首登改密
+
+> **2026-11-25 更新（[ADR-0055](docs/DECISIONS/0055-initial-admin-credential.md)，commit `99754fd`）**：凭据交付已从「serve 首启 TTY 打印一次」升级为**安装期统一入口 `ensureInitialAdminCredential`**：`kored install --package` 与 serve bootstrap 共用同一函数，安装完成时即生成一次性凭据文件 `<install>/data/initial-admin-credential`（0600，已 gitignore）。TTY 下在终端打印明文口令 **+ 文件路径**；**非 TTY（systemd / journald / 重定向 / CI）只打印文件路径，绝不打印明文**——请在自己的终端读该文件。首次登录必须改密，改密成功后凭据文件被删除、旧会话吊销。下方 2026-11-23 的「首启 TTY 打印 / 非 TTY 只给 CLI 指引」为 serve bootstrap 兜底形态的历史描述，**与新口径冲突时以本段为准**。
+
 
 全新实例（`auth.admin_password_hash` 为空）**第一次启动**时，kored 自动生成 24 字符随机口令，把 PBKDF2 哈希原子写进**它自己解析的那个配置文件**（权限 0600），并把初始口令**只在当前终端打印一次**——本次启动就能登录，不需要预先生成口令，也**不要求输入任何系统账号密码**：
 
@@ -46,12 +49,10 @@ kore 是**单管理员、Web 面板管理**的产品（[AGENTS.md](AGENTS.md) G-
 
 - 与宝塔 / 1Panel 的安装期凭据模型一致：**安装/首启生成随机凭据 + 终端只输出一次**。区别是 kore **单管理员、无用户名**（登录体只有口令），且明文**不落盘**——配置 / state / 日志里只有哈希。
 - **只出现一次**：哈希写回后，重启或再次启动都不会再打印；没有任何"再查一次"的入口，忘记只能走 §2.2 / `admin-password --set` 的 CLI 重置。
-- **非交互启动（systemd / 重定向）**：输出会被 journald 长期留存，kored **不会**把明文打进去，首启只给一行可照做的指引。请在自己的终端执行一次（同样只显示一次）：
-  ```bash
-  ./bin/kored admin-password --generate --config ./kore-quickstart.yaml   # 哈希写入后重启 kored
-  ```
+- **非 TTY 安装 / 启动（systemd / journald / 重定向 / CI）**：kored **不会**把明文打进 journald 或 CI 日志，只打印「初始凭据已生成，请在自己的终端读取：`<install>/data/initial-admin-credential`（0600）」。在自己的终端执行 `cat` 读取后登录面板并**立即改密**；改密成功后该文件被删除。忘记口令不可找回，只能走 §2.2 / `admin-password --set` 重置。
+- **首登改密闸门（ADR-0055）**：初始凭据登录只拿到受限会话——只能调用改密端点与登出，其余 `/api/v1/*` 返回 403 + 白话「首次登录请先设置新口令」。改密成功后标志清除、旧会话全部失效、凭据文件删除；这是**单管理员的一次性状态机，不是多用户 RBAC**（G-11）。
 - **路径铁律**：`admin-password` 与 `serve` 必须用同一个 `--config`（或都不用，走默认 `<install>/config/config.yaml`，设了 `KORE_HOME` 就是 `$KORE_HOME/config/config.yaml`）。两边不一致 = 口令写进 A 文件、serve 读 B 文件，**登录永远 401**；两个命令的解析优先级一致：`KORE_CONFIG` 环境变量 > `--config` > profile 默认路径；相对路径按**配置文件所在目录**解析（与启动目录无关），仍建议写绝对路径。
-- **生效时机**：首启自动生成的哈希**本次启动即生效**；用 `admin-password` 手工写入的哈希要**重启 kored** 才生效（运行中的进程只在启动时读取口令哈希；SIGHUP 热更只更新配置快照），重启会同时踢掉旧会话。
+- **生效时机（2026-11-25 更新）**：安装 / 首启自动生成的哈希**本次启动即生效**；用 `admin-password` 手工写入的哈希**无需重启**——向运行中的 kored 发 `SIGHUP`，快照里的新哈希与 `must_change_password` 会同步进内存 `auth.Manager`，且**只在字段真变化时**吊销旧会话（ADR-0055；重启仍是兜底）。
 - 写入走「临时文件 + fsync + rename」，权限固定 **0600**；口令与哈希**不进日志**。命令就地改写 `auth.admin_password_hash`，保留文件里其它键、注释与顺序。
 
 ### 2.2 自己指定口令
