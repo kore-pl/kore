@@ -161,6 +161,24 @@ rm -rf /opt/kore
 ! test -e /etc/kore && ! test -e /var/lib/kore && ! pgrep -x kored && ! ss -lx | grep -q kore
 ```
 
+**本地更新状态文件的回滚（ADR-0023 §3.5 豁免 #5 / §11）**：
+
+静默更新链会在 `<state>/update-state.json`（portable 即 `<install>/data/update-state.json`）留下跨重启的状态元数据；每次创建或覆写前都先向 `<state>/changes.jsonl` 追加一条 `purge_op=file.remove` 的结构化账本记录（`summary` = 「更新状态记录」）。该文件只含版本 / 阶段 / 校验值等状态元数据，**不含任何口令 / token / 凭据**。
+
+- `kored uninstall --yes --purge`：与其余宿主变更一起，从账本读取 `file.remove` 白名单操作逐条删除该文件（不执行 shell 字符串，重复执行幂等）；
+- 手工回滚（卸载命令不可用、或只想清这一项）：
+
+```bash
+STATE_FILE="<install>/data/update-state.json"   # 按实际安装根替换
+rm -f "$STATE_FILE"
+grep -v '"action":"selfupdate.state.write"' <install>/data/changes.jsonl > /tmp/kore-ledger.new \
+  && mv /tmp/kore-ledger.new <install>/data/changes.jsonl && chmod 600 <install>/data/changes.jsonl
+# 断言状态文件已消失、账本无幽灵条目
+! test -e "$STATE_FILE" && ! grep -q 'update-state.json' <install>/data/changes.jsonl
+```
+
+> 手工清理只删该文件及其账本行，**不动**其他 `changes.jsonl` 条目（nginx / 防火墙等用户批准的宿主变更需单独裁决是否回滚）。全系统仅此一个状态文件，禁止在 `/etc`、`/var/lib`、`/var/log`、`/run` 下创建同类文件。门禁：`make zero-intrusion-check`（隔离实例验证 0600 / 账本登记 / 回滚删除）。
+
 ### 6.2.1 卸载的部分完成与退出码
 
 卸载链把动作分成两段：**安装目录内（本地）**与**宿主侧（systemd unit / `kore-*` 用户）**。两段的权限要求不同，退出码必须能区分"真完成"和"只做了一半"。

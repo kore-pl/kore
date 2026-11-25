@@ -293,6 +293,31 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 **读取方**：`kored uninstall` 打印清单（默认不自动回滚，仅按 `purge_op` 分派结构化回滚，未知 kind 拒绝）；`before`/`after` 供人工比对。schema 变更（新增字段或 kind）属数据形状变更，须同步本节与 ADR-0023。
 
+### 9.2 本地更新状态文件 `update-state.json`（ADR-0023 §3.5 豁免 #5 / §11）
+
+位置 `<state>/update-state.json`（portable 即 `<install>/data/update-state.json`）；**全系统仅此一个文件，不得扩展为目录树**。记录静默更新链跨重启的意图与结果（下载完成、校验通过、pending、`.prev` 回滚材料、新进程 finalize）。它是 ADR-0023 §3.5 新增的**唯一**安装目录外写入豁免（U3 有限放宽 2026-11-26 accept），其余清单外路径仍原样封禁。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `phase` | string | 阶段白名单：`downloading` / `verified` / `installed` / `pending` / `committed` / `rolled_back`；未知值拒绝（fail-closed） |
+| `target_version` | string | 目标版本，必填 |
+| `previous_version` | string | 更新前版本（首次更新可空） |
+| `asset_sha256` | string | 资产 sha256（供应链校验结果） |
+| `unit` | string | 本次更新关联 systemd unit（portable 形态记 `""`） |
+| `commit_result` | string | 提交 / finalize 结果 |
+| `started_at` / `finished_at` | string | RFC3339 时点（未完成可空） |
+
+**契约**：
+
+- **权限与属主**：`0600`，属主 = kored 运行 uid（root 服务即 root、portable 即当前用户，由同目录 `CreateTemp` 继承）；`umask` 不影响 0600。
+- **原子写**：同目录临时文件 + `fsync` + `rename` + 目录 `fsync`（与 `upgrade.go` 的二进制原子替换同口径）；不成功即清理临时文件，目标字节不动。
+- **账本先行**：创建 / 覆写前先向 `<state>/changes.jsonl` 追加一条（`target` = 实际绝对路径、`summary` = 「更新状态记录」、`purge_op` = `file.remove`）；登记失败即**拒绝写盘**（复用 §9.1 账本，不造第二套）。重复覆写逐条登记，账本 append-only。
+- **schema 边界**：显式字段全为 string，禁止 `object` / `any` / `map[string]any`；读取用 `DisallowUnknownFields`，**状态文件里永远不出现 `password` / `secret` / `token`**（G-30）。
+- **回滚**：`kore uninstall --purge` 遍历账本按 `file.remove` 白名单逐条删（不执行 shell 字符串，重复删幂等）；手工回滚 = `rm <path>` 后从 `changes.jsonl` 删该行（避免幽灵条目）。
+- **禁止**：不写 `/etc`、`/var/lib`、`/var/log`、`/run`、`/usr/lib/systemd` 等 ADR-0023 清单外路径；不新增常驻任务落盘 / 新 unit / 新用户（U3 点名排除的三类）。
+
+实现：`cmd/kored/selfupdate_state.go`（读写 + 账本登记 + 白名单回滚）；门禁：`scripts/zero-intrusion-check.sh`（§11 追加判据）。
+
 ## 10. 备份与恢复
 
 > **当前未实现**：`kored backup` / `kored restore` / `kored db dump` **都没有对应子命令**（唯一权威清单是 `kored help`）；下面是**停机手工流程**，可直接照敲，M2 由 backup 能力接管。离线核对需要 bbolt CLI，它不随 `kored` 分发，按 `go.mod` 的版本自行安装：`go install go.etcd.io/bbolt/cmd/bbolt@v1.3.11`。

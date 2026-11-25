@@ -14,7 +14,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TMP="$(mktemp -d /tmp/kore-zero-intrusion.XXXXXX)" || { echo "[FAIL] 无法创建临时安装目录"; exit 1; }
+# 隔离根落在工作区内（G-29：不写真实 <install>/data、不碰 .kore-local-*）。
+TMP="$(mktemp -d "$ROOT/.zero-intrusion-tmp.XXXXXX")" || { echo "[FAIL] 无法创建临时安装目录"; exit 1; }
 PID=""
 PASS=0
 FAIL=0
@@ -59,6 +60,8 @@ BEFORE_GROUPS="$(snapshot_groups)"
 BEFORE_UNITS="$(snapshot_units)"
 
 echo "[INFO] 隔离安装根：$TMP（不设 KORE_HOME / --config，验证 portable 默认推导）"
+# web/dist 是 gitignored 构建产物（//go:embed 依赖）；干净检出先补齐再编译。
+make web-dist >/dev/null 2>&1 || true
 echo "[INFO] 构建隔离二进制：$TMP/bin/kored"
 if ! CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$TMP/bin/kored" ./cmd/kored 2>"$TMP/build.log"; then
   bad "构建 kored 失败（见 $TMP/build.log）"
@@ -94,6 +97,54 @@ for d in data run logs; do
   if [ -d "$TMP/$d" ]; then ok "portable 目录已创建：<install>/$d"; else bad "portable 目录缺失：<install>/$d"; fi
 done
 if [ -f "$TMP/data/state.db" ]; then ok "状态库落在 <install>/data/state.db"; else info "未发现 <install>/data/state.db（可能尚未写入，不影响判定）"; fi
+
+# ---- ADR-0023 §11 追加判据：本地更新状态文件（豁免 #5）----
+# 状态文件不随 serve 自动产生（写入点由 M6 更新链接入）；用专用夹具在隔离目录
+# 写一次，验证 0600 + 账本 file.remove + 白名单回滚，全程不碰真实 <install>/data。
+ZI_STATE="$TMP/zi-state"
+mkdir -p "$ZI_STATE"
+if KORE_ZI_STATE_DIR="$ZI_STATE" GOCACHE="$ROOT/.gocache-m5" CGO_ENABLED=0 \
+    go test -count=1 -run '^TestZeroIntrusionFixture$' ./cmd/kored >"$TMP/zi-fixture.log" 2>&1; then
+  ok "隔离实例写入状态文件（隔离目录 $ZI_STATE，不碰真实 <install>/data）"
+else
+  bad "隔离状态文件夹具失败（见 $TMP/zi-fixture.log）"
+  tail -n 20 "$TMP/zi-fixture.log" 2>/dev/null || true
+fi
+
+STATE_FILE="$ZI_STATE/update-state.json"
+LEDGER="$ZI_STATE/changes.jsonl"
+if [ -f "$STATE_FILE" ]; then
+  MODE="$(stat -c '%a' "$STATE_FILE" 2>/dev/null || echo '?')"
+  if [ "$MODE" = "600" ]; then ok "状态文件权限 0600（实际 $MODE）"; else bad "状态文件权限 = $MODE，要求 0600"; fi
+  # 每系统仅此一个文件：隔离状态目录内不得有第二个 update-state* 或状态目录树
+  STATE_COUNT="$(find "$ZI_STATE" -maxdepth 1 -name 'update-state*' | wc -l)"
+  if [ "$STATE_COUNT" -eq 1 ]; then ok "全系统仅一个更新状态文件（实际 $STATE_COUNT 个）"; else bad "状态文件数量 = $STATE_COUNT，要求 1"; fi
+else
+  bad "状态文件未生成：$STATE_FILE"
+fi
+if [ -f "$LEDGER" ]; then
+  if grep -q '"kind"[[:space:]]*:[[:space:]]*"file.remove"' "$LEDGER" && grep -q 'update-state.json' "$LEDGER"; then
+    ok "账本含该状态文件的 file.remove 条目（有状态文件 ⟹ 可回滚）"
+  else
+    bad "账本缺少指向状态文件的 file.remove 条目"
+  fi
+  LEDGER_MODE="$(stat -c '%a' "$LEDGER" 2>/dev/null || echo '?')"
+  if [ "$LEDGER_MODE" = "600" ]; then ok "账本权限 0600"; else bad "账本权限 = $LEDGER_MODE，要求 0600"; fi
+else
+  bad "账本未生成：$LEDGER"
+fi
+
+# 卸载后状态文件不存在：用账本里的 file.remove 逐条删除（幂等），再断言文件消失。
+# 这里只删隔离目录内的文件，等价于 kore uninstall --purge 对该条目的处理。
+if [ -f "$STATE_FILE" ] && [ -f "$LEDGER" ]; then
+  TARGET="$(grep 'file.remove' "$LEDGER" | grep 'update-state.json' | tail -1 | sed -n 's/.*"args"[[:space:]]*:[[:space:]]*\["\([^"]*\)"\].*/\1/p')"
+  if [ -n "$TARGET" ] && [ "$TARGET" = "$STATE_FILE" ]; then
+    rm -f "$TARGET"
+    if [ ! -e "$STATE_FILE" ]; then ok "按账本回滚后状态文件不存在（uninstall --purge 语义）"; else bad "回滚后状态文件仍存在"; fi
+  else
+    bad "无法从账本解析 file.remove 目标（target=$TARGET，期望 $STATE_FILE）"
+  fi
+fi
 
 # 系统路径：新增即 FAIL；原有只记录（豁免项）
 AFTER_PATHS="$(snapshot_paths)"
