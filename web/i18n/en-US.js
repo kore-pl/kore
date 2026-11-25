@@ -90,7 +90,7 @@
     'sites.detail.stopped': 'Stopped',
     'sites.detail.title': 'Site details',
     'sites.empty.cta': 'Create your first site',
-    'sites.empty.hint': 'No sites yet: use the setup wizard above to create your first site; the wizard will fill in the document root for you.',
+    'sites.empty.hint': 'No sites yet: enter a domain above and click Create site; the directory is detected automatically.',
     'sites.list.title': 'Sites',
     'sites.load.failed': 'Failed to load sites:',
     'sites.load.loading': 'Loading sites…',
@@ -100,7 +100,7 @@
     'sites.status.meta': 'Config / validation / directory / loading',
     'sites.status.recheck': 'Re-check',
     'sites.status.title': 'Runtime status',
-    'sites.subtitle': 'The wizard collects domain, document root, SSL and rewrite rules in one go; click a domain to view its full configuration and keep managing it.',
+    'sites.subtitle': 'Enter a domain to create a site in one step: the directory is auto-detected; SSL and rewrite rules live under Advanced options.',
     'sites.title': 'Websites',
     // db.*（92 条）
     'db.action.analyze': 'Analyze',

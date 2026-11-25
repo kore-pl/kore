@@ -244,7 +244,7 @@
   function loadWizard() {
     if (!S.wizardHost) return;
     S.wizardHost.textContent = '';
-    add(S.wizardHost, el('div', 'stub', '正在加载建站向导…'));
+    add(S.wizardHost, el('div', 'stub', '正在加载一键建站表单…'));
     ensureEdit().then(function (mod) {
       if (!S.wizardHost) return;
       S.wizardHost.textContent = '';
@@ -252,7 +252,7 @@
     }, function (err) {
       if (!S.wizardHost) return;
       S.wizardHost.textContent = '';
-      add(S.wizardHost, el('div', 'site-result-error', '建站向导加载失败：' + errText(err)));
+      add(S.wizardHost, el('div', 'site-result-error', '一键建站表单加载失败：' + errText(err)));
     });
   }
   function loadEditor(data) {
@@ -740,7 +740,7 @@
     if (S.listMeta) S.listMeta.textContent = S.sites.length ? '共 ' + S.sites.length + ' 个站点' : '';
     if (!S.sites.length) {
       var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
-      add(empty, el('p', 'empty-state-text', tr('sites.empty.hint', '还没有站点：用上面的建站向导创建第一个站点，向导会自动填好根目录。')));
+      add(empty, el('p', 'empty-state-text', tr('sites.empty.hint', '还没有站点：在上方填域名、点「一键创建站点」，目录会自动推断，几秒就能建好第一个站点。')));
       var cta = add(empty, el('button', 'btn btn-primary', tr('sites.empty.cta', '创建第一个站点')));
       cta.type = 'button';
       on(cta, function () {
@@ -818,7 +818,7 @@
   function build(root) {
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', tr('sites.title', '网站管理')));
-    add(head, el('p', 'view-sub', tr('sites.subtitle', '向导一次收齐域名、根目录、SSL 与伪静态；点域名查看完整配置并继续管理。')));
+    add(head, el('p', 'view-sub', tr('sites.subtitle', '填域名一次提交即可建站：目录自动推断并可选自动创建；SSL 与伪静态收在高级选项，点域名继续管理。')));
     S.resultHost = add(root, el('div', 'site-result-host'));
     S.wizardHost = add(root, el('div', 'site-wizard-host'));
     S.configHost = add(root, el('div', 'site-config-host'));

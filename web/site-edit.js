@@ -18,6 +18,25 @@
   function isPHPTemplate(name) { return PHP_TEMPLATES.indexOf(name) >= 0; }
   function certBase(file) { return String(file || '').replace(/\.(crt|pem)$/i, ''); }
   function autoRoot(domain) { return domain ? '/var/www/' + domain : ''; }
+  // 已有站点的根大概率落在本机的约定父目录（零侵入安装为 <data>/sites/<domain>，
+  // 历史安装为 /var/www/<domain>）。打开表单时只读探测一次：取现有站点的根，剥掉
+  // 末段域名，用它当新站点的父目录前缀——这样"已自动检测"不是写死的 /var/www。
+  // 探测失败或没有站点就保持默认前缀，不打扰用户（原则 2：探测不到才让人填）。
+  function detectRootBase(ctx, done) {
+    var fallback = '';
+    function finish() { done(fallback); }
+    ctx.invoke('site.list', {}).then(function (data) {
+      var sites = Array.isArray(data && data.sites) ? data.sites : [];
+      if (!sites.length) { finish(); return; }
+      ctx.invoke('site.get', { domain: sites[0].domain }).then(function (g) {
+        var root = g && g.root ? String(g.root) : '';
+        if (root.charAt(0) === '/' && root.indexOf('/' + sites[0].domain) >= 0) {
+          fallback = root.slice(0, root.lastIndexOf('/'));
+        }
+        finish();
+      }, finish);
+    }, finish);
+  }
   function paintSteps(host, steps) {
     host.textContent = '';
     if (!steps.length) return;
@@ -38,46 +57,78 @@
       box.appendChild(line);
     });
   }
-  // 建站向导：一次表单收齐 域名 + 根目录（自动填 /var/www/<域名>）+ SSL + 伪静态，
-  // 提交后按 create → bindSSL → setRewrite 串行执行并逐步回显；任一步失败即停。
+  // 一键建站：域名 + 目录（自动推断）+ 是否建目录合并到一次表单，填完域名点一次即提交。
+  // SSL / 伪静态 / PHP-FPM 全部收进「高级选项」折叠区（默认收起，能力一项不丢）。
+  // 提交链路：（勾选建目录时）file.write 生成默认首页并顺带建目录 → site.create →
+  // bindSSL → setRewrite → setPHP。建目录是"尽力而为"：文件插件没装或没权限时如实记跳过，
+  // 不阻断建站主流程（原则 1：不填高级参数也能成功），也不把"没建成目录"说成成功。
   function renderWizard(host, ctx) {
     var el = ctx.ui.el, add = ctx.ui.add, on = ctx.ui.on;
     host.textContent = '';
     var panel = add(host, el('section', 'panel'));
     var head = add(panel, el('div', 'panel-head'));
-    add(head, el('span', 'panel-title', '建站向导'));
-    add(head, el('span', 'panel-meta', '一次提交：create → bindSSL → setRewrite（PHP 模板再接 setPHP）'));
+    add(head, el('span', 'panel-title', '一键建站'));
+    add(head, el('span', 'panel-meta', '填域名即可：目录自动推断、可自动创建；SSL 与伪静态在「高级选项」里'));
     var form = add(panel, el('form', 'site-form site-wizard'));
-    var w = { rootTouched: false, certs: [], certLoaded: false, certError: '' };
+    var w = { rootTouched: false, certs: [], certLoaded: false, certError: '', rootBase: '/var/www' };
+    // 打开表单就只读探测一次现有站点的目录前缀；用户一旦手动填过域名/目录就不再覆盖。
+    detectRootBase(ctx, function (base) {
+      if (base) w.rootBase = base;
+      if (!w.rootTouched) syncRoot();
+    });
     var domainField = add(form, el('label', 'field'));
     add(domainField, el('span', 'field-label', '域名（小写，至少两个标签）'));
     w.domain = add(domainField, el('input', 'field-input'));
-    w.domain.type = 'text'; w.domain.placeholder = 'l2ui.kore.test'; w.domain.autocomplete = 'off';
+    w.domain.type = 'text'; w.domain.placeholder = 'demo.kore.test'; w.domain.autocomplete = 'off';
     w.domain.setAttribute('data-field', 'domain');
+    add(domainField, el('p', 'field-hint', '只填这一项就能建站；目录、SSL 与伪静态都有默认值或可稍后再配。'));
     var rootField = add(form, el('label', 'field'));
-    var rootLabel = add(rootField, el('span', 'field-label', '站点根目录'));
-    w.badge = add(rootLabel, el('span', 'auto-badge', '已自动填入'));
+    var rootLabel = add(rootField, el('span', 'field-label', '站点目录'));
+    w.badge = add(rootLabel, el('span', 'auto-badge', '已自动检测'));
     w.badge.hidden = true;
     w.root = add(rootField, el('input', 'field-input'));
-    w.root.type = 'text'; w.root.placeholder = '/var/www/l2ui.kore.test'; w.root.autocomplete = 'off';
+    w.root.type = 'text'; w.root.placeholder = '/var/www/demo.kore.test'; w.root.autocomplete = 'off';
     w.root.setAttribute('data-field', 'root');
-    var sslLine = add(form, el('label', 'field field-check'));
+    add(rootField, el('p', 'field-hint', '按域名自动推断；要放别处就直接改。改过之后点「恢复自动」可回到推断值。'));
+    var resetLine = add(form, el('div', 'site-edit-ops'));
+    w.reset = add(resetLine, el('button', 'btn btn-ghost', '恢复自动推断'));
+    w.reset.type = 'button'; w.reset.setAttribute('data-action', 'wizard-root-reset');
+    w.reset.hidden = true;
+    on(w.reset, function () {
+      var d = w.domain.value.trim().toLowerCase();
+      w.root.value = d ? w.rootBase + '/' + d : '';
+      w.rootTouched = false; w.reset.hidden = true; w.badge.hidden = !d;
+    });
+    var dirLine = add(form, el('label', 'field field-check'));
+    w.makeDir = add(dirLine, el('input', 'files-checkbox'));
+    w.makeDir.type = 'checkbox'; w.makeDir.checked = true;
+    w.makeDir.setAttribute('data-field', 'make-dir');
+    add(dirLine, el('span', null, '同时创建站点目录并放一个默认首页（推荐，开箱就能访问）'));
+    add(form, el('p', 'field-hint', '不勾选也可建站：只写 nginx 配置，目录请你自己准备；文件管理插件没装或没权限时会自动跳过这一步并如实提示。'));
+    // 高级选项：SSL / 伪静态 / PHP 全部折叠进来，默认收起；老手的能力一项不减。
+    var adv = add(form, el('details', 'wizard-advanced'));
+    var advSummary = add(adv, el('summary', 'field-label wizard-advanced-summary', '高级选项（SSL / 伪静态 / PHP，默认不用填）'));
+    advSummary.style.minHeight = 'var(--kore-touch)';
+    advSummary.style.display = 'flex';
+    advSummary.style.alignItems = 'center';
+    advSummary.style.cursor = 'pointer';
+    var sslLine = add(adv, el('label', 'field field-check'));
     w.ssl = add(sslLine, el('input', 'files-checkbox'));
     w.ssl.type = 'checkbox';
     add(sslLine, el('span', null, '同时启用 SSL（证书从 ssl.list 选择）'));
-    w.sslBox = add(form, el('div', 'wizard-ssl'));
+    w.sslBox = add(adv, el('div', 'wizard-ssl'));
     w.sslBox.hidden = true;
     var certField = add(w.sslBox, el('label', 'field'));
     add(certField, el('span', 'field-label', '证书（ssl.list）'));
     w.cert = add(certField, el('select', 'field-input'));
     w.cert.setAttribute('data-field', 'ssl-cert');
     var dirField = add(w.sslBox, el('label', 'field'));
-    add(dirField, el('span', 'field-label', '证书目录（KORE_SSL_CERT_DIR）'));
+    add(dirField, el('span', 'field-label', '证书目录'));
     w.certDir = add(dirField, el('input', 'field-input'));
     w.certDir.type = 'text'; w.certDir.value = '/etc/kore/ssl'; w.certDir.autocomplete = 'off';
     w.certDir.setAttribute('data-field', 'ssl-dir');
     w.certHint = add(w.sslBox, el('p', 'field-hint', '选择证书后自动拼接 cert_path 与同名 .key 私钥路径'));
-    var rewriteField = add(form, el('label', 'field'));
+    var rewriteField = add(adv, el('label', 'field'));
     add(rewriteField, el('span', 'field-label', '伪静态模板'));
     w.rewrite = add(rewriteField, el('select', 'field-input'));
     w.rewrite.setAttribute('data-field', 'rewrite');
@@ -85,10 +136,10 @@
       var opt = add(w.rewrite, el('option', null, name === 'none' ? 'none（默认，不启用）' : name));
       opt.value = name;
     });
-    // PHP-FPM 表单：选 wordpress/laravel/thinkphp/discuz 才显示。建站阶段站点尚未落盘，
+    // PHP-FPM：选 wordpress/laravel/thinkphp/discuz 才显示。建站阶段站点尚未落盘，
     // getPHP.available 无从读取，故这里给「auto 自动检测」+ 可选手填 socket，不硬编码版本；
     // 真正的版本下拉（来自 getPHP.available）在编辑器伪静态面板提供。
-    w.phpBox = add(form, el('div', 'wizard-php'));
+    w.phpBox = add(adv, el('div', 'wizard-php'));
     w.phpBox.hidden = !isPHPTemplate(w.rewrite.value);
     add(w.phpBox, el('p', 'field-hint', '所选模板需要 PHP-FPM 才能访问；不配置页面会一直 404。版本填 auto 会自动选用已检测到的最高版本；如未检测到，可先留空建站，再到站点详情里选版本。'));
     var phpVerField = add(w.phpBox, el('label', 'field'));
@@ -99,16 +150,17 @@
     var phpSockField = add(w.phpBox, el('label', 'field'));
     add(phpSockField, el('span', 'field-label', 'FPM socket（可选，留空自动检测）'));
     w.phpSocket = add(phpSockField, el('input', 'field-input'));
-    w.phpSocket.type = 'text'; w.phpSocket.placeholder = '/run/php/php-fpm.sock'; w.phpSocket.autocomplete = 'off';
+    w.phpSocket.type = 'text'; w.phpSocket.placeholder = '/run/php/php8.3-fpm.sock'; w.phpSocket.autocomplete = 'off';
     w.phpSocket.setAttribute('data-field', 'php-socket');
     w.rewrite.addEventListener('change', function () { w.phpBox.hidden = !isPHPTemplate(w.rewrite.value); });
-    var submit = add(form, el('button', 'btn btn-primary site-submit', '创建站点并应用'));
+    var submit = add(form, el('button', 'btn btn-primary site-submit', '一键创建站点'));
     submit.type = 'submit'; submit.setAttribute('data-action', 'wizard-submit');
     var stepsHost = add(panel, el('div', 'wizard-steps-host'));
     function syncRoot() {
       if (w.rootTouched) return;
-      w.root.value = autoRoot(w.domain.value.trim().toLowerCase());
-      w.badge.hidden = !w.domain.value.trim();
+      var d = w.domain.value.trim().toLowerCase();
+      w.root.value = d ? w.rootBase + '/' + d : '';
+      w.badge.hidden = !d;
     }
     function syncCertHint() {
       var dir = (w.certDir.value.trim() || '/etc/kore/ssl').replace(/\/+$/, '');
@@ -145,6 +197,7 @@
     w.root.addEventListener('input', function () {
       w.rootTouched = !!w.root.value.trim();
       w.badge.hidden = true;
+      w.reset.hidden = !w.rootTouched;
     });
     w.ssl.addEventListener('change', function () {
       w.sslBox.hidden = !w.ssl.checked;
@@ -157,13 +210,13 @@
       var domain = w.domain.value.trim().toLowerCase();
       var rootPath = w.root.value.trim();
       if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) {
-        ctx.setStatus('域名非法：仅允许小写字母数字、连字符与点，且至少两个标签', 'fail'); w.domain.focus(); return;
+        ctx.setStatus('域名不合法：请填小写字母、数字或连字符，至少两段并用点分开，例如 demo.kore.test', 'fail'); w.domain.focus(); return;
       }
       if (!rootPath || rootPath.charAt(0) !== '/') {
-        ctx.setStatus('站点根目录必须是绝对路径', 'fail'); w.root.focus(); return;
+        ctx.setStatus('站点目录要填以 / 开头的完整路径；要恢复自动推断请点「恢复自动推断」', 'fail'); w.root.focus(); return;
       }
       if (w.ssl.checked && !w.cert.value) {
-        ctx.setStatus('已勾选 SSL，但证书下拉为空：请先在 SSL 页自签/导入，或取消勾选', 'fail'); return;
+        ctx.setStatus('已勾选 SSL，但证书列表为空：请先在 SSL 页自签/导入证书，或取消勾选', 'fail'); return;
       }
       var steps = [], stopped = false;
       function record(step) { steps.push(step); paintSteps(stepsHost, steps); }
@@ -179,37 +232,61 @@
           return null;
         });
       }
-      var dir = (w.certDir.value.trim() || '/etc/kore/ssl').replace(/\/+$/, '');
-      var chain = runStep('创建站点 create', function () {
-        return ctx.invoke('site.create', { domain: domain, root: rootPath });
-      }, function (r) {
-        return (r.vhost_path || '') + '；nginx -t ' + (r.test_skipped ? '未检测' : r.test_passed ? '通过' : '失败') +
-          '；reload ' + (r.reload_skipped ? '未执行' : r.reloaded ? '已重载' : '未重载');
+      // 尽力而为的建目录：失败只记跳过，不阻断建站主链路。
+      function runBestEffort(name, run, describe) {
+        if (stopped) { record({ name: name, state: 'skip', detail: '前一步失败，未执行' }); return Promise.resolve(null); }
+        ctx.setStatus('正在执行：' + name + '…');
+        return run().then(function (res) {
+          record({ name: name, state: 'ok', detail: describe(res) });
+          return res;
+        }, function (err) {
+          record({ name: name, state: 'skip', detail: '未创建：' + ctx.errText(err) + '；不影响站点配置，可到「文件管理」自行建目录' });
+          return null;
+        });
+      }
+      var chain = Promise.resolve(null);
+      if (w.makeDir.checked) {
+        chain = chain.then(function () {
+          return runBestEffort('创建站点目录', function () {
+            var rel = rootPath.replace(/^\/+/, '').replace(/\/+$/, '') + '/index.html';
+            var welcome = '<!doctype html>\n<html lang="zh-CN">\n<head><meta charset="utf-8"><title>站点已创建</title></head>\n' +
+              '<body><h1>站点已创建</h1><p>' + domain + ' 的目录由 Kore 自动创建。把你的网站文件放到这个目录即可。</p></body>\n</html>\n';
+            return ctx.invokePlugin('file', 'file.write', { path: rel, content: welcome, create_if_missing: true });
+          }, function (r) { return '目录已创建并写入默认首页 index.html' + (r.created ? '（新建）' : ''); });
+        });
+      }
+      chain = chain.then(function () {
+        return runStep('创建站点', function () {
+          return ctx.invoke('site.create', { domain: domain, root: rootPath });
+        }, function (r) {
+          return (r.vhost_path || '目录 ' + rootPath) + '；nginx -t ' + (r.test_skipped ? '未检测' : r.test_passed ? '通过' : '失败') +
+            '；reload ' + (r.reload_skipped ? '未执行' : r.reloaded ? '已重载' : '未重载');
+        });
       });
       if (w.ssl.checked) {
+        var dir = (w.certDir.value.trim() || '/etc/kore/ssl').replace(/\/+$/, '');
         chain = chain.then(function () {
-          return runStep('绑定证书 bindSSL', function () {
+          return runStep('绑定证书', function () {
             return ctx.invoke('site.bindSSL', {
               domain: domain, cert_path: dir + '/' + w.cert.value,
               key_path: dir + '/' + certBase(w.cert.value) + '.key', force_https: true
             });
-          }, function (r) { return 'ssl_bound=' + r.ssl_bound + '；force_https=' + r.force_https; });
+          }, function (r) { return '证书已绑定；强制 HTTPS=' + (r.force_https ? '是' : '否'); });
         });
       }
       var needPHP = isPHPTemplate(w.rewrite.value);
       if (w.rewrite.value !== 'none') {
         chain = chain.then(function () {
-          return runStep('设置伪静态 setRewrite', function () {
+          return runStep('设置伪静态', function () {
             return ctx.invoke('site.setRewrite', { domain: domain, template: w.rewrite.value });
           }, function (r) {
-            return 'template=' + r.template + (r.proxy_cleared ? '；已自动清除反向代理（互斥）' : '');
+            return '模板 ' + r.template + (r.proxy_cleared ? '；已自动清除反向代理（互斥）' : '');
           });
         });
       }
-      // 伪静态是 PHP 模板时串一步 setPHP；失败即停并原样展示后端 message（含"先设 none"怎么办）。
       if (needPHP) {
         chain = chain.then(function () {
-          return runStep('启用 PHP-FPM setPHP', function () {
+          return runStep('启用 PHP-FPM', function () {
             var params = { domain: domain };
             var ver = w.phpVersion.value.trim();
             var sock = w.phpSocket.value.trim();
@@ -217,7 +294,7 @@
             if (sock) params.socket = sock;
             return ctx.invoke('site.setPHP', params);
           }, function (r) {
-            return 'version=' + (r.php_version || 'auto') + '；socket=' + (r.php_socket || '自动检测') +
+            return '版本 ' + (r.php_version || 'auto') + '；socket ' + (r.php_socket || '自动检测') +
               (r.php_socket_verified ? '（已验证）' : r.php_hint ? '（' + r.php_hint + '）' : '');
           });
         });
@@ -227,13 +304,14 @@
         submit.disabled = false;
         var failed = steps.filter(function (s) { return s.state === 'fail'; });
         if (failed.length) {
-          ctx.setStatus('建站未完成：' + failed[0].name + ' 失败，请查看步骤明细后重试', 'fail');
+          ctx.setStatus('建站未完成：' + failed[0].name + ' 失败，请按下面的提示处理后重试', 'fail');
           ctx.after('');
           return;
         }
-        ctx.setStatus('已创建 ' + domain + '，共 ' + steps.length + ' 步全部成功', 'ok');
-        w.domain.value = ''; w.root.value = ''; w.rootTouched = false; w.badge.hidden = true;
-        w.ssl.checked = false; w.sslBox.hidden = true; w.rewrite.value = 'none';
+        var skipped = steps.filter(function (s) { return s.state === 'skip'; }).length;
+        ctx.setStatus('已建好 ' + domain + '（' + steps.length + ' 步' + (skipped ? '，' + skipped + ' 步跳过见明细' : '全部完成') + '）', 'ok');
+        w.domain.value = ''; w.root.value = ''; w.rootTouched = false; w.badge.hidden = true; w.reset.hidden = true;
+        w.makeDir.checked = true; w.ssl.checked = false; w.sslBox.hidden = true; w.rewrite.value = 'none';
         w.phpBox.hidden = true; w.phpVersion.value = 'auto'; w.phpSocket.value = '';
         ctx.after(domain);
       });
