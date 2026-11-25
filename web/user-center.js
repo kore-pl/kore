@@ -251,14 +251,14 @@
     var gen = S.gen;
 
     var head = add(box, el('div', 'uc-head'));
-    add(head, el('h2', 'uc-title', '账户与安全'));
+    add(head, el('h2', 'uc-title', '账户中心'));
     var refresh = button('刷新', 'btn-ghost');
     refresh.setAttribute('data-kore-action', 'uc-refresh');
     refresh.addEventListener('click', function () { load(gen, true); });
     add(head, refresh);
     add(box, el('p', 'uc-sub',
       '这里回答一个问题：我的管理账号现在安全吗。口令、两步验证、API 令牌、登录白名单、' +
-      '活跃会话与登录记录都在这一页；改口令和踢下线也在这一页完成。'));
+      '活跃会话与登录记录都在这一页；改口令和踢下线也在这一页完成。具体配置项仍在「常规设置」里改。'));
 
     var body = add(box, el('div', 'uc-body'));
     load(gen, false);

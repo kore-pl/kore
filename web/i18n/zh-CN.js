@@ -12,7 +12,7 @@
   'nav.tasks': '计划任务',
   'nav.monitor': '监控',
   'nav.settings': '设置',
-  'nav.userCenter': '账户与安全',
+  'nav.userCenter': '账户中心',
   'nav.terminal': '终端',
   'nav.db': '数据库',
   'nav.logs': '日志',
