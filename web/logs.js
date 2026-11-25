@@ -1007,12 +1007,13 @@
           '（' + (a.rotated_by === 'size' ? '按大小' : '按天') + '）');
         else if (a.trimmed && a.trimmed.length) detail.push(a.source + '：清理 ' + a.trimmed.length + ' 个');
       });
-      S.notice = '维护完成：切割 ' + rotated + ' 个文件、清理 ' + cleaned + ' 个过期轮转文件' +
+      var msg = '维护完成：切割 ' + rotated + ' 个文件、清理 ' + cleaned + ' 个过期轮转文件' +
         (cleaned ? '（进回收区，可「撤销上次清理」恢复）' : '') + '。' +
         (detail.length ? ' ' + detail.join('；') : '');
-      paintNotices(); paintMaint();
+      /* 刷新可能重置 S.notice（loadTail 等），所以最后再写入并渲染结果。 */
       loadUsage(); loadSources();
       if (S.selected) { loadStats(); loadTail(); }
+      S.notice = msg; paintNotices(); paintMaint();
     }, function (err) {
       if (S.destroyed) return;
       S.maintainBusy = false;
