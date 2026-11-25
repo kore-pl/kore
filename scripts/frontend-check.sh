@@ -2,6 +2,7 @@
 # kore 前端首屏门禁（M2-D / G-03 / R4）
 # 用法: bash scripts/frontend-check.sh
 # 退出码: 首屏 gzip 超 300 KiB 或产物含 *.map/.vite/全量字体 → 1；否则 0
+#        （「体积漂移告警」只打印 [WARN]、列出逐文件增量，不改退出码）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,6 +51,43 @@ if [ "$TOTAL" -gt "$BUDGET" ]; then
   exit 1
 fi
 printf '[OK] 首屏体积达标：%d 字节 ≤ %d 字节，余量 %d 字节\n' "$TOTAL" "$BUDGET" "$((BUDGET - TOTAL))"
+
+# ---- 体积漂移告警（WARN，不阻断；本条不是 G-03 红线）---------------------------
+# G-03 只判 300 KiB 红线，红线以下的增长此前无人看守：e86b97c 一条「文案改名」提交
+# 把他人 728 行概览实现带进首屏（app.js gzip 39163→49329，+10166 B），期间零报警，
+# 到 533d938 才被撤回。故这里加一条非阻断告警，让漂移在 review 里可见。
+#
+# 基线语义：一份「已评审、来源写清」的首屏快照。当前 = 2026-11-25 把插件管理子系统
+# 抽出到 /assets/plugins-view.js 之后的快照（合计 80387 B），它已含 f8b54a3 的概览交付；
+# 比 805bf31 的旧基线 81528 B 低 1141 B，即「概览 +10.1 KiB / 抽取 -12.0 KiB」的净结果。
+# 合法增长落地时，同轮把下面六个数字更新为新快照并在提交说明里写明来源；
+# 不更新就会每次跑都 WARN——这正是设计意图：首屏变大必须有人签字，不能靠余量悄悄吃掉。
+# 触发条件：合计 > 基线 +5%（当前 84406 B）或 > 绝对线 90000 B。
+declare -A BASE_FILES=(
+  [index.html]=1006 [style.css]=19422 [app.js]=38003
+  [shell.js]=19015 [i18n.js]=1594 [i18n-zh-CN.js]=1347
+)
+BASE_TOTAL=0
+for f in "${FILES[@]}"; do
+  BASE_TOTAL=$((BASE_TOTAL + ${BASE_FILES[${f#"$DIST"/}]:-0}))
+done
+BASE_LIMIT=$((BASE_TOTAL * 105 / 100))
+WARN_ABS=90000
+if [ "$TOTAL" -gt "$BASE_LIMIT" ] || [ "$TOTAL" -gt "$WARN_ABS" ]; then
+  printf '[WARN] 首屏体积漂移：%d 字节 > 基线+5%%（%d）或绝对线（%d）\n' "$TOTAL" "$BASE_LIMIT" "$WARN_ABS"
+  printf '[WARN]   %-18s %8s %8s %8s %7s\n' 文件 当前 基线 增量 占比
+  for f in "${FILES[@]}"; do
+    name=${f#"$DIST"/}
+    cur=$(gzip -9 -c "$f" | wc -c)
+    base=${BASE_FILES[$name]:-0}
+    printf '[WARN]   %-18s %8d %8d %+8d %6d%%\n' "$name" "$cur" "$base" "$((cur - base))" "$((cur * 100 / TOTAL))"
+  done
+  printf '[WARN] 处理口径：增长若是已评审的首屏必需功能（如概览页本体）→ 同轮更新脚本里的 BASE_FILES 快照并写来源；\n'
+  printf '[WARN]           若是「本该懒加载却被塞进首屏」→ 拆回 /assets/<视图>.js 懒加载视图，再跑本条复核。\n'
+else
+  printf '[OK] 首屏体积无漂移告警：%d 字节 ≤ 基线+5%%（%d）\n' "$TOTAL" "$BASE_LIMIT"
+fi
+
 
 # i18n 增量（ADR-0021）：i18n.js + i18n-zh-CN.js 合计 gzip ≤ 3 KiB（3072 字节）。
 # 独立于 300 KiB 总预算：语言骨架不能靠总预算的余量悄悄膨胀。

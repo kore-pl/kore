@@ -14,7 +14,9 @@
 // monitor-cards.js 是 monitor.js 进入监控视图时才注入的卡片/表格渲染构件；
 // search.js 是全局搜索命令面板（首次 Ctrl/Cmd+K 或点顶栏入口才注入）；
 // audit.js 是设置页「操作审计」tab（首次切到该 tab 才注入）；
-// alerts.js 是顶栏铃铛的告警中心（首屏后懒探测 / 点铃铛才注入）。
+// alerts.js 是顶栏铃铛的告警中心（首屏后懒探测 / 点铃铛才注入）；
+// plugins-view.js 是「软件商店 → 插件管理」tab 的已装插件管理视图（首次进该 tab 才注入，
+// 含插件表 / 单条升级 / 卸载 / 一键全部升级 / invoke ping / 插件 UI 桥，从 app.js 抽出）。
 // onboarding.js / onboarding.css / theme.js / theme.css / shortcuts.js 是个性化组件
 // （首次使用引导 / 深浅色主题 / 快捷键帮助；shell.js 首屏渲染后按 theme→shortcuts→onboarding
 // 顺序懒加载并 mount，不进首屏六件套、不计首屏 gzip 预算）。
@@ -27,7 +29,7 @@ package web
 
 import "embed"
 
-// Dist 是主壳静态资源文件系统，包含以下45个精确路径：
+// Dist 是主壳静态资源文件系统，包含以下66个精确路径：
 //
 //	dist/index.html
 //	dist/app.js
@@ -93,8 +95,9 @@ import "embed"
 //	dist/slow-query.js
 //	dist/log-alerts.js
 //	dist/user-center.js
+//	dist/plugins-view.js
 //
 // httpapi 用 embed.FS.ReadFile 按精确路径读取，不暴露子目录遍历面。
 //
-//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/security.js dist/terminal.js dist/db.js dist/db-l2.js dist/db-mysql.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js dist/onboarding.js dist/onboarding.css dist/theme.js dist/theme.css dist/shortcuts.js dist/health.js dist/calendar.js dist/batch.js dist/report.js dist/topology.js dist/snapshot.js dist/webhook.js dist/webhook.css dist/migrate.js dist/site-migrate.js dist/alert-rules.js dist/disk-analysis.js dist/fault-drill.js dist/macros.js dist/cert-lifecycle.js dist/config-drift.js dist/slow-query.js dist/log-alerts.js dist/user-center.js
+//go:embed dist/index.html dist/app.js dist/style.css dist/shell.js dist/i18n.js dist/i18n-zh-CN.js dist/i18n-en-US.js dist/store.js dist/files.js dist/files-l2.js dist/sites.js dist/site-edit.js dist/config-panel.js dist/tasks.js dist/monitor.js dist/monitor-cards.js dist/settings.js dist/security.js dist/terminal.js dist/db.js dist/db-l2.js dist/db-mysql.js dist/logs.js dist/process.js dist/ssl.js dist/backups.js dist/redis.js dist/firewall.js dist/waf.js dist/dns.js dist/sshguard.js dist/runtimes.js dist/integrity.js dist/container.js dist/appdeploy.js dist/discover.js dist/search.js dist/audit.js dist/alerts.js dist/credentials.js dist/onboarding.js dist/onboarding.css dist/theme.js dist/theme.css dist/shortcuts.js dist/health.js dist/calendar.js dist/batch.js dist/report.js dist/topology.js dist/snapshot.js dist/webhook.js dist/webhook.css dist/migrate.js dist/site-migrate.js dist/alert-rules.js dist/disk-analysis.js dist/fault-drill.js dist/macros.js dist/cert-lifecycle.js dist/config-drift.js dist/slow-query.js dist/log-alerts.js dist/user-center.js dist/plugins-view.js
 var Dist embed.FS
