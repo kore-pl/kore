@@ -36,7 +36,11 @@
       stats: null, summaryHost: null, listHost: null, count: null,
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
       retPresets: [], retPresetSelected: '',
-      verify: { supported: null, version: '' } };
+      verify: { supported: null, version: '' },
+      srcDetect: { state: 'idle', data: null, error: null }, presetTask: null,
+      pathsTouched: false, pathsAuto: '', presetAuto: '', presetPicked: false,
+      pathsBadge: '', schedPathsTouched: false, schedPathsAuto: '', schedPathsBadge: '',
+      detBadge: null, detBox: null, schedDetBadge: null, schedDetMeta: null };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -357,10 +361,10 @@
     return found;
   }
   function loadPresets() {
-    if (!S.presetHost) return;
+    if (!S.presetHost) return Promise.resolve();
     S.presetHost.textContent = '正在读取备份预设…';
     S.presetHost.className = 'bak-presets loading muted';
-    invoke('backup.presets', {}).then(function (data) {
+    return invoke('backup.presets', {}).then(function (data) {
       if (S.destroyed) return;
       S.presetList = Array.isArray(data.presets) ? data.presets : [];
       S.presetDefault = data.default_preset || '';
@@ -461,6 +465,11 @@
     if (S.name) S.name.value = expanded.name || S.presetSelected;
     if (S.compression) S.compression.value = expanded.compression || 'gzip';
     if (S.paths) S.paths.value = (expanded.paths || []).join('\n');
+    S.presetAuto = S.paths ? S.paths.value : '';
+    if (!silent) {
+      // 用户显式选了预设：预设值是用户的选择，探测结果不再覆盖它（可点「重新检测」拉回来）。
+      S.presetPicked = true; S.pathsTouched = false; syncPathsBadge();
+    }
     if (S.exclude) S.exclude.value = (expanded.exclude || []).join(', ');
     if (S.dims) {
       var wanted = expanded.dimensions || [];
@@ -480,7 +489,7 @@
     } else if (noPaths) {
       // callPresets 在本机没找到可备份目录时仍列出预设、但 paths 留空（preset.go:367-370）。
       // 必须给出可操作下一步，不能让用户以为"填好了"就点创建然后撞校验错误。
-      msg = desc + '本预设要备份的目录在本机没找到，请在下方「路径列表」手动填写实际路径（可到「设置 → 允许的根路径」加入目录）。';
+      msg = desc + '本预设要备份的目录在本机没找到，请在下方「备份源路径」手动填写实际路径（可到「设置 → 允许的根路径」加入目录）。';
       tone = 'fail';
     } else {
       msg = desc + '参数已自动填好，仍可自行修改。'; tone = 'ok';
@@ -488,6 +497,194 @@
     if (!silent) msg += ' 已选用「' + (p.label || p.id) + '」。';
     setPresetMsg(msg, tone);
     if (!silent && S.presetDbField && needsDb && S.presetDb) S.presetDb.focus();
+  }
+
+  // ---- 备份源自动检测（产品原则②：自动发现，不让人填环境细节） ----
+  // 数据源 = backup.sources.detect：插件侧 os.Lstat/os.ReadDir 只读探测 + 白名单过滤
+  // （与 preset.go 的 existingAllowed 同一口径，见 kore-plugin-backup/internal/backupop/detect.go）。
+  // 纪律：
+  //   1) 只在打开页面 / 点「重新检测」时各调一次，不进首屏、不轮询、不新增定时器（G-19）；
+  //   2) 用户手改过的路径不再被探测覆盖（原则②「用户改过的值不得被下一次探测覆盖」）；
+  //   3) 探测失败不挡「创建备份」，只把「怎么办」写清楚（原则④）；
+  //   4) 白名单外的目录如实列出但不可预填（预填一个点创建必失败的路径更糟），给「加入允许根路径」。
+  var KIND_LABELS = { site: '网站目录', config: '配置目录', app: '应用目录', data: '数据目录' };
+  var BADGE_TEXT = { auto: '已自动检测', preset: '预设已填', manual: '手动填写' };
+  function detectedInfo() {
+    var data = S.srcDetect.data || {};
+    return {
+      data: data,
+      sources: Array.isArray(data.sources) ? data.sources : [],
+      suggested: Array.isArray(data.suggested_paths) ? data.suggested_paths : []
+    };
+  }
+  function splitPathLines(text) {
+    return String(text || '').split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+  }
+  function detectClock(iso) {
+    var d = new Date(iso || '');
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+  function paintPathBadges() {
+    if (S.detBadge) {
+      var text = BADGE_TEXT[S.pathsBadge] || '';
+      S.detBadge.hidden = !text; S.detBadge.textContent = text;
+    }
+    if (S.schedDetBadge) {
+      var schedText = BADGE_TEXT[S.schedPathsBadge] || '';
+      S.schedDetBadge.hidden = !schedText; S.schedDetBadge.textContent = schedText;
+    }
+  }
+  // syncPathsBadge 按输入框实际内容判断来源：等于自动探测值 = 已自动检测，等于预设值 = 预设已填，否则手动。
+  function syncPathsBadge() {
+    var value = S.paths ? S.paths.value.trim() : '';
+    if (!value) S.pathsBadge = '';
+    else if (S.pathsAuto && value === S.pathsAuto.trim()) S.pathsBadge = 'auto';
+    else if (S.presetAuto && value === S.presetAuto.trim()) S.pathsBadge = 'preset';
+    else S.pathsBadge = 'manual';
+    paintPathBadges();
+  }
+  // applyDetected 把探测结果填进两处路径输入框；force=true 是用户点「重新检测」，可以覆盖自动填过的值。
+  function applyDetected(force) {
+    var info = detectedInfo();
+    if (!info.data) return;
+    var suggested = info.suggested;
+    if (S.paths) {
+      var canFill = !S.pathsTouched && (force || !S.presetPicked);
+      if (canFill && suggested.length) {
+        S.paths.value = suggested.join('\n');
+        S.pathsAuto = S.paths.value;
+        S.pathsBadge = 'auto';
+      } else if (!S.paths.value.trim()) {
+        S.pathsBadge = '';
+      }
+    }
+    if (S.sched.paths && !S.schedPathsTouched && suggested.length) {
+      var schedValue = S.sched.paths.value.trim();
+      if (!schedValue || S.sched.paths.value === S.schedPathsAuto) {
+        S.sched.paths.value = suggested.join('\n');
+        S.schedPathsAuto = S.sched.paths.value;
+        S.schedPathsBadge = 'auto';
+      }
+    }
+    paintPathBadges();
+  }
+  function toggleDetectedPath(path) {
+    if (!S.paths) return;
+    var lines = splitPathLines(S.paths.value);
+    var at = lines.indexOf(path);
+    if (at >= 0) lines.splice(at, 1); else lines.push(path);
+    S.paths.value = lines.join('\n');
+    S.pathsTouched = true;
+    setStatus(at >= 0 ? '已从备份源移除 ' + path : '已把 ' + path + ' 加入备份源', 'ok');
+    syncPathsBadge();
+  }
+  // addAllowRoot 把白名单外目录加入「允许的根路径」后重新探测：一次点击即可采用，不用去设置页手填。
+  function addAllowRoot(path, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '正在加入…'; }
+    invoke('backup.config.get', {}).then(function (data) {
+      var values = (data && data.values) || {};
+      var roots = Array.isArray(values.allow_roots) ? values.allow_roots.slice() : [];
+      if (roots.indexOf(path) < 0) roots.push(path);
+      return invoke('backup.config.set', { values: { allow_roots: roots } });
+    }).then(function () {
+      setStatus('已把 ' + path + ' 加入允许的根路径，正在重新检测…', 'ok');
+      loadDetect(true);
+    }, function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = '加入允许根路径'; }
+      setStatus('加入允许根路径失败：' + (err && err.message ? err.message : '接口不可用') +
+        '。怎么办：点右上角「⚙ 设置」→「允许的根路径」手动加上这个目录，再点「重新检测」。', 'fail');
+    });
+  }
+  function detectRetryButton(parent) {
+    var b = add(parent, el('button', 'btn btn-ghost bak-detect-btn', '重新检测'));
+    b.type = 'button';
+    on(b, function () { loadDetect(true); });
+    return b;
+  }
+  function paintDetect() {
+    var st = S.srcDetect.state, info = detectedInfo(), clock = detectClock(info.data.detected_at);
+    if (S.detBox) {
+      S.detBox.textContent = '';
+      S.detBox.className = 'bak-detect bak-detect-' + st;
+      if (st === 'loading') {
+        add(S.detBox, el('p', 'bak-detect-meta muted', '正在只读探测本机可备份的目录…'));
+      } else if (st === 'fail') {
+        add(S.detBox, el('p', 'bak-detect-hint row-note-fail',
+          '自动探测没成功（' + ((S.srcDetect.error && S.srcDetect.error.message) || '接口不可用') +
+          '）。怎么办：直接在下面手填绝对路径也能创建备份，或点「重新检测」再试一次。'));
+        detectRetryButton(S.detBox);
+      } else if (st === 'ok') {
+        var head = add(S.detBox, el('div', 'bak-detect-head'));
+        add(head, el('span', 'bak-detect-meta',
+          (info.suggested.length
+            ? '检测到 ' + info.suggested.length + ' 个可直接备份的目录'
+            : '本机没检测到可直接备份的目录') + (clock ? ' · 只读探测 ' + clock : '')));
+        detectRetryButton(head);
+        if (info.sources.length) {
+          var chips = add(S.detBox, el('div', 'bak-detect-chips'));
+          chips.setAttribute('role', 'group');
+          chips.setAttribute('aria-label', '检测到的备份源目录');
+          info.sources.forEach(function (src) {
+            var row = add(chips, el('span', 'bak-detect-chip bak-detect-' + src.kind));
+            add(row, el('span', 'bak-chip-kind', KIND_LABELS[src.kind] || '目录'));
+            add(row, el('span', 'bak-chip-path', src.path));
+            if (src.kind === 'data') {
+              row.title = src.hint || '数据目录建议用「数据库备份」预设做一致性导出';
+              add(row, el('span', 'bak-chip-note', '用数据库备份预设'));
+              return;
+            }
+            if (!src.in_roots) {
+              var join = add(row, el('button', 'bak-chip-btn', '加入允许根路径'));
+              join.type = 'button';
+              join.title = '该目录不在允许的根路径内，先加入才能备份';
+              on(join, function () { addAllowRoot(src.path, join); });
+              return;
+            }
+            var inUse = S.paths ? splitPathLines(S.paths.value).indexOf(src.path) >= 0 : false;
+            var use = add(row, el('button', 'bak-chip-btn' + (inUse ? ' is-on' : ''), inUse ? '已填入' : '填入'));
+            use.type = 'button';
+            use.setAttribute('aria-pressed', inUse ? 'true' : 'false');
+            on(use, function () { toggleDetectedPath(src.path); });
+          });
+        }
+        if (!info.suggested.length && info.data.hint) {
+          add(S.detBox, el('p', 'bak-detect-hint row-note-fail', info.data.hint));
+          var open = add(S.detBox, el('button', 'btn btn-ghost bak-detect-btn', '去备份设置加允许根路径'));
+          open.type = 'button';
+          on(open, openConfig);
+        } else if (info.data.note) {
+          add(S.detBox, el('p', 'bak-detect-hint', info.data.note));
+        }
+      }
+    }
+    if (S.schedDetMeta) {
+      var schedText = '';
+      if (st === 'loading') schedText = '正在只读探测本机可备份的目录…';
+      else if (st === 'fail') schedText = '自动探测没成功，请在下面手填路径，或到上面点「重新检测」。';
+      else if (st === 'ok' && info.suggested.length) {
+        schedText = '已按检测结果填好' + (clock ? '（只读探测 ' + clock + '）' : '') + '；改过之后不会再被覆盖。';
+      } else if (st === 'ok') schedText = '没检测到可备份目录，请在下面手填，或到上面点「重新检测」。';
+      setNote(S.schedDetMeta, schedText, st === 'fail' ? 'fail' : '');
+    }
+    paintPathBadges();
+  }
+  function loadDetect(force) {
+    if (!S.detBox && !S.schedDetMeta) return;
+    if (force) { S.pathsTouched = false; S.schedPathsTouched = false; }
+    S.srcDetect.state = 'loading';
+    paintDetect();
+    (S.presetTask || Promise.resolve()).then(function () {
+      return invoke('backup.sources.detect', {});
+    }).then(function (data) {
+      if (S.destroyed) return;
+      S.srcDetect = { state: 'ok', data: data || {}, error: null };
+      applyDetected(force);
+      paintDetect();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.srcDetect = { state: 'fail', data: null, error: err };
+      paintDetect();
+    });
   }
 
   // ---- 下载（download 分块 → Blob，同 logs/files 通道） ----
@@ -950,7 +1147,9 @@
         S.result = { kind: 'create', id: data.id, data: data }; paintResult();
         setStatus('备份已创建：' + data.id + ' · ' + fmtSize(data.size_bytes) + ' · ' + data.entries +
           ' 条目 · sha ' + String(data.sha256 || '').slice(0, 12) + ' · ' + data.duration_ms + 'ms', 'ok');
-        S.paths.value = ''; loadList(true); loadStats(); loadJobs(true);
+        // 创建成功后把备份源恢复到「已自动检测」的值，下一次备份不用重新填（原则②）。
+        S.paths.value = ''; S.pathsTouched = false; S.presetPicked = false; applyDetected(false);
+        loadList(true); loadStats(); loadJobs(true);
       }, function (err) {
         S.busy = false; S.submit.disabled = false; stopProgress();
         progressFail(err);
@@ -1012,8 +1211,24 @@
       '.bak-progress-fail .bak-progress-fill{background:var(--kore-danger,#f85149);}',
       '.bak-progress-hint{flex:1 1 100%;color:var(--kore-text-3);word-break:break-word;}',
       '.bak-job-error{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--kore-text-3);}',
+      '.bak-detect{display:flex;flex-direction:column;gap:var(--kore-space-2);margin-top:var(--kore-space-2);}',
+      '.bak-detect-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
+      '.bak-detect-meta{flex:1 1 220px;min-height:18px;color:var(--kore-text-2);font-size:var(--kore-font-12);word-break:break-word;}',
+      '.bak-detect-btn{min-height:32px;padding:0 10px;font-size:var(--kore-font-12);}',
+      '.bak-detect-chips{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);}',
+      '.bak-detect-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:2px 4px 2px 10px;background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:999px;font-size:var(--kore-font-12);}',
+      '.bak-chip-kind{color:var(--kore-info);white-space:nowrap;}',
+      '.bak-detect-config .bak-chip-kind{color:var(--kore-warning);}',
+      '.bak-detect-app .bak-chip-kind{color:var(--kore-success);}',
+      '.bak-detect-data .bak-chip-kind{color:var(--kore-text-3);}',
+      '.bak-chip-path{overflow-wrap:anywhere;color:var(--kore-text-1);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}',
+      '.bak-chip-btn{min-height:32px;padding:0 10px;color:var(--kore-info);background:transparent;border:1px solid var(--kore-border-2);border-radius:999px;font-size:var(--kore-font-12);cursor:pointer;touch-action:manipulation;}',
+      '.bak-chip-btn.is-on{color:var(--kore-bg-1);background:var(--kore-info);border-color:var(--kore-info);}',
+      '.bak-chip-btn:disabled{color:var(--kore-text-3);cursor:not-allowed;}',
+      '.bak-chip-note{color:var(--kore-text-3);white-space:nowrap;}',
+      '.bak-detect-hint{margin:0;color:var(--kore-text-2);font-size:var(--kore-font-12);line-height:1.6;}',
       '@media (min-width:640px){.bak-sched-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);} .bak-sched-grid .span2{grid-column:1 / -1;}}',
-      '@media (max-width:639px){.bak-task-table{min-width:640px;}}'
+      '@media (max-width:639px){.bak-task-table{min-width:640px;} .bak-detect-btn,.bak-chip-btn{min-height:44px;}}'
     ].join(''));
     style.id = 'kore-backup-sched-css'; document.head.appendChild(style);
   }
@@ -1041,7 +1256,15 @@
     S.presetDbField = field(presetBox, '数据库名（数据库备份时必填）', S.presetDb);
     S.presetDbField.hidden = true;
     S.name = input('text', 'span2', 'site-20261122'); field(form, '名称', S.name, 'span2');
-    S.paths = textarea(4, '/var/www/site\n/etc/kore'); field(form, '路径列表（每行一个）', S.paths, 'span2');
+    // 备份源：标签带来源徽标，输入框下方是只读探测结果（可点选填入 / 加入允许根路径 / 重新检测）。
+    var srcField = add(form, el('div', 'field span2'));
+    var srcLabel = add(srcField, el('span', 'field-label', '备份源路径（每行一个）'));
+    S.detBadge = add(srcLabel, el('span', 'auto-badge'));
+    S.detBadge.hidden = true;
+    S.paths = textarea(4, '点「重新检测」自动填入；也可以直接手填绝对路径，每行一个');
+    srcField.appendChild(S.paths);
+    S.detBox = add(srcField, el('div', 'bak-detect bak-detect-idle'));
+    S.paths.addEventListener('input', function () { S.pathsTouched = true; syncPathsBadge(); });
     S.exclude = input('text', 'span2', '*.log, node_modules（可选，glob）'); field(form, '排除 glob（可选）', S.exclude, 'span2');
     S.dims = dimsBox(['site', 'db']);
     field(form, '备份对象', S.dims, 'span2');
@@ -1067,8 +1290,14 @@
     S.sched.keep = input('number', null, '7');
     S.sched.keep.value = '7'; S.sched.keep.min = '1'; S.sched.keep.max = '100';
     field(sForm, '保留份数（1–100）', S.sched.keep);
-    S.sched.paths = textarea(2, '/var/www');
-    field(sForm, '定时备份的路径（每行一个）', S.sched.paths, 'span2');
+    var schedPathField = add(sForm, el('div', 'field span2'));
+    var schedPathLabel = add(schedPathField, el('span', 'field-label', '定时备份的路径（每行一个）'));
+    S.schedDetBadge = add(schedPathLabel, el('span', 'auto-badge'));
+    S.schedDetBadge.hidden = true;
+    S.sched.paths = textarea(2, '与上面「新建备份」的备份源一致即可，自动检测会填好');
+    schedPathField.appendChild(S.sched.paths);
+    S.schedDetMeta = add(schedPathField, el('p', 'bak-sched-msg muted'));
+    S.sched.paths.addEventListener('input', function () { S.schedPathsTouched = true; });
     S.sched.dims = dimsBox(['site', 'db']);
     field(sForm, '备份对象', S.sched.dims, 'span2');
     S.sched.db = input('text', null, '例：wordpress');
@@ -1129,7 +1358,10 @@
     var root = add(container, el('section', 'backups'));
     build(root);
     loadVerifySupport();
-    loadPresets();
+    // 预设读取与备份源探测都跑在首屏渲染之后（按需触发，不拖慢打开页面），
+    // 探测等预设读完再发一次请求，避免两次全量调用打同一个插件 socket。
+    S.presetTask = loadPresets();
+    loadDetect(false);
     loadList(false); loadStats(); loadTasks(true); loadJobs(true);
     return { destroy: function () { S.destroyed = true; stopProgress(); } };
   }
