@@ -45,6 +45,7 @@
     '.rt-check{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--kore-border-2)}.rt-check:last-child{border-bottom:0}.rt-check-main{flex:1;min-width:0;font-size:var(--kore-font-12)}.rt-check-name{display:block;color:var(--kore-text-1);font-weight:500;margin-bottom:2px}.rt-check-detail{display:block;color:var(--kore-text-2);word-break:break-word}.rt-fix{margin-top:4px;color:var(--kore-text-2)}.rt-note{padding:10px 12px;color:var(--kore-text-3);font-size:var(--kore-font-12)}.rt-error{padding:10px 12px;color:var(--kore-danger);font-size:var(--kore-font-12);word-break:break-word}' +
     '.rt-empty-title{margin:0;font-size:var(--kore-font-14);font-weight:600}.rt-cmds{display:flex;flex-direction:column;gap:6px}.rt-cmd-row{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:var(--kore-font-12)}.rt-cmd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--kore-bg-2);border:1px solid var(--kore-border-2);border-radius:3px;padding:1px 5px;word-break:break-all}.rt-cmd-note{color:var(--kore-text-3)}.rt-link{color:var(--kore-info)}' +
     '.rt-venv-pkgs{margin:6px 0 0;padding:6px 10px;background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:4px;font-size:var(--kore-font-12);color:var(--kore-text-2)}.rt-venv-pkgs code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.rt-row-btns{display:flex;gap:6px;flex-wrap:wrap}.rt-row-btns .btn{min-height:32px;padding:3px 10px;font-size:var(--kore-font-12)}.rt-venv-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:10px 12px;border-bottom:1px solid var(--kore-border-2)}.rt-field{display:flex;flex-direction:column;gap:4px;font-size:var(--kore-font-12)}.rt-field label{color:var(--kore-text-3)}.rt-field .rt-input{flex:none;width:100%;min-height:36px}.rt-field-hint{color:var(--kore-text-3);font-size:11px}.rt-venv-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px}.rt-err-detail{margin-top:6px;font-size:var(--kore-font-12);color:var(--kore-text-3)}.rt-err-detail summary{cursor:pointer}.rt-ok{padding:10px 12px;color:var(--kore-success);font-size:var(--kore-font-12);word-break:break-word}' +
+    '.rt-log{margin:0;padding:8px 12px;max-height:300px;overflow:auto;background:var(--kore-bg-0);border:1px solid var(--kore-border-2);border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all}.rt-guard-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px}.rt-guard-meta .btn{min-height:32px;padding:3px 10px;font-size:var(--kore-font-12)}' +
     '@media (max-width:639px){.rt-tab{flex:1 1 auto;min-height:var(--kore-touch);padding:8px 10px}.rt-title{font-size:var(--kore-font-14)}.rt-row-btns .btn{min-height:var(--kore-touch);flex:1 1 auto}.rt-venv-form{grid-template-columns:1fr}.rt-field .rt-input{min-height:var(--kore-touch)}}';
 
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined && text !== null) n.textContent = String(text); return n; }
@@ -99,11 +100,11 @@
   }
 
   var TABS = [
-    { id: 'node', label: 'Node.js', domain: 'runtime-node', noun: 'Node', deps: 'dependencies_count', cols: ['项目名', '路径', '依赖数', '锁文件'],
+    { id: 'node', label: 'Node.js', domain: 'runtime-node', noun: 'Node', deps: 'dependencies_count', edge: 'app.js', cols: ['项目名', '路径', '依赖数', '锁文件'],
       cmds: [['apt install nodejs', tr('runtimes.cmd.debian', 'Debian / Ubuntu')], ['nvm install --lts', tr('runtimes.cmd.nvmInstalled', '已安装 nvm 时')], ['https://nodejs.org', tr('runtimes.cmd.official', '官方安装包')]] },
-    { id: 'php', label: 'PHP', domain: 'runtime-php', noun: 'PHP', deps: 'dependencies_count', cols: ['项目名', '路径', '依赖数', '框架', '锁文件'],
+    { id: 'php', label: 'PHP', domain: 'runtime-php', noun: 'PHP', deps: 'dependencies_count', edge: 'index.php', cols: ['项目名', '路径', '依赖数', '框架', '锁文件'],
       cmds: [['apt install php-cli', tr('runtimes.cmd.debian', 'Debian / Ubuntu')], ['phpenv install 8.4.0', tr('runtimes.cmd.phpenvInstalled', '已安装 phpenv 时')], ['https://www.php.net/downloads', tr('runtimes.cmd.official', '官方安装包')]] },
-    { id: 'python', label: 'Python', domain: 'runtime-python', noun: 'Python', deps: 'dependency_count', cols: ['项目名', '路径', '依赖数', '锁文件', 'venv'],
+    { id: 'python', label: 'Python', domain: 'runtime-python', noun: 'Python', deps: 'dependency_count', edge: 'app.py', cols: ['项目名', '路径', '依赖数', '锁文件', 'venv'],
       cmds: [['apt install python3', tr('runtimes.cmd.debian', 'Debian / Ubuntu')], ['pyenv install 3.13.0', tr('runtimes.cmd.pyenvInstalled', '已安装 pyenv 时')], ['https://www.python.org/downloads', tr('runtimes.cmd.official', '官方安装包')]] }
   ];
   function detailRows(t, i) {
@@ -136,9 +137,15 @@
   }
   function blank(id) {
     var root = ''; try { root = localStorage.getItem(LS + id) || ''; } catch (e) { root = ''; }
-    return { versions: null, defaultVersion: '', hint: '', error: '', loading: false, selected: '',
+    return { versions: null, defaultVersion: '', pinnedVersion: '', hint: '', error: '', loading: false, selected: '',
       info: {}, infoErrors: {}, infoLoading: '', root: root, projects: null, projectError: '',
       projectWarnings: [], scanning: false, doctor: null, doctorError: '', doctorLoading: false,
+      // 版本默认（use）：钉住 / 取消钉住一个已装版本，供站点与守护启动时使用
+      pinBusy: '', pinMsg: '', pinErr: null,
+      // 进程守护（三 tab 共用）：列表 / 表单 / 忙碌项 / 日志
+      guard: null, guardError: '', guardLoading: false, guardBusy: '', guardMsg: '', guardErr: null,
+      gName: '', gDir: '', gScript: '', gVersion: '', gArgs: '', gShowForm: false,
+      gLogFor: '', gLog: null, gLogLoading: false, gLogError: '',
       // Python venv/pip（仅 runtime-python tab 使用；node/php 这三组字段闲置、不影响其渲染）
       venvRoot: '', venvs: null, venvListError: '', venvListLoading: false,
       vPath: '', vVersion: '', vPkgs: '', vBusy: false, vMsg: null, vErr: null,
@@ -156,6 +163,7 @@
     invoke(t.domain, 'versions', {}).then(function (d) {
       s.loading = false; s.error = ''; s.versions = Array.isArray(d.versions) ? d.versions : [];
       s.defaultVersion = d.default_version || ''; s.hint = d.hint || '';
+      s.pinnedVersion = d.pinned_version || '';
       if (tab === t.id) paintBody();
     }, function (err) { s.loading = false; s.error = err.message; if (tab === t.id) paintBody(); });
   }
@@ -177,6 +185,7 @@
     var s = state[id], t = byId[id];
     if (s.versions === null && !s.loading) loadVersions(t, s);
     if (s.doctor === null && !s.doctorLoading) loadDoctor(t, s);
+    if (s.guard === null && !s.guardLoading) loadGuard(t, s);
     if (id === 'python' && s.venvs === null && !s.venvListLoading) loadVenvs(t, s);
   }
   // ---- Python venv / pip（仅 runtime-python）：契约源自后端 venv.go 的 *Params/*Result ----
@@ -259,6 +268,12 @@
     add(bar, el('span', null, s.versions === null ? tr('runtimes.status.detecting', '正在探测 ') + t.noun + tr('runtimes.ellipsis', '…')
       : (has ? '检测到 ' + s.versions.length + tr('runtimes.unit.countSpaced', ' 个 ') + t.noun + tr('runtimes.status.defaultSuffix', '，默认 ') + (s.defaultVersion || '—') : tr('runtimes.status.notDetected', '未检测到 ') + t.noun)));
     if (s.versions !== null) bar.appendChild(has ? statusChip('ok', tr('runtimes.badge.installed', '已安装')) : statusChip('na', tr('runtimes.badge.notInstalled', '未安装')));
+    if (s.pinnedVersion) add(bar, el('span', 'rt-muted', tr('runtimes.pin.current', '默认版本（站点/守护用）：') + s.pinnedVersion));
+    if (s.pinMsg) add(bar, el('span', 'rt-ok', s.pinMsg));
+    if (s.pinErr) {
+      var pe = add(bar, el('span', 'rt-error', tr('runtimes.pin.err.title', '设置默认版本失败：') + ((s.pinErr && s.pinErr.message) || s.pinErr)));
+      add(pe, el('div', 'rt-fix', tr('runtimes.pin.err.howto', '怎么办：') + pinHint(s.pinErr)));
+    }
     return bar;
   }
   function emptyGuide(t, s) {
@@ -285,7 +300,7 @@
   function versionsTable(t, s) {
     var scroll = el('div', 'rt-scroll'), table = add(scroll, el('table', 'rt-table'));
     var htr = add(add(table, el('thead')), el('tr'));
-    [tr('runtimes.col.version', '版本'), tr('runtimes.col.path', '路径'), tr('runtimes.col.source', '来源'), tr('runtimes.col.default', '默认')].forEach(function (h) { add(htr, el('th', null, h)); });
+    [tr('runtimes.col.version', '版本'), tr('runtimes.col.path', '路径'), tr('runtimes.col.source', '来源'), tr('runtimes.col.default', '默认'), tr('runtimes.col.actions', '操作')].forEach(function (h) { add(htr, el('th', null, h)); });
     var tbody = add(table, el('tbody'));
     s.versions.forEach(function (v) {
       var open = s.selected === v.version, td;
@@ -299,10 +314,21 @@
       var src = add(row, el('td', null, v.source || '—'));
       if (SRC[v.source]) src.title = SRC[v.source];
       td = add(row, el('td'));
-      if (v.is_default) td.appendChild(statusChip('ok', tr('runtimes.col.default', '默认'))); else add(td, el('span', 'rt-muted', '—'));
+      if (v.is_default) td.appendChild(statusChip('ok', tr('runtimes.col.default', '默认')));
+      else if (s.pinnedVersion && s.pinnedVersion === v.version) td.appendChild(statusChip('info', tr('runtimes.pin.badge', '已设为默认')));
+      else add(td, el('span', 'rt-muted', '—'));
+      // 「设为默认」：把站点与守护启动时用的版本钉住（不改宿主 PATH，零侵入）
+      td = add(row, el('td'));
+      var pinBtn = add(td, el('button', 'btn', s.pinBusy === v.version ? tr('runtimes.pin.saving', '保存中…')
+        : (s.pinnedVersion === v.version ? tr('runtimes.pin.reset', '取消默认') : tr('runtimes.pin.set', '设为默认'))));
+      pinBtn.type = 'button'; pinBtn.disabled = !!s.pinBusy;
+      pinBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        pinVersion(t, s, s.pinnedVersion === v.version ? '' : v.version);
+      });
       if (!open) return;
       td = add(add(tbody, el('tr', 'rt-detail-row')), el('td'));
-      td.colSpan = 4; td.appendChild(detailBox(t, s, v.version));
+      td.colSpan = 5; td.appendChild(detailBox(t, s, v.version));
     });
     return scroll;
   }
@@ -482,6 +508,245 @@
     return p;
   }
 
+  // ---- 默认版本（use）：把某个已装版本钉住，站点与守护启动时优先用它 ----
+  function pinVersion(t, s, version) {
+    s.pinBusy = version; s.pinErr = null; s.pinMsg = ''; paintBody();
+    invoke(t.domain, 'use', { version: version }).then(function (d) {
+      s.pinBusy = '';
+      s.pinMsg = d.cleared
+        ? tr('runtimes.pin.cleared', '已恢复跟随系统默认版本（点「重新探测」刷新）')
+        : tr('runtimes.pin.done', '已把 ') + (d.version || version) + tr('runtimes.pin.doneSuffix', ' 设为默认版本：站点与「进程守护」启动时优先使用它');
+      loadVersions(t, s);
+      if (tab === t.id) paintBody();
+    }, function (err) { s.pinBusy = ''; s.pinErr = err; if (tab === t.id) paintBody(); });
+  }
+  function pinHint(err) {
+    var code = err && err.code ? String(err.code) : '';
+    var m = (err && err.backendMessage) || (err && err.message) || '';
+    if (code === 'E_NOTFOUND' || /未检测到|未安装/.test(m))
+      return tr('runtimes.pin.hint.notfound', '先装好运行时再设默认版本；可用上方「安装提示」里的命令装一个，然后点「重新探测」。');
+    if (code === 'E_INVALID') return tr('runtimes.pin.hint.invalid', '要设默认的版本必须在「版本列表」里（已检测到的）；刷新后重新点这一行的「设为默认」。');
+    return tr('runtimes.pin.hint.generic', '请刷新页面重试；反复失败把下方错误详情反馈给管理员。');
+  }
+
+  // ---- 进程守护（guard.*）：启动 / 停止 / 重启 / 状态 / 日志尾部 ----
+  // 不自动重启：没有常驻 supervisor（G-05 无中间件、G-19 不自起 ticker），
+  // 进程退出后由这里显示「已退出」并给出日志入口，用户点一次「重启」即拉起。
+  var GUARD_META = {
+    running: ['ok', '运行中', 'runtimes.guard.state.running'],
+    stopped: ['na', '已停止', 'runtimes.guard.state.stopped'],
+    crashed: ['fail', '已退出', 'runtimes.guard.state.crashed']
+  };
+  function guardHint(err) {
+    var code = err && err.code ? String(err.code) : '';
+    var m = (err && err.backendMessage) || (err && err.message) || '';
+    if (code === 'E_UNSUPPORTED' || /不支持/.test(m))
+      return tr('runtimes.guard.hint.platform', '当前系统不支持进程守护（Linux / macOS 可用；其他系统仍能看列表）。');
+    if (code === 'E_INVALID') return tr('runtimes.guard.hint.invalid', '检查填写内容：应用名用小写字母/数字/连字符；目录必须在 /var/www、/opt、/home 或 Kore 状态目录内；入口脚本要在该目录里。');
+    if (code === 'E_NOTFOUND' || /未找到该应用/.test(m)) return tr('runtimes.guard.hint.notfound', '该应用还没添加：先点「添加应用」填好名称、目录与入口脚本。');
+    return tr('runtimes.guard.hint.generic', '请刷新重试；反复失败看「日志」里的最后几行，或把下方错误详情反馈给管理员。');
+  }
+  function guardErrBox(err) {
+    var box = el('div', 'rt-error'), msg = (err && err.backendMessage) || (err && err.message) || String(err);
+    add(box, el('div', null, tr('runtimes.guard.err.title', '操作失败：') + msg));
+    add(box, el('div', 'rt-fix', tr('runtimes.guard.err.howto', '怎么办：') + guardHint(err)));
+    var det = add(box, el('details', 'rt-err-detail'));
+    add(det, el('summary', null, tr('runtimes.guard.err.detail', '错误详情')));
+    add(det, el('code', 'rt-cmd', (err && err.code ? err.code + ' · ' : '') + msg));
+    return box;
+  }
+  function guardStateChip(state) {
+    var meta = GUARD_META[state] || GUARD_META.stopped;
+    return statusChip(meta[0], tr(meta[2], meta[1]));
+  }
+  function loadGuard(t, s) {
+    s.guardLoading = true; s.guardError = '';
+    invoke(t.domain, 'guard.list', {}).then(function (d) {
+      s.guardLoading = false;
+      s.guard = Array.isArray(d.apps) ? d.apps : [];
+      s.guardRoot = d.root || s.guardRoot;
+      if (!s.gScript) s.gScript = t.edge;
+      if (!s.gDir && s.root) s.gDir = s.root;
+      if (tab === t.id) paintBody();
+    }, function (err) { s.guardLoading = false; s.guardError = err; if (tab === t.id) paintBody(); });
+  }
+  function doGuard(t, s, action, name) {
+    var params = {};
+    if (action === 'restart' || action === 'remove') params = { name: name || '' };
+    else if (name) params = { names: [name] };
+    s.guardBusy = action + ':' + (name || '*'); s.guardErr = null; s.guardMsg = ''; paintBody();
+    invoke(t.domain, 'guard.' + action, params, 30000).then(function (d) {
+      s.guardBusy = '';
+      if (Array.isArray(d.apps)) s.guard = d.apps;
+      var failed = d.failed || 0;
+      var first = (d.apps || []).filter(function (a) { return !!a.error; })[0];
+      if (failed && first) s.guardErr = new Error(first.error);
+      if (action === 'start') {
+        s.guardMsg = d.started ? tr('runtimes.guard.msg.started', '已启动 ') + d.started + tr('runtimes.guard.msg.startedSuffix', ' 个应用')
+          : (d.already_running ? tr('runtimes.guard.msg.already', '已在运行，无需重复启动') : '');
+      } else if (action === 'stop') {
+        s.guardMsg = d.stopped ? tr('runtimes.guard.msg.stopped', '已停止 ') + d.stopped + tr('runtimes.guard.msg.stoppedSuffix', ' 个应用') : '';
+      } else if (action === 'restart') {
+        s.guardMsg = tr('runtimes.guard.msg.restarted', '已重启；新日志从这次启动开始追加');
+      } else if (action === 'remove') {
+        s.guardMsg = tr('runtimes.guard.msg.removed', '已删除该应用（进程需先停止才能删）');
+        loadGuard(t, s);
+      }
+      if (tab === t.id) paintBody();
+    }, function (err) { s.guardBusy = ''; s.guardErr = err; if (tab === t.id) paintBody(); });
+  }
+  function doGuardAdd(t, s) {
+    var name = (s.gName || '').trim(), dir = (s.gDir || '').trim(), script = (s.gScript || '').trim();
+    if (!name || !dir || !script) {
+      s.guardErr = new Error(tr('runtimes.guard.err.required', '请把应用名、目录、入口脚本都填上：目录可在「项目扫描」里复制，脚本通常是 app.js / app.py / index.php'));
+      s.guardMsg = ''; paintBody(); return;
+    }
+    var args = (s.gArgs || '').split(/\s+/).filter(function (x) { return !!x; });
+    s.guardBusy = 'add'; s.guardErr = null; s.guardMsg = ''; paintBody();
+    invoke(t.domain, 'guard.add', { name: name, dir: dir, script: script, args: args, version: (s.gVersion || '') }).then(function () {
+      s.guardBusy = ''; s.gName = ''; s.gArgs = ''; s.gShowForm = false;
+      s.guardMsg = tr('runtimes.guard.added', '已添加；点行内「启动」即拉起进程（日志写到插件状态目录）。');
+      loadGuard(t, s);
+    }, function (err) { s.guardBusy = ''; s.guardErr = err; if (tab === t.id) paintBody(); });
+  }
+  function doGuardLogs(t, s, name) {
+    if (s.gLogFor === name && s.gLog) { s.gLogFor = ''; s.gLog = null; paintBody(); return; }
+    s.gLogFor = name; s.gLogLoading = true; s.gLogError = ''; s.gLog = null; paintBody();
+    invoke(t.domain, 'guard.logs', { name: name, lines: 200 }, 25000).then(function (d) {
+      s.gLogLoading = false; s.gLog = d;
+      if (tab === t.id) paintBody();
+    }, function (err) { s.gLogLoading = false; s.gLogError = err; if (tab === t.id) paintBody(); });
+  }
+  function guardPanel(t, s) {
+    var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
+    add(h, el('span', 'panel-title', tr('runtimes.guard.panel', '进程守护')));
+    add(h, el('span', 'panel-meta', tr('runtimes.guard.meta', '启动 / 停止 / 重启单个进程，看日志尾部；不做集群与编排')));
+    var tools = add(p, el('div', 'rt-guard-meta'));
+    var refresh = add(tools, el('button', 'btn', tr('runtimes.guard.btn.refresh', '刷新状态')));
+    refresh.type = 'button'; refresh.disabled = !!s.guardLoading;
+    refresh.addEventListener('click', function () { loadGuard(t, s); });
+    var addBtn = add(tools, el('button', 'btn btn-primary', s.gShowForm ? tr('runtimes.guard.btn.cancelAdd', '取消添加') : tr('runtimes.guard.btn.add', '添加应用')));
+    addBtn.type = 'button';
+    addBtn.addEventListener('click', function () { s.gShowForm = !s.gShowForm; s.guardErr = null; paintBody(); });
+    var startAll = add(tools, el('button', 'btn', tr('runtimes.guard.btn.startAll', '全部启动')));
+    startAll.type = 'button'; startAll.disabled = !s.guard || !s.guard.length || !!s.guardBusy;
+    startAll.addEventListener('click', function () { doGuard(t, s, 'start', ''); });
+    var stopAll = add(tools, el('button', 'btn', tr('runtimes.guard.btn.stopAll', '全部停止')));
+    stopAll.type = 'button'; stopAll.disabled = !s.guard || !s.guard.length || !!s.guardBusy;
+    stopAll.addEventListener('click', function () { doGuard(t, s, 'stop', ''); });
+    if (s.guardRoot) add(tools, el('span', 'rt-field-hint', tr('runtimes.guard.rootPrefix', '日志目录：') + s.guardRoot));
+
+    if (s.gShowForm) {
+      var form = add(p, el('div', 'rt-venv-form'));
+      function field(label, hintText, placeholder, value, onChange) {
+        var wrap = add(form, el('div', 'rt-field'));
+        add(wrap, el('label', null, label));
+        var input = add(wrap, el('input', 'rt-input'));
+        input.type = 'text'; input.placeholder = placeholder; input.value = value || '';
+        input.addEventListener('change', function () { onChange(input.value); });
+        if (hintText) add(wrap, el('div', 'rt-field-hint', hintText));
+        return input;
+      }
+      field(tr('runtimes.guard.field.name', '应用名'), tr('runtimes.guard.field.nameHint', '小写字母/数字/连字符，例如 my-api'), 'my-api', s.gName, function (v) { s.gName = v; });
+      field(tr('runtimes.guard.field.dir', '目录'), tr('runtimes.guard.field.dirHint', '项目根目录，须在 /var/www、/opt、/home 或 Kore 状态目录内'), '/var/www/my-api', s.gDir, function (v) { s.gDir = v; });
+      field(tr('runtimes.guard.field.script', '入口脚本'), tr('runtimes.guard.field.scriptHint', '相对目录的入口文件，例如 ' + t.edge), t.edge, s.gScript, function (v) { s.gScript = v; });
+      field(tr('runtimes.guard.field.args', '附加参数（可选）'), tr('runtimes.guard.field.argsHint', '空格分隔，例如 --port 3000'), '--port 3000', s.gArgs, function (v) { s.gArgs = v; });
+      var vs = add(form, el('div', 'rt-field'));
+      add(vs, el('label', null, tr('runtimes.guard.field.version', '运行版本')));
+      var select = add(vs, el('input', 'rt-input'));
+      select.type = 'text'; select.placeholder = tr('runtimes.guard.field.versionPlaceholder', '留空 = 默认版本');
+      select.value = s.gVersion || '';
+      select.setAttribute('list', 'rt-guard-versions');
+      select.addEventListener('change', function () { s.gVersion = select.value.trim(); });
+      var dl = add(vs, el('datalist')); dl.id = 'rt-guard-versions';
+      (s.versions || []).forEach(function (v) { add(dl, el('option')).value = v.version; });
+      add(vs, el('div', 'rt-field-hint', tr('runtimes.guard.field.versionHint', '只能填「版本列表」里已有的版本；留空用默认版本')));
+      var actions = add(p, el('div', 'rt-venv-actions'));
+      var save = add(actions, el('button', 'btn btn-primary', s.guardBusy === 'add' ? tr('runtimes.guard.btn.adding', '添加中…') : tr('runtimes.guard.btn.save', '保存应用')));
+      save.type = 'button'; save.disabled = s.guardBusy === 'add';
+      save.addEventListener('click', function () { doGuardAdd(t, s); });
+      add(actions, el('span', 'rt-field-hint', tr('runtimes.guard.add.note', '守护只在本机跑单进程；崩溃不会自动重启，会显示「已退出」并保留日志')));
+    }
+
+    if (s.guardErr) p.appendChild(guardErrBox(s.guardErr));
+    if (s.guardMsg) add(p, el('div', 'rt-ok', s.guardMsg));
+    if (s.guardError) { p.appendChild(guardErrBox(s.guardError)); return p; }
+    if (s.guard === null) { add(p, el('div', 'stub', tr('runtimes.guard.loading', '正在读取守护列表…'))); return p; }
+    if (!s.guard.length) {
+      add(p, el('div', 'rt-note', tr('runtimes.guard.empty', '还没有被守护的应用。点「添加应用」填名称 / 目录 / 入口脚本，然后「启动」——适合常驻的 Node / Python / PHP 服务。')));
+      return p;
+    }
+    var scroll = add(p, el('div', 'rt-scroll')), table = add(scroll, el('table', 'rt-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    [tr('runtimes.guard.col.name', '应用'), tr('runtimes.guard.col.dir', '目录 / 入口'), tr('runtimes.guard.col.state', '状态'),
+      tr('runtimes.guard.col.version', '版本'), tr('runtimes.guard.col.actions', '操作')].forEach(function (x) { add(htr, el('th', null, x)); });
+    var tbody = add(table, el('tbody'));
+    s.guard.forEach(function (a) {
+      var running = a.state === 'running';
+      var row = add(tbody, el('tr')), td;
+      var nameCell = add(row, el('td'));
+      add(nameCell, el('span', null, a.name || '—'));
+      if (a.pid) add(nameCell, el('span', 'rt-muted', tr('runtimes.guard.pid', ' · 进程 ') + a.pid));
+      td = add(row, el('td', 'rt-path'));
+      add(td, el('div', null, a.dir || '—'));
+      add(td, el('div', 'rt-muted', a.script || '—'));
+      td = add(row, el('td'));
+      add(td, guardStateChip(a.state));
+      if (running) add(td, el('div', 'rt-muted', tr('runtimes.guard.uptime', '已运行 ') + fmtDuration(a.uptime_s) + (a.rss_kb ? ' · 内存 ' + fmtKB(a.rss_kb) : '')));
+      else if (a.error) add(td, el('div', 'rt-error', a.error));
+      else if (a.last_error) add(td, el('div', 'rt-muted', a.last_error));
+      add(add(row, el('td')), el('span', 'rt-muted', a.version || tr('runtimes.guard.defaultVersion', '默认')));
+      td = add(row, el('td'));
+      var btns = add(td, el('div', 'rt-row-btns'));
+      function actionBtn(label, action, cls) {
+        var b = add(btns, el('button', 'btn' + (cls ? ' ' + cls : ''), label));
+        b.type = 'button'; b.disabled = !!s.guardBusy && s.guardBusy !== action + ':*';
+        b.addEventListener('click', function () { doGuard(t, s, action, a.name); });
+        return b;
+      }
+      if (running) {
+        actionBtn(tr('runtimes.guard.btn.stop', '停止'), 'stop');
+        actionBtn(tr('runtimes.guard.btn.restart', '重启'), 'restart');
+      } else {
+        actionBtn(tr('runtimes.guard.btn.start', '启动'), 'start', 'btn-primary');
+      }
+      var logBtn = add(btns, el('button', 'btn', s.gLogFor === a.name ? tr('runtimes.guard.btn.hideLog', '收起日志') : tr('runtimes.guard.btn.logs', '日志')));
+      logBtn.type = 'button';
+      logBtn.addEventListener('click', function () { doGuardLogs(t, s, a.name); });
+      var del = add(btns, el('button', 'btn', tr('runtimes.guard.btn.remove', '删除')));
+      del.type = 'button'; del.disabled = running;
+      del.title = running ? tr('runtimes.guard.remove.running', '运行中的进程不能删除，先停止') : '';
+      del.addEventListener('click', function () { doGuard(t, s, 'remove', a.name); });
+      if (s.gLogFor !== a.name) return;
+      var logRow = add(tbody, el('tr', 'rt-detail-row')), logCell = add(logRow, el('td'));
+      logCell.colSpan = 5;
+      if (s.gLogError) logCell.appendChild(guardErrBox(s.gLogError));
+      else if (s.gLogLoading) add(logCell, el('div', 'rt-note', tr('runtimes.guard.logLoading', '正在读取日志…')));
+      else if (s.gLog) {
+        add(logCell, el('div', 'rt-note', tr('runtimes.guard.logPath', '日志文件：') + (s.gLog.path || '—')
+          + (s.gLog.total_lines != null ? tr('runtimes.guard.logCount', ' · 最近 ') + s.gLog.returned + tr('runtimes.guard.logCountSuffix', ' 行') : '')
+          + (s.gLog.truncated ? tr('runtimes.guard.logTruncated', ' · 太长已截断') : '')));
+        if (s.gLog.hint) add(logCell, el('div', 'rt-note', s.gLog.hint));
+        var pre = add(logCell, el('pre', 'rt-log'));
+        pre.textContent = (s.gLog.lines && s.gLog.lines.length) ? s.gLog.lines.join('\n') : tr('runtimes.guard.logEmpty', '（日志为空）');
+      }
+    });
+    return p;
+  }
+  function fmtDuration(seconds) {
+    var s2 = typeof seconds === 'number' && seconds > 0 ? seconds : 0;
+    if (s2 < 60) return s2 + 's';
+    if (s2 < 3600) return Math.floor(s2 / 60) + tr('runtimes.unit.minutes', ' 分钟');
+    if (s2 < 86400) return Math.floor(s2 / 3600) + tr('runtimes.unit.hours', ' 小时');
+    return Math.floor(s2 / 86400) + tr('runtimes.unit.days', ' 天');
+  }
+  function fmtKB(kb) {
+    if (typeof kb !== 'number' || !isFinite(kb) || kb <= 0) return '—';
+    if (kb < 1024) return kb + ' KiB';
+    if (kb < 1024 * 1024) return (kb / 1024).toFixed(1) + ' MiB';
+    return (kb / 1024 / 1024).toFixed(1) + ' GiB';
+  }
+
   function paintBar() {
     if (!barBox) return;
     barBox.textContent = '';
@@ -499,6 +764,7 @@
     var t = byId[tab], s = state[tab];
     bodyBox.appendChild(summary(t, s));
     bodyBox.appendChild(versionsPanel(t, s));
+    bodyBox.appendChild(guardPanel(t, s)); // 三 tab 共用：启动/停止/重启/状态/日志尾部
     // 仅 Python runtime 显示虚拟环境区；domain 是运行时变量、非常量，node/php 走不到这个分支
     if (t.domain === 'runtime-python') bodyBox.appendChild(venvPanel(t, s));
     if (s.versions && s.versions.length) bodyBox.appendChild(projectsPanel(t, s));
@@ -515,6 +781,7 @@
     refresh.addEventListener('click', function () {
       var s = state[tab];
       s.versions = null; s.error = ''; s.doctor = null; s.doctorError = ''; s.selected = '';
+      s.guard = null; s.guardError = ''; s.gLogFor = ''; s.gLog = null; s.pinMsg = ''; s.pinErr = null;
       if (tab === 'python') { s.venvs = null; s.venvListError = ''; s.pkgFor = ''; s.pkgMode = ''; s.pkgResult = null; s.pkgErr = null; }
       ensureLoaded(tab); paintBody();
     });
