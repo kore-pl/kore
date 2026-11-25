@@ -2,10 +2,10 @@
 # 安装**系统级 root** 的 kore 服务（ADR-0042 方案 B：结构性消除授权判定）。
 #
 # 用法:
-#   scripts/install-system-service.sh --dry-run              # 打印 unit 与计划，零变更
-#   scripts/install-system-service.sh --install-root /opt/kore
-#   scripts/install-system-service.sh --remove               # 停服务 + 删 unit（幂等）
-#   scripts/install-system-service.sh --no-start --install-root DIR
+#   scripts/install.sh --dry-run              # 打印 unit 与计划，零变更
+#   scripts/install.sh --install-root /opt/kore
+#   scripts/install.sh --remove               # 停服务 + 删 unit（幂等）
+#   scripts/install.sh --no-start --install-root DIR
 #                                                             # 只写 unit + enable，不 start
 #                                                             # （给「先装、再停旧实例、再 start」的有序切换用）
 #
@@ -132,8 +132,8 @@ KORE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 render_unit() {
   cat <<UNIT
-# $UNIT_PATH — 由 scripts/install-system-service.sh 生成（ADR-0042 方案 B）
-# 手工改动会在下次安装时被覆盖；卸载: sudo scripts/install-system-service.sh --remove
+# $UNIT_PATH — 由 scripts/install.sh 生成（ADR-0042 方案 B）
+# 手工改动会在下次安装时被覆盖；卸载: sudo scripts/install.sh --remove
 [Unit]
 Description=kore 内核（kored，root 服务；特权动作零交互）
 Documentation=file://$INSTALL_ROOT/docs/ARCHITECTURE.md

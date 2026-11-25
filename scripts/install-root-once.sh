@@ -118,7 +118,7 @@ path_ok() { case "$1" in /*) ;; *) return 1 ;; esac; case "$1" in *[\"\\[:space:
 # ---------- 受控写白名单（ADR-0052；默认 fail-closed） ----------
 #
 # resolve_allow_dirs / validate_allow_dirs 的**单一真源**是 scripts/lib/allow-dirs.sh：
-# 三个安装器（本脚本 / install-service.sh / install-system-service.sh）共用同一份实现，
+# 三个安装器（本脚本 / install-service.sh / install.sh）共用同一份实现，
 # 改库 = 三个同时生效。这里只负责把本脚本的安装根（HOME_DIR）交给库，不再重复定义校验
 # 语义——重定义会遮蔽公共库，又退回「三份副本靠注释对齐」的静默漂移。
 

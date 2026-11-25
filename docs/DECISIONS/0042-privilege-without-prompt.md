@@ -67,7 +67,7 @@
 
 | 产物 | 作用 |
 | --- | --- |
-| `scripts/install-system-service.sh` | 幂等安装/卸载系统级 root unit；`--dry-run` 零变更预览；检测用户级实例冲突；只写 `/etc/systemd/system/kore.service`（豁免 #1） |
+| `scripts/install.sh` | 幂等安装/卸载系统级 root unit；`--dry-run` 零变更预览；检测用户级实例冲突；只写 `/etc/systemd/system/kore.service`（豁免 #1） |
 | `scripts/install-polkit-rule.sh` | **降级路径 A** 的安装器（保留，不在默认安装链里调用） |
 | `docs/SECURITY.md` §15.5 | 两方案的边界、审计、撤销、与 G-11 的关系 |
 | `docs/RUNBOOK.md` §5.1 | 系统级 unit 示例（已有，落地后与脚本生成的 unit 对齐） |
@@ -75,7 +75,7 @@
 **实测边界（诚实记录）**：本会话 `NoNewPrivs=1`，`sudo` 被内核阻断（`sudo: The "no new privileges" flag is set`），`/etc/systemd/system` 不可写 → **系统服务真装与"root 下特权动作零交互"未在本机实测**，仅完成 `--dry-run`、`bash -n`、unit 渲染核对与用户级实例检测。真机验证命令：
 
 ```bash
-sudo bash scripts/install-system-service.sh --install-root /opt/kore
+sudo bash scripts/install.sh --install-root /opt/kore
 systemctl show -p User --value kore        # 期望 root
 ps -o user= -C kored                       # 期望 root
 curl -sS --unix-socket /opt/kore/run/kore.sock -b <cookie> \
@@ -100,13 +100,13 @@ journalctl -u polkit --since -5min | grep -c manage-units   # 期望 0
 
 | 产物 | 状态 | 核对事实 |
 | --- | --- | --- |
-| `scripts/install-system-service.sh` | 已落地（225 行） | 幂等（渲染结果与既有 unit `cmp` 一致即不写、打印「幂等」）；`--dry-run` 零变更预览并打印完整 unit；`--remove` 停服务 + 删 unit + `daemon-reload`（幂等）；**用户级实例冲突检测**（`systemctl --user is-active kored-local` 命中 → `[BLOCKED]` exit 4，`--force` 只跳过检查、不代停）；非 root 真装/卸载 `exit 3` 并打印需执行的 `sudo` 命令 |
+| `scripts/install.sh` | 已落地（225 行） | 幂等（渲染结果与既有 unit `cmp` 一致即不写、打印「幂等」）；`--dry-run` 零变更预览并打印完整 unit；`--remove` 停服务 + 删 unit + `daemon-reload`（幂等）；**用户级实例冲突检测**（`systemctl --user is-active kored-local` 命中 → `[BLOCKED]` exit 4，`--force` 只跳过检查、不代停）；非 root 真装/卸载 `exit 3` 并打印需执行的 `sudo` 命令 |
 | `scripts/install-polkit-rule.sh` | 已落地，**降级路径 A**，不在默认安装链里调用 | 规则功能自检 **13/13 PASS**（假 polkit 沙箱，PASS/FAIL 逐条打印；证据 `.agents/verify/root-nopass-polkit.md`）；`--dry-run` / `--check` 非 root 只读，`--remove` 幂等，polkitd 监听目录自动重载 |
 | `docs/SECURITY.md` §15.5 | 已落地 | 写清「为什么不需要口令」的机制链、方案 A 的等价提权面与 5 条收紧条件、A 的豁免归属（ADR-0023 §3.5 需新增第 5 项）、撤销路径与「与 G-11 多用户 RBAC 无关」的边界 |
 | `docs/RUNBOOK.md` §5.1 | 本次对齐 | unit 示例改为与本脚本生成结果一致（见第 2 节），并修正 §5.2 的 socket 路径为安装根内 `<install>/run/kore.sock` |
 | `e1980a3` | 实现提交 | `[agent:root-nopass-polkit] feat(privilege): 系统级 root 服务实现提权零交互（ADR-0042，polkit 规则降为降级路径）`——4 文件 / +831 行：本 ADR、两个安装器、验收报告 |
 
-### 2. unit 模板的关键字段（取自 `scripts/install-system-service.sh` 的 `render_unit()` 实际值，非文档推测）
+### 2. unit 模板的关键字段（取自 `scripts/install.sh` 的 `render_unit()` 实际值，非文档推测）
 
 | 字段 | 实际值 | 为什么是它 |
 | --- | --- | --- |
@@ -136,7 +136,7 @@ journalctl -u polkit --since -5min | grep -c manage-units   # 期望 0
 **闭环命令（在有 root 的真实环境按序执行一次即可闭环）**：
 
 ```bash
-sudo bash scripts/install-system-service.sh --install-root /opt/kore   # 期望 exit 0，打印 [OK] 已写入 /etc/systemd/system/kore.service
+sudo bash scripts/install.sh --install-root /opt/kore   # 期望 exit 0，打印 [OK] 已写入 /etc/systemd/system/kore.service
 systemctl show -p User --value kore                                    # 期望输出 root
 journalctl -u polkit --since -5min | grep -c manage-units              # 期望 0
 ```

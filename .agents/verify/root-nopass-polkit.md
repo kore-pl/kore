@@ -1,3 +1,5 @@
+> 命名更新（2026-11-25）：本文记录的历史命令中的 `scripts/install-system-service.sh` 为当时原文；安装脚本现已重命名为 `scripts/install.sh`，复现时请用新名。
+
 # 验收报告：polkit 规则实现 root 提权零口令（ADR-0018 通道）
 
 > 日期：2026-11-23 22:0x +0800 · 角色：implementer（`root-nopass-polkit`）· 写域：`scripts/install-polkit-rule.sh`、`docs/SECURITY.md` §15.5、本文件

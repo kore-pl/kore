@@ -20,7 +20,7 @@
 
 1. **root**：`sudo -v` 能过。脚本不自行提权，非 root 真跑直接 `exit 3`。
 2. **systemd**：`systemctl --version` 可用、`/etc/systemd/system` 存在（无 systemd 的容器/WSL1 不适用）。
-3. **停掉用户级实例**：`systemctl --user disable --now kored-local`。两个实例会抢同一 state/socket，`install-system-service.sh` 检测到它会 `[BLOCKED] exit 4`（`--force` 只跳过检查、不代停）。
+3. **停掉用户级实例**：`systemctl --user disable --now kored-local`。两个实例会抢同一 state/socket，`install.sh` 检测到它会 `[BLOCKED] exit 4`（`--force` 只跳过检查、不代停）。
 4. **kored 就位**：默认 `<install-root>/bin/kored`（`/opt/kore/bin/kored`）；否则 `--install-root` / `--bin` 指定。脚本不下载、不安装二进制。
 5. **管理会话（可选，但 STEP 3 需要）**：`--cookie` 或 `--password-file`。都不给时 STEP 3 自动降级为 `systemd-run --uid=0` 的机制等价自检，并明确记 `SKIP`、整体 `exit 7`（不谎报 PASS）。
 6. **记录基线**（建议，便于对比）：
@@ -64,7 +64,7 @@ STEP 3 默认只挑**非 `irreversible`** 的 root 动作（优先 id 含 `statu
 
 | 项 | 内容 |
 | --- | --- |
-| 执行 | `bash scripts/install-system-service.sh --install-root /opt/kore --bin /opt/kore/bin/kored --name kore` |
+| 执行 | `bash scripts/install.sh --install-root /opt/kore --bin /opt/kore/bin/kored --name kore` |
 | 期望 | `[OK] 已写入 /etc/systemd/system/kore.service`（已存在且内容一致时：`[OK] unit 已是最新（幂等）`） |
 | 判据 | `systemctl is-active kore` → `active`；`systemctl show -p User --value kore` → `root`；`test -f /etc/systemd/system/kore.service` → 存在 |
 | 不符 | `[BLOCKED]` + `exit 4`：先停 `kored-local`；`[NEED-ROOT]`：忘了 `sudo`；`[FAIL] kored 不可执行`：先 `make build` |
@@ -126,7 +126,7 @@ kore 系统级 root 服务 · 一次性验证包（ADR-0042 方案 B）
   环境     : uid=1000 · systemd=systemd 259 (259.9-0ubuntu0.1)
 
 ===== STEP 1/6 · 安装系统级 root unit 并启动（User=root） =====
-[DO]     bash /home/pt/Work/GolandProjects/kore/scripts/install-system-service.sh --install-root /home/pt/Work/GolandProjects/kore --bin /home/pt/Work/GolandProjects/kore/bin/kored --name kore
+[DO]     bash /home/pt/Work/GolandProjects/kore/scripts/install.sh --install-root /home/pt/Work/GolandProjects/kore --bin /home/pt/Work/GolandProjects/kore/bin/kored --name kore
 [EXPECT] exit 0；"[OK] 已写入 /etc/systemd/system/kore.service"
 [EXPECT] 重复运行时 "[OK] unit 已是最新（幂等）"（不重写、不重启）
 [DRY-RUN] 未执行（零变更）
@@ -191,7 +191,7 @@ sudo bash scripts/verify-root-service.sh --rollback --dry-run
 sudo bash scripts/verify-root-service.sh --rollback
 ```
 
-回滚脚本做的事：调 `scripts/install-system-service.sh --remove`（`systemctl stop kore` → `rm -f /etc/systemd/system/kore.service` → `systemctl daemon-reload`），然后打印恢复用户级实例的命令。**用户级实例不会被自动拉起**——它属于原用户的会话，脚本不替你跨会话操作。
+回滚脚本做的事：调 `scripts/install.sh --remove`（`systemctl stop kore` → `rm -f /etc/systemd/system/kore.service` → `systemctl daemon-reload`），然后打印恢复用户级实例的命令。**用户级实例不会被自动拉起**——它属于原用户的会话，脚本不替你跨会话操作。
 
 ```bash
 # ③ 在原用户的图形会话里（非 root）恢复原来的形态

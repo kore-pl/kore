@@ -2,7 +2,7 @@
 
 > 元信息: 2026-11-23 · 执行者 priv-model-analysis 子 agent · 性质：**只读架构分析，不改代码/ADR**
 > 输入约束：① 只有「壳子安装」一次 sudo，运行期任何操作不得要求本机系统口令；② 定位是薄壳调度内核 + 每插件一仓的低权插件；③ 必须具备 8 类全权管理（装包、任意系统配置写入、防火墙、容器、系统用户/账号、服务、证书、数据库/中间件）。
-> 对齐基线：`docs/DECISIONS/0018-privilege-model.md`、`0042-privilege-without-prompt.md`、`internal/core/privilege/*`、`pkg/pluginapi/{rootaction,rootpolicy}.go`、`scripts/install-system-service.sh`。
+> 对齐基线：`docs/DECISIONS/0018-privilege-model.md`、`0042-privilege-without-prompt.md`、`internal/core/privilege/*`、`pkg/pluginapi/{rootaction,rootpolicy}.go`、`scripts/install.sh`。
 > 只读声明：本会话未起服务、未 sudo、未改任何既有文件；`git status` 里 `internal/core/httpapi/*` 的在途改动与本次分析无关。
 
 ## 0. 结论速览
@@ -20,7 +20,7 @@
 | # | 事实 | 依据 |
 | --- | --- | --- |
 | 1 | 插件一律降到 `kore-<id>` 运行，root 动作只能由内核经 `systemd-run --uid=0` 的 transient unit 执行，unit 名 `kore-root-<plugin>-<action>-<rand>` | ADR-0018 §决策 2、`internal/core/privilege/systemd.go:35-43` |
-| 2 | 内核默认形态是系统级 root 服务（`User=root`），运行期不做 polkit 授权判定 | ADR-0042、`scripts/install-system-service.sh:88-118` |
+| 2 | 内核默认形态是系统级 root 服务（`User=root`），运行期不做 polkit 授权判定 | ADR-0042、`scripts/install.sh:88-118` |
 | 3 | root 动作不是「任意 argv」：`argv[0]` 限系统二进制目录，声明参数必须匹配「命令 + 子命令 + 参数形状」，追加参数只能落在 Tail 形状上 | `pkg/pluginapi/rootpolicy.go:520-600`、`rootpolicy.go:700-725`、`internal/core/privilege/service.go:152-185` |
 
 ### 1.2 本机机制证据（2026-11-23，只读命令）
@@ -172,7 +172,7 @@
 ### E1：uid=0 调用 `systemd-run --uid=0` 是否真的不经过 polkit（ADR-0042 的核心前提）
 
 ```bash
-sudo bash scripts/install-system-service.sh --install-root /opt/kore
+sudo bash scripts/install.sh --install-root /opt/kore
 systemctl show -p User --value kore            # 期望 root
 # 通过管理会话触发任一个 root 动作（firewall ufw-status）
 journalctl -u polkit --since -5min | grep -c manage-units
@@ -232,6 +232,6 @@ sudo -u koreprobe systemd-run --uid=0 --no-ask-password --scope /bin/true
 - `docs/DECISIONS/0023-zero-intrusion.md` §3.5（unit 豁免 #1）
 - `internal/core/privilege/{service,systemd,audit,confirm}.go`
 - `pkg/pluginapi/{rootaction,rootpolicy}.go`（命令 + 子命令 + 参数形状三级约束）
-- `scripts/install-system-service.sh`（unit 模板：`User=root`、`NoNewPrivileges=false`、`KillMode=mixed`）
+- `scripts/install.sh`（unit 模板：`User=root`、`NoNewPrivileges=false`、`KillMode=mixed`）
 - 手册页：capabilities(7)、setuid(2)、systemd.exec(5)、systemd-run(1)、sudoers-rs(5)
 - 本机实测命令与结果见 §1.2、§5（均为只读或隔离测试机命令）

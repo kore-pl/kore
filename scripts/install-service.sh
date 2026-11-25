@@ -45,7 +45,7 @@ if [ -z "$BIN" ] || [ -z "$INSTALL_ROOT" ]; then
 fi
 
 # 受控写白名单的解析/校验是**单一真源** scripts/lib/allow-dirs.sh：本脚本与
-# install-root-once.sh / install-system-service.sh 共用同一份实现，改库 = 三个同时生效。
+# install-root-once.sh / install.sh 共用同一份实现，改库 = 三个同时生效。
 # 不要在本脚本重新定义同名函数——重定义会遮蔽公共库，又退回「副本靠注释对齐」。
 KORE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/allow-dirs.sh

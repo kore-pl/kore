@@ -2,7 +2,7 @@
 # allow-dirs.sh — 受控写白名单（KORE_FILE_WRITE_ALLOW_DIRS）的**单一真源**。
 #
 # 谁在用：scripts/install-root-once.sh、scripts/install-service.sh、
-#         scripts/install-system-service.sh 三个安装器都 source 本文件。
+#         scripts/install.sh 三个安装器都 source 本文件。
 # 改这里的语义 = 三个安装器**同时**生效；不要在任何安装脚本里重新定义
 # resolve_allow_dirs / validate_allow_dirs——重定义会遮蔽本库，又退回
 # 「三份副本靠注释对齐」的静默漂移模式（这正是本库要消除的东西）。

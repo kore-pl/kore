@@ -446,7 +446,7 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 
 用户裁决：「root 管理本来也是这个软件的功能的一部分，不应该有任何一次输入账号密码确认」。ADR-0018 只定了「谁来执行」（最初实现为内核经 `systemd-run --uid=0` 的 transient unit；ADR-0049 起改为内核直接 `exec`），**没定「谁来授权」**——默认 polkit 策略下 `org.freedesktop.systemd1.manage-units` 是 `auth_admin`，于是普通用户跑 `kored` 时每个 root 动作都弹管理员口令框（实测：`systemd-run --uid=0 --pipe true` → `Failed to start transient service unit: Access denied`，journal 记 `FAILED to authenticate to gain authorization`）。这是产品级否决。
 
-**结论（ADR-0042 方案 B + ADR-0049）**：`kored` 以**系统级 root 服务**运行（`/etc/systemd/system/kore.service`，`User=root`），特权动作由内核**直接 `exec`**（新进程组 + 真实退出码）——机制上已不存在 polkit 判定这一步，也不依赖 systemd 运行时。于是运行期**不存在授权判定这一步**，也不可能出现口令输入；这与 `dockerd` 以 root 运行、`docker run` 从不要口令同构。插件仍是独立低权进程（`kore-<id>`），G-04 与 ADR-0018「插件低权、内核代理特权动作」原意不变。方案对比、代价（root 进程面、目录属主迁移、两实例互斥）与复审条件见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)；安装走 `scripts/install-system-service.sh`（幂等、`--dry-run`，只写 ADR-0023 §3.5 豁免 #1 的 unit）。
+**结论（ADR-0042 方案 B + ADR-0049）**：`kored` 以**系统级 root 服务**运行（`/etc/systemd/system/kore.service`，`User=root`），特权动作由内核**直接 `exec`**（新进程组 + 真实退出码）——机制上已不存在 polkit 判定这一步，也不依赖 systemd 运行时。于是运行期**不存在授权判定这一步**，也不可能出现口令输入；这与 `dockerd` 以 root 运行、`docker run` 从不要口令同构。插件仍是独立低权进程（`kore-<id>`），G-04 与 ADR-0018「插件低权、内核代理特权动作」原意不变。方案对比、代价（root 进程面、目录属主迁移、两实例互斥）与复审条件见 [ADR-0042](./DECISIONS/0042-privilege-without-prompt.md)；安装走 `scripts/install.sh`（幂等、`--dry-run`，只写 ADR-0023 §3.5 豁免 #1 的 unit）。
 
 **为什么不是"配一条 polkit 规则"**：规则只是把弹框改成静默 YES，**每次操作仍过一次 authorization check**；规则丢失/被覆盖/被收紧时会退回弹框，违反用户「任何时候都不应该有本机账号密码的输入」这条绝对约束；而且规则本身是一个静默提权面（等价于该用户可免密以任意 uid 起 `kore-root-*` 单元），需要新增 ADR-0023 豁免项。因此 polkit 规则只保留为**降级路径 A**：
 

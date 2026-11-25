@@ -39,7 +39,7 @@ kored upgrade --rollback
 
 > **运行期不需要 sudo——权限由服务形态决定，不是由命令自己提权。** 系统服务形态（`/etc/systemd/system/kore.service`，`User=root`，[ADR-0042](DECISIONS/0042-privilege-without-prompt.md)）下内核本身就是 root，`kored upgrade` 由服务进程执行：校验、原子替换、自重启全程零口令。它不是给普通用户 shell 直接跑的——普通用户 shell 里执行会打印「需以系统服务身份运行」并返回退出码 **6**，那不是权限坏了：这台机器还处于「非 root 裸跑」降级形态，改装为系统服务即可（RUNBOOK §5.1）。
 >
-> **整条链路上唯一的一次 sudo 是安装**：`sudo bash scripts/install-system-service.sh --install-root <install>`（装二进制 / 写 unit / enable，**仅安装这一次**）。装完之后的升级、重启、卸载一律不再经过 sudo。
+> **整条链路上唯一的一次 sudo 是安装**：`sudo bash scripts/install.sh --install-root <install>`（装二进制 / 写 unit / enable，**仅安装这一次**）。装完之后的升级、重启、卸载一律不再经过 sudo。
 
 ### 1.2 需要重启吗？配置/state 兼容吗？
 

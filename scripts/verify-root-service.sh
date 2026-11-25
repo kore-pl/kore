@@ -23,7 +23,7 @@
 # 退出码: 0 全部闭环 / 1 参数、前置或某项检查 FAIL / 3 需要 root / 7 有步骤未闭环（如无登录会话、无 root 动作插件）
 #
 # 这个脚本做什么（按顺序，每步打印「做了什么 / 期望看到什么 / 实际看到什么」）:
-#   STEP 1  调 scripts/install-system-service.sh 装 /etc/systemd/system/kore.service（User=root）并 enable --now
+#   STEP 1  调 scripts/install.sh 装 /etc/systemd/system/kore.service（User=root）并 enable --now
 #   STEP 2  校验运行身份：systemctl show -p User = root、MainPID 的属主 = root
 #   STEP 3  触发一次 root 动作，比较触发前后 `journalctl -u polkit | grep -c manage-units` 的差值应为 0
 #   STEP 4  在 /tmp 假安装根上跑 `kored upgrade --bin --sha256`：查 .prev、upgrade-result.json pending → success
@@ -40,7 +40,7 @@ set -uo pipefail
 
 SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
-INSTALL_SH="$SCRIPT_DIR/install-system-service.sh"
+INSTALL_SH="$SCRIPT_DIR/install.sh"
 
 UNIT_NAME="kore"
 INSTALL_ROOT=""

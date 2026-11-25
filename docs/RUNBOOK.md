@@ -160,9 +160,9 @@ python3 -c 'import json;print("count=",len(json.load(open("/tmp/store.json"))["p
 ### 5.1 systemd unit 示例（`/etc/systemd/system/kore.service`）
 
 ```ini
-# /etc/systemd/system/kore.service — 与 scripts/install-system-service.sh 的 render_unit() 一致
-# 等价于 `bash scripts/install-system-service.sh --dry-run --install-root /opt/kore` 打印的内容
-# 手工改动会在下次安装时被覆盖；卸载：sudo bash scripts/install-system-service.sh --remove
+# /etc/systemd/system/kore.service — 与 scripts/install.sh 的 render_unit() 一致
+# 等价于 `bash scripts/install.sh --dry-run --install-root /opt/kore` 打印的内容
+# 手工改动会在下次安装时被覆盖；卸载：sudo bash scripts/install.sh --remove
 [Unit]
 Description=kore 内核（kored，root 服务；特权动作零交互）
 Documentation=file:///opt/kore/docs/ARCHITECTURE.md
@@ -193,7 +193,7 @@ WantedBy=multi-user.target
 ```bash
 make build
 # 默认安装形态：脚本一次性写 unit + enable（幂等；--dry-run 只预览、零变更）
-sudo bash scripts/install-system-service.sh --install-root /opt/kore
+sudo bash scripts/install.sh --install-root /opt/kore
 systemctl is-active kore                 # 判据：active
 systemctl show -p User --value kore      # 判据：root
 ps -o user= -C kored                     # 判据：root

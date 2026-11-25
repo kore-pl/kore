@@ -23,18 +23,20 @@
 
 ## 脚本评审与修补（先于安装）
 
-仓库脚本实为 `scripts/install-system-service.sh`（RUNBOOK.md §5.1 + ADR-0042/0049 指定）；不存在 `scripts/install.sh`。Makefile 的 `install` 目标调用的是另一支 `scripts/install-service.sh`（非 root 服务口径）。
+仓库脚本现为 `scripts/install.sh`（RUNBOOK.md §5.1 + ADR-0042/0049 指定；2026-11-25 由 `install-system-service.sh` 改名）；`scripts/install-service.sh` 是另一支非 root 服务口径的安装器，Makefile 的 `install` 目标调用的是它。
 
 脚本原有行为完备（User=root、ExecStart 指向真实二进制、cmp 幂等、只写 ADR-0023 §3.5 豁免 #1 的 unit、无 chown -R / useradd / sudoers），但有两处缺口，已最小修补：
 
 1. `enable --now` 会在旧实例仍占 8787/state.db 时抢启 → 新增 `--no-start`（只写 unit + enable，不 start），供有序切换使用。
 2. 既有 unit 内容不同会被静默覆盖 → 默认拒绝并 exit 5，显式 `--overwrite` 才允许。
 
-验证：`bash -n scripts/install-system-service.sh` → rc=0；临时 harness（`/tmp`，调用内即删）功能测试 T1–T5 通过：dry-run 显示新启动方式、`--no-start` 不调 start、冲突拒绝 exit 5、`--overwrite` 放行、二次幂等。
+验证：`bash -n scripts/install.sh` → rc=0；临时 harness（`/tmp`，调用内即删）功能测试 T1–T5 通过：dry-run 显示新启动方式、`--no-start` 不调 start、冲突拒绝 exit 5、`--overwrite` 放行、二次幂等。
 
 提交：`659aec8 [agent:system-service-install] fix(privilege): 安装器支持 --no-start/拒绝覆盖既有 unit（有序切换）`（1 file / +26 -3，精确 pathspec，**未 push**）。
 
 ## root 通道命令与退出码（所有 root 动作只走 dsh-root）
+
+> 历史命令原文如实保留：下列命令执行时脚本名为 `install-system-service.sh`；脚本现已重命名为 `install.sh`，复现时把命令中的旧名换成 `install.sh` 即可，参数不变。
 
 1. `dsh-root --dry-run bash scripts/install-system-service.sh --no-start --install-root <repo> --bin <repo>/bin/kored --config <repo>/.kore-local.yaml --force`
    - 退出码：0
@@ -74,6 +76,6 @@
 ## 回退办法（未执行，待用户/lead 明确指示）
 
 1. `dsh-root systemctl disable --now kore.service`
-2. `dsh-root bash scripts/install-system-service.sh --remove`（删 unit + daemon-reload）
+2. `dsh-root bash scripts/install.sh --remove`（脚本现已改名；原执行时为旧名）（删 unit + daemon-reload）
 3. 经 `systemd-run --user --wait --pipe --collect systemctl --user start kored-local` 恢复旧实例
 4. 视用户裁决用 `userdel kore-site kore-terminal` 清理（属破坏性，须明确授权）
