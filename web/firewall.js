@@ -15,7 +15,11 @@
       rules: [], rulesError: '', rulesErrorCode: '', rulesErrorHint: '',
       rulesLoaded: false, canWrite: false, previewable: false, formLocked: true, preview: null, pending: null, previewError: '', busy: false,
       deletePreview: null, deleteTarget: null, deleteError: '', notice: '', destroyed: false,
-      switchPreview: null, switchError: '', switchBusy: false, switchRiskAck: false, switchEnable: false };
+      switchPreview: null, switchError: '', switchBusy: false, switchRiskAck: false, switchEnable: false,
+      // IP 名单与防爆破（竞品条目 5）
+      ipRules: [], ipLoaded: false, ipError: '', ipBusy: false,
+      ipPreview: null, ipPending: null, ipErrorText: '', ipRemoveTarget: null,
+      brute: { enabled: false, threshold: 5, ban_min: 10 }, bruteDirty: false, bruteMsg: '' };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -434,6 +438,192 @@
       S.rulesLoaded = true; paintRules(); paintSwitch();
     });
   }
+
+  // ==== IP 白名单/黑名单 与 防爆破（竞品清单条目 5）====
+  // 用户流程（≤3 点击）：选预设或填 IP → 预览命令 → 确认执行；防爆破一次表单直接保存。
+  function ipModeText(mode) { return mode === 'allow' ? '白名单' : (mode === 'deny' ? '黑名单' : '临时封禁'); }
+  function ipModeKls(mode) { return mode === 'allow' ? 'is-allow' : (mode === 'deny' ? 'is-deny' : 'is-reject'); }
+  function paintIPNotice() {
+    if (!S.ipNoticeHost) return;
+    S.ipNoticeHost.textContent = '';
+    if (S.bruteMsg) S.ipNoticeHost.appendChild(notice(S.bruteMsg, true));
+  }
+  function loadIPList() {
+    S.ipLoaded = false; S.ipError = ''; paintIPRules();
+    invoke('firewall.ipList', {}).then(function (data) {
+      if (S.destroyed) return;
+      S.ipRules = data.rules || []; S.ipLoaded = true;
+      if (data.brute) S.brute = data.brute;
+      S.bruteDirty = false;
+      paintIPRules(); paintBrute();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.ipError = failureText(err, '读取 IP 名单'); S.ipLoaded = true;
+      paintIPRules();
+    });
+  }
+  function paintIPRules() {
+    if (!S.ipRulesHost) return;
+    S.ipRulesHost.textContent = '';
+    if (S.ipError) { S.ipRulesHost.appendChild(notice(S.ipError)); return; }
+    if (!S.ipLoaded) { add(S.ipRulesHost, el('div', 'muted fw-loading', '正在读取 IP 名单…')); return; }
+    if (!S.ipRules.length) {
+      S.ipRulesHost.appendChild(window.KoreUI.emptyBlock({
+        title: '还没有 IP 规则',
+        text: '可以一键添加常用规则，或在下面填写 IP 后点「预览命令」。防爆破开启后，达到失败阈值的来源 IP 会自动出现在临时封禁里。',
+        label: '重新读取 IP 名单', onClick: loadIPList
+      }));
+      return;
+    }
+    var scroll = add(S.ipRulesHost, el('div', 'fw-rules-scroll'));
+    var table = add(scroll, el('table', 'fw-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['编号', '类型', 'IP / 网段', '来源', '到期', '备注', '操作'].forEach(function (t) { add(htr, el('th', null, t)); });
+    var tbody = add(table, el('tbody'));
+    S.ipRules.forEach(function (rule, idx) {
+      var tr = add(tbody, el('tr'));
+      function cell(label, cls, text) { var c = add(tr, el('td', cls || null, text)); c.dataset.label = label; return c; }
+      cell('编号', 'fw-index', '#' + (idx + 1));
+      cell('类型', 'fw-action ' + ipModeKls(rule.mode), ipModeText(rule.mode) + (rule.expired ? '（已过期）' : ''));
+      cell('IP / 网段', 'fw-from', rule.ip);
+      cell('来源', null, rule.comment || '手工添加');
+      cell('到期', 'fw-port', rule.expires_at ? String(rule.expires_at).replace('T', ' ').slice(0, 19) : '长期');
+      cell('备注', 'fw-comment', rule.comment || '');
+      var td = cell('操作', 'fw-ops');
+      var del = add(td, el('button', 'btn fw-danger', '删除')); del.type = 'button';
+      del.disabled = S.ipBusy;
+      del.title = S.canWrite ? '从名单和防火墙规则中移除' : '需要 root 运行 kored 才能真正下发，后端会给出原因';
+      on(del, function () { startIPRemove(rule); });
+    });
+    paintIPRemove();
+  }
+  function ipPreviewBox(host, title, cmd, note, canConfirm, onConfirm, onCancel) {
+    host.textContent = '';
+    var box = add(host, el('div', 'fw-preview'));
+    add(box, el('div', 'fw-preview-title', title));
+    add(box, el('pre', 'fw-cmd', (cmd || []).join(' ') || '（无命令：仅保存配置）'));
+    add(box, el('p', 'fw-preview-note', note));
+    var ops = add(box, el('div', 'fw-ops'));
+    if (canConfirm) {
+      var ok = add(ops, el('button', 'btn btn-primary', '确认执行')); ok.type = 'button';
+      on(ok, function () { onConfirm(ok); });
+    }
+    var cancel = add(ops, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
+    on(cancel, onCancel);
+  }
+  function startIPAdd(mode) {
+    // IP 名单的预览只是构造 argv（dry_run），不需要 root：非 root 也要能看到命令。
+    // 权限不足时把「确认执行」放行到后端，由后端回 E_NEED_ROOT + 指引（fail-closed 且可操作）。
+    if (S.ipBusy) return;
+    var ip = String(S.ipInput.value || '').trim();
+    if (!ip) { S.ipErrorText = '请先填写 IP 或网段（如 203.0.113.7 / 10.0.0.0/8）'; paintIPPreview(); return; }
+    S.ipErrorText = ''; S.ipPreview = null; S.ipPending = null;
+    invoke('firewall.ip' + (mode === 'allow' ? 'Allow' : 'Deny'),
+      { ip: ip, comment: String(S.ipComment.value || '').trim(), dry_run: true }).then(function (data) {
+      if (S.destroyed) return;
+      S.ipPreview = data; S.ipPending = { mode: mode, ip: ip, comment: String(S.ipComment.value || '').trim() };
+      paintIPPreview();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.ipErrorText = failureText(err, '预览'); paintIPPreview();
+    });
+  }
+  function execIPAdd(btn) {
+    // 同 startIPAdd：执行权限由后端裁决（非 root 会回 E_NEED_ROOT + 指引），前端不提前挡掉，
+    // 否则用户只看到一个「点了没反应」的按钮。
+    if (!S.ipPending || S.ipBusy) return;
+    S.ipBusy = true; btn.disabled = true;
+    var p = S.ipPending, method = 'firewall.ip' + (p.mode === 'allow' ? 'Allow' : 'Deny');
+    invoke(method, { ip: p.ip, comment: p.comment, dry_run: false }).then(function () {
+      if (S.destroyed) return;
+      S.ipBusy = false; S.bruteMsg = '已添加 IP ' + p.ip + ' 到' + ipModeText(p.mode);
+      S.ipPreview = null; S.ipPending = null; S.ipErrorText = '';
+      S.ipInput.value = ''; S.ipComment.value = '';
+      paintIPNotice(); paintIPPreview(); loadIPList();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.ipBusy = false; S.ipErrorText = failureText(err, '执行'); paintIPPreview();
+    });
+  }
+  function paintIPPreview() {
+    if (!S.ipPreviewHost) return;
+    S.ipPreviewHost.textContent = '';
+    // 顺序不能反：ipPreviewBox 会清空宿主，先渲染命令再把错误追加在后面，
+    // 否则「确认执行」失败的提示会被预览块整块擦掉（用户只看得到命令、看不到拒绝原因）。
+    if (!S.ipPreview) {
+      if (S.ipErrorText) S.ipPreviewHost.appendChild(notice(S.ipErrorText));
+      return;
+    }
+    ipPreviewBox(S.ipPreviewHost, '将执行的命令（预览，尚未执行）', S.ipPreview.command,
+      S.canWrite ? '确认后才会真正下发到防火墙。'
+        : '确认后会尝试下发；当前 kored 非 root，预计会被拒绝并给出开启方式（需以 root 运行 kored）。',
+      true, execIPAdd, function () { S.ipPreview = null; S.ipPending = null; S.ipErrorText = ''; paintIPPreview(); });
+    if (S.ipErrorText) S.ipPreviewHost.appendChild(notice(S.ipErrorText));
+  }
+  function startIPRemove(rule) {
+    if (S.ipBusy) return;
+    S.ipError = '';
+    invoke('firewall.ipRemove', { id: rule.id, dry_run: true }).then(function (data) {
+      if (S.destroyed) return;
+      S.ipRemoveTarget = { rule: rule, preview: data }; paintIPRemove();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.ipError = failureText(err, '删除预览'); paintIPRules();
+    });
+  }
+  function paintIPRemove() {
+    if (!S.ipRemoveHost) return;
+    S.ipRemoveHost.textContent = '';
+    if (!S.ipRemoveTarget) return;
+    var r = S.ipRemoveTarget.rule;
+    ipPreviewBox(S.ipRemoveHost, '将移除 ' + r.ip + ' 的' + ipModeText(r.mode) + '规则（预览，尚未执行）',
+      (S.ipRemoveTarget.preview || {}).command,
+      '确认后会从名单与防火墙规则中同时移除；非 root 时后端会回拒绝原因与开启方式。', !S.ipBusy,
+      function (btn) {
+        S.ipBusy = true; btn.disabled = true;
+        invoke('firewall.ipRemove', { id: r.id, dry_run: false }).then(function () {
+          if (S.destroyed) return;
+          S.ipBusy = false; S.bruteMsg = '已移除规则 ' + r.ip;
+          S.ipRemoveTarget = null; paintIPRemove(); paintIPNotice(); loadIPList();
+        }, function (err) {
+          if (S.destroyed) return;
+          S.ipBusy = false; S.ipError = failureText(err, '执行删除'); paintIPRules();
+        });
+      },
+      function () { S.ipRemoveTarget = null; paintIPRemove(); });
+  }
+  function applyPreset(name) {
+    if (!S.ipInput || !S.ipComment) return;
+    if (name === 'office') { S.ipInput.value = '10.0.0.0/8'; S.ipComment.value = '公司内网'; }
+    if (name === 'home') { S.ipInput.value = '192.168.1.0/24'; S.ipComment.value = '家庭内网'; }
+    if (name === 'example') { S.ipInput.value = '203.0.113.7'; S.ipComment.value = '示例 IP'; }
+  }
+  function paintBrute() {
+    if (!S.bruteThreshold || !S.bruteBanMin || !S.bruteEnabled) return;
+    S.bruteThreshold.value = String(S.brute.threshold);
+    S.bruteBanMin.value = String(S.brute.ban_min);
+    S.bruteEnabled.checked = !!S.brute.enabled;
+    if (S.bruteState) S.bruteState.textContent = S.brute.enabled
+      ? '已开启：失败 ' + S.brute.threshold + ' 次后封禁 ' + S.brute.ban_min + ' 分钟（到期自动解封）'
+      : '未开启：登录失败不会触发封禁';
+  }
+  function saveBrute(btn) {
+    var threshold = Math.trunc(Number(S.bruteThreshold.value));
+    var banMin = Math.trunc(Number(S.bruteBanMin.value));
+    if (!isFinite(threshold) || threshold < 1 || threshold > 1000) { S.bruteMsg = '失败次数须为 1–1000 的整数'; paintIPNotice(); return; }
+    if (!isFinite(banMin) || banMin < 1 || banMin > 1440) { S.bruteMsg = '封禁时长须为 1–1440 分钟'; paintIPNotice(); return; }
+    S.ipBusy = true; btn.disabled = true;
+    invoke('firewall.bruteSet', { enabled: S.bruteEnabled.checked, threshold: threshold, ban_min: banMin }).then(function (data) {
+      if (S.destroyed) return;
+      S.ipBusy = false; S.brute = data; S.bruteDirty = true;
+      S.bruteMsg = '已保存并设置成功：' + (data.enabled ? '开启，失败 ' + data.threshold + ' 次封禁 ' + data.ban_min + ' 分钟' : '已关闭');
+      paintIPNotice(); paintBrute(); loadIPList();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.ipBusy = false; S.bruteMsg = failureText(err, '保存防爆破配置'); paintIPNotice();
+    });
+  }
+
   function render(container) {
     if (!container) return null;
     S = fresh(); container.textContent = '';
@@ -471,9 +661,64 @@
     on(S.previewBtn, previewRule);
     S.previewNote = add(ops, el('span', 'fw-preview-hint', '预览只构造命令，确认后才真正执行。'));
     S.previewHost = add(formP.panel, el('div', 'fw-preview-host'));
+
+    // IP 名单与防爆破面板（竞品条目 5）。
+    var ipP = panel('IP 白名单 / 黑名单 与 防爆破', '来源 IP 或网段，白名单优先'); add(S.root, ipP.panel);
+    S.ipNoticeHost = add(ipP.panel, el('div', 'redis-notice-host'));
+    var ipDesc = add(ipP.panel, el('p', 'fw-callout-text',
+      '允许/拒绝指定来源 IPv4 地址或网段；登录失败达到阈值自动临时封禁。所有变更先预览命令，确认后才执行。',));
+    ipDesc.style.padding = '12px 16px 0';
+    // 预设（USABILITY §1）：常用内网网段一键填入，高级项折叠为手工填写。
+    var presetOps = add(ipP.panel, el('div', 'fw-ops')); presetOps.style.padding = '8px 16px';
+    [['公司内网', '10.0.0.0/8', 'office'], ['家庭内网', '192.168.1.0/24', 'home'], ['示例 IP', '203.0.113.7', 'example']].forEach(function (p) {
+      var b = add(presetOps, el('button', 'btn btn-ghost', p[0])); b.type = 'button';
+      b.title = '一键填入 ' + p[1];
+      on(b, function () { applyPreset(p[2]); });
+    });
+    var ipForm = add(ipP.panel, el('div', 'fw-form'));
+    S.ipInput = el('input', 'fw-input'); S.ipInput.type = 'text';
+    S.ipInput.placeholder = '203.0.113.7 或 10.0.0.0/8'; S.ipInput.maxLength = 64;
+    S.ipComment = el('input', 'fw-input'); S.ipComment.type = 'text';
+    S.ipComment.placeholder = '备注（可选）'; S.ipComment.maxLength = 64;
+    var ipFormHint = el('span', 'fw-preview-hint', '填写 IPv4 地址或网段 → 点下方「预览白名单/黑名单」→ 确认执行。不填高级项也能完成。');
+    [['IP / 网段（必填）', S.ipInput], ['备注（可选）', S.ipComment]].forEach(function (f) {
+      var label = add(ipForm, el('label', 'fw-field'));
+      add(label, el('span', 'fw-label', f[0])); add(label, f[1]);
+    });
+    add(ipForm, ipFormHint);
+    var ipOps = add(ipP.panel, el('div', 'fw-form-ops'));
+    var allowBtn = add(ipOps, el('button', 'btn btn-primary', '预览白名单')); allowBtn.type = 'button';
+    var denyBtn = add(ipOps, el('button', 'btn fw-danger', '预览黑名单')); denyBtn.type = 'button';
+    on(allowBtn, function () { startIPAdd('allow'); });
+    on(denyBtn, function () { startIPAdd('deny'); });
+    S.ipPreviewHost = add(ipP.panel, el('div', 'fw-preview-host'));
+    S.ipRemoveHost = add(ipP.panel, el('div', 'fw-delete-host'));
+    var bruteBox = add(ipP.panel, el('div', 'fw-callout-warn')); bruteBox.style.margin = '0 16px 12px';
+    add(bruteBox, el('div', 'fw-callout-title', '防爆破（登录失败自动封禁）'));
+    add(bruteBox, el('p', 'fw-callout-text', '开启后，来自同一 IP 的登录失败累计达到阈值就临时封禁；到期自动解封，无需手工清理。默认失败 5 次封禁 10 分钟。',));
+    var bruteForm = add(bruteBox, el('div', 'fw-form')); bruteForm.style.padding = '8px 0 0';
+    var enabledLabel = add(bruteForm, el('label', 'field-check'));
+    S.bruteEnabled = add(enabledLabel, el('input')); S.bruteEnabled.type = 'checkbox';
+    add(enabledLabel, el('span', null, '开启防爆破'));
+    S.bruteThreshold = el('input', 'fw-input'); S.bruteThreshold.type = 'number';
+    S.bruteThreshold.min = '1'; S.bruteThreshold.max = '1000'; S.bruteThreshold.value = '5';
+    S.bruteBanMin = el('input', 'fw-input'); S.bruteBanMin.type = 'number';
+    S.bruteBanMin.min = '1'; S.bruteBanMin.max = '1440'; S.bruteBanMin.value = '10';
+    [['失败几次后封禁（1–1000）', S.bruteThreshold], ['封禁时长（分钟，1–1440）', S.bruteBanMin]].forEach(function (f) {
+      var label = add(bruteForm, el('label', 'fw-field'));
+      add(label, el('span', 'fw-label', f[0])); add(label, f[1]);
+    });
+    S.bruteState = add(bruteBox, el('p', 'fw-callout-text', ''));
+    var bruteOps = add(bruteBox, el('div', 'fw-ops')); bruteOps.style.marginTop = '8px';
+    var bruteSave = add(bruteOps, el('button', 'btn btn-primary', '保存防爆破设置')); bruteSave.type = 'button';
+    on(bruteSave, function () { saveBrute(bruteSave); });
+    add(bruteOps, el('span', 'fw-preview-hint', '保存即生效，无需重启。',));
+    var ipRulesPanel = panel('当前 IP 规则', ''); add(S.root, ipRulesPanel.panel);
+    S.ipRulesHost = add(ipRulesPanel.panel, el('div', 'fw-rules'));
     // fail-closed：状态回来前先禁用表单，避免"打开就能填、点提交才知道没权限"。
     setFormLocked(true);
     paintStatus(); paintRules(); paintPreview(); paintSwitch(); loadStatus(); loadRules();
+    paintBrute(); paintIPRules(); paintIPPreview(); paintIPRemove(); paintIPNotice(); loadIPList();
     return { destroy: function () { S.destroyed = true; } };
   }
   window.KoreFirewall = { render: render };
