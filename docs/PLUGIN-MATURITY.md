@@ -112,7 +112,7 @@
 
 **上一版的 16 是漏计**：`runtimes`（业务组）与 `integrity`（平台组）自 `d6f517c` 起已在导航与 `lazyView` 注册，旧表未列入——真实基线是 **18**（不是 16），加上容器视图为 **19**（不是 17）。
 
-**Round 4/5 已落地**：① **全局搜索**（`web/search.js` 四源：页面 / 已装插件 / 商店 / 操作；`shell.js:316-363` 入口，Ctrl/Cmd+K、手机 44px；懒加载不进首屏）；② **操作审计入口**（设置页 tab，`web/audit.js` + `GET /api/v1/audit`）；③ **告警中心**（顶栏铃铛 + 抽屉，`web/alerts.js` + `handlers_alerts.go:19` 的 3 个 `/api/v1/alerts` 端点 + 5 类服务端埋点；双端截图 `alerts-*.png`）；④ **长任务真实进度**（`httpapi/sse.go` 的 `task.progress` 流 + `store.js` 按 task_id 过滤）；⑤ 监控页接 monitor 插件 `/proc` 数据。审计与告警都是**设置页 tab / 顶栏抽屉，不新增视图**。
+**Round 4/5 已落地**：① **全局搜索**（`web/search.js` 跨资源命令面板：站点 / 文件 / 库表 / 容器 / 进程 / 端口 / 日志 / 页面 / 已装插件 / 商店 / 操作，逐源降级；`shell.js:316-363` 入口，Ctrl/Cmd+K 开合、前缀限定 `site:/file:/db:/ctr:/proc:/port:/log:`、数字优先端口·PID、最近搜索、手机 44px；懒加载不进首屏）；② **操作审计入口**（设置页 tab，`web/audit.js` + `GET /api/v1/audit`）；③ **告警中心**（顶栏铃铛 + 抽屉，`web/alerts.js` + `handlers_alerts.go:19` 的 3 个 `/api/v1/alerts` 端点 + 5 类服务端埋点；双端截图 `alerts-*.png`）；④ **长任务真实进度**（`httpapi/sse.go` 的 `task.progress` 流 + `store.js` 按 task_id 过滤）；⑤ 监控页接 monitor 插件 `/proc` 数据。审计与告警都是**设置页 tab / 顶栏抽屉，不新增视图**。
 
 **更早轮次**：统一配置面板（`web/config-panel.js`，走 `<id>.config.get/set`）、数据库/Redis 自动检测与预填、建站向导自动填路径；双端证据：`.agents/verify/round2-full-evidence.md`（34 张）与 `l2-live.md`（15 张 L2 操作截图）。
 
@@ -120,7 +120,7 @@
 
 | 能力 | 竞品有 | 我们有 | 现状证据 | 优先级 |
 | --- | --- | --- | --- | --- |
-| 全局搜索 | 有（站点/文件/功能） | **有**（四源） | `search.js` 四组结果 + `shell.js:316-363` 入口；商店/插件数据懒加载 | 已达标 |
+| 全局搜索 | 有（站点/文件/功能） | **有**（跨 11 源 + 前缀限定 + 最近搜索） | `search.js` 分组结果（端口 / 容器 / 日志 / 库表 / 进程…）+ `shell.js:316-363` 入口；各源按插件可用性降级并在面板内标注「该来源未启用」，证据 `.agents/verify/screenshots/search-*-*.png` | 已达标 |
 | 告警 / 通知中心 | 有（铃铛 + 未读） | **有**（铃铛 + 红点 + 抽屉 + 服务端历史） | `web/alerts.js` + `handlers_alerts.go:19`（3 端点）+ `ui-alerts-progress.md` 双端截图；无 `setInterval` | 已达标 |
 | 长任务进度 | 有（安装/备份/部署进度条） | **有**（SSE 真实阶段） | `httpapi/sse.go` + `store.js` 按 `task_id` 显示 download/verify/extract/register/reload | 已达标 |
 | 操作审计入口 | 有（谁在何时做了什么） | **有**（设置页「操作审计」tab，按**最终生效能力**决定是否落库） | `web/audit.js` + `GET /api/v1/audit`；`audit_http.go:137`：`!auditInvokeAll && !needAdmin` 直接不写；审计记录无 capability 字段（`store/audit.go:36-44`） | 已达标 |
