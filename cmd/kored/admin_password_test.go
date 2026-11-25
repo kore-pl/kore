@@ -367,7 +367,7 @@ func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	if cfg.snapshot.Auth.AdminPasswordHash == "" || !cfg.snapshot.Auth.MustChangePassword {
 		t.Fatal("非 TTY 也应写哈希并设置 must_change 标志")
 	}
-	// 凭据文件：0600、内容只有明文口令一行；明文不出现在 stderr。
+	// ADR-0057 T2：凭据文件两行 username/password、0600；明文不出现在 stderr。
 	info, err := os.Stat(credPath)
 	if err != nil {
 		t.Fatalf("凭据文件未生成: %v", err)
@@ -379,7 +379,10 @@ func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读凭据文件失败: %v", err)
 	}
-	plain := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(string(data), credentialUsernamePrefix+auth.DefaultAdminUsername+"\n"+credentialPasswordPrefix) {
+		t.Fatalf("凭据文件不是两行账号/口令格式: %q", string(data))
+	}
+	plain := strings.TrimSpace(strings.TrimPrefix(string(data), credentialUsernamePrefix+auth.DefaultAdminUsername+"\n"+credentialPasswordPrefix))
 	if len(plain) != adminPasswordLength || strings.Contains(out, plain) {
 		t.Fatalf("凭据文件内容/交付异常: len=%d, stderr 含明文=%v", len(plain), strings.Contains(out, plain))
 	}
@@ -570,8 +573,10 @@ func TestCredentialLifecycleGuard(t *testing.T) {
 			}
 			if tc.credFile {
 				afterCred, _ := os.ReadFile(cred)
-				if !bytes.Equal(beforeCred, afterCred) {
-					t.Fatalf("更新安装不得覆盖凭据文件: before=%q after=%q", beforeCred, afterCred)
+				// ADR-0057 T2：老单行凭据升级为两行格式，口令不变（不重新生成、不丢数据）。
+				want := credentialFileContent(auth.DefaultAdminUsername, strings.TrimSpace(string(beforeCred)))
+				if string(afterCred) != want {
+					t.Fatalf("更新安装应把老凭据包装为两行且口令不变: before=%q after=%q", beforeCred, afterCred)
 				}
 			} else if fileExists(cred) {
 				t.Fatal("更新安装不得新建凭据文件")
@@ -607,15 +612,20 @@ func TestFirstInstallWritesCredentialUnderStateDir(t *testing.T) {
 	if snap.Auth.AdminPasswordHash == "" || !snap.Auth.MustChangePassword || !snap.Auth.Initialized {
 		t.Fatal("首次安装应写哈希 + initialized + must_change_password")
 	}
-	plain, err := os.ReadFile(cred)
+	credData, err := os.ReadFile(cred)
 	if err != nil {
 		t.Fatalf("读凭据文件失败: %v", err)
 	}
-	ok, err := auth.VerifyPassword(snap.Auth.AdminPasswordHash, strings.TrimSpace(string(plain)))
+	wantPrefix := credentialUsernamePrefix + auth.DefaultAdminUsername + "\n" + credentialPasswordPrefix
+	if !strings.HasPrefix(string(credData), wantPrefix) {
+		t.Fatalf("凭据文件不是两行格式: %q", string(credData))
+	}
+	plain := strings.TrimSpace(strings.TrimPrefix(string(credData), wantPrefix))
+	ok, err := auth.VerifyPassword(snap.Auth.AdminPasswordHash, plain)
 	if err != nil || !ok {
 		t.Fatalf("凭据文件口令与配置哈希不匹配: ok=%v err=%v", ok, err)
 	}
-	if strings.Contains(stderr.String(), strings.TrimSpace(string(plain))) {
+	if strings.Contains(stderr.String(), plain) {
 		t.Fatal("非 TTY 输出泄露了明文口令")
 	}
 }

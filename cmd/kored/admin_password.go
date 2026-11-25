@@ -253,15 +253,18 @@ func generateAdminPassword(n int) (string, error) {
 //   - 一次性凭据文件（0600，gitignore，运行态资产，消费后删）——非 TTY 唯一交付载体；
 //   - TTY 从当前终端打印一次明文 + 文件路径；非 TTY 绝不打印明文，只打印路径提示。
 //
-// 方向（待新 ADR 落地）：登录形态改为账号 + 密码，凭据文件将含账号与密码；当前实现
-// 仍按既有单管理员口令交付，本函数不自行设计账号字段（G-11 / 等 ADR）。
+// ADR-0057 T2：凭据文件为两行纯文本 username / password（占位只出现在文档），
+// 老单行明文自动包装迁移，0600 / gitignore / 消费后删不变；更新安装继承三判据守门。
 func ensureInitialAdminCredential(path, stateDir string, stderr io.Writer) {
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(stderr, "提示：尚未设置管理员口令，且未解析到配置文件路径；请执行 `kored admin-password --generate --config <path>` 后重试。")
 		return
 	}
 	if credentialInitialized(path, stateDir) {
-		return // 更新安装：静默跳过，不生成、不覆盖、不打印
+		// ADR-0057 §3.3.2：更新安装绝不覆盖，但老单行凭据文件要升级到两行格式；
+		// 迁移只在凭据文件已存在时做，不生成新凭据、不写配置、不改哈希。
+		migrateInitialAdminCredential(stateDir, path, stderr)
+		return // 更新安装：不生成、不覆盖、不打印凭据；仅格式升级提示可写 stderr
 	}
 	plain, err := generateAdminPassword(adminPasswordLength)
 	if err != nil {
@@ -278,22 +281,23 @@ func ensureInitialAdminCredential(path, stateDir string, stderr io.Writer) {
 		fmt.Fprintf(stderr, "首启凭据写入配置失败: %v\n请手动执行 `kored admin-password --generate --config %s`（同样只显示一次）。\n", err, path)
 		return
 	}
-	credPath, err := writeInitialAdminCredentialFile(stateDir, plain)
+	credPath, err := writeInitialAdminCredentialFile(stateDir, auth.DefaultAdminUsername, plain)
 	if err != nil {
 		fmt.Fprintf(stderr, "初始凭据文件写入失败: %v；请手动执行 `kored admin-password --generate --config %s`。\n", err, path)
 		return
 	}
 	if firstRunTerminal() {
 		fmt.Fprintln(stderr, "================ Kore 初始管理员凭据（只显示这一次）================")
+		fmt.Fprintf(stderr, "管理员账号: %s\n", auth.DefaultAdminUsername)
 		fmt.Fprintf(stderr, "管理员口令: %s\n", plain)
-		fmt.Fprintf(stderr, "一次性凭据文件: %s（权限 0600，首次登录改密后自动删除）\n", credPath)
-		fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；建议登录后设置一个新口令（可选，不强制）。")
+		fmt.Fprintf(stderr, "一次性凭据文件: %s（权限 0600，改密后自动删除）\n", credPath)
+		fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的账号与口令；建议登录后设置一个新口令（可选，不强制）。")
 		fmt.Fprintln(stderr, "======================================================================")
 		return
 	}
 	// 非 TTY：绝不打印明文，只给路径（ADR-0055 §3 / G-30）。
 	fmt.Fprintf(stderr, "初始管理员凭据已生成，请在自己的终端读取：%s（权限 0600）。\n", credPath)
-	fmt.Fprintln(stderr, "打开面板输入该口令，建议登录后设置一个新口令（可选，不强制）；改密成功后该文件会自动删除。")
+	fmt.Fprintln(stderr, "打开面板输入凭据文件里的账号与口令，建议登录后设置一个新口令（可选，不强制）；改密成功后该文件会自动删除。")
 }
 
 // credentialInitialized 判断本实例是否已初始化（= 更新安装，必须完全跳过凭据生成）。
@@ -381,10 +385,12 @@ func initialAdminCredentialPath(stateDir string) string {
 	return initialAdminCredentialPathFn(stateDir)
 }
 
-// writeInitialAdminCredentialFile 把明文口令写入 0600 的一次性凭据文件。
-func writeInitialAdminCredentialFile(stateDir, plain string) (string, error) {
+// writeInitialAdminCredentialFile 把两行凭据内容原子写入 0600 的一次性凭据文件
+// （ADR-0057 T2：username/password 两行格式，纯文本 key-value，不含哈希/副本）。
+func writeInitialAdminCredentialFile(stateDir, username, plain string) (string, error) {
+	content := credentialFileContent(username, plain)
 	path := initialAdminCredentialPath(stateDir)
-	if err := atomicWrite0600(path, plain+"\n"); err != nil {
+	if err := atomicWrite0600(path, content); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -410,6 +416,7 @@ func writeAdminBootstrapHash(path, hash string) error {
 		return err
 	}
 	doc = upsertAdminHash(doc, hash)
+	doc = upsertAuthKey(doc, "admin_username", quoteYAML(auth.DefaultAdminUsername)) // ADR-0057 T1：首启把账号写回配置（幂等）
 	doc = upsertAuthKey(doc, "initialized", "true")
 	doc = upsertAuthKey(doc, "must_change_password", "true")
 	return atomicWrite0600(path, doc)
