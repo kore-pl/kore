@@ -57,6 +57,18 @@ type Options struct {
 	// 负值表示不注册该任务。默认启用是产品决策：日志无界增长是真实运维问题，
 	// 装完不配就该有人负责切割与清理（G-19：周期仍只来自本调度器的单 ticker）。
 	LogsMaintainInterval time.Duration
+	// UpdateCheckEnabled 对应配置 update.source.enabled：默认 false，
+	// 只有显式开启且 UpdateSource 非空、UpdateChecker 已装配时才注册内置任务（U4）。
+	UpdateCheckEnabled bool
+	// UpdateSource 是更新源地址（默认空）；空串时拒绝注册更新检查任务。
+	UpdateSource string
+	// UpdateInterval 是更新检查周期（默认 6h）。
+	UpdateInterval time.Duration
+	// UpdateChecker 是装配层注入的「读已验签索引 → 比对版本」能力（M6 接供应链）。
+	// nil 且任务被启用时 fail-closed（拒绝注册/执行，不假装成功）。
+	UpdateChecker UpdateIndexCheck
+	// IsOffline 返回当前是否离线；nil 视为离线（fail-closed，零出站）。
+	IsOffline func() bool
 }
 
 // Service 是内核唯一的周期执行器：单实例、单 ticker、任务表在 state.db。
@@ -78,6 +90,12 @@ type Service struct {
 	auditBatch     int
 	// logsMaintainInterval 是日志自动维护任务周期；<0 表示禁用。
 	logsMaintainInterval time.Duration
+	// 更新检查内置任务（ADR-0019 修订 / ADR-0059 §3.1）；默认关闭，零改动空闲行为。
+	updateEnabled  bool
+	updateSource   string
+	updateInterval time.Duration
+	updateChecker  UpdateIndexCheck
+	isOffline      func() bool
 	// baseCtx 是调度循环的生命周期根：不能绑定请求 ctx（响应写完即取消，ticker 会秒退）。
 	baseCtx context.Context
 
@@ -103,6 +121,11 @@ func New(opts Options) (*Service, error) {
 		auditInterval:        opts.AuditCleanInterval,
 		auditBatch:           opts.AuditCleanBatch,
 		logsMaintainInterval: opts.LogsMaintainInterval,
+		updateEnabled:        opts.UpdateCheckEnabled,
+		updateSource:         opts.UpdateSource,
+		updateInterval:       opts.UpdateInterval,
+		updateChecker:        opts.UpdateChecker,
+		isOffline:            opts.IsOffline,
 		baseCtx:              context.Background(), running: map[string]bool{},
 	}
 	if service.log == nil {
@@ -126,6 +149,9 @@ func New(opts Options) (*Service, error) {
 	// 0 = 未配置 → 默认 6h（默认启用）；只有显式负值才表示禁用。
 	if service.logsMaintainInterval == 0 {
 		service.logsMaintainInterval = defaultLogsMaintainInterval * time.Second
+	}
+	if service.updateInterval <= 0 {
+		service.updateInterval = defaultUpdateCheckInterval
 	}
 	return service, nil
 }
@@ -272,7 +298,7 @@ func (s *Service) RunNow(ctx context.Context, id string) (Run, error) {
 	return s.execute(ctx, task), nil
 }
 
-// Start 恢复任务状态（错过不补跑）、注册内置 cert_renew 与审计清理任务并启动单 ticker。
+// Start 恢复任务状态（错过不补跑）、注册内置 cert_renew / 审计清理 / 更新检查任务并启动单 ticker。
 func (s *Service) Start(ctx context.Context) error {
 	if err := s.syncCertRenewTask(); err != nil {
 		return err
@@ -281,6 +307,9 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	if err := s.syncLogsMaintainTask(); err != nil {
+		return err
+	}
+	if err := s.syncUpdateCheckTask(); err != nil {
 		return err
 	}
 	tasks, err := s.loadTasks()
