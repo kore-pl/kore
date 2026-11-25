@@ -65,3 +65,12 @@ ADR-0055（[0055-initial-admin-credential](./0055-initial-admin-credential.md)�
 3. **对 §1 鉴权表**：新增说明——`auth.must_change_password` 是**单管理员账号上的一次性状态机**（登录校验通过后仅放行改密 / 登出，其余 `/api/v1/*` 返回 403 + 白话提示），没有用户列表、角色、权限组，**不是 RBAC**，不改变 §1「单管理员、无用户名」的既有口径（G-11）。
 
 实现事实与验证命令见 ADR-0055 §7 与 [.agents/verify/adr55-credential.md](../../.agents/verify/adr55-credential.md)（commit `99754fd`）。
+## 7. 账号 + 密码口径覆盖（2026-11-25，ADR-0057；§0–§6 原文不动）
+
+[ADR-0057](./0057-login-account-model.md)（accepted，commit 草案 `0b80dae`，实现 `b1f7e59` / `ee724d5` / `b5480a6` / `7af792f` 等）按用户新裁决覆盖本 ADR 的「**单管理员、无用户名**」前提。本节只追加口径，**前文一字不动**：
+
+1. **对 §1「单管理员、无用户名」**：现行为「**单账号有名字（固定 `admin`）+ 口令**」——账号标识符存 config `auth.admin_username`（默认 `admin`、冷字段、不进 state.db），登录体 `{username,password,otp,captcha_id,captcha_answer}`，凭据 = 账号 + PBKDF2 口令。账号是标识符不是秘密，安全性仍由口令承担。**本 ADR §1 其余决策不变**：登录门仍是 `POST /api/v1/auth/login`，UDS / loopback 不跳过会话校验，7 天滑动会话，root 动作经内核 root 服务免密执行（ADR-0042），无 PAM / 系统账号。
+2. **对 §3「代价 / 已知缺口」与 §6 追加修订**：首启凭据文件由「明文口令一行」升级为**显式两行纯文本**（`username: admin` / `password: <placeholder>`，0600、gitignore、非 TTY 只给路径、消费后删均不变）；老单行文件自动包装、不一致备份 `.legacy`、更新安装绝不覆盖（ADR-0055 §8）。`auth.must_change_password` 字段保留，但**从 403 强制闸门降为可关闭的非阻断改密提示**（响应头 `X-Kore-Password-Hint: 1`），登录成功即签完整会话；改密成功仍清标志 / 吊销会话 / 删凭据 / 写审计。
+3. **对 §5 复审条件追加**：若出现「再加一个账号 / 按人分权」需求 → 命中 G-11「不做多用户 RBAC」，退回提案阶段，不在本 ADR 或 ADR-0057 打补丁；若把 `must_change` 恢复为强制闸门 → 与用户裁决冲突，须先取得新裁决。
+
+实现复核与验收证据见 [ADR-0057 §6](./0057-login-account-model.md) 与 [.agents/verify/account-t123.md](../../.agents/verify/account-t123.md) / [account-t4-bruteforce.md](../../.agents/verify/account-t4-bruteforce.md)。

@@ -467,3 +467,30 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 > | 5 | polkit 免口令规则（可选，仅 systemd 环境） | `/etc/polkit-1/rules.d/49-kore.rules`（或 `/usr/share/polkit-1/rules.d/`） | `kore uninstall` / `scripts/install-polkit-rule.sh --remove`（删文件，polkitd 自动重载） | 仅当选择"root 提权零口令"安装时写入；规则按 `subject.user` + `kore-root-*` unit 名前缀收敛，卸载后立即恢复口令授权 |
 
 > 未入豁免清单前，本脚本按"用户批准的可选安装步骤"执行、默认不运行；拒绝接受此提权的用户继续走每次弹口令的 `auth_admin` 路径（功能可用，体验降级）。
+- **socket 与身份校验**：插件 socket 由主壳 listen 后 `chown kore-<id>`、`0600`；hello 阶段用 `SO_PEERCRED` 校验 `pid` 且（降权时）`uid == kore-<id>`，不符即拒绝进入 ready。凭据不可用而处于降权状态时 **fail-closed**。
+## 16. 账号 + 密码模型与登录失败防护（2026-11-25，ADR-0057；§1–§15 原文不动）
+
+> [ADR-0057](DECISIONS/0057-login-account-model.md)（accepted）按用户新裁决覆盖 §3.2 的「无用户名」口径与 §3.5 的限速宽容次数。本节为 append-only 修订注记：**前文原句不动，冲突处以本节为准**。
+
+### 16.1 凭据边界：账号纳入，但不作为秘密
+
+| 项 | 口径 |
+| --- | --- |
+| 账号标识符 | config `auth.admin_username`，默认 `admin`，与 `auth.admin_password_hash` **同一配置文件 0600**；**不进 state.db**（无用户表、无角色、无枚举、无账号管理 API）；缺失 / 空归一 `admin`。账号是**标识符不是秘密**，安全性仍由口令承担——§3.1「系统只有一个账号，不做用户枚举」仍成立，不命中 G-11 |
+| 冷字段 | `auth.admin_username` 属 SIGHUP **冷字段**：改后须重启内核（避免会话 / 限速主体分叉）；`security.login_rate_limit.*` 仍为热更白名单 |
+| 凭据文件 | `<install>/data/initial-admin-credential` 由一行明文升级为两行 `username: admin` / `password: <placeholder>`（文档占位）；0600 + gitignore（含 `.legacy`）+ 运行态资产（G-29）+ 消费后删；日志 / 审计只记元数据，**账号不因「不是秘密」就可明文进日志或文档**（G-30 仍守） |
+| 迁移 | 老单行自动包装；哈希与明文不一致先备份 `.legacy` 再包装、提示 CLI 重置，不删数据、不猜口令；更新安装绝不覆盖（ADR-0055 §8） |
+| 改密请求体 | `POST /api/v1/auth/password` 显式 `{username,current_password,new_password}`；账号错 403、缺 400；会话 + 双提交 CSRF 两道门保留 |
+| must_change | `auth.must_change_password` 键名保留，**从 403 强制闸门降为可关闭的非阻断提示**（`X-Kore-Password-Hint: 1`）；登录成功即签完整会话，用户可忽略改密建议 |
+
+### 16.2 登录失败防护：验证码挑战 + 递增延时
+
+- **触发**：全局桶 key=`admin` 第 1 次口令错误即置 `captcha_required=true`，此后每次登录必须过验证码；**只有登录成功或 CLI 重置凭据才清除**，静默超时只清延时等级（fail-secure）。
+- **端点**：公开 `GET /api/v1/auth/captcha`（登录前可读，GET 不放宽 CSRF），stdlib `image/png` + 内嵌 5×7 点阵字形绘 5 字符图，去易混字符、随机噪点 / 干扰线，返回 base64 data URI；同一 challenge 另带「a + b = ?」文本加法题，供终端 / curl 无障碍使用。零第三方依赖、零字体、零联网（G-02 / G-10）。端点自身 10 次/分钟轻量限流（超出 429），不与口令失败桶共用计数。
+- **challenge 状态**：**只在进程内存**，`sha256(answer)` + 到期时刻，TTL 2 分钟，一次性（对错都立即删）；恒定时间比较（`crypto/subtle`）；不落盘、不进 state.db / 日志 / 审计，不回显答案；重启即失效、登录页重新拉取。零 ticker / goroutine（G-19）。
+- **校验顺序**：账号 → IP 白名单（§3.6，默认关）→ 验证码（挑战态才要）→ 口令 → OTP（§3.6，默认关）→ 签发。缺 / 过期 / 答案错分回 428 `E_CAPTCHA_REQUIRED` / 401 `E_CAPTCHA_INVALID`，**不计入口令失败计数**——否则攻击者可用错验证码推高延时 DoS 管理员；验证码正确后口令仍错才记一次失败。
+- **延时阶梯（覆盖 §3.5 的 5 次宽容数字表）**：`attempts` 默认 5→**1**，第 1 次口令错误 0s（但触发验证码），第 2 次起 **1s→2s→4s→8s→16s→30s 封顶**，`Retry-After` 给下一次错误将延迟的秒数；**正确口令始终 0s**，不存在「锁定期内正确口令被拒」（§3.5 的 P1 DoS 修复结论不变）。
+- **审计**：新增 `captcha.issued`（只记 challenge id 前缀）、`captcha.failed`（reason=`missing`/`expired`/`invalid`）、`captcha.passed`；`login.failed.reason` 扩 `captcha_required` / `captcha_invalid`。沿用 §11 字段白名单与 IP / UA 脱敏；**验证码答案 / 图片 / 口令任何形式都不进审计**（G-30）。
+- **复审条件（在 §3.1 / §3.5 原有条件上追加）**：出现短信 / 邮箱 / 第三方 CAPTCHA → 命中 G-10 / G-02 退回提案阶段；验证码被自动化稳定识别或 challenge 出现竞争 / 泄漏 → 复审生成算法与状态机。
+
+实现与证据见 [ADR-0057 §6](DECISIONS/0057-login-account-model.md)、[account-t123.md](../.agents/verify/account-t123.md)、[account-t4-bruteforce.md](../.agents/verify/account-t4-bruteforce.md)。

@@ -886,3 +886,29 @@ ADR-0041 为 `superseded-in-part`（`9b5d4dc`）；`web/.cache/` 已进 `.gitign
 1. **安装 / 修改系统级 root 服务**：`/etc/systemd/system/kore.service` + enable（ADR-0023 §3.5 豁免 #1、G-31），把当前 uid=1000 降级形态迁到 `User=root` 目标形态——一次性不可逆系统变更。
 2. **开启远端同步**：`remote_sync.enabled` 默认关闭；即使 Gitea（权威源，可按版本触发 CI）也须当次授权；**GitHub 任何情况下只能 workflow_dispatch 主动触发**，绝不自动 push / tag。
 3. 未验证项：Gitea Actions 服务端启用 / act_runner；真实 systemd 下 marker pending→success 与信号注入（按 G-29 未碰主实例）。
+
+---
+
+## T7 收口快照（2026-11-25，account-docs / scribe）
+
+> 只记结论与残留授权边界；逐条证据见 `.agents/verify/` 与 `.agents/LOG/`。本轮只写文档 / 台账，未碰代码、未改运行态（G-29）、未 push、未触发 CI；口令与凭据一律占位（G-30）。
+
+### ADR-0057 正式落盘与 append-only 修订
+
+- 新正式 ADR：[0057-login-account-model](../docs/DECISIONS/0057-login-account-model.md)（accepted，来自 [architect 草案](verify/login-account-model.md) `0b80dae`，§6 逐卡列 commit、列草案→实现差异、§5 保留被否决选项）。
+- append-only 修订：[0043](../docs/DECISIONS/0043-login-gate-vs-passwordless-ops.md) §7（「无用户名」→「单账号 admin + 口令」）、[0055](../docs/DECISIONS/0055-initial-admin-credential.md) §8.7（首登改密强制→可选、凭据两行、更新安装绝不覆盖不变）、[SECURITY](../docs/SECURITY.md) §16（凭据边界含账号标识符 + 验证码 / 延时 / 审计）、[CORE](../docs/CORE.md) §12（`auth.admin_username` 冷字段 + `GET /api/v1/auth/captcha` + 改密 body 增 `username` + 端点 70→71），已同步 AGENTS.md §6 / README.md 文档表（lead 扩域批准）、[USABILITY](../docs/USABILITY.md) §9（账号预填「已自动检测」+ 验证码 / 延时白话 + 改密提示可关）、[QUICKSTART](../QUICKSTART.md) 附录 B（登录填什么、两行凭据示例占位、密码错后怎么办）。**全部只追加新节，历史正文一字未改**（`git diff --numstat` 上述 6 文件均为「N 插入 / 0 删除」）。
+- G-23：[LOG/DECISIONS.md](LOG/DECISIONS.md) 追加 0057 五维裁决行（含多账号 / 无用户名 / 短信验证码 / 外部服务等被否决选项与依据）；[LOG/DISPATCH.md](LOG/DISPATCH.md) 追加 T1–T7 + must_change 卡派发行（task / owner / 写域 / 依赖 / 交付 / commit）。
+- 验收报告：[verify/account-t7-docs.md](verify/account-t7-docs.md)（命令 + 退出码 + 逐文件证据 + 未验证项）。
+
+### 三门禁与本卡证据
+
+- `make docs-check` exit 0（元信息 / 链接 / 占位词 / 行数 / 关键口径全绿或既有 WARN 不阻断）；`make secret-check` exit 0（0 FAIL / 23 处合规占位）；`bash scripts/log-check.sh` exit 0（8 pass / 0 warn）。
+- commit 精确 pathspec + `[agent:account-docs]` 前缀，**不 push、不触发 CI**；临时文件即建即删。
+- 实现侧证据（非本卡复跑）：T1 `b1f7e59` / T2 `ee724d5` / T3 `b5480a6`+报告 `445e2e0`+复核 `4805511` / T4 `7af792f` / must_change `b6e091b`+`5697b3c`；T5（account-ui）/ T6（account-password）的 commit 以各自报告与 DISPATCH 行为准。
+
+### 残留边界（延续 T5，本轮未执行）
+
+1. `must_change` 已是**非阻断提示**，不是闸门；不要把它恢复为 403 强制项（用户裁决）。
+2. 安装 / 修改系统级 root 服务仍属需用户一次性授权的不可逆变更（ADR-0023 §3.5 豁免 #1、G-31）；开启远端同步仍需当次授权，GitHub 任何情况下只 workflow_dispatch 主动触发。
+3. 未验证项：真实 systemd 实例下验证码 challenge 的跨进程重启行为（按内存态设计，未碰主实例，G-29）；Gitea Actions 服务端启用 / act_runner 注册（服务端前置）。
+4. 单账号有名字不等于多用户系统（G-11）：出现「再加一个账号 / 按人分权 / 短信验证码 / 外部 CAPTCHA」需求一律退回提案阶段，不在 ADR-0057 打补丁。

@@ -140,3 +140,13 @@ git check-ignore -v data/initial-admin-credential                               
 ### 8.6 回归证据
 
 实现与验证见 [.agents/verify/credential-lifecycle.md](../../.agents/verify/credential-lifecycle.md)。
+
+### 8.7 账号 + 密码与失败挑战正式覆盖（2026-11-25，ADR-0057；§1–§8.6 原文不动）
+
+> 触发：ADR-0057 已由 accepted 正式落盘（[0057-login-account-model](./0057-login-account-model.md)，草案 commit `0b80dae`）。§8.5 此前写「方向已定稿为 draft、实现待落地」，**现已落地**；本节为 append-only 口径更正，与前文冲突处以本节为准。
+
+1. **首登改密：强制 → 可选**。**§2 选项 C / §3.4 / §4 / §5 / §7 中「首登强制改密 / 403 受限会话闸门」均为 2026-11-25 早期口径，已作废。** `auth.must_change_password` 键名与字段保留（兼容现有配置 / SIGHUP / 测试），语义降为**非阻断提示**：登录成功即签完整会话，不再降权、不再对 `/api/v1/*` 返回 403；改为响应头 `X-Kore-Password-Hint: 1` + 面板顶部可关闭白话提示「建议尽快修改初始口令」，用户可忽略。实现 commit `b6e091b` / `5697b3c`（见 [must-change-deadlock.md](../../.agents/verify/must-change-deadlock.md)）。改密成功仍清标志、吊销旧会话、删一次性凭据文件、写审计（只记元数据）。
+2. **凭据文件两行格式**：由「明文口令一行」升级为 `username: admin` / `password: <placeholder>` 两行纯文本（尖括号占位，仅文档示例；G-30）。权限 0600、gitignore（含 `.legacy`）、非 TTY 只打印路径、运行态资产（G-29）、消费后删——§3.3 / §6 的这些边界**全部不变**。实现 commit `ee724d5`。
+3. **迁移**：老单行文件自动包装为两行（幂等）；若配置哈希与文件明文不一致，先把原文原子备份为 `<install>/data/initial-admin-credential.legacy`（0600、gitignore），再包装，提示 CLI 重置——**不删数据、不猜口令、不重新初始化**。实现 commit `ee724d5`，验证见 [account-t123.md](../../.agents/verify/account-t123.md) §3 / §5.2。
+4. **账号进入配置**：新字段 `auth.admin_username`（默认 admin、冷字段、缺失归一、不进 state.db）；账号校验常量时间比较、账号错与口令错统一 401 防枚举。单账号有名字**不是 RBAC，不命中 G-11**；验证码本地生成**不联网、不加依赖，不破 G-10 / G-02**。
+5. **§8.1 / §8.3 生命周期不变**：首次安装生成、**更新 / 升级安装绝不覆盖**（哈希 / 凭据文件 / 标志 / 终端输出一个字节不动），这是事故修订的硬边界，ADR-0057 没有放宽。

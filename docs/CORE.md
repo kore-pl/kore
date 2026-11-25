@@ -388,3 +388,27 @@ WantedBy=multi-user.target
 | [GLOSSARY.md](./GLOSSARY.md) | 术语、反术语与命名约定；字段名/错误码/方法名的唯一解释 |
 
 > 规格的价值不在"写得很全"，在于 implementer 照着写不会跑偏、verifier 照着测能给出红绿。本文任何一条"明确不做什么"被实现，就是内核开始膨胀的第一天。
+- **职责**：凭据只落 `<install>/data/credentials/`（目录 `0700`）、元数据 `index.json`（`0600`，字段显式）、每条密钥 `<id>.secret`（`0600`，原子写）；读取只对 owner 或显式 grantee 放行，越权返回 `E_NEED_GRANT`；授权 / 撤销 / 删除先写审计（`credential.grant` / `credential.revoke` / `credential.delete`），审计写失败按 **fail-closed** 拒绝（`E_AUDIT`），操作不生效。
+## 12. ADR-0057 账号模型与登录防护口径补充（2026-11-25；§0–§11 原文不动）
+
+> 本节 append-only 补充 §2.1 / §2.3 / §2.4 中已被 ADR-0057 推进的字段与端点口径；[ADR-0057](DECISIONS/0057-login-account-model.md) accepted，实现 commit `b1f7e59` / `ee724d5` / `b5480a6` / `7af792f` 等。
+
+### 12.1 配置字段 `auth.admin_username`（§2.1 补充）
+
+- **类型 / 默认**：显式 string（G-24，无 `any/object`），默认 `admin`；老配置缺失 / 空归一 `admin`（无需写盘即可登录）；显式值 2–32 位、小写字母开头的小写字母 / 数字 / 中划线 / 下划线；首启统一入口幂等写回同一 0600 配置。
+- **冷字段**：`reload.go` 的 `coldChanged` 收 `auth.admin_username`，SIGHUP **不热更**（提示重启），`mergeHot` 不含该字段；避免会话 / 限速主体与配置分叉。单一事实源在 config，**不进 state.db**（§2.2 的无用户表口径不变）。
+- **限速默认值**：`security.login_rate_limit.attempts` 由 5 改 **1**（宽容次数），键名与热更白名单不变；`lock` 仍 300s，仅清延时等级、不清验证码挑战态。
+
+### 12.2 登录 / 改密请求体与失败防护端点（§2.3 / §2.4 补充）
+
+| 端点 | 请求 / 响应 | 口径 |
+| --- | --- | --- |
+| `POST /api/v1/auth/login` | body `{username,password,otp,captcha_id,captcha_answer}` | 账号 → IP 白名单 → 验证码（挑战态才要）→ 口令 → OTP → 签发；账号错与口令错统一 401「账号或口令错误」防枚举，账号错不动限速桶 / 挑战态；限速 key 固定 `"admin"` 不按输入分桶。首次口令错置 `captcha_required`，第 2 次起 1s→30s 递增延时，正确口令 0s 并清零；`Retry-After` 给下一次错误延迟秒数 |
+| `GET /api/v1/auth/captcha` | 响应 `{captcha_id,image,text_question,expires_in}` | **新增独立注册端点**（`server.go` 的 `mux.HandleFunc`，不写 `routes()`）；`middleware.isPublicPath` 放行（GET 安全方法，不放宽 CSRF），登录前可拉取；stdlib PNG 点阵字形 + 文本加法题双通道；challenge 只存内存（sha256 + TTL 2 分钟 + 一次性）；端点自身 10 次/分钟限流；缺 / 错 / 过期分回 428 `E_CAPTCHA_REQUIRED` / 401 `E_CAPTCHA_INVALID`，不计口令失败 |
+| `POST /api/v1/auth/password` | body `{username,current_password,new_password}` | `username` 必填（缺 400 / 错 403「账号不匹配，无法修改口令」）；会话 + 双提交 CSRF 两道门保留；成功后清 must_change、吊销旧会话、删一次性凭据文件、写审计（只记元数据）。失败闭环「先吊销 → 再持久化 → 后切内存」不变 |
+
+**端点计数变化**：§2.4 的 **70 → 71** 个业务 / store 端点（新增 `GET /api/v1/auth/captcha` 1 条；`POST /auth/login` 与 `POST /auth/password` 是既有路由的请求体扩展，不新增路由数）。独立注册策略与 ADR-0056 的 3 条重启路由、账户与安全中心 5 条一致，Go 1.22 ServeMux 最长前缀匹配、**注册顺序无关**；不计入 `routes()` 的 5 条 catch-all 兜底，healthz 与 2 条静态前缀仍单列。根 [AGENTS.md](../AGENTS.md) §6 与 [README.md](../README.md) 文档表已同轮同步为 71（64 业务 + 7 store）；逐条清单以 §2.4 与本节为准。
+
+**must_change 非阻断**（§2.3 补充）：`auth.must_change_password` 键名保留，但不再把会话降权——登录成功即签完整会话，取消对 `/api/v1/*` 的 403 闸门；会话鉴权通过后由 `notePasswordHint` 挂响应头 `X-Kore-Password-Hint: 1`，前端显示可关闭白话提示。SIGHUP 仅在哈希 / 标志真变化时 `RevokeAll`，普通热更不误踢会话。
+
+实现复核与门禁证据见 [ADR-0057 §6](DECISIONS/0057-login-account-model.md)、[account-t123.md](../.agents/verify/account-t123.md)、[account-t4-bruteforce.md](../.agents/verify/account-t4-bruteforce.md)。
