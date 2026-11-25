@@ -141,6 +141,16 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 
 **未落地项（如实标注）**：~~`auth.login` / `ratelimit.hit` 审计事件尚未实现~~——**登录审计已落地**：成功写 `login.success`（`result=ok`，detail=`{ip,user_agent,session_id_prefix}`），失败写 `login.failed`（`result=denied`，detail=`{ip,user_agent,reason}`，reason ∈ `wrong_password` / `rate_limited` / `no_session`；进入惩罚的错误口令记 `rate_limited`）。IP 只保留前 3 段、UA 截断 100 字符、会话只留 8 字符前缀，**口令任何形式都不进审计**；可按 `action=login.failed` 从审计库追溯暴力破解。
 
+### 3.6 两步验证、登录 IP 白名单与 API token（2026-11-25 落地，`0a66c10`）
+
+三项均为**默认关闭**的显式开关，状态存 bbolt `security` 桶（`security.totp` / `security.totp.pending` / `security.ipallow` / `security.tokens`）；改配置类操作额外要求当前口令。实现：`internal/core/auth/security.go`、`internal/core/httpapi/handlers_security.go`、`internal/core/httpapi/middleware.go`。
+
+| 项 | 实现口径 | 边界与残余风险 |
+| --- | --- | --- |
+| TOTP 两步验证 | RFC 6238 / HMAC-SHA1 / 6 位 / 30 s 周期，允许 ±1 步时钟偏差；开启时一次性展示 **10 个**恢复码（单次有效、库中只存 sha256），密钥只在开启流程返回一次；开启后登录 = 口令 + 动态码，**缺 OTP → 428 `E_2FA_REQUIRED`**，码错 → 401 `E_2FA_INVALID` | 依赖用户自备 TOTP App，内核不联网、不发短信/邮件；恢复码用尽需关闭后重开；密钥在校验侧必须可取回（bbolt 中非哈希存储），威胁等价于能读 `state.db` 的 root |
+| 登录 IP 白名单 | CIDR 列表；开启后在**口令校验之前**判定（不泄露口令正确性），未命中 / 列表为空 / CIDR 解析失败一律拒绝 **403 `E_IP_DENIED`**（fail-closed，文案不回显白名单）；来源取 TCP 对端，仅 UDS / 回环对端才采信 `X-Forwarded-For` 首段 | 只约束**登录入口**，不限制已签发会话与 API token；反向代理非本机时看到的是代理地址，白名单须放行代理 IP；IPv4/IPv6 需分别登记 |
+| API token | `Authorization: Bearer kore_<base64url>`；明文只在创建时返回一次、库中只存 sha256；scope 两档：`read` 只放行安全方法，`admin` 放行全部；TTL 默认 90 天、上限 365 天；按 id 吊销，不存在的 id 幂等成功 | 与 Cookie 会话并存；token 无 IP/UA 绑定，泄漏即等于对应 scope 的长期权限；`read` 是方法级只读，不按资源细分 |
+
 ## 4. CSRF
 
 三层同时启用，任一层失败即拒绝：
@@ -318,6 +328,9 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 | `auth.cookie_secure` | `auto` | 配置 | 逐请求判定（§3.4）：TLS 或本机反代 `X-Forwarded-Proto: https` 才加 `Secure`；纯 HTTP 不加 |
 | 会话 TTL | 168h（7d）滑动 / 30d 绝对 | `auth.session_ttl`（1m–720h） | 调大增加劫持窗口；阈值 `min(24h, ttl/2)` 决定写盘频率 |
 | 登录限速 | 60s 内 5 次失败后按 1s→30s 递增延迟（无锁定期） | 配置 | 只惩罚错误口令，正确口令始终放行（§3.5）；`lock` 是惩罚记忆窗口 |
+| 两步验证（TOTP） | 关闭 | 安全页主动开启（口令 + 动态码确认） | 开启后登录需口令 + 6 位动态码；恢复码 10 个单次有效（§3.6） |
+| 登录 IP 白名单 | 关闭（关闭时放行所有来源） | 安全页配置 CIDR | 开启后 fail-closed：列表为空 / 未命中 / 解析失败一律拒登（§3.6） |
+| API token | 不预置；新建默认 90 天，上限 365 天 | 安全页生成 / 吊销，scope `read` / `admin` | `read` 仅安全方法；明文只回显一次；无 IP/UA 绑定（§3.6） |
 | 插件签名 | `allow_unsigned=true`（M4 改 `false`） | 配置 | 未签名期无法证明来源 |
 | 插件包大小 | 以 [CORE](./CORE.md) `body_limit` 为真源 | 配置 | 调大增加解压炸弹面 |
 | 单插件内存 | 12 MiB | `resources.memory_mb`（取声明与上限较小值） | 超限被 cgroup OOM kill |

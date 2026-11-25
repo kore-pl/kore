@@ -79,7 +79,7 @@
 | G4 | v1.0 gate 九类取证（`V1-GOALS.md:79-89`） | 功能/质量/资源/性能/兼容/安全/运维闭环/开放/不做九类证据齐备、无 P0。 |
 | G5 | 商店装/卸全量（21 仓） | 20 产品 + echo 均可经商店安装与卸载，索引 sha256 与发布物一致。 |
 | G6 | 资源与性能实测 | 空载进程 ≤1、同时常驻 ≤3、合计 ≤24 MiB、API p95 ≤50 ms、启动 ≤1 s 三件输出在阈值内。 |
-| G7 | 安全能力缺口（2FA / IP 白名单 / API token / 审计 CSV） | 登录二次验证生效、token 可生成/吊销、审计可按动作过滤并导出 CSV（`FEATURE-PARITY.md:80-83`）。 |
+| G7 | ~~安全能力缺口（2FA / IP 白名单 / API token）~~ **已实现**（`0a66c10`，`internal/core/auth/security.go` + `internal/core/httpapi/handlers_security.go`）；审计 CSV 为前端对已加载行过滤导出（`web/audit.js`，后端 `GET /audit` 只接 `since`） | 登录二次验证生效（缺 OTP → 428 `E_2FA_REQUIRED`，恢复码 10 个单次有效）、白名单外 IP → 403 `E_IP_DENIED`（口令校验前 fail-closed）、token 可生成/吊销且 `read` 档禁写；三项默认关闭，需管理员主动开启（`FEATURE-PARITY.md:82-83`）。 |
 | G8 | 运维五步链端到端 | 装插件→装运行时→建站→签证书→配备份一次跑通，运行时预检失败给可读错误。 |
 | G9 | M1/M3 遗留未闭环项（`.agents/BOARD.md:160,52`） | bus 多路复用、capability 方法级校验、退避重启/心跳、真实宿主 `env_kind=real`、echo audit CLI 各有通过用例。 |
 | G10 | 对象存储备份 + cgroup 硬上限 + 三处文案一致 | S3 备份恢复 sha256 一致、cgroup 超限只杀插件、README/商店首屏/安装器口径逐字相同。 |
