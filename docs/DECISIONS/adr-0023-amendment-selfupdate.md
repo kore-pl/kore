@@ -1,15 +1,15 @@
-> 状态: proposed（修订提案，待用户 accept；**不改已 accepted 的 ADR-0023 正文**）· 归属: designer（task-41，用户 U3 裁决）· 更新: 2026-11-26 · 里程碑: R26 · 门禁关联: G-06 / G-12 / G-23 / G-29 / G-30 / G-31
-> ADR 状态: proposed · 修订对象: [ADR-0023 §3.5 豁免清单](./0023-zero-intrusion.md)（accepted，2026-11-23，原文一字不改）· 关联: [草案 §6.2 U3](./self-update-design-draft.md)、[ADR-0059](./0059-silent-update-trigger-and-supply-chain.md)（更新链）、[ADR-0056](./0056-self-restart.md)（本地边界）、[实现任务图](./self-update-implementation-plan.md)
+> 状态: accepted（2026-11-26 用户 accept U3 有限放宽，已 append 并入 ADR-0023 §3.5 与 §11 修订记录）· 归属: designer（task-41，用户 U3 裁决）→ scribe（task-42，accept 落地）· 更新: 2026-11-26 · 里程碑: R26 · 门禁关联: G-06 / G-12 / G-23 / G-29 / G-30 / G-31
+> ADR 状态: accepted · 修订对象: [ADR-0023 §3.5 豁免清单](./0023-zero-intrusion.md)（accepted，2026-11-23；2026-11-26 append 新增豁免 #5，原文 4 项不动）· 关联: [草案 §6.2 U3](./self-update-design-draft.md)、[ADR-0059](./0059-silent-update-trigger-and-supply-chain.md)（更新链）、[ADR-0056](./0056-self-restart.md)（本地边界）、[实现任务图](./self-update-implementation-plan.md)
 > 纪律: 只写文档 / 台账；不 push、不联网、不执行 install/serve/upgrade；品牌 Kore/kore。
 
 # ADR-0023 §3.5 修订提案：静默自更新的最小安装目录外写入豁免（U3 有限放宽）
 
 ## 1. 提案性质与前置
 
-本文件是**修订提案**，不是已生效的 ADR，也不是对 ADR-0023 正文的改写。ADR-0023（`0023-zero-intrusion.md`，accepted，2026-11-23）§3.5 现有 4 项豁免、§3.6 验收判据、§5 被否决方案汇总**均保持原文**；本提案供用户后续 accept，accept 之前：
+本文件原为**修订提案**；2026-11-26 用户明确 accept U3（有限放宽）后，已按 §4 的建议以 append 方式并入已 accepted 的 ADR-0023——豁免 #5 落到 [§3.5](./0023-zero-intrusion.md)，accept 留痕落到 [§11](./0023-zero-intrusion.md)。ADR-0023 原有 4 项豁免、§3.6 验收判据、§5 被否决方案汇总**原文均保持不动**。本文件保留为提案来源与逐项依据（accept 后仍不得据此无限放宽）：
 
-- 不得实现本提案新增的安装目录外写入（G-31 判据仍按 ADR-0023 §3.5 现有 4 项执行）；
-- 不得因本提案存在而放宽 `make zero-intrusion-check`（`Makefile:338-340`、`scripts/zero-intrusion-check.sh`）。
+- 本提案只新增一项安装目录外写入豁免（§3.1），其余写入仍按 ADR-0023 §3.5 清单执行；
+- 不得因本提案存在而放宽清单外路径；`make zero-intrusion-check`（`Makefile:338-340`、`scripts/zero-intrusion-check.sh`）的 `snap()` 由 M5 实现卡增该路径断言，未增前不得宣称已覆盖该项（G-31）。
 
 用户 2026-11-26 的 U3 裁决原文口径：**有限放宽**——「允许新增 ADR 明确列出的最小安装目录外写入（如一个本地更新状态文件），逐项登记 changes.jsonl 可回滚；不是按需无限放宽——必须在 ADR-0023 §3.5 逐项列明新增豁免路径与回滚方式。」
 
@@ -43,9 +43,9 @@
 | 新系统用户（如 `kore-updater`） | **不新增**：本机身份用 `SO_PEERCRED` uid∈{0,kored uid}，无需新用户（ADR-0058 §3.1） | U3；ADR-0023 §3.2 |
 | `/etc/kore`、`/var/lib/kore`、`/var/log/kore`、`/run/kore` 等目录树 | **不新增**：ADR-0023 `:113` 明列的清单外路径原样封禁 | G-31 |
 
-## 4. 对 ADR-0023 现有章节的影响（accept 时才生效）
+## 4. 对 ADR-0023 现有章节的影响（2026-11-26 accept 后已 append 落地）
 
-> 以下为**建议追加文字**，不是对原文的修改。accept 后由 scribe 以 append 修订段方式落到 ADR-0023（延续 ADR-0043 §6/§7、ADR-0056 §实现复核注记的先例），原文保持不动。
+> 以下追加文字已由 scribe（task-42）以 append 修订段方式落到 ADR-0023（延续 ADR-0043 §6/§7、ADR-0056 §实现复核注记的先例），原文保持不动；落地位置为 [§3.5 豁免 #5](./0023-zero-intrusion.md) 与 [§11 追加修订记录](./0023-zero-intrusion.md)。
 
 1. **§3.5 豁免清单追加一行**（编号 #5，内容取 §3.1 表格），并在清单下方注明「新增项来自 U3 有限放宽裁决（2026-11-26），仅此一项，逐项登记 `changes.jsonl` 可回滚」。
 2. **§3.6 验收判据追加**：断言 `<install>/data/update-state.json` 存在时，`changes.jsonl` 必须有对应条目且 `purge_op=file.remove`；卸载后该文件必须不存在（纳入 `snap()` 断言集合），否则零侵入判 FAIL。

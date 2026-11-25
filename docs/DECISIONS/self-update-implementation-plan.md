@@ -1,5 +1,5 @@
 > 状态: proposed（实现任务图，供 lead 审阅后派发；本卡只写文档，不建 team_task、不改代码）· 归属: designer（task-41）· 更新: 2026-11-26 · 里程碑: R26 · 门禁关联: G-06 / G-07 / G-08 / G-09 / G-12 / G-19 / G-23 / G-29 / G-31
-> ADR 状态: proposed · 关联: [草案 §6.2](./self-update-design-draft.md)、[ADR-0058](./0058-local-update-caller-identity.md)（U1）、[ADR-0059](./0059-silent-update-trigger-and-supply-chain.md)（U2/U4/U6）、[ADR-0023 §3.5 修订提案](./adr-0023-amendment-selfupdate.md)（U3，待 accept）、[ADR-0056](./0056-self-restart.md)（U5 本地边界）、[角色卡](../../.agents/ROLES.md) §3/§4/§8
+> ADR 状态: proposed（本图自身仍为文档版）· 关联: [草案 §6.2](./self-update-design-draft.md)、[ADR-0058](./0058-local-update-caller-identity.md)（U1）、[ADR-0059](./0059-silent-update-trigger-and-supply-chain.md)（U2/U4/U6）、[ADR-0023 §3.5 修订提案](./adr-0023-amendment-selfupdate.md)（U3，**已 accept 2026-11-26**）、[ADR-0056](./0056-self-restart.md)（U5 本地边界）、[角色卡](../../.agents/ROLES.md) §3/§4/§8
 > 纪律: implementer ≠ verifier（G-09 / ROLES §8）；red-team ≠ implementer；写域同层不相交（G-08）；验收靠命令 + 退出码 + 关键输出（G-07）；不 push、不执行 install/serve/upgrade；品牌 Kore/kore。
 
 # 静默自更新实现任务图（MVP / 完整两期）
@@ -8,7 +8,7 @@
 
 1. 这是**文档版任务图**，供 lead 审阅后按 `.agents/WORKFLOW.md` 建 `team_task_*` 派发；本卡不建任务、不改代码、不跑实现门禁。
 2. 每个任务给出：目标 / 写域 / 依赖 / 角色 / 验收命令 + 退出码 + 关键输出 / ADR 前置门槛。
-3. **ADR 门槛**：标注「需先 accept」的任务在该 ADR 正式 accepted 之前不得开工；ADR-0058 / 0059 已 accepted（2026-11-26），ADR-0023 §3.5 提案仍 **proposed**，U5 的实际安装那一次仍须**执行时单独确认**（不可逆操作不预先代授权）。
+3. **ADR 门槛**：标注「需先 accept」的任务在该 ADR 正式 accepted 之前不得开工；ADR-0058 / 0059 已 accepted（2026-11-26），ADR-0023 §3.5 提案**已于 2026-11-26 accept 并 append 进 ADR-0023 §3.5 #5 / §11（M5 门槛已解除）**，U5 的实际安装那一次仍须**执行时单独确认**（不可逆操作不预先代授权）。
 4. 同层任务写域互不相交；同一任务内 implementer 与 verifier 必须是不同 agent（G-09）；验收命令由 verifier 独立复跑、贴原文，不复用 implementer 输出。
 5. 品牌：产品显示 **Kore**，代码内部标识（路径 / 配置键 / 能力名 / cookie / 变量）一律 `kore` 小写。
 
@@ -20,12 +20,12 @@ ADR-0058 accepted ✓ ─┬─→ M1 本机专用端点（UDS + peercred + 专�
 ADR-0059 accepted ✓ ─┬─→ M3 批量编排器（复用 reloadOne）
                      ├─→ M4 scheduler update.check 内置任务（默认禁用）
                      └─→ M7 备份/磁盘配置 + stale 自动清理
-ADR-0023 §3.5 提案 [需用户 accept] ─→ M5 本地更新状态文件 + changes.jsonl 登记  ← 唯一带 ADR 门槛的任务
+ADR-0023 §3.5 提案 [✅ 已 accept 2026-11-26] ─→ M5 本地更新状态文件 + changes.jsonl 登记（门槛已解除）
 U5 设计口径已授权 / 实际安装当次确认 ─→ M8 形态 A 全闭环演练（安装动作单独确认）
 ADR-0019 append 修订 ─→ M4（任务登记，先追加修订段再实现内置任务）
 ADR-0025 append 修订 ─→ M6（内核资产索引字段，先追加修订段再实现供应链入口）
 
-MVP = M1 + M2 + M3 + M5(部分，受 ADR 门槛) + M8(设计口径；安装当次确认)
+MVP = M1 + M2 + M3 + M5(ADR 门槛已解除，按 §3.5 #5 实施) + M8(设计口径；安装当次确认)
 完整期 = M4 + M6 + M7 + M9（离线 B 路径 + 双形态演练 + 红队反例）
 ```
 
@@ -66,23 +66,23 @@ MVP = M1 + M2 + M3 + M5(部分，受 ADR 门槛) + M8(设计口径；安装当�
   - 隔离实例一次触发 N 个插件 → 全部 200；`GET /plugins` 立即新版本、无需重启内核；启用态与升级前一致；注入一条失败 → 其余项仍成功、失败项可单条重试。
   - **禁止**改 `store/install` 对外 schema（G-24，U2-C 留完整期）。
 
-### M5 · 本地更新状态文件 + changes.jsonl（U3，**需先 accept ADR-0023 §3.5 提案**）
+### M5 · 本地更新状态文件 + changes.jsonl（U3，**ADR-0023 §3.5 提案已 accept 2026-11-26**）
 
-- **目标**：一个安装目录外状态文件的原子写 + 逐项账本登记 + 可回滚；仅在提案 accepted 后开工（ADR-0023 提案 §1/§3.1）。
+- **目标**：一个安装目录外状态文件的原子写 + 逐项账本登记 + 可回滚；门槛已解除，可按 [ADR-0023 §3.5 豁免 #5 / §11](./0023-zero-intrusion.md) 开工（原提案 §1/§3.1）。
 - **写域**：`cmd/kored/`（状态文件读写 + `file.remove` purge_op）、`scripts/zero-intrusion-check.sh`（snap 增该路径断言）、`docs/DATA-MODEL.md` / `docs/RUNBOOK-INSTALL.md`（schema / 回滚说明）。
-- **依赖**：**ADR-0023 §3.5 修订提案 accepted**（硬门槛）；M2（编排结果写入）。
+- **依赖**：**ADR-0023 §3.5 修订提案 accepted（✅ 2026-11-26，已 append 进 ADR-0023 §3.5 #5 / §11）**；M2（编排结果写入）。
 - **角色**：implementer ≠ verifier；red-team 另派（不得是 implementer）做误删 / 绕过账本反例。
 - **验收**：
   - `go test -timeout 200s ./cmd/kored/...` → exit 0（原子写 + 账本登记正反例）。
   - `make zero-intrusion-check` → exit 0；有状态文件时账本有 `file.remove` 条目；卸载后文件不存在。
   - `make secret-check` → exit 0；状态文件样本无凭据字段。
-  - **若提案未 accept**：本任务整体 BLOCKED，不得用「先写 `<install>/data/` 再说」绕过（ADR-0023 §3.5 原文仍生效）。
+  - **门槛现状**：提案已 accept（2026-11-26），本任务可开工；仍不得用「先写 `<install>/data/` 再说」绕过 §3.5 #5 的 0600 / 原子写 / `changes.jsonl` 登记契约。
 
 ### M8 · 形态 A 全闭环演练（U5，设计口径已授权 / 安装当次确认）
 
 - **目标**：root systemd 服务（`kore.service`，ADR-0042 目标形态）下走完插件热更新 + 内核 upgrade + 自重启 + finalize；portable 形态内核升级 fail-closed 白话提示。
 - **写域**：仅验收报告 `.agents/verify/self-update-mvp.md` + 必要的文档同步（**不改代码**；如需代码修复回派 M1–M3）。
-- **依赖**：M1 + M2 + M3 + M5（若提案未 accept，M5 状态文件项跳过并显式标注 BLOCKED）；**实际安装 root 服务须执行时单独确认，本图不代授权**。
+- **依赖**：M1 + M2 + M3 + M5（U3 提案已 accept 2026-11-26，M5 状态文件项按 §3.5 #5 正常实施，不再走跳过分支）；**实际安装 root 服务须执行时单独确认，本图不代授权**。
 - **角色**：verifier 主导演练（独立于 M1–M3 implementer）；root 安装动作由 lead 向用户当次取得确认后再派。
 - **验收**：
   - `make check` → exit 0（21 段门禁）；`make idle` → exit 0（出站 0 / CPU / fd / goroutine 达标）。
@@ -107,7 +107,7 @@ MVP = M1 + M2 + M3 + M5(部分，受 ADR 门槛) + M8(设计口径；安装当�
 
 - **目标**：消费 ADR-0025 验签索引里的内核资产条目；https 绝对 URL + sha256 校验先于替换；落本地临时文件后交 `upgrade --bin`（拒绝 URL，`upgrade.go:10-14`）。
 - **写域**：`internal/core/market/`（索引字段显式化，G-24）、`cmd/kored/upgrade*.go` 的调用侧（不碰 accepted 语义）、`docs/DECISIONS/0025-index-signing-redesign.md`（**append 修订段**）、`docs/SECURITY.md`。
-- **依赖**：ADR-0025 append 修订先落盘；M4；M5（状态文件记录 sha / phase；若 M5 BLOCKED，则退化为内存 + `.prev` 并显式披露）。
+- **依赖**：ADR-0025 append 修订先落盘；M4；M5（状态文件记录 sha / phase；U3 已 accept，M5 不再因 ADR 门槛 BLOCKED；M5 未落地前可临时退化为内存 + `.prev` 并显式披露）。
 - **角色**：implementer ≠ verifier；red-team 另派（篡改索引 / 资产 / 公钥轮换反例）。
 - **验收**：
   - `go test -timeout 200s ./internal/core/market/... ./cmd/kored/...` → exit 0。
@@ -118,7 +118,7 @@ MVP = M1 + M2 + M3 + M5(部分，受 ADR 门槛) + M8(设计口径；安装当�
 
 - **目标**：`backup.keep_count`（默认 2）+ `backup.max_disk_bytes`（按 G-03 预算比例保守默认）可配置；`stale_versions` 超限自动清理，保底 1 份可回滚；清理写审计。
 - **写域**：`internal/core/config/`（配置键）、`internal/core/market/`（stale 语义改：`types.go:104-106` 现状「不自动删」）、前端文案（若涉及 UI 则按 G-28 补双端截图）、`docs/DATA-MODEL.md` / `docs/USABILITY.md`。
-- **依赖**：M3；M5（审计写状态文件，若 BLOCKED 则用既有审计通道并披露）。
+- **依赖**：M3；M5（审计写状态文件；U3 已 accept，M5 不再因 ADR 门槛 BLOCKED；M5 未落地前可临时用既有审计通道并披露）。
 - **角色**：implementer ≠ verifier。
 - **验收**：
   - `go test -timeout 200s ./internal/core/market/... ./internal/core/config/...` → exit 0。
@@ -155,7 +155,7 @@ MVP = M1 + M2 + M3 + M5(部分，受 ADR 门槛) + M8(设计口径；安装当�
 | --- | --- | --- |
 | ADR-0058 accepted | ✅ 2026-11-26 | M1 / M2 |
 | ADR-0059 accepted | ✅ 2026-11-26 | M3 / M4 / M6 / M7 |
-| ADR-0023 §3.5 修订提案 accepted | ❌ proposed（待用户） | **M5 不得开工**；M5 未做时 M6/M7 的审计写退化为既有通道并披露 |
+| ADR-0023 §3.5 修订提案 accepted | ✅ 2026-11-26（已 append 进 ADR-0023 §3.5 #5 / §11） | **M5 门槛已解除，可开工**；M5 未做时 M6/M7 的审计写退化为既有通道并披露 |
 | ADR-0019 append 修订段落盘 | ❌ 待实现卡 | M4 不得注册内置任务 |
 | ADR-0025 append 修订段落盘 | ❌ 待实现卡 | M6 不得改索引字段语义 |
 | U5 实际安装 root 服务当次确认 | ❌ 未取得 | M8 的安装动作标 NOT EXECUTED，不代授权 |

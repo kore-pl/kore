@@ -1,5 +1,5 @@
-> 状态: accepted · 归属: architect · 更新: 2026-11-23 · 里程碑: M5
-> ADR 状态: accepted（2026-11-23 lead 裁决）· 实现进度: 阶段 A（portable 默认）+ B（卸载链 `kore uninstall`）+ E（`make zero-intrusion-check`）已落地 · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md
+> 状态: accepted · 归属: architect · 更新: 2026-11-26 · 里程碑: M5
+> ADR 状态: accepted（2026-11-23 lead 裁决；2026-11-26 追加 U3 有限放宽修订，见 §11）· 实现进度: 阶段 A（portable 默认）+ B（卸载链 `kore uninstall`）+ E（`make zero-intrusion-check`）已落地 · 关联: ../ARCHITECTURE.md、0018-privilege-model.md、0022-root-command-shapes.md、../RUNBOOK.md、../SECURITY.md、adr-0023-amendment-selfupdate.md（U3 修订提案，accepted）
 
 # ADR-0023: 零侵入设计规范——删掉安装目录即等于卸载
 
@@ -109,6 +109,9 @@
 | 2 | 插件系统用户 | `/etc/passwd`、`/etc/group` 的 `kore-<id>`；共享通道组 `kore`（`/etc/group` 一条，无同名用户） | `kore uninstall` 按前缀 `userdel`（共享组 `kore` 在目录为空时由运维/后续版本清理） | 仅 root 内核 + 首次启用/启用通道时创建；非 root portable 实例不创建 |
 | 3 | 用户批准的宿主变更 | nginx conf.d、ufw/nft 规则、crontab、fail2ban、docker 资源、DB/Redis 数据 | `uninstall` 按 `changes.jsonl` 提示回滚 | 必须有清单条目；默认不自动回滚 |
 | 4 | 显式安装的二进制（可选） | `/usr/local/bin/kored` | `make uninstall` / 用户自行删除 | 默认"解压即用"，不写系统目录 |
+| 5 | 本地更新状态文件（静默更新链跨重启的意图与结果） | `<install>/data/update-state.json`（优先）或经用户显式配置的安装目录外单文件路径；全系统仅此一个文件，不得扩展为目录树 | 每次创建 / 覆写先追加 `<install>/data/changes.jsonl` 一条（`target`=实际绝对路径、`summary`=「更新状态记录」、`purge_op`=`file.remove`）；`kore uninstall --purge` 按清单逐条删除；手工回滚 = `rm <该路径>` 后 `grep -v <该路径> changes.jsonl`（账本同步清理，避免幽灵条目） | 0600、属主 = kored 运行 uid（root 服务即 root；portable 即当前 uid）；原子写（临时文件 + fsync + rename）；只写状态元数据，不写凭据 / token / 口令；不在 `/etc`、`/var/lib`、`/var/log`、`/run`、`/usr/lib/systemd` 等清单外路径写入；**不新增常驻任务落盘 / 新 unit / 新用户** |
+
+> **豁免 #5 来源**：新增项来自 U3 有限放宽裁决（2026-11-26），仅此一项，逐项登记 `changes.jsonl` 可回滚；U3 点名排除的三类（常驻任务落盘 / 新 unit / 新用户）全部不在本豁免内。逐项字段、否决选项与回滚口径见 [adr-0023-amendment-selfupdate.md](./adr-0023-amendment-selfupdate.md)（已 accept）。复审条件见本 ADR §11。
 
 **清单外一切写入 = 违规**：包括但不限于 `/etc/kore`、`/var/lib/kore`、`/var/log/kore`、`/run/kore`（portable 默认下）、`/etc/nginx/nginx.conf`、`/etc/resolv.conf`、`/etc/hosts`、`/etc/cron.d`、`/etc/sudoers*`、`/usr/lib/systemd/*`。
 
@@ -263,3 +266,14 @@ lead 裁决后先落地"默认值 + 判据"，阶段 B（uninstall / changes.jso
 **测试**：`cmd/kored/uninstall_test.go`（注入假 `platform.Cleanup` + 假 `execPurge` + 临时 state）、`cmd/kored/changes_test.go`（账本 0600、结构化 op、坏行、拒绝 shell 字符串）、`internal/platform/linux_cleanup_test.go`（临时 `/etc/passwd` + 假 `userdel`/`systemctl` 可执行文件）。**测试从不触碰真实系统用户**。
 
 **未实现（下一阶段）**：`kore uninstall`（安装脚本形态）尚未提供——当前由 `make install` 写 unit；账本写入点仍在阶段 C（`privilege` 的 root.action 收口后自动记账）；`file.restore` 需要备份文件先由插件写入。
+
+## 11. 追加修订记录（2026-11-26，U3 有限放宽 accept；§0–§10 原文不动）
+
+**accept 留痕**：2026-11-26 用户明确 accept U3 修订提案（**有限放宽**），来源 [adr-0023-amendment-selfupdate.md](./adr-0023-amendment-selfupdate.md)（accepted，原状态 proposed）。本轮按提案 §4 的建议以 append 方式落地，§3.5 原有 4 项豁免、§3.6、§5、§8 原文保持不动，仅追加下列口径。
+
+1. **§3.5 豁免清单新增 #5「本地更新状态文件」**：`<install>/data/update-state.json`（或经用户显式配置的安装目录外单文件路径），0600 + 属主 = kored 运行 uid + 原子写（临时文件 + fsync + rename），只写更新状态元数据、不写凭据 / token / 口令。**回滚方式**：创建 / 覆写前先向 `<install>/data/changes.jsonl` 追加一条 `purge_op=file.remove` 的结构化账本记录（复用既有 #3 账本机制，`cmd/kored/changes.go`）；`kore uninstall --purge` 按清单逐条删除，手工回滚 = `rm <该路径>` 后 `grep -v <该路径> changes.jsonl`。**边界**：全系统仅此一个文件，不得扩展为目录树；不写 `/etc`、`/var/lib`、`/var/log`、`/run`、`/usr/lib/systemd` 等清单外路径；**不新增常驻任务落盘 / 新 unit / 新用户**（U3 点名排除的三类）。
+2. **对应 §3.6 验收判据的追加**（由 M5 实现卡同步到 `make zero-intrusion-check` 的 `snap()`）：状态文件存在时 `changes.jsonl` 必须有对应条目且 `purge_op=file.remove`；`kore uninstall --purge` 后该文件必须不存在。未落地前 §3.6 现有判据原文继续有效，不因本 append 放宽。
+3. **对应 §5 被否决方案汇总的追加**：「按需无限放宽安装目录外写入」与「为自更新新增独立 unit / 用户 / 常驻任务落盘」列入否决，依据 U3 裁决与提案 §3.2。
+4. **对应 §8 复审条件的追加**：若出现第二个安装目录外写入需求，必须另开 ADR 逐项裁决，不得援引本次 #5 类推（U3「有限放宽」边界）。
+
+实现排期见 [self-update-implementation-plan.md](./self-update-implementation-plan.md) M5（本 append 落地即解除该任务的 ADR 门槛）。
