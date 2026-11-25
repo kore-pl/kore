@@ -26,6 +26,40 @@ func socketPath(app *platform.Platform) string {
 	return filepath.Join(app.Paths.Dir(platform.DirRun), "kore.sock")
 }
 
+// selfUpdateSocketPath 返回 ADR-0058 本机专用更新端点的独立 UDS 路径。
+// 与主 socket 分离：专用通道只承载 POST /api/v1/system/self-update，0600 属主可写，
+// 不放宽公开门；由 transport.Listen 创建并收紧权限（不 chown）。
+func selfUpdateSocketPath(app *platform.Platform) string {
+	return filepath.Join(app.Paths.Dir(platform.DirRun), "kore-selfupdate.sock")
+}
+
+// selfUpdateCapabilityFor 是 ADR-0058 §3.1.4 的专用能力解析器：本机专用通道
+// 只授予单一 system:self_update，绝不返回 6 项 admin 能力，也不进入会话能力集。
+// 它不读取 cookie / session / Authorization——身份只来自 UDS + SO_PEERCRED。
+func selfUpdateCapabilityFor(_ int32) []string {
+	return []string{httpapi.LocalUpdateCapability()}
+}
+
+// selfUpdateAuditFromStore 把专用端点的审计事件接到 audit bucket（fail-closed）。
+// 与 httpAuditRecorderFromStore 不同，Record 返回错误：写不进就不执行更新
+// （ADR-0058 §3.1.5）。detail 由 httpapi 收口，只含 uid/channel/capability/target_version，
+// 本适配器不注入任何凭据字段（G-30）。
+type selfUpdateAuditFromStore struct {
+	db *store.Store
+}
+
+// Record 实现 httpapi.SelfUpdateAuditRecorder。
+func (a *selfUpdateAuditFromStore) Record(ev httpapi.AuditEvent) error {
+	return a.db.PutAudit(store.AuditRecord{
+		Subject: ev.Subject,
+		Action:  ev.Action,
+		Plugin:  ev.Plugin,
+		Target:  ev.Target,
+		Result:  ev.Result,
+		Detail:  ev.Detail,
+	})
+}
+
 // bootstrap 绑定平台实现、探测环境并创建运行期目录，返回退出码。
 func bootstrap(cfg config) (*platform.Platform, envprobe.Report, int) {
 	app, err := platform.New(platform.Config{
@@ -97,6 +131,10 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		Credentials:       svc.credential,
 		Alerts:            alertSink(svc.db),
 		InstallState:      installStateProvider(svc.db),
+		// ADR-0058：独立 UDS 专用更新端点（公开门零变化，严格双向鉴权）。
+		SelfUpdateSocket:             selfUpdateSocketPath(app),
+		SelfUpdateCapabilityResolver: selfUpdateCapabilityFor,
+		SelfUpdateAuditRecorder:      &selfUpdateAuditFromStore{db: svc.db},
 	}, app.Transport)
 	if err := server.Start(); err != nil {
 		slog.Error("HTTP 监听失败", "err", err)

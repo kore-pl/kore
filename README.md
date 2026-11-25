@@ -102,7 +102,7 @@ M4 ░░░░░░░░░░░░ 生态开放
 | --- | --- | --- |
 | [docs/VISION.md](docs/VISION.md) | 定位、五锚点、非目标、成功判据 | 所有人，先读 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 组件图、进程模型、插件状态机、故障域 | architect / implementer |
-| [docs/CORE.md](docs/CORE.md) | 15 个内核模块 + 3 个支撑小节（共 18 节）的职责、输入输出、失败模式、不做什么；71 个端点（64 业务 + 7 store，含 ADR-0056 的 3 条 system/restart·config 与 ADR-0057 的 1 条 auth/captcha） | 改内核的人 |
+| [docs/CORE.md](docs/CORE.md) | 15 个内核模块 + 3 个支撑小节（共 18 节）的职责、输入输出、失败模式、不做什么；72 个端点（65 业务 + 7 store，含 ADR-0056 的 3 条 system/restart·config、ADR-0057 的 1 条 auth/captcha 与 ADR-0058 的 1 条 UDS-only system/self-update） | 改内核的人 |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | 术语表：五锚点、插件类型、能力、预算、角色的准确定义 | 所有人，写文档前先对齐用词 |
 | [docs/PLUGIN-PROTOCOL.md](docs/PLUGIN-PROTOCOL.md) | UDS + 4B 长度前缀 + JSON、8 MiB 帧上限、方法表、错误码、生命周期 | 写插件 / 写 supervisor |
 | [docs/RESOURCE-MODEL.md](docs/RESOURCE-MODEL.md) | 预算表、cgroup v2 落地、度量口径、超预算处置 | 做资源门禁的人 |

@@ -152,6 +152,22 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 | 登录 IP 白名单 | CIDR 列表；开启后在**口令校验之前**判定（不泄露口令正确性），未命中 / 列表为空 / CIDR 解析失败一律拒绝 **403 `E_IP_DENIED`**（fail-closed，文案不回显白名单）；来源取 TCP 对端，仅 UDS / 回环对端才采信 `X-Forwarded-For` 首段 | 只约束**登录入口**，不限制已签发会话与 API token；反向代理非本机时看到的是代理地址，白名单须放行代理 IP；IPv4/IPv6 需分别登记 |
 | API token | `Authorization: Bearer kore_<base64url>`；明文只在创建时返回一次、库中只存 sha256；scope 两档：`read` 只放行安全方法，`admin` 放行全部；TTL 默认 90 天、上限 365 天；按 id 吊销，不存在的 id 幂等成功 | 与 Cookie 会话并存；token 无 IP/UA 绑定，泄漏即等于对应 scope 的长期权限；`read` 是方法级只读，不按资源细分 |
 
+### 3.7 本机专用更新端点的身份边界（ADR-0058 / CVE-2025-54424）
+
+静默自更新需要「本机触发、零凭据输入」的写通道，但**本机通道不是认证**（§3.2 / ADR-0043）不能被放宽。方案是**旁路 identity**：新增 UDS-only 专用端点 `POST /api/v1/system/self-update`，绑独立 socket `<run>/kore-selfupdate.sock`（0600 属主可写、不 chown），**不进主 mux、不过 withAuth / CSRF**，公开门零变化——未登录 UDS 访问 `POST /api/v1/store/install` 仍是 401。
+
+严格**三重鉴权 + fail-closed**（吸收 1Panel CVE-2025-54424「`RequireAnyClientCert` 只验有证书不验 CA」导致 RCE 的教训——「连上来」绝不等于「有身份」）：
+
+| 关 | 判据 | 失败结果 |
+| --- | --- | --- |
+| 连接来源 | 只接受 `net.UnixConn` / `LocalAddr.Network()=="unix"`；loopback TCP 与远程地址一律拒绝 | 401 |
+| 进程身份 | `SO_PEERCRED` uid ∈ {0, kored 运行 uid}；取不到凭据即 fail-closed | 伪造 uid 403 / 凭据不可用 401 |
+| 专用能力 | 解析出的能力集**恰好只有** `system:self_update`；不含 6 项 admin、不进会话能力集，公开会话持 admin 也不自动拥有 | 403 |
+
+- **双向隔离**：专用能力不是 Web 登录凭据，会话能力也不是专用通道凭据——两个 resolver 相互独立；要合并或扩大范围必须重开 ADR-0043 与 ADR-0058（G-23）。
+- **审计**：每次调用（含拒绝）写 `system.self_update`，subject=uid、detail 仅 `channel`/`capability`/`target_version`，**不记口令、token、confirm 原文或任何凭据字段**（G-30）；审计出口未装配或写失败 → 503 且不执行更新（fail-closed）。
+- **复用而非重写**：专用端点只做受控入口，通过后委托与 kored 进程内编排共用的 `SelfUpdater`（校验/替换/pending/reload 语义一致，ADR-0058 §3.2）；内核仍只做规则（G-01）。
+
 ## 4. CSRF
 
 三层同时启用，任一层失败即拒绝：

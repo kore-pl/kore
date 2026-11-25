@@ -141,18 +141,23 @@ type SelfUpdater interface {
 	UpgradeJob(id string) (SelfUpdateJob, bool)
 }
 
-// selfUpdater 取装配层的自升级实现；未装配时回 501（不假装成功）。
-func (s *Server) selfUpdater(w http.ResponseWriter) (SelfUpdater, bool) {
+// availableSelfUpdater 探测装配层是否提供自升级实现；不写响应（专用端点要在写审计前探）。
+func (s *Server) availableSelfUpdater() (SelfUpdater, bool) {
 	if s.opts.Backend == nil {
-		writeError(w, http.StatusNotImplemented, pluginapi.E_UNSUPPORTED, "后端未装配", "")
 		return nil, false
 	}
 	updater, ok := s.opts.Backend.(SelfUpdater)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, pluginapi.E_UNSUPPORTED, "当前装配不支持内核自升级", "")
-		return nil, false
+	return updater, ok
+}
+
+// selfUpdater 取装配层的自升级实现；未装配时回 501（不假装成功）。
+func (s *Server) selfUpdater(w http.ResponseWriter) (SelfUpdater, bool) {
+	updater, ok := s.availableSelfUpdater()
+	if ok {
+		return updater, true
 	}
-	return updater, true
+	writeError(w, http.StatusNotImplemented, pluginapi.E_UNSUPPORTED, "当前装配不支持内核自升级", "")
+	return nil, false
 }
 
 // handleUpgradeStatus 返回当前版本、可回滚目标与最近一次升级标记。

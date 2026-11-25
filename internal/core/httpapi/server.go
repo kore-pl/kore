@@ -150,6 +150,20 @@ type Options struct {
 	// 完成记录端点需会话。由 cmd/kored 用 store.Store 适配器注入；本包不 import store。
 	// nil 时公开端点返回稳定"不自动弹"默认，写端点回 501（不假装成功）。
 	InstallState InstallStateProvider
+	// SelfUpdateSocket 是本机专用更新端点的独立 UDS 路径（ADR-0058 A）；空串表示
+	// 不启用该端点。它与主 socket（/run/kore/kore.sock）分离，只承载专用更新端点，
+	// 0600 属主可写，不 chown；不放宽公开门、不复用主 socket 的会话身份。
+	SelfUpdateSocket string
+	// SelfUpdateCapabilityResolver 解析专用通道授予的能力集（ADR-0058 §3.1.4）：
+	// 入参是已校验的 SO_PEERCRED uid，返回值必须**恰好只有** system:self_update；
+	// 返回 6 项 admin 或其它能力一律拒绝。由装配层注入，nil 时用内置最小能力
+	// resolver（fail-closed 到单一专用能力，绝不放行 admin）。
+	// 该 resolver 与会话能力解析器（CapabilityResolver）相互独立：公开会话即使
+	// 持 6 项 admin 能力也不自动获得本能力，吸收 CVE-2025-54424 教训。
+	SelfUpdateCapabilityResolver func(uid int32) []string
+	// SelfUpdateAuditRecorder 是专用端点的 fail-closed 审计出口（ADR-0058 §3.1.5）。
+	// 由 cmd/kored 注入 store.PutAudit 适配器；nil 时端点回 501，绝不无审计执行更新。
+	SelfUpdateAuditRecorder SelfUpdateAuditRecorder
 }
 
 // RootActionExecutor 是 httpapi 对提权服务的最小依赖（privilege.Service 实现）。
@@ -179,6 +193,11 @@ type CapabilityAuditor func(subject, plugin, target, reason string)
 var adminCapabilities = []string{
 	"system:admin", "system:read", "net:read", "net:write", "proc:read", "proc:write",
 }
+
+// selfUpdateCapability 是 ADR-0058 的单一专用能力：只覆盖"读更新索引 → 下载校验 →
+// 安装/替换 → 触发 reload/自重启"这一条链，**不属于** adminCapabilities（G-01：
+// capability 字符串是规则标识，不是插件业务），也绝不并入会话能力集。
+const selfUpdateCapability = "system:self_update"
 
 // defaultCapabilityResolver 从 session cookie 推导 admin 全权；无有效 cookie 返回空 subject。
 //
@@ -338,6 +357,14 @@ type Server struct {
 	logAlerts *logAlertRegistry
 	// channelServer 是独立通道 socket 的服务端；nil 表示未启用通道。
 	channelServer *http.Server
+	// selfUpdateServer / selfUpdateListener 是本机专用更新端点的独立 UDS 服务（ADR-0058）；
+	// 与主 httpServer 完全分离，不经过 withAuth / CSRF / 主 mux 中间件链。
+	selfUpdateServer   *http.Server
+	selfUpdateListener net.Listener
+	// selfUpdateCapabilityResolver 是专用能力的独立解析出口；nil 时回退到最小能力集。
+	selfUpdateCapabilityResolver func(uid int32) []string
+	// selfUpdateAuditRecorder 是专用更新端点的 fail-closed 审计出口；nil 时端点回 501。
+	selfUpdateAuditRecorder SelfUpdateAuditRecorder
 	// loginFailStreak 是登录连续失败计数（noteLoginFailure 用；互斥见 loginStreakMu）。
 	loginStreakMu   sync.Mutex
 	loginFailStreak int
@@ -367,6 +394,8 @@ func New(opts Options, transport platform.Transport) *Server {
 		configWriter:   opts.ConfigWriter,
 		taskEvents:     opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
 		webhooks: opts.Webhooks,
+		selfUpdateCapabilityResolver: opts.SelfUpdateCapabilityResolver,
+		selfUpdateAuditRecorder:      opts.SelfUpdateAuditRecorder,
 	}
 	if server.captchas == nil {
 		server.captchas = auth.NewCaptchaStore()
@@ -438,6 +467,19 @@ func New(opts Options, transport platform.Transport) *Server {
 			IdleTimeout:       120 * time.Second,
 		}
 	}
+	// 本机专用更新端点（ADR-0058）：独立 http.Server + 独立 ConnContext，
+	// 处理器内部自己完成「连接来源 + 进程身份 + 专用能力」三重校验，
+	// 不挂主 mux、不过 withAuth / withCSRF（公开门零变化）。
+	if opts.SelfUpdateSocket != "" {
+		server.selfUpdateServer = &http.Server{
+			Handler:           server.selfUpdateHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+				return context.WithValue(ctx, selfUpdateConnKey{}, conn)
+			},
+		}
+	}
 	return server
 }
 
@@ -455,17 +497,45 @@ func (s *Server) Start() error {
 	}
 	s.track(uds)
 	go s.serve(uds)
-	if s.opts.Addr == "" {
-		return s.startChannel()
+	if s.opts.Addr != "" {
+		tcp, err := net.Listen("tcp", s.opts.Addr)
+		if err != nil {
+			_ = s.httpServer.Close()
+			return fmt.Errorf("监听 TCP %s: %w", s.opts.Addr, err)
+		}
+		s.track(tcp)
+		go s.serve(tcp)
 	}
-	tcp, err := net.Listen("tcp", s.opts.Addr)
+	if err := s.startChannel(); err != nil {
+		return err
+	}
+	return s.startSelfUpdate()
+}
+
+// startSelfUpdate 绑定本机专用更新端点的独立 UDS（ADR-0058）。socket 权限由
+// transport.Listen 收紧到 0600（不 chown），与主 socket 分离；绑定失败即返回
+// 错误让 kored 拒绝启动，不假装专用端点可用。
+func (s *Server) startSelfUpdate() error {
+	if s.opts.SelfUpdateSocket == "" {
+		return nil
+	}
+	if s.selfUpdateServer == nil {
+		_ = s.httpServer.Close()
+		return errors.New("专用更新端点装配不完整：缺少 http.Server")
+	}
+	listener, err := s.transport.Listen(s.opts.SelfUpdateSocket)
 	if err != nil {
 		_ = s.httpServer.Close()
-		return fmt.Errorf("监听 TCP %s: %w", s.opts.Addr, err)
+		return fmt.Errorf("监听专用更新 socket %s: %w", s.opts.SelfUpdateSocket, err)
 	}
-	s.track(tcp)
-	go s.serve(tcp)
-	return s.startChannel()
+	s.selfUpdateListener = listener
+	s.track(listener)
+	go func() {
+		if err := s.selfUpdateServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("专用更新端点服务异常退出", "socket", listener.Addr().String(), "err", err)
+		}
+	}()
+	return nil
 }
 
 // startChannel 绑定独立通道 socket（插件 root-action 专用）。
@@ -512,6 +582,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.channelServer != nil {
 		if channelErr := s.channelServer.Shutdown(ctx); err == nil {
 			err = channelErr
+		}
+	}
+	if s.selfUpdateServer != nil {
+		if selfUpdateErr := s.selfUpdateServer.Shutdown(ctx); err == nil {
+			err = selfUpdateErr
 		}
 	}
 	s.mu.Lock()
