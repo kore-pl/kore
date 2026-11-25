@@ -548,10 +548,48 @@
 
   /* ===================== 登录视图 ===================== */
 
-  function showLoginError(errBox, message) {
+  function showLoginError(errBox, message, retryAfter) {
     if (!errBox) return;
-    errBox.textContent = message;
-    errBox.hidden = false;
+    // 延时提示给白话 + 逐秒倒计时（USABILITY §4：错误提示必须带「怎么办」）。
+    // 只有一个计时器：重绘/再次报错先清掉，避免两条提示各跑一个 interval 互相覆盖。
+    if (errBox._koreCountdown) {
+      clearInterval(errBox._koreCountdown);
+      errBox._koreCountdown = null;
+    }
+    var seconds = parseInt(retryAfter || '0', 10);
+    if (!isFinite(seconds) || seconds <= 0) {
+      errBox.textContent = message;
+      errBox.hidden = false;
+      return;
+    }
+    var fixed = message.replace(/\d+\s*秒/g, 'N 秒');
+    var left = seconds;
+    function paint() {
+      errBox.textContent = fixed.replace('N', String(left));
+      errBox.hidden = false;
+    }
+    paint();
+    errBox._koreCountdown = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(errBox._koreCountdown);
+        errBox._koreCountdown = null;
+        errBox.textContent = '等待结束，请再试一次';
+        return;
+      }
+      paint();
+    }, 1000);
+  }
+
+  // 一字段一卡：中文标签 + 一行帮助（USABILITY 原则④），表单顺序即阅读顺序。
+  function loginField(labelText, helpText, isAuto) {
+    var field = el('div', 'login-field');
+    var head = el('div', 'login-field-head');
+    head.appendChild(el('span', 'field-label', labelText));
+    if (isAuto) head.appendChild(el('span', 'login-auto-tag', '已自动检测'));
+    field.appendChild(head);
+    if (helpText) field.appendChild(el('div', 'field-help', helpText));
+    return field;
   }
 
   function renderLogin(message) {
@@ -563,8 +601,9 @@
     card.appendChild(el('div', 'login-brand', 'Kore'));
     card.appendChild(el('div', 'login-sub', '控制台 · 账号登录'));
 
-    var userLabel = el('label', 'field');
-    userLabel.appendChild(el('span', 'field-label', '账号'));
+    // 三要素一张卡：账号 → 密码 →（按需）验证码，顺序即阅读顺序；
+    // 每个字段「中文标签 + 一行帮助」（USABILITY 原则④），不靠 placeholder 当标签。
+    var userLabel = loginField('账号', '本机管理员账号，已为你填好，一般不用改', true);
     var username = document.createElement('input');
     username.type = 'text';
     username.id = 'kore-username';
@@ -575,11 +614,9 @@
     username.required = true;
     username.setAttribute('placeholder', '请输入账号');
     userLabel.appendChild(username);
-    userLabel.appendChild(el('span', 'field-help', '已自动检测：默认账号 admin，一般不用改'));
     card.appendChild(userLabel);
 
-    var label = el('label', 'field');
-    label.appendChild(el('span', 'field-label', '口令'));
+    var label = loginField('密码', '安装时生成的管理员密码，输入后点「登录」');
     var input = document.createElement('input');
     input.type = 'password';
     input.id = 'kore-password';
@@ -587,42 +624,42 @@
     input.className = 'field-input';
     input.autocomplete = 'current-password';
     input.required = true;
-    input.setAttribute('placeholder', '请输入口令');
+    input.setAttribute('placeholder', '请输入密码');
     label.appendChild(input);
     card.appendChild(label);
 
     // 两步验证：服务端要求时（E_2FA_REQUIRED）才显示验证码输入框。
-    var otpLabel = el('label', 'field');
+    var otpLabel = loginField('验证码（认证器）', '打开认证器 App，输入 6 位数字或恢复码');
     otpLabel.id = 'kore-otp-field';
     otpLabel.hidden = true;
-    otpLabel.appendChild(el('span', 'field-label', '验证码（认证器 6 位数字或恢复码）'));
     var otp = document.createElement('input');
     otp.type = 'text';
     otp.id = 'kore-otp';
     otp.name = 'otp';
     otp.className = 'field-input';
     // 不设 maxLength：恢复码是 11 位（XXXXX-XXXXX），设 6 会把恢复码截断。
-    otp.setAttribute('placeholder', '请输入 6 位验证码');
+    otp.setAttribute('placeholder', '请输入认证器上的验证码');
     otpLabel.appendChild(otp);
     card.appendChild(otpLabel);
 
-    // 图形验证码：第一次口令错误后由服务端要求，默认隐藏；点「换一张」重新拉取。
-    var captchaLabel = el('label', 'field');
+    // 图形验证码：第一次密码错误后由服务端要求，默认隐藏；图片与按钮都能刷新。
+    var captchaLabel = loginField('验证码（图片）', '请输入右侧图片里的字符；看不清可点图片或「换一张」', false);
     captchaLabel.id = 'kore-captcha-field';
     captchaLabel.hidden = true;
-    captchaLabel.appendChild(el('span', 'field-label', '验证码'));
+    var captchaRow = el('div', 'kore-captcha-row');
     var captchaImg = el('img', 'kore-captcha-img');
     captchaImg.id = 'kore-captcha-image';
-    captchaImg.alt = '验证码图片';
-    captchaImg.style.cursor = 'pointer';
-    captchaImg.style.height = '44px';
-    captchaImg.style.maxWidth = '100%';
-    captchaImg.style.borderRadius = '4px';
-    captchaLabel.appendChild(captchaImg);
+    captchaImg.alt = '验证码图片，点击可换一张';
+    captchaImg.title = '点击换一张';
+    captchaImg.setAttribute('role', 'button');
+    captchaImg.tabIndex = 0;
+    captchaRow.appendChild(captchaImg);
     var captchaSwap = el('button', 'btn btn-ghost kore-captcha-swap', '换一张');
     captchaSwap.type = 'button';
     captchaSwap.id = 'kore-captcha-refresh';
-    captchaLabel.appendChild(captchaSwap);
+    captchaSwap.setAttribute('aria-label', '刷新验证码图片');
+    captchaRow.appendChild(captchaSwap);
+    captchaLabel.appendChild(captchaRow);
     var captcha = document.createElement('input');
     captcha.type = 'text';
     captcha.id = 'kore-captcha-answer';
@@ -631,12 +668,21 @@
     captcha.className = 'field-input';
     captcha.autocomplete = 'off';
     captcha.setAttribute('placeholder', '请输入图片里的字符');
+    captcha.setAttribute('aria-label', '图片验证码答案');
     captchaLabel.appendChild(captcha);
-    captchaLabel.appendChild(el('span', 'field-help', '看不清可点「换一张」；终端可用图片标题里的加法题'));
+    captchaLabel.appendChild(el('span', 'field-help', '不方便看图？图片标题里有同样的加法题，可直接算答案'));
     card.appendChild(captchaLabel);
+
+    // 验证码触发后把「为什么多了一步」写在验证码与按钮之间，小白不用猜三者关系。
+    var captchaNotice = el('div', 'login-captcha-notice', '为确认是您本人操作，请先填写下方图片验证码，再点「登录」。');
+    captchaNotice.id = 'kore-captcha-notice';
+    captchaNotice.setAttribute('role', 'status');
+    captchaNotice.hidden = true;
+    card.appendChild(captchaNotice);
 
     var submit = el('button', 'btn btn-primary btn-block', '登录');
     submit.type = 'submit';
+    submit.id = 'kore-login-submit';
     card.appendChild(submit);
 
     var errBox = el('div', 'login-error', message || '');
@@ -644,7 +690,7 @@
     errBox.setAttribute('role', 'alert');
     if (!message) errBox.hidden = true;
     card.appendChild(errBox);
-    card.appendChild(el('div', 'login-note', '口令连续输错后需要输入验证码并逐步等待；口令仅在本机校验。'));
+    card.appendChild(el('div', 'login-note', '密码连续输错后会要求验证码并逐步延长等待时间；密码只在本机校验，不会发送出去。'));
 
     var captchaState = { id: '', question: '' };
     function loadCaptcha() {
@@ -658,11 +704,16 @@
     }
     function showCaptcha() {
       captchaLabel.hidden = false;
+      captchaNotice.hidden = false;
       captcha.value = '';
       loadCaptcha();
     }
     captchaSwap.addEventListener('click', loadCaptcha);
     captchaImg.addEventListener('click', loadCaptcha);
+    // 图片也是可点控件：键盘 Enter/空格同效（触摸目标在 CSS 里≥44px）。
+    captchaImg.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); loadCaptcha(); }
+    });
 
     card.addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -684,7 +735,7 @@
       return;
     }
     if (!password) {
-      showLoginError(errBox, '请输入口令');
+      showLoginError(errBox, '请输入密码');
       input.focus();
       return;
     }
@@ -710,6 +761,13 @@
       var code = (res.data && res.data.code) || '';
       var msg = (res.data && res.data.message) || '';
       var retryAfter = parseInt(res.retryAfter || '0', 10);
+      // 429 先判：延时提示优先于其它分支，倒计时跟 Retry-After 走（G-30 不泄露内部码）。
+      if (res.status === 429) {
+        showLoginError(errBox, retryAfter > 0 ? ('请 ' + retryAfter + ' 秒后再试') : '请稍后再试，尝试太频繁', res.retryAfter);
+        submit.disabled = false;
+        submit.textContent = '登录';
+        return;
+      }
       if (code === 'E_2FA_REQUIRED' && otpLabel && otp) {
         // 口令正确，只差二次验证：展开输入框，保留口令不清空，等用户输入后重提。
         otpLabel.hidden = false;
@@ -730,7 +788,6 @@
       else if (code === 'E_IP_DENIED') showLoginError(errBox, '当前网络地址不在允许登录的范围内，请联系管理员');
       else if (res.status === 401 && msg === '账号或口令错误') showLoginError(errBox, '账号或口令不正确，请检查后再试');
       else if (needCaptcha) showLoginError(errBox, msg || '密码错误，请输入右侧验证码');
-      else if (res.status === 429) showLoginError(errBox, retryAfter > 0 ? ('尝试太频繁，请 ' + retryAfter + ' 秒后再试') : '尝试太频繁，请稍后再试');
       else showLoginError(errBox, '登录失败：' + describeError(res));
       submit.disabled = false;
       submit.textContent = '登录';

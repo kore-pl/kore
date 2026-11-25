@@ -221,6 +221,85 @@ html, body {
   color: var(--kore-text-3);
 }
 
+/* T5 登录三要素分组：一个字段一块，中文标签 + 一行帮助，顺序即阅读顺序。
+   不用细分割线，靠间距与标签层级区分；移动端靠单列保证互不挤压。 */
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kore-space-2);
+  min-width: 0;
+}
+
+/* display:flex 会盖掉 UA 的 [hidden]{display:none}（实测隐藏的验证码框被显示），
+   这里显式收回来：只有服务端触发 / 2FA 要求时才占位。 */
+.login-field[hidden], .login-captcha-notice[hidden] { display: none; }
+
+.login-field-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--kore-space-2);
+  min-height: var(--kore-touch);
+}
+
+.login-field-head .field-label {
+  font-size: var(--kore-font-14);
+  font-weight: 600;
+  color: var(--kore-text-1);
+}
+
+/* 「已自动检测」是可读徽标，不只是颜色（FRONTEND 状态双通道）。 */
+.login-auto-tag {
+  padding: 2px var(--kore-space-2);
+  border: 1px solid var(--kore-info);
+  border-radius: var(--kore-radius-control);
+  color: var(--kore-info);
+  font-size: var(--kore-font-12);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.login-field .field-help {
+  margin-top: calc(var(--kore-space-2) * -1);
+}
+
+/* 验证码触发后的引导：为什么多了一步 + 下一步做什么，写在登录按钮旁。 */
+.login-captcha-notice {
+  padding: var(--kore-space-3);
+  border: 1px solid var(--kore-warning);
+  border-radius: var(--kore-radius-control);
+  background: var(--kore-warning-bg);
+  color: var(--kore-text-1);
+  font-size: var(--kore-font-13);
+  line-height: 1.5;
+}
+
+/* 图片与「换一张」同排、输入框独占一行：390px 下图片仍 150px 可读可点。 */
+.kore-captcha-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--kore-space-3);
+}
+
+.login-card .kore-captcha-img {
+  width: 150px;
+  min-width: 150px;
+  height: 48px;
+  min-height: var(--kore-touch);
+  cursor: pointer;
+}
+
+.login-card .kore-captcha-img:focus {
+  outline: 2px solid var(--kore-info);
+  outline-offset: 2px;
+}
+
+.login-card .kore-captcha-swap {
+  min-width: var(--kore-touch);
+  min-height: var(--kore-touch);
+}
+
 /* ===== 提示条 ===== */
 .notice {
   display: flex;
