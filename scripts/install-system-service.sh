@@ -5,6 +5,9 @@
 #   scripts/install-system-service.sh --dry-run              # 打印 unit 与计划，零变更
 #   scripts/install-system-service.sh --install-root /opt/kore
 #   scripts/install-system-service.sh --remove               # 停服务 + 删 unit（幂等）
+#   scripts/install-system-service.sh --no-start --install-root DIR
+#                                                             # 只写 unit + enable，不 start
+#                                                             # （给「先装、再停旧实例、再 start」的有序切换用）
 #
 # 关键参数（都可省略，默认值见下）:
 #   --bin PATH             kored 路径（默认 <install-root>/bin/kored，其次 PATH 里的 kored）
@@ -12,6 +15,8 @@
 #   --config PATH          显式 --config（默认 <install-root>/config/config.yaml，存在才写进 ExecStart）
 #   --name NAME            unit 名（默认 kore）
 #   --force                跳过"用户级实例仍在运行"的阻断（不会替你停它，需另按提示操作）
+#   --no-start             只写 unit + systemctl enable，不立即 start（有序切换用）
+#   --overwrite            允许覆盖内容不同的既有 unit（默认拒绝，见退出码 5）
 #   --file-write-allow-dirs LIST
 #                          受控写证书/口令目录白名单（写进 unit 的
 #                          Environment=KORE_FILE_WRITE_ALLOW_DIRS；LIST 用 : 分隔绝对路径）。
@@ -27,6 +32,7 @@
 #   证书目录一致；改它 = 调整 root 写面，不是普通配置项。
 #
 # 退出码: 0 成功/已最新 / 1 参数或环境错误 / 3 需要 root / 4 检测到用户级实例在跑
+#         5 既有 unit 内容不同且未给 --overwrite（拒绝静默覆盖）
 #
 # ── 为什么是 root，以及为什么不涉及 polkit ────────────────────────────────
 # 方案 B：kore.service 装在 /etc/systemd/system/、以 User=root 运行。
@@ -52,6 +58,8 @@ BIN=""
 INSTALL_ROOT=""
 CONFIG=""
 FORCE=0
+NO_START=0
+OVERWRITE=0
 MODE="install"
 # ALLOW_DIRS_OVERRIDE 是「用户显式指定」的白名单（flag 或环境变量），空 = 用默认值。
 ALLOW_DIRS_OVERRIDE="${KORE_FILE_WRITE_ALLOW_DIRS:-}"
@@ -68,6 +76,8 @@ while [ $# -gt 0 ]; do
     --dry-run) MODE="dry-run" ;;
     --remove)  MODE="remove" ;;
     --force)   FORCE=1 ;;
+    --no-start) NO_START=1 ;;
+    --overwrite) OVERWRITE=1 ;;
     --bin)     shift; BIN="${1:-}" ;;
     --bin=*)   BIN="${1#--bin=}" ;;
     --install-root) shift; INSTALL_ROOT="${1:-}" ;;
@@ -183,6 +193,7 @@ case "$MODE" in
     echo "  KORE_HOME : $INSTALL_ROOT"
     echo "  受控写白名单: $FILE_WRITE_ALLOW_DIRS（ADR-0052 fail-closed；默认 <install-root>/data/ssl/）"
     echo "  运行身份  : root（uid=0；特权动作不经 polkit 授权）"
+    echo "  启动方式  : $([ "$NO_START" -eq 1 ] && echo '只 enable，不 start（--no-start；留给有序切换）' || echo 'enable --now（装完立即启动）')"
     echo "  状态/日志 : 全部在 $INSTALL_ROOT 内（不新增零侵入豁免）"
     if user_unit_active; then
       echo "  [WARN] 检测到 systemctl --user 的 kored-local 正在运行（同一 state/socket 会冲突）"
@@ -195,6 +206,8 @@ case "$MODE" in
     echo "----- unit 内容结束 -----"
     if [ -e "$UNIT_PATH" ] && diff -q <(render_unit) "$UNIT_PATH" >/dev/null 2>&1; then
       echo "[OK] 已安装且内容一致（幂等，无需改动）"
+    elif [ -e "$UNIT_PATH" ]; then
+      echo "[BLOCKED] 既有 unit 内容不同：$UNIT_PATH（未给 --overwrite，dry-run 不会改）"
     fi
     ;;
   remove)
@@ -254,14 +267,24 @@ chmod 0644 "$tmp"
 chown root:root "$tmp"
 if [ -e "$UNIT_PATH" ] && cmp -s "$tmp" "$UNIT_PATH"; then
   echo "[OK] unit 已是最新（幂等）: $UNIT_PATH"
+elif [ -e "$UNIT_PATH" ] && [ "$OVERWRITE" -ne 1 ]; then
+  echo "[BLOCKED] 既有 unit 内容不同，拒绝覆盖：$UNIT_PATH" >&2
+  echo "  先人工核对差异；确认要覆盖时加 --overwrite 重跑。" >&2
+  exit 5
 else
   mv -f "$tmp" "$UNIT_PATH"
   echo "[OK] 已写入 $UNIT_PATH"
 fi
 systemctl daemon-reload
-systemctl enable --now "$UNIT_NAME"
-sleep 1
-echo "[OK] $UNIT_NAME: $(systemctl is-active "$UNIT_NAME" 2>/dev/null || echo unknown)（root 运行：$(systemctl show -p User --value "$UNIT_NAME" 2>/dev/null)）"
+if [ "$NO_START" -eq 1 ]; then
+  systemctl enable "$UNIT_NAME"
+  sleep 0
+  echo "[OK] 已 enable（未 start，--no-start）: $UNIT_NAME；当前 active=$(systemctl is-active "$UNIT_NAME" 2>/dev/null || echo unknown)（留给运维有序切换）"
+else
+  systemctl enable --now "$UNIT_NAME"
+  sleep 1
+  echo "[OK] $UNIT_NAME: $(systemctl is-active "$UNIT_NAME" 2>/dev/null || echo unknown)（root 运行：$(systemctl show -p User --value "$UNIT_NAME" 2>/dev/null)）"
+fi
 echo "  验证特权动作（应零交互、无 polkit）："
 echo "    curl -sS --unix-socket $(printf '%q' "$INSTALL_ROOT")/run/kore.sock -b <cookie> \\"
 echo "      -X POST http://kore/api/v1/plugins/firewall/root-action -d '{\"action_id\":\"ufw-status\"}'"
