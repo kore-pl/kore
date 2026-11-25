@@ -10,7 +10,7 @@ import (
 var (
 	topKeys       = []string{"profile", "server", "auth", "paths", "log", "resources", "plugins", "store", "security", "audit", "cert_renew"}
 	serverKeys    = []string{"addr", "socket", "tls"}
-	authKeys      = []string{"admin_password_hash", "must_change_password", "session_ttl", "cookie_secure", "initialized"}
+	authKeys      = []string{"admin_username", "admin_password_hash", "must_change_password", "session_ttl", "cookie_secure", "initialized"}
 	pathsKeys     = []string{"state_dir", "log_dir", "run_dir", "plugin_dir", "index_dir"}
 	storeKeys     = []string{"allow_unsigned"}
 	logKeys       = []string{"level", "rotate"}
@@ -122,6 +122,11 @@ func (p *parser) decodeAuth(n *yaml.Node, out *Auth) error {
 	m, err := p.mapping(n, "auth", authKeys)
 	if err != nil {
 		return err
+	}
+	if v := m["admin_username"]; v != nil {
+		if out.AdminUsername, err = p.str(v, "auth.admin_username"); err != nil {
+			return err
+		}
 	}
 	if v := m["admin_password_hash"]; v != nil {
 		if out.AdminPasswordHash, err = p.str(v, "auth.admin_password_hash"); err != nil {

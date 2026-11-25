@@ -17,6 +17,9 @@ type Server struct {
 
 // Auth 是单管理员鉴权配置。
 type Auth struct {
+	// AdminUsername 是单管理员账号标识符（ADR-0057，默认 admin）。
+	// 不是秘密、不进 state.db；v1 不可经 UI 修改，缺失/空由解析层归一为 admin。
+	AdminUsername string
 	// AdminPasswordHash 是 PBKDF2 存储串；空表示首启 bootstrap。
 	AdminPasswordHash string
 	// SessionTTL 是会话滑动过期时长。
@@ -177,14 +180,15 @@ func defaultsFor(profile string) *Snapshot {
 		Profile: profile,
 		Server:  Server{Socket: socket},
 		Auth: Auth{
-			SessionTTL:   7 * 24 * time.Hour, // ADR-0041：面板默认 7 天；显式配置优先
-			CookieSecure: "auto",
+			AdminUsername: "admin",          // ADR-0057：固定单账号标识符，非空显式类型（G-24）
+			SessionTTL:    7 * 24 * time.Hour, // ADR-0041：面板默认 7 天；显式配置优先
+			CookieSecure:  "auto",
 		},
 		Paths:     paths,
 		Log:       Log{Level: "info", Rotate: Rotate{MaxSizeMB: 10, MaxBackups: 5}},
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true, ResidentMax: 2},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
-		Security:  Security{LoginRateLimit: RateLimit{Attempts: 5, Window: 60 * time.Second, Lock: 300 * time.Second}},
+		Security:  Security{LoginRateLimit: RateLimit{Attempts: 1, Window: 60 * time.Second, Lock: 300 * time.Second}},
 		Audit: Audit{
 			InvokeAll: false,
 			// 审计无限增长是真实运维问题：默认保留 90 天，清理走 scheduler

@@ -7,7 +7,8 @@ import "log/slog"
 // 解析或校验失败时返回错误且不修改旧快照，调用方必须继续使用旧快照。
 // 白名单：log.*、resources.*（resident_max 除外，需重启）、security.login_rate_limit.*、
 // audit.invoke_all、plugins.allow_unsigned、cert_renew.*、auth.session_ttl、
-// auth.admin_password_hash、auth.must_change_password；其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
+// auth.admin_password_hash、auth.must_change_password；其余（含 auth.admin_username 账号标识符、
+// paths.*、store.allow_unsigned 信任边界开关）需重启内核。
 func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 	next, warnings, err := load(opts)
 	if err != nil {
@@ -174,6 +175,10 @@ func coldChanged(dst, src *Snapshot) []string {
 	}
 	if dst.Auth.CookieSecure != src.Auth.CookieSecure {
 		keys = append(keys, "auth.cookie_secure")
+	}
+	// ADR-0057：账号标识符是冷字段——运行中改账号会分叉会话/限速主体，必须重启内核。
+	if dst.Auth.AdminUsername != src.Auth.AdminUsername {
+		keys = append(keys, "auth.admin_username")
 	}
 	if dst.Auth.Initialized != src.Auth.Initialized {
 		keys = append(keys, "auth.initialized")

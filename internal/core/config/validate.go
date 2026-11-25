@@ -52,6 +52,15 @@ func validateServer(s *Snapshot, add func(string, string)) {
 
 // validateAuth 校验鉴权配置与首启状态一致性。
 func validateAuth(s *Snapshot, add func(string, string)) {
+	// ADR-0057：老配置缺失/空值归一为 admin，无需写盘即可登录；显式值走标识符校验。
+	if strings.TrimSpace(s.Auth.AdminUsername) == "" {
+		s.Auth.AdminUsername = "admin"
+	} else {
+		s.Auth.AdminUsername = strings.TrimSpace(s.Auth.AdminUsername)
+		if msg := usernameError(s.Auth.AdminUsername); msg != "" {
+			add("auth.admin_username", msg)
+		}
+	}
 	if s.Auth.Initialized && s.Auth.AdminPasswordHash == "" {
 		add("auth.initialized", "为 true 但 auth.admin_password_hash 为空（配置不一致，拒绝重新生成）")
 	}
@@ -70,6 +79,25 @@ func validateAuth(s *Snapshot, add func(string, string)) {
 	default:
 		add("auth.cookie_secure", `必须是 auto / true / false，实际为 `+s.Auth.CookieSecure)
 	}
+}
+
+// usernameError 校验单管理员账号标识符：2–32 位小写字母/数字/中划线/下划线，
+// 首字符必须是小写字母。账号是公开标识符，不接受空白、大写与符号（G-24 显式类型）。
+func usernameError(v string) string {
+	if len(v) < 2 || len(v) > 32 {
+		return "必须是 2–32 个字符"
+	}
+	if v[0] < 'a' || v[0] > 'z' {
+		return "必须以小写字母开头"
+	}
+	for _, ch := range v {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '-', ch == '_':
+		default:
+			return "只能包含小写字母、数字、中划线或下划线"
+		}
+	}
+	return ""
 }
 
 // validatePaths 校验目录非空；plugin_dir 允许为空（由 state_dir 派生）。
