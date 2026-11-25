@@ -7,7 +7,10 @@
 (function () {
   'use strict';
   var API = '/api/v1/invoke/site/';
-  var S = { sites: [], detail: null, editor: null, editorReady: null };
+  // plugin：'' 未知 / 'ready' 已装可用 / 'missing' 未安装（E_NOTFOUND）；
+  // nginxMode/nginxReason 来自 site.list 的探测结果（off 时页面要给「怎么办」）。
+  var S = { sites: [], detail: null, editor: null, editorReady: null,
+    plugin: '', nginxMode: '', nginxReason: '', storeEntry: null };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -64,14 +67,50 @@
   function invokeSSL(method, params) { return request('ssl', method, params); }
   // invokePlugin 供跨插件只读探测使用（例如 runtime-php.versions）；只读方法，失败一律降级。
   function invokePlugin(plugin, method, params) { return request(plugin, method, params); }
+  // 商店 / 插件管理 API（不是插件方法）：整页只有「缺站点插件时一键安装」用，
+  // 复用同一套 CSRF 双提交；错误同样归一成 {code, message}。
+  function apiJSON(method, url, body) {
+    var token = cookie('kore_csrf');
+    if (!token) return Promise.reject(new Error('缺少刷新令牌（kore_csrf），请刷新页面或重新登录'));
+    var init = { method: method, credentials: 'same-origin', cache: 'no-store',
+      headers: { Accept: 'application/json', 'X-Kore-CSRF': token } };
+    if (body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    return fetch(url, init).then(function (res) {
+      return res.text().then(function (raw) {
+        var data = {};
+        if (raw) { try { data = JSON.parse(raw); } catch (e) { data = {}; } }
+        if (!res.ok) {
+          var err = new Error((data.code ? data.code + '：' : '') +
+            (data.message || ('请求失败（HTTP ' + res.status + '）')));
+          err.code = data.code || '';
+          err.detail = data.detail || '';
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+  // 用户看到的错误只留白话 message；错误码只作排查线索挂在 err.code 上，
+  // 不进正文（G-33 A4：不让用户读 E_NOTFOUND 这类内部码）。
   function errText(err) {
     var text = err && err.message ? String(err.message) : '未知错误';
+    text = text.replace(/^E_[A-Z_]+[：:]\s*/, '');
     if (err && err.detail && text.indexOf(err.detail) < 0) text += '（' + err.detail + '）';
     return text;
   }
   function hintFor(action, err) {
     var msg = err ? String(err.message || '') : '';
-    if (err && err.code === 'E_CONFLICT') return '目标已存在或状态冲突：刷新后按当前状态重试。';
+    var code = err && err.code ? String(err.code) : '';
+    if (code === 'E_NOTFOUND' || (/未安装|未启用/.test(msg) && /站点插件|site/.test(msg))) {
+      return '站点插件还没安装或已被停用：点上方「安装站点插件」一键装好（也可到软件商店安装），装好后重试即可。';
+    }
+    if (/nginx|NGINX/.test(msg) && /没有|未检测|找不到|not found|missing/.test(msg)) {
+      return '本机没有可用的 nginx：站点配置能保存但浏览器打不开。请先安装 nginx 并启动，或到「连接配置」改用已有的 nginx 容器。';
+    }
+    if (code === 'E_CONFLICT') return '目标已存在或状态冲突：刷新后按当前状态重试。';
     if (/nginx 配置校验失败/.test(msg)) return '配置未通过 nginx -t，插件已回滚；请检查路径、端口或模板是否冲突。';
     if (/重载失败/.test(msg)) return '文件已写入但 nginx 未确认；页面的 applied/reloaded 会如实显示。';
     if (/证书|私钥|cert_path|key_path/.test(msg)) return '证书与私钥必须是存在的绝对路径，且与证书域名匹配。';
@@ -238,7 +277,10 @@
           if (!domain) return;
           load(true).then(function () { return openDetail(domain, true); }).then(function () { if (msg) setStatus(msg, 'ok'); });
         }
-        : function (created) { load(true).then(function () { if (created) return openDetail(created, true); }); }
+        : function (created, steps) {
+          if (created) paintCreated(created, steps);
+          load(true);
+        }
     };
   }
   function loadWizard() {
@@ -267,6 +309,181 @@
       host.textContent = '';
       add(host, el('div', 'site-result-error', '配置编辑器加载失败：' + errText(err)));
     });
+  }
+  // ---------------- 缺插件：一页装好（新用户第一次点进「网站」的落点） ----------------
+  // 一键安装 = 读商店索引拿版本 → store/install(download) → plugins/<id>/enable。
+  // 只用既有 API，不改后端；失败按「怎么办」给下一步，不把错误码甩给用户。
+  function storeEntry(id) {
+    return apiJSON('GET', '/api/v1/store/plugins').then(function (data) {
+      var list = data && Array.isArray(data.plugins) ? data.plugins : [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === id) return list[i];
+      }
+      return null;
+    });
+  }
+  function installStorePlugin(entry) {
+    return apiJSON('POST', '/api/v1/store/install',
+      { id: entry.id, version: entry.version, download: true });
+  }
+  function enablePlugin(id) {
+    return apiJSON('POST', '/api/v1/plugins/' + encodeURIComponent(id) + '/enable', {});
+  }
+  function installStatus(text, tone) {
+    if (!S.installStatus) return;
+    S.installStatus.textContent = text;
+    S.installStatus.className = 'site-install-status ' +
+      (tone === 'fail' ? 'row-note-fail' : tone === 'ok' ? 'row-note-ok' : 'muted');
+  }
+  function paintMissingPlugin() {
+    if (!S.wizardHost) return;
+    S.wizardHost.textContent = '';
+    var card = add(S.wizardHost, el('section', 'panel site-install-card'));
+    var head = add(card, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', '还差一步：装好「站点」插件就能建站'));
+    add(head, el('span', 'panel-meta', '内核不自带 Web 服务，装完才有网站管理'));
+    var body = add(card, el('div', 'site-install-body'));
+    body.style.padding = '0 var(--kore-space-4) var(--kore-space-3)';
+    add(body, el('p', 'site-install-text',
+      'Kore 内核本身不带 Web 服务。装好站点插件后，在上面填一个域名、点一次，就能建好第一个站点（用本机 nginx 直接生效）。'));
+    var pick = add(body, el('label', 'field field-check'));
+    S.withFile = add(pick, el('input', 'files-checkbox'));
+    S.withFile.type = 'checkbox'; S.withFile.checked = true;
+    S.withFile.setAttribute('data-field', 'install-file');
+    add(pick, el('span', null, '同时安装文件管理插件（用来自动创建站点目录和默认首页，建议保留）'));
+    var ops = add(body, el('div', 'site-edit-ops'));
+    ops.style.padding = '0 0 var(--kore-space-3)';
+    S.installBtn = add(ops, el('button', 'btn btn-primary site-install-btn', '一键安装站点插件'));
+    S.installBtn.type = 'button';
+    S.installBtn.setAttribute('data-action', 'install-site-plugin');
+    on(S.installBtn, installMissingPlugin);
+    var store = add(ops, el('button', 'btn btn-ghost', '去软件商店自己挑'));
+    store.type = 'button';
+    on(store, function () {
+      if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
+    });
+    S.installStatus = add(body, el('div', 'site-install-status muted'));
+    S.installStatus.setAttribute('role', 'status');
+    if (S.listHost) {
+      S.listHost.textContent = '';
+      var empty = add(S.listHost, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-text', '站点插件装好后，这里会列出你已经建好的站点。'));
+    }
+  }
+  function installMissingPlugin() {
+    if (S.installBtn) S.installBtn.disabled = true;
+    installStatus('正在读取商店索引…');
+    var wantFile = !!(S.withFile && S.withFile.checked);
+    storeEntry('site').then(function (entry) {
+      if (!entry) throw new Error('商店索引里没有站点插件，请到软件商店刷新索引后重试');
+      S.storeEntry = entry;
+      var mb = Math.max(1, Math.round((entry.size_bytes || 0) / 1024 / 1024));
+      installStatus('正在安装站点插件 v' + entry.version + '（首次约 ' + mb + ' MB，需要联网）…');
+      return installStorePlugin(entry);
+    }).then(function () {
+      if (!wantFile) return null;
+      installStatus('站点插件已装好，正在安装文件管理插件…');
+      return storeEntry('file').then(function (entry) {
+        if (!entry) return null;
+        return installStorePlugin(entry);
+      });
+    }).then(function () {
+      installStatus('正在启用站点插件…');
+      return enablePlugin('site');
+    }).then(function () {
+      if (!wantFile) return null;
+      return enablePlugin('file').then(null, function () { return null; });
+    }).then(function () {
+      S.plugin = 'ready';
+      installStatus('站点插件已装好，填个域名就能建站。', 'ok');
+      setStatus('站点插件已装好：在上面填域名 → 点「一键创建站点」，几秒就能建好第一个站点', 'ok');
+      load(true);
+      loadWizard();
+    }, function (err) {
+      if (S.installBtn) S.installBtn.disabled = false;
+      // 已装过按成功处理：这里不做覆盖重装（重装会重置插件配置）。
+      if (/已安装|已存在|E_CONFLICT/.test(errText(err))) {
+        S.plugin = 'ready';
+        installStatus('站点插件已经装好了，填个域名就能建站。', 'ok');
+        load(true); loadWizard();
+        return;
+      }
+      installStatus('安装没完成：' + errText(err) + ' ' + hintFor('', err), 'fail');
+    });
+  }
+  // nginx 不可用时给「怎么办」：配置能写、浏览器打不开这件事必须说清楚（否则新人以为站点坏了）。
+  function paintNginxNotice() {
+    if (!S.nginxHost) return;
+    S.nginxHost.textContent = '';
+    if (S.plugin !== 'ready' || String(S.nginxMode) !== 'off') return;
+    var box = add(S.nginxHost, el('section', 'panel site-nginx-note'));
+    add(box, el('span', 'panel-title', '本机还没有可用的 nginx'));
+    add(box, el('p', 'site-nginx-text',
+      '站点配置可以照常保存，但浏览器打不开：请先安装 nginx 并启动，再点「刷新」重试；本机已有 nginx 容器时，到「连接配置」把运行方式改成 docker 并填容器名。' +
+      (S.nginxReason ? '（检测结果：' + S.nginxReason + '）' : '')));
+    box.style.padding = 'var(--kore-space-3) var(--kore-space-4)';
+    var ops = add(box, el('div', 'site-edit-ops'));
+    ops.style.padding = 'var(--kore-space-2) 0 0';
+    var cfg = add(ops, el('button', 'btn', '打开连接配置'));
+    cfg.type = 'button';
+    on(cfg, function () { if (S.configToggle) S.configToggle(); });
+  }
+  // 建站成功后的出口：立刻能在浏览器看到结果；打不开时给 hosts / nginx 两条「怎么办」。
+  function paintCreated(domain, steps) {
+    if (!S.wizardHost || !domain) return;
+    S.wizardHost.textContent = '';
+    var sslOk = false, dirSkipped = '';
+    (steps || []).forEach(function (s) {
+      if (s.name === '绑定证书' && s.state === 'ok') sslOk = true;
+      if (s.name === '创建站点目录' && s.state === 'skip') dirSkipped = String(s.detail || '');
+    });
+    var url = (sslOk ? 'https://' : 'http://') + domain;
+    var card = add(S.wizardHost, el('section', 'panel site-created'));
+    var head = add(card, el('div', 'panel-head'));
+    add(head, el('span', 'panel-title', '站点已建好 · ' + domain));
+    add(head, el('span', 'panel-meta', '下一步：在浏览器打开看看'));
+    var body = add(card, el('div', 'site-created-body'));
+    body.style.padding = '0 var(--kore-space-4) var(--kore-space-3)';
+    var line = add(body, el('div', 'site-created-url'));
+    line.style.margin = 'var(--kore-space-2) 0 var(--kore-space-3)';
+    line.style.wordBreak = 'break-all';
+    add(line, el('span', 'mono', url));
+    var ops = add(body, el('div', 'site-edit-ops'));
+    ops.style.padding = '0 0 var(--kore-space-3)';
+    var open = add(ops, el('button', 'btn btn-primary site-open-btn', '在浏览器打开'));
+    open.type = 'button';
+    open.setAttribute('data-action', 'site-open');
+    on(open, function () { window.open(url + '/', '_blank', 'noopener'); });
+    var copy = add(ops, el('button', 'btn btn-ghost', '复制访问地址'));
+    copy.type = 'button';
+    on(copy, function () {
+      var fail = function () { setStatus('浏览器不允许自动复制：请手动选中地址 ' + url + ' 复制', 'fail'); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { setStatus('访问地址已复制：' + url, 'ok'); }, fail);
+      } else { fail(); }
+    });
+    var manage = add(ops, el('button', 'btn btn-ghost', '管理这个站点'));
+    manage.type = 'button';
+    on(manage, function () {
+      openDetail(domain).then(function () {
+        if (S.detailHost && S.detailHost.scrollIntoView) S.detailHost.scrollIntoView({ block: 'start' });
+      });
+    });
+    var again = add(ops, el('button', 'btn btn-ghost', '再建一个站点'));
+    again.type = 'button';
+    on(again, function () { loadWizard(); });
+    add(body, el('p', 'field-hint',
+      '打不开怎么办：先确认域名已解析到这台机器（本机测试可在 /etc/hosts 加一行「127.0.0.1 ' + domain + '」），再确认 nginx 已运行并 reload。'));
+    if (dirSkipped) {
+      add(body, el('p', 'row-note-fail', '站点目录没创建成功，页面可能 404：' + dirSkipped));
+      var fixOps = add(body, el('div', 'site-edit-ops'));
+      fixOps.style.padding = '0 0 var(--kore-space-2)';
+      var goFiles = add(fixOps, el('button', 'btn', '去文件管理建目录'));
+      goFiles.type = 'button';
+      on(goFiles, function () {
+        if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('files');
+      });
+    }
   }
   // ---------------- 运行状态（site.status）----------------
   // 三态口径：presence 用 present/absent/unknown 表达；unknown 是「查不到」，
@@ -690,6 +907,25 @@
     on(close, function () { S.detail = null; paintDetail(); });
     var table = add(box, el('table', 'rows'));
     table.appendChild(row('启用状态', d.enabled ? chip('ok', '已启用') : chip('na', '已停用（配置保留）')));
+    // 访问地址永远可见：建完之后最常做的事就是「打开看看」，不让用户自己拼 URL。
+    var visitUrl = ((d.ssl && d.ssl.force_https) ? 'https://' : 'http://') + d.domain;
+    var visitCell = el('span', 'site-visit');
+    visitCell.appendChild(el('span', 'mono', visitUrl));
+    var visitOpen = add(visitCell, el('button', 'btn btn-ghost btn-sm site-open-btn', '打开'));
+    visitOpen.type = 'button';
+    visitOpen.setAttribute('data-action', 'site-open');
+    on(visitOpen, function () { window.open(visitUrl + '/', '_blank', 'noopener'); });
+    var visitCopy = add(visitCell, el('button', 'btn btn-ghost btn-sm', '复制'));
+    visitCopy.type = 'button';
+    on(visitCopy, function () {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(visitUrl).then(function () { setStatus('访问地址已复制：' + visitUrl, 'ok'); },
+          function () { setStatus('浏览器不允许自动复制：请手动选中地址 ' + visitUrl + ' 复制', 'fail'); });
+      } else {
+        setStatus('浏览器不允许自动复制：请手动选中地址 ' + visitUrl + ' 复制', 'fail');
+      }
+    });
+    table.appendChild(row('访问地址', visitCell));
     table.appendChild(row('站点根目录', el('span', 'mono', d.root || '—')));
     table.appendChild(row('监听端口', d.port || '—'));
     table.appendChild(row('默认文档', (d.index || []).join(' ') || '—'));
@@ -810,10 +1046,24 @@
   function load(silent) {
     if (!silent) setStatus(tr('sites.load.loading', '正在读取站点列表…'));
     return invoke('site.list', {}).then(function (data) {
+      S.plugin = 'ready';
+      S.nginxMode = data && data.nginx_mode ? String(data.nginx_mode) : '';
+      S.nginxReason = data && data.nginx_reason ? String(data.nginx_reason) : '';
       S.sites = Array.isArray(data.sites) ? data.sites : [];
+      paintNginxNotice();
       paintList();
-      if (!silent) setStatus(S.sites.length ? tr('sites.load.ok', '站点列表已刷新') : tr('sites.load.none', '还没有站点，用上方向导创建第一个站点'), 'ok');
-    }, function (err) { if (!silent) setStatus(tr('sites.load.failed', '站点列表读取失败：') + errText(err), 'fail'); });
+      if (!silent) setStatus(S.sites.length ? tr('sites.load.ok', '站点列表已刷新') : tr('sites.load.none', '还没有站点：在上方填一个域名、点「一键创建站点」就能建好第一个'), 'ok');
+    }, function (err) {
+      if (err && err.code === 'E_NOTFOUND') {
+        // 新用户第一次点进「网站」的常见状态：内核没装站点插件。给一键安装入口，不留死胡同。
+        S.plugin = 'missing';
+        paintNginxNotice();
+        paintMissingPlugin();
+        if (!silent) setStatus('网站管理要先装站点插件：点下面的「一键安装站点插件」，装好就能建站', 'fail');
+        return;
+      }
+      if (!silent) setStatus(tr('sites.load.failed', '站点列表读取失败：') + errText(err) + (hintFor('', err) ? ' ' + hintFor('', err) : ''), 'fail');
+    });
   }
   function build(root) {
     var head = add(root, el('header', 'view-head'));
@@ -821,19 +1071,22 @@
     add(head, el('p', 'view-sub', tr('sites.subtitle', '填域名一次提交即可建站：目录自动推断并可选自动创建；SSL 与伪静态收在高级选项，点域名继续管理。')));
     S.resultHost = add(root, el('div', 'site-result-host'));
     S.wizardHost = add(root, el('div', 'site-wizard-host'));
+    S.nginxHost = add(root, el('div', 'site-nginx-host'));
     S.configHost = add(root, el('div', 'site-config-host'));
     S.configHost.hidden = true;
     var cfgToggle = add(head, el('button', 'btn btn-ghost', tr('sites.config.button', '连接配置')));
     cfgToggle.type = 'button';
     cfgToggle.setAttribute('data-action', 'site-config');
-    on(cfgToggle, function () {
+    // 存一份切换函数：nginx 未检测到的提示条里也放同一个入口，不复制状态。
+    S.configToggle = function () {
       S.configHost.hidden = !S.configHost.hidden;
       cfgToggle.textContent = S.configHost.hidden ? tr('sites.config.button', '连接配置') : tr('sites.config.collapse', '收起连接配置');
       if (!S.configHost.hidden && !S.configHost.dataset.loaded) {
         S.configHost.dataset.loaded = '1';
         loadConfig(S.configHost);
       }
-    });
+    };
+    on(cfgToggle, S.configToggle);
     S.status = add(root, el('div', 'site-status muted'));
     S.status.setAttribute('role', 'status');
     var listPanel = add(root, el('section', 'panel'));
@@ -841,7 +1094,8 @@
     add(listHead, el('span', 'panel-title', tr('sites.list.title', '站点列表')));
     S.listMeta = add(listHead, el('span', 'panel-meta', ''));
     var refresh = add(listHead, el('button', 'btn btn-ghost', tr('sites.refresh', '刷新'))); refresh.type = 'button';
-    on(refresh, load);
+    refresh.setAttribute('data-action', 'site-refresh');
+    on(refresh, function () { load(); });
     S.listHost = add(listPanel, el('div', 'sites-list-host'));
     S.detailHost = add(root, el('div', 'site-detail-host'));
   }
@@ -849,6 +1103,7 @@
     if (!container) return null;
     container.textContent = '';
     S.sites = []; S.detail = null; S.editor = null; S.editorReady = null;
+    S.plugin = ''; S.nginxMode = ''; S.nginxReason = ''; S.storeEntry = null;
     var root = add(container, el('section', 'sites'));
     build(root);
     load();

@@ -7,6 +7,14 @@
 // 卸载走 DELETE /api/v1/plugins/{id}（停进程 + 删程序文件，幂等）；老内核（404/405/501）直接禁用按钮，不做点了才报错的假按钮。
 (function () {
   'use strict';
+  // 装完之后最该去的下一步：给直达入口，别让用户自己找（USABILITY 原则 4「成功后给下一个动作」）。
+  var NEXT_VIEW = {
+    site: { href: '#/sites', label: '去创建第一个站点' },
+    file: { href: '#/files', label: '去管理文件' },
+    'db-mysql': { href: '#/db', label: '去连接数据库' },
+    redis: { href: '#/db/redis', label: '去连接 Redis' },
+    backup: { href: '#/files/backup', label: '去配置备份' }
+  };
   var U = { plugins: '/api/v1/store/plugins', presets: '/api/v1/store/presets',
     install: '/api/v1/store/install', installed: '/api/v1/plugins', disable: '/api/v1/plugins/',
     enable: '/api/v1/plugins/', uninstall: '/api/v1/plugins/' };
@@ -797,7 +805,8 @@
         loadInstalled();
         return;
       }
-      setStatus(p.id, 'ok', '安装成功 · 已自动启用');
+      var next = NEXT_VIEW[p.id];
+      setStatus(p.id, 'ok', '安装成功 · 已自动启用', next ? next.href : '', next ? next.label : '');
       loadInstalled();
     }, function (err) {
       setStatus(p.id, 'fail', '安装成功，但启用失败：' +

@@ -1785,6 +1785,11 @@
       '.ov-row-value{display:inline-flex;align-items:center;gap:var(--kore-space-2)}',
       '.ov-row-num{font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1);' +
         'font-variant-numeric:tabular-nums}',
+      '.ov-row-link{cursor:pointer;min-height:var(--kore-touch);margin:0 calc(var(--kore-space-3) * -1);' +
+        'padding:0 var(--kore-space-3);border-radius:var(--kore-radius-control)}',
+      '.ov-row-link:hover{background:var(--kore-bg-2)}',
+      '.ov-row-link:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}',
+      '.ov-row-go{color:var(--kore-text-3);font-size:var(--kore-font-16);line-height:1}',
       '.ov-alert-panel{margin-bottom:var(--kore-space-4)}',
       '.ov-alert-body{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-3) var(--kore-space-4) var(--kore-space-4)}',
       '.ov-alert{display:flex;gap:var(--kore-space-3);padding:var(--kore-space-2) var(--kore-space-3);' +
@@ -2034,19 +2039,45 @@
       var note = document.getElementById('kore-ov-note');
       if (note && note.isConnected) {
         note.hidden = false;
-        note.textContent = 'monitor 插件未启用，指标为内核采样降级值（不含内存占比）。' +
-          (ov.sysReason ? '原因：' + ov.sysReason : '');
+        // 不把 HTTP 404 / 插件内部原因摆在正文：给「现在能用什么 + 下一步装什么」。
+        note.textContent = '监控插件还没装：指标暂用内核采样（不含内存占比）。装好「监控」插件后这里会完整显示。';
+        if (ov.sysReason) note.title = '检测结果：' + ov.sysReason;
+        if (!note.querySelector('.ov-note-btn')) {
+          var installBtn = el('button', 'btn btn-ghost ov-note-btn', '去商店装监控插件');
+          installBtn.type = 'button';
+          installBtn.style.marginLeft = 'var(--kore-space-2)';
+          installBtn.style.minHeight = 'var(--kore-touch)';
+          installBtn.addEventListener('click', function () {
+            if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('store');
+          });
+          note.appendChild(installBtn);
+        }
       }
     }
   }
 
-  function ovCountRow(label, toneName, valueText) {
-    var rowEl = el('div', 'ov-row');
+  // route 给了就把整行做成入口：概览上看到「未启用」时，点一下直接到能处理它的页面，
+  // 不用先想「这在哪个菜单里」（USABILITY 原则 4「空状态给下一步按钮」的概览版）。
+  function ovCountRow(label, toneName, valueText, route) {
+    var rowEl = el('div', 'ov-row' + (route ? ' ov-row-link' : ''));
     rowEl.appendChild(el('span', 'ov-row-label', label));
     var val = el('span', 'ov-row-value');
     val.appendChild(el('span', 'dot ' + (toneName === 'na' ? '' : toneName)));
     val.appendChild(el('span', 'ov-row-num', valueText));
     rowEl.appendChild(val);
+    if (route) {
+      rowEl.appendChild(el('span', 'ov-row-go', '\u203a'));
+      rowEl.setAttribute('role', 'button');
+      rowEl.setAttribute('tabindex', '0');
+      rowEl.title = '打开' + label + '管理';
+      var jump = function () {
+        if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate(route);
+      };
+      rowEl.addEventListener('click', jump);
+      rowEl.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(); }
+      });
+    }
     return rowEl;
   }
   function paintOvStatus(host) {
@@ -2060,13 +2091,13 @@
     var svcBody = el('div', 'ov-panel-body');
     var sites = ov.svc.sites, certs = ov.svc.ssl;
     svcBody.appendChild(ovCountRow('站点', sites === null ? 'na' : (sites.length ? 'ok' : 'na'),
-      sites === null ? '未启用' : String(sites.length)));
+      sites === null ? '未启用' : String(sites.length), 'sites'));
     svcBody.appendChild(ovCountRow('证书', certs === null ? 'na' : (certs.length ? 'ok' : 'na'),
-      certs === null ? '未启用' : String(certs.length)));
+      certs === null ? '未启用' : String(certs.length), 'ssl'));
     var db = ov.svc.db;
     svcBody.appendChild(ovCountRow('数据库', db ? 'ok' : 'na', db
       ? (String(db.id) === 'mariadb' ? 'MariaDB 运行中' : 'MySQL 运行中')
-      : '未检测到'));
+      : '未检测到', 'db'));
     svc.appendChild(svcBody);
     host.appendChild(svc);
 

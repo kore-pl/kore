@@ -305,7 +305,7 @@
         var failed = steps.filter(function (s) { return s.state === 'fail'; });
         if (failed.length) {
           ctx.setStatus('建站未完成：' + failed[0].name + ' 失败，请按下面的提示处理后重试', 'fail');
-          ctx.after('');
+          ctx.after('', steps);
           return;
         }
         var skipped = steps.filter(function (s) { return s.state === 'skip'; }).length;
@@ -313,7 +313,7 @@
         w.domain.value = ''; w.root.value = ''; w.rootTouched = false; w.badge.hidden = true; w.reset.hidden = true;
         w.makeDir.checked = true; w.ssl.checked = false; w.sslBox.hidden = true; w.rewrite.value = 'none';
         w.phpBox.hidden = true; w.phpVersion.value = 'auto'; w.phpSocket.value = '';
-        ctx.after(domain);
+        ctx.after(domain, steps);
       });
     });
   }
