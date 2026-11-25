@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/pengtang1024/kore/internal/core/scheduler"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -20,6 +21,19 @@ const maxSchedulerBody = 64 << 10
 type schedulerListBody struct {
 	// Tasks 按下次执行时间升序。
 	Tasks []scheduler.Task `json:"tasks"`
+}
+
+// schedulerRunsBody 是执行历史响应体（最新在前）。
+//
+// Note 说明保留上限：内核只保留最近 maxRuns（100）条，用户看到条数变少时
+// 需要知道是"被轮转"而不是"记录丢了"。
+type schedulerRunsBody struct {
+	// Runs 该任务的执行记录，最新在前。
+	Runs []scheduler.Run `json:"runs"`
+	// Count 本次返回条数。
+	Count int `json:"count"`
+	// Note 保留口径说明。
+	Note string `json:"note,omitempty"`
 }
 
 // schedulerDeletedBody 是删除成功的响应体。
@@ -88,6 +102,57 @@ func (s *Server) handleSchedulerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+// handleSchedulerUpdate 就地修改任务计划（表达式 / 周期 / 超时 / 启停）。
+//
+// 校验与审计口径与创建一致：写操作需 system:admin（越权记 capability.denied），
+// 参数校验复用调度器的 normalize（不在这里重写一套）。目标插件与方法不可改。
+func (s *Server) handleSchedulerUpdate(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.requireScheduler(w)
+	if !ok || !s.authorizeScheduler(w, r, "update") {
+		return
+	}
+	var input scheduler.UpdateInput
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		writeSchedulerError(w, err)
+		return
+	}
+	task, err := service.Update(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		writeSchedulerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+// handleSchedulerRuns 返回某条任务的执行历史（最新在前）。
+//
+// 只读内核自己的调度记录（scheduler_runs）——不代理插件业务：crontab 任务的
+// 逐次执行日志由 cron 插件的 cron.runlog 提供，前端直接调插件方法（G-01）。
+func (s *Server) handleSchedulerRuns(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.requireScheduler(w)
+	if !ok || !s.authorizeScheduler(w, r, "runs") {
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "limit 必须是正整数", "")
+			return
+		}
+		limit = parsed
+	}
+	runs, err := service.Runs(r.Context(), r.PathValue("id"), limit)
+	if err != nil {
+		writeSchedulerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, schedulerRunsBody{
+		Runs: runs, Count: len(runs),
+		Note: "内核只保留每条任务最近 100 条执行记录；更早的记录已被轮转",
+	})
 }
 
 // handleSchedulerRun 立即执行一次任务（不改 next_run_at）。

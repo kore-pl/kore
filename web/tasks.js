@@ -1,10 +1,13 @@
 /* kore 主壳 · 计划任务（web/tasks.js）
    入口 window.KoreTasks.render(container)，零框架 / 零 CDN / 无外链。
    调 cron 插件：POST /api/v1/invoke/cron/cron.<action>，写请求带 X-Kore-CSRF。
-   方法面（0.3.0）：
+   方法面（0.3.0 起；0.9.0 补 cron.runlog）：
      cron.list / cron.add / cron.replace / cron.remove —— 系统 crontab 增删改查；
      cron.logs —— 读系统 cron 启动日志（journalctl / cron.log / syslog）；
+     cron.runlog —— 逐次执行记录（定时执行由包装命令写、立即执行由 cron.run 写）；
      cron.run  —— 同步执行**已注册任务**的命令（不接受任意命令）。
+   内核定时任务的执行历史走 GET /api/v1/scheduler/tasks/{id}/runs（内核自己的调度记录），
+   就地改计划走 PUT /api/v1/scheduler/tasks/{id}（插件与方法不可改，改了等于换任务）。
    任务类型：shell / http 落系统 crontab；plugin 类型按 ADR-0019 归内核 scheduler，
    前端拿到 cron.add 返回的 scheduler_task 建议后调 /api/v1/scheduler/tasks 创建，
    cron 插件不写 crontab、不执行 plugin 任务。
@@ -49,6 +52,11 @@
     type: 'shell',
     selected: {}, quickGrid: null, quickMeta: null, quickFirst: null, quickPresets: [],
     logs: { available: null, source: '', entries: [], note: '', loading: false, error: '' },
+    // runlog：crontab 任务的逐次执行记录（cron.runlog）。与上面「系统 cron 日志」不同——
+    // 那份是 cron 守护进程的启动行，这份是**每次执行的退出码与输出摘要**，刷新不丢。
+    runlog: { available: null, entries: [], note: '', loading: false, error: '', failuresOnly: false },
+    // schedRuns：内核任务的执行历史（GET /scheduler/tasks/{id}/runs），按任务 id 缓存。
+    schedRuns: {},
     // runs：本页「立即执行」的结果按任务下标留在内存（刷新即清空，不落盘）；
     // filter：列表过滤（all / abnormal）；loadError：读取失败的原因（用于空态给下一步）。
     runs: {}, filter: 'all', loadError: '', filterBtn: null,
@@ -483,18 +491,20 @@
     if (S.runPanel) S.runPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // showRunLog 打开某条 crontab 任务在本页最近一次执行的结果与关键日志。
+  // showRunLog 打开某条 crontab 任务最近一次执行的结果与关键日志：
+  // 优先本页刚跑的，其次插件持久化的定时执行记录（刷新后依然能看）。
   function showRunLog(index) {
-    var record = runRecord(index);
-    if (!record) {
-      setStatus('这条任务还没有本页执行记录：点「立即执行」跑一次后就会留下日志', 'fail');
+    var entry = findEntry(index);
+    var latest = entry ? latestRun(entry) : null;
+    if (!latest) {
+      setStatus('这条任务还没有执行记录：等到点执行，或点「立即执行」先跑一次，之后这里就能看到时间、退出码与关键输出', 'fail');
       return;
     }
-    var entry = findEntry(index);
     S.result = {
       visible: true, kind: 'cron', index: index, id: '',
-      title: '第 ' + index + ' 条任务' + (entry && entry.comment ? '「' + entry.comment + '」' : ''),
-      record: record, error: ''
+      title: '第 ' + index + ' 条任务' + (entry && entry.comment ? '「' + entry.comment + '」' : '') +
+        (latest.scheduled ? ' · 定时执行' : ''),
+      record: latest.record, error: ''
     };
     paintResult();
     scrollToResult();
@@ -507,6 +517,7 @@
     S.runHost.textContent = '';
     if (S.runPanel) S.runPanel.hidden = !S.result.visible;
     if (!S.result.visible) return;
+    if (S.result.kind === 'schedruns') { paintSchedRuns(); return; }
     var record = S.result.record || {};
     var verdict, sourceText = '', metaBits = [];
     if (record.runnerError) {
@@ -522,6 +533,7 @@
       metaBits.push(record.exitCode === null || record.exitCode === undefined ? '没有退出码' : '退出码 ' + record.exitCode);
       metaBits.push('耗时 ' + humanDuration(record.durationMs));
       if (record.outputBytes) metaBits.push('输出共 ' + record.outputBytes + ' 字节');
+      metaBits.push(record.scheduled ? '定时执行' : '立即执行');
     }
     var toneColor = verdict.tone === 'ok' ? 'var(--kore-success)'
       : verdict.tone === 'warn' ? 'var(--kore-warning)' : 'var(--kore-danger)';
@@ -546,6 +558,9 @@
       hint.textContent = '下一步：先点「重试」；一直失败就确认计划任务插件已启动，或按上方提示让管理员授权后再试。';
     } else if (S.result.kind === 'sched' && !record.error) {
       hint.textContent = '内核只保留最近一次执行的状态；点「重试」立即跑一次就能看到本次的错误信息。';
+    } else if (record.scheduled) {
+      hint.textContent = '这条是定时执行留下的真实记录。下一步：点「重试」手动再跑一次对照；' +
+        '重复失败就把命令复制到「终端」里执行，能看到完整报错。';
     } else {
       hint.textContent = '下一步：点「重试」再跑一次；若重复失败，把命令复制到「终端」手动执行，就能看到完整报错。';
     }
@@ -691,9 +706,8 @@
     missed: { text: '错过（停机未补跑）', tone: 'warn' }
   };
 
-  // recordRun 把一次 cron.run 的结果按任务下标留下：行内状态、重试、查看日志都靠它。
-  // 只存本页发起的执行——crontab 定时执行的逐任务历史需要插件暴露 runlog，
-  // 当前插件版本未注册该动词（见交付报告），这里不伪造"定时执行历史"。
+  // recordRun 把一次 cron.run 的结果按任务下标留在内存：行内状态、重试、查看日志都靠它。
+  // 只存本页发起的执行（刷新即清空）；定时执行的持久历史在 S.runlog（cron.runlog）。
   function recordRun(index, data) {
     S.runs[index] = {
       at: Date.now(),
@@ -725,6 +739,180 @@
     return { tone: 'fail', short: '失败（退出码 ' + record.exitCode + '）', text: '执行失败（退出码 ' + record.exitCode + '）' };
   }
 
+  /* ---------- 逐次执行记录（定时执行历史）---------- */
+
+  // runlogLatest 按任务名找最近一条执行记录（插件返回的 entries 已是最新在前）。
+  // 任务名来自 crontab 条目（备注优先、其次命令），与插件写 runlog 的口径一致。
+  function runlogLatest(name) {
+    var wanted = String(name || '').trim();
+    if (!wanted) return null;
+    var list = (S.runlog && S.runlog.entries) || [];
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].task_name || '') === wanted) return list[i];
+    }
+    return null;
+  }
+  // runlogRecord 把一条 runlog 记录转成本页统一的结果形状（paintResult 直接复用）。
+  function runlogRecord(entry) {
+    return {
+      at: entry.started_at,
+      runnerError: '',
+      exitCode: typeof entry.exit_code === 'number' ? entry.exit_code : null,
+      timedOut: !!entry.timed_out,
+      durationMs: entry.duration_ms,
+      command: '',
+      output: entry.output_head || '',
+      outputBytes: entry.output_bytes || 0,
+      scheduled: true
+    };
+  }
+  // latestRun 取某条任务最近一次执行：优先本页立即执行的结果，其次定时执行记录。
+  // 定时记录是持久化的（刷新仍在），这样"到点跑失败"不用手动点了才看得见。
+  function latestRun(entry) {
+    var local = runRecord(entry.index);
+    if (local) return { record: local, scheduled: false };
+    var log = runlogLatest(entry.task_name);
+    if (log) return { record: runlogRecord(log), scheduled: true };
+    return null;
+  }
+
+  // loadRunlog 读逐次执行记录：available=false 照实说明（还没跑过），不伪装成失败。
+  function loadRunlog() {
+    if (!S.runlogHost) return Promise.resolve();
+    S.runlog.loading = true;
+    S.runlog.error = '';
+    paintRunlog();
+    return invoke('cron.runlog', { limit: 50 }).then(function (data) {
+      S.runlog.available = !!data.available;
+      S.runlog.entries = Array.isArray(data.entries) ? data.entries : [];
+      S.runlog.note = data.note || '';
+      S.runlog.loading = false;
+      paintRunlog();
+      paintList();
+    }, function (err) {
+      S.runlog.loading = false;
+      S.runlog.available = false;
+      S.runlog.entries = [];
+      S.runlog.error = err.message || '读取失败';
+      paintRunlog();
+    });
+  }
+
+  // runlogVerdict 判定一条执行记录：成功 / 失败（退出码）/ 超时，与立即执行同一套文案。
+  function runlogVerdict(entry) {
+    return runVerdict(runlogRecord(entry));
+  }
+
+  // paintRunlog 渲染「执行历史」表：时间（人话）/ 任务 / 状态 / 耗时 / 关键输出。
+  // 输出只给关键行，全量（前 512 字节）折叠——与立即执行的结果面板同一口径。
+  function paintRunlog() {
+    if (!S.runlogHost) return;
+    S.runlogHost.textContent = '';
+    var entries = S.runlog.entries || [];
+    var shown = S.runlog.failuresOnly
+      ? entries.filter(function (e) { return runlogVerdict(e).tone === 'fail'; })
+      : entries;
+    if (S.runlogMeta) {
+      S.runlogMeta.textContent = S.runlog.loading ? '读取中…'
+        : S.runlog.error ? '读取失败'
+          : S.runlog.available ? ('最近 ' + entries.length + ' 条' +
+            (S.runlog.failuresOnly ? '（只看失败 ' + shown.length + ' 条）' : ''))
+            : '还没有执行记录';
+    }
+    if (S.runlogToggle) {
+      S.runlogToggle.hidden = !entries.length;
+      S.runlogToggle.textContent = S.runlog.failuresOnly ? '显示全部' : '只看失败';
+      S.runlogToggle.setAttribute('aria-pressed', S.runlog.failuresOnly ? 'true' : 'false');
+    }
+    if (S.runlog.loading) {
+      add(S.runlogHost, el('div', 'panel-empty empty-state')).appendChild(
+        el('p', 'empty-state-text', '正在读取执行历史…'));
+      return;
+    }
+    if (S.runlog.error) {
+      var box = add(S.runlogHost, el('div', 'fw-callout-warn'));
+      add(box, el('div', 'fw-callout-title', '执行历史读不出来'));
+      add(box, el('p', 'fw-callout-text', S.runlog.error));
+      add(box, el('p', 'fw-callout-text',
+        '先点「重试」再读一次；一直失败的话，到「软件商店」确认计划任务插件已更新到新版本。'));
+      emptyButton(box, '重试', true, loadRunlog);
+      return;
+    }
+    if (!entries.length) {
+      var empty = add(S.runlogHost, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-text', '还没有执行记录。'));
+      add(empty, el('p', 'empty-state-text',
+        '任务到点执行后，每一次的时间、状态、退出码和关键输出都会记在这里（刷新不丢）；' +
+        '不想等到点，也可以点任务行的「立即执行」先跑一次。'));
+      var ops = add(empty, el('div', 'task-empty-ops'));
+      ops.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+      emptyButton(ops, '刷新', true, loadRunlog);
+      emptyButton(ops, '用预设创建第一个任务', false, primeFirstPreset);
+      if (S.runlog.note) add(S.runlogHost, el('p', 'task-note', S.runlog.note));
+      return;
+    }
+    if (!shown.length) {
+      var calm = add(S.runlogHost, el('div', 'panel-empty empty-state'));
+      add(calm, el('p', 'empty-state-text', '最近 ' + entries.length + ' 次执行全部成功，没有失败记录。'));
+      emptyButton(add(calm, el('div')), '显示全部记录', true, function () {
+        S.runlog.failuresOnly = false;
+        paintRunlog();
+      });
+      return;
+    }
+    var table = add(S.runlogHost, el('table', 'tasks-table task-runlog-table'));
+    var head = add(table, el('thead')), htr = add(head, el('tr'));
+    ['时间', '任务', '状态', '耗时', '输出'].forEach(function (label) { add(htr, el('th', null, label)); });
+    var body = add(table, el('tbody'));
+    shown.forEach(function (entry) {
+      var verdict = runlogVerdict(entry);
+      var tr = add(body, el('tr'));
+      if (verdict.tone === 'fail') tr.style.boxShadow = 'inset 3px 0 0 var(--kore-danger)';
+      var when = add(tr, el('td', 'task-log-time', humanTime(entry.started_at)));
+      when.title = entry.started_at || '';
+      when.dataset.label = '时间';
+      add(tr, el('td', 'mono', entry.task_name || '—')).dataset.label = '任务';
+      var state = add(tr, el('td')); state.dataset.label = '状态';
+      var tone = verdict.tone === 'ok' ? 'ok' : verdict.tone === 'warn' ? 'warn' : 'fail';
+      var c = add(state, el('span', 'chip chip-' + tone));
+      if (tone === 'fail') c.style.color = 'var(--kore-danger)';
+      add(c, el('span', 'dot ' + tone));
+      add(c, el('span', null, verdict.short));
+      var dur = add(tr, el('td', 'muted', humanDuration(entry.duration_ms))); dur.dataset.label = '耗时';
+      var out = add(tr, el('td', 'task-command')); out.dataset.label = '输出';
+      // 手机端 td 是 flex 行（左侧 84px 标签列）：允许换行，摘要与折叠区才能独占整行。
+      out.style.flexWrap = 'wrap';
+      var text = String(entry.output_head || '');
+      var picked = keyLines(text);
+      var summary = picked.lines.length ? picked.lines : ['（这次执行没有输出）'];
+      var pre = add(out, el('pre', 'task-output', summary.join('\n')));
+      pre.style.cssText = 'margin:0;max-height:120px;overflow:auto;';
+      pre.setAttribute('aria-label', '第 ' + (entry.task_name || '') + ' 条执行记录的关键输出');
+      var more = [];
+      more.push('开始于 ' + humanTime(entry.started_at));
+      more.push('耗时 ' + humanDuration(entry.duration_ms) || '耗时未知');
+      if (entry.exit_code !== undefined && entry.exit_code !== null) more.push('退出码 ' + entry.exit_code);
+      if (entry.mode === 'scheduled') more.push('定时执行');
+      else if (entry.mode === 'manual') more.push('立即执行');
+      if (entry.output_bytes) more.push('输出共 ' + entry.output_bytes + ' 字节');
+      if (entry.truncated) more.push('只保留了前 512 字节');
+      if (picked.hidden > 0) more.push('关键行已折叠 ' + picked.hidden + ' 行');
+      add(out, el('div', 'muted', more.join(' · '))).style.cssText =
+        'margin-top:4px;font-size:12px;color:var(--kore-text-3);flex-basis:100%;width:100%;';
+      if (verdict.tone === 'fail') {
+        var details = add(out, el('details', 'task-raw'));
+        // 手机端 td 是 flex（左侧 84px 标签列）：折叠区必须独占一行，
+        // 否则 summary 会被挤成竖排单字（截图验收时发现）。
+        details.style.cssText = 'display:block;flex-basis:100%;width:100%;margin-top:4px;';
+        add(details, el('summary', null, '查看保存的输出（前 512 字节）'));
+        var full = add(details, el('pre', 'task-output', text || '（这次执行没有输出）'));
+        full.style.maxHeight = '240px';
+        full.setAttribute('aria-label', '执行记录保存的完整输出');
+      }
+    });
+    if (S.runlog.note) add(S.runlogHost, el('p', 'task-note', S.runlog.note));
+  }
+
   // entryRisk 用插件返回的 binary_status 预判"到点会静默失败"：missing 必失败，stale 升级后易失败。
   function entryRisk(entry) {
     var status = entry.binary_status || '';
@@ -736,8 +924,10 @@
   // entryAbnormal 是行级异常判定（用于标红与"只看异常"过滤）。
   function entryAbnormal(entry) {
     if (entryRisk(entry)) return true;
-    var record = runRecord(entry.index);
-    return !!(record && (record.runnerError || record.timedOut || record.exitCode !== 0));
+    var latest = latestRun(entry);
+    if (!latest) return false;
+    var record = latest.record;
+    return !!(record.runnerError || record.timedOut || record.exitCode !== 0);
   }
   function abnormalCount() {
     var n = 0;
@@ -928,17 +1118,25 @@
       bad.style.cssText = 'color:var(--kore-danger);cursor:pointer;';
       on(bad, fixPaths);
     }
-    var record = runRecord(entry.index);
-    if (record) {
+    var latest = latestRun(entry);
+    if (latest) {
+      var record = latest.record;
       var verdict = runVerdict(record);
       var status = add(wrap, el('span', 'chip chip-' + (verdict.tone === 'ok' ? 'ok' : verdict.tone === 'fail' ? 'fail' : 'na')));
       if (verdict.tone === 'fail') status.style.color = 'var(--kore-danger)';
       add(status, el('span', 'dot ' + (verdict.tone === 'ok' ? 'ok' : verdict.tone === 'fail' ? 'fail' : 'na')));
       add(status, el('span', null, verdict.short));
-      status.title = verdict.text + '（本页执行记录，刷新后清空）';
+      status.title = verdict.text + (latest.scheduled
+        ? '（定时执行记录，来自「执行历史」，刷新后仍在）'
+        : '（本页立即执行，刷新后清空）');
       var when = add(wrap, el('span', 'muted', humanTime(record.at)));
       when.style.cssText = 'font-size:12px;';
-      when.title = new Date(record.at).toLocaleString();
+      when.title = String(record.at);
+      if (latest.scheduled) {
+        var tag = add(wrap, el('span', 'muted', '定时'));
+        tag.style.cssText = 'font-size:12px;color:var(--kore-text-3);';
+        tag.title = '这条状态来自插件记录的真实定时执行，不是本页手动点出来的';
+      }
       return;
     }
     if (!risk) add(wrap, el('span', 'muted', '—'));
@@ -1033,7 +1231,10 @@
         edit.disabled = S.locked;
         on(edit, function () { beginEdit(entry); });
       }
-      var record = runRecord(entry.index);
+      // 最近一次执行可能来自本页立即执行，也可能来自插件的定时执行记录：
+      // 两种都要给「查看日志」入口，否则"到点跑失败"在行上只显示状态、点不进去。
+      var latestForRow = latestRun(entry);
+      var record = latestForRow ? latestForRow.record : null;
       var failedBefore = !!(record && (record.runnerError || record.timedOut || record.exitCode !== 0));
       var run = add(ops, el('button', 'btn task-run-btn', failedBefore ? '重试' : '立即执行'));
       run.type = 'button';
@@ -1045,7 +1246,9 @@
       if (record) {
         var logBtn = add(ops, el('button', 'btn btn-ghost task-log-btn', '查看日志'));
         logBtn.type = 'button';
-        logBtn.title = '看这次执行的关键日志（错误行 + 首尾）与完整输出';
+        logBtn.title = latestForRow.scheduled
+          ? '看这次定时执行的时间、退出码与关键输出（插件持久记录，刷新不丢）'
+          : '看这次执行的关键日志（错误行 + 首尾）与完整输出';
         on(logBtn, function () { showRunLog(entry.index); });
       }
       var del = add(ops, el('button', 'btn btn-ghost tasks-del', '删除')); del.type = 'button';
@@ -1263,6 +1466,20 @@
       run.type = 'button';
       run.title = '立刻执行一次（不改下次执行时间）';
       on(run, function () { runSchedTask(task); });
+      var histBtn = add(ops, el('button', 'btn btn-ghost', '执行历史'));
+      histBtn.type = 'button';
+      histBtn.title = '看这条任务每次到点执行的时间、状态与耗时（最近 100 条）';
+      on(histBtn, function () { showSchedRuns(task); });
+      var editBtn = add(ops, el('button', 'btn', '改计划'));
+      editBtn.type = 'button';
+      if (task.plugin === 'kore') {
+        editBtn.disabled = true;
+        editBtn.title = '系统自带任务（证书续期 / 审计清理等）的计划由内核配置管理，' +
+          '请改对应配置项后重启，不能在这里直接改';
+      } else {
+        editBtn.title = '就地修改执行时间或启停（调用的插件动作不变）';
+        on(editBtn, function () { openSchedEdit(task); });
+      }
       var logBtn = add(ops, el('button', 'btn btn-ghost', '查看日志'));
       logBtn.type = 'button';
       logBtn.title = '看最近一次执行的结果与错误信息';
@@ -1273,7 +1490,7 @@
     });
     add(S.sched.host, el('p', 'task-note',
       '内核定时任务由 Kore 按时间直接调用插件动作（备份、证书续期、审计清理等），不写系统 crontab；' +
-      '这类任务不能就地编辑，改计划请删除后重建——上表 crontab 的 shell / http 任务可以直接「编辑」。'));
+      '时间或启停可以点「改计划」就地修改，插件动作不随之改变——要换动作请删除后重建。'));
   }
 
   function focusPluginForm() {
@@ -1331,6 +1548,176 @@
       });
   }
 
+  // schedById 按 id 找当前列表里的内核任务（重试 / 历史按钮都要最新定义）。
+  function schedById(id) {
+    var found = null;
+    (S.sched.tasks || []).forEach(function (t) { if (t.id === id) found = t; });
+    return found;
+  }
+
+  // openSchedEdit 就地改计划（PUT /scheduler/tasks/{id}）：表达式 / 固定间隔 / 启停。
+  // 插件与方法不可改——改了等于换一条任务，页面明确说明而不是让用户猜。
+  // 内置任务（plugin=kore，如证书续期 / 审计清理）由内核配置管理，入口直接禁用。
+  function openSchedEdit(task) {
+    var mask = el('div', 'kore-modal');
+    mask.setAttribute('role', 'dialog'); mask.setAttribute('aria-modal', 'true');
+    var box = add(mask, el('div', 'kore-modal-box'));
+    add(box, el('div', 'kore-modal-title', '修改执行计划'));
+    add(box, el('p', 'kore-modal-text',
+      '「' + schedName(task) + '」只改什么时候执行，它调用的插件动作不变。'));
+    var modeField = add(box, el('label', 'field'));
+    add(modeField, el('span', 'field-label', '按什么时间执行'));
+    var mode = add(modeField, el('select', 'field-input'));
+    [['schedule', '按时间表达式（分 时 日 月 周）'], ['interval', '按固定间隔（秒）']].forEach(function (pair) {
+      var option = el('option', null, pair[1]); option.value = pair[0]; add(mode, option);
+    });
+    mode.value = task.schedule ? 'schedule' : 'interval';
+    var valueField = add(box, el('label', 'field'));
+    var valueLabel = add(valueField, el('span', 'field-label', ''));
+    var valueInput = add(valueField, el('input', 'field-input mono'));
+    valueInput.type = 'text'; valueInput.autocomplete = 'off';
+    function syncValue() {
+      if (mode.value === 'schedule') {
+        valueLabel.textContent = '时间表达式（例：0 3 * * * 表示每天 03:00）';
+        valueInput.value = task.schedule || '';
+        valueInput.placeholder = '0 3 * * *';
+      } else {
+        valueLabel.textContent = '间隔秒数（需在 30 秒到 366 天之间，例：3600 表示每小时）';
+        valueInput.value = task.interval_s ? String(task.interval_s) : '3600';
+        valueInput.placeholder = '3600';
+      }
+    }
+    mode.addEventListener('change', syncValue);
+    syncValue();
+    var enabledLabel = add(box, el('label', 'task-bulk-all'));
+    enabledLabel.style.cssText = 'display:inline-flex;align-items:center;gap:6px;min-height:44px;';
+    var enabled = add(enabledLabel, el('input'));
+    enabled.type = 'checkbox'; enabled.checked = task.enabled !== false;
+    add(enabledLabel, el('span', null, '启用这条任务（取消勾选后到点不执行，历史记录保留）'));
+    var msg = add(box, el('div', 'kore-modal-msg'));
+    var ops = add(box, el('div', 'kore-modal-actions'));
+    var cancel = add(ops, el('button', 'btn btn-ghost', '取消')); cancel.type = 'button';
+    var ok = add(ops, el('button', 'btn btn-primary', '保存')); ok.type = 'button';
+    function close() {
+      document.removeEventListener('keydown', esc);
+      if (mask.parentNode) mask.parentNode.removeChild(mask);
+    }
+    function esc(ev) { if (ev.key === 'Escape') close(); }
+    cancel.addEventListener('click', close);
+    mask.addEventListener('click', function (ev) { if (ev.target === mask) close(); });
+    document.addEventListener('keydown', esc);
+    ok.addEventListener('click', function () {
+      var raw = valueInput.value.trim();
+      var body = { enabled: enabled.checked };
+      if (mode.value === 'schedule') {
+        if (raw.split(/\s+/).length !== 5) {
+          msg.textContent = '时间表达式需恰好 5 段，例如 0 3 * * *（每天 03:00）';
+          valueInput.focus();
+          return;
+        }
+        body.schedule = raw;
+      } else {
+        var seconds = Number(raw);
+        if (!/^\d+$/.test(raw) || seconds < 30 || seconds > 31622400) {
+          msg.textContent = '间隔需是 30 到 31622400 之间的整数秒（最多一年），例：3600 表示每小时';
+          valueInput.focus();
+          return;
+        }
+        body.interval_s = seconds;
+      }
+      ok.disabled = true;
+      schedRequest('PUT', '/' + encodeURIComponent(task.id), body).then(function () {
+        close();
+        setStatus('已修改「' + schedName(task) + '」的执行计划', 'ok');
+        loadSched();
+      }, function (err) { ok.disabled = false; msg.textContent = err.message; });
+    });
+    document.body.appendChild(mask);
+    valueInput.focus();
+  }
+
+  // showSchedRuns 打开内核任务的执行历史（GET /scheduler/tasks/{id}/runs）。
+  // 与「立即执行」区分：这里看的是**已经发生过的**定时执行，不是这次点出来的结果。
+  function showSchedRuns(task) {
+    S.result = {
+      visible: true, kind: 'schedruns', index: null, id: task.id,
+      title: '内核定时任务「' + schedName(task) + '」', record: null,
+      runs: [], note: '', loading: true, error: ''
+    };
+    paintResult();
+    scrollToResult();
+    schedRequest('GET', '/' + encodeURIComponent(task.id) + '/runs?limit=20').then(function (data) {
+      S.result.runs = Array.isArray(data.runs) ? data.runs : [];
+      S.result.note = data.note || '';
+      S.result.loading = false;
+      paintResult();
+    }, function (err) {
+      S.result.loading = false;
+      S.result.error = err.message || '读取失败';
+      paintResult();
+    });
+  }
+
+  // paintSchedRuns 渲染内核任务的执行历史：时间 / 状态 / 耗时 / 错误摘要。
+  function paintSchedRuns() {
+    var runs = S.result.runs || [];
+    var head = add(S.runHost, el('div', 'task-result-head'));
+    var verdictText = S.result.loading ? '正在读取执行历史…'
+      : S.result.error ? '执行历史读取失败'
+        : (runs.length ? '最近 ' + runs.length + ' 次执行' : '还没有执行记录');
+    var verdict = add(head, el('p', 'task-result-verdict', verdictText));
+    verdict.style.cssText = 'margin:0 0 4px;font-size:15px;font-weight:600;color:var(--kore-text-1);';
+    if (S.result.title) {
+      var which = add(head, el('p', 'muted', S.result.title));
+      which.style.cssText = 'margin:0 0 4px;font-size:12px;';
+    }
+    if (S.result.error) {
+      add(S.runHost, el('div', 'site-result-error')).textContent = '执行历史读取失败：' + S.result.error;
+      var retryOps = add(S.runHost, el('div', 'task-result-ops'));
+      retryOps.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;';
+      emptyButton(retryOps, '重试', true, function () {
+        var task = schedById(S.result.id);
+        if (task) showSchedRuns(task);
+      });
+      return;
+    }
+    if (S.result.loading) return;
+    var task = schedById(S.result.id);
+    if (!runs.length) {
+      var empty = add(S.runHost, el('div', 'panel-empty empty-state'));
+      add(empty, el('p', 'empty-state-text',
+        '这条任务还没有执行记录：到点执行，或点「立即执行」先跑一次，' +
+        '之后每次的时间、结果与耗时都会记在这里（最近 100 条）。'));
+      var ops = add(empty, el('div', 'task-empty-ops'));
+      ops.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+      if (task) emptyButton(ops, '立即执行一次', true, function () { runSchedTask(task); });
+      return;
+    }
+    var table = add(S.runHost, el('table', 'tasks-table'));
+    var thead = add(table, el('thead')), htr = add(thead, el('tr'));
+    ['时间', '状态', '耗时', '错误信息'].forEach(function (label) { add(htr, el('th', null, label)); });
+    var body = add(table, el('tbody'));
+    runs.forEach(function (run) {
+      var state = SCHED_STATUS[run.status] || { text: run.status || '未知', tone: 'warn' };
+      var tone = state.tone === 'ok' ? 'ok' : state.tone === 'warn' ? 'warn' : 'fail';
+      var tr = add(body, el('tr'));
+      if (tone === 'fail') tr.style.boxShadow = 'inset 3px 0 0 var(--kore-danger)';
+      var when = add(tr, el('td', 'task-log-time', humanTime(run.started_at)));
+      when.title = String(run.started_at || '');
+      when.dataset.label = '时间';
+      var cell = add(tr, el('td')); cell.dataset.label = '状态';
+      var chipNode = add(cell, el('span', 'chip chip-' + tone));
+      if (tone === 'fail') chipNode.style.color = 'var(--kore-danger)';
+      add(chipNode, el('span', 'dot ' + tone));
+      add(chipNode, el('span', null, state.text));
+      add(tr, el('td', 'muted', humanDuration(run.dur_ms) || '—')).dataset.label = '耗时';
+      var errCell = add(tr, el('td', 'mono')); errCell.dataset.label = '错误信息';
+      errCell.textContent = run.error || '—';
+      errCell.style.cssText = 'word-break:break-word;';
+    });
+    if (S.result.note) add(S.runHost, el('p', 'task-note', S.result.note));
+  }
+
   function removeSchedTask(task) {
     var label = schedName(task);
     confirmBox('删除内核定时任务「' + label + '」？删除后不再执行，要恢复只能重新创建。', function (close, msg, ok) {
@@ -1358,6 +1745,8 @@
       else if (S.warning) setStatus('已读取；当前环境受限，见上方提示', 'ok');
       else setStatus(S.entries.length ? '计划任务已刷新' : '还没有任何定时任务：点「用预设创建第一个任务」即可建好第一条', 'ok');
       loadSched();
+      // 任务名用于把执行历史对回行内状态：列表刷新后重读一次（读文件尾部，开销小）。
+      loadRunlog();
     }, function (err) {
       var blocked = permissionProblem(err && (err.message + ' ' + (err.code || '')));
       if (blocked) {
@@ -1516,6 +1905,24 @@
     on(refresh, load);
     S.listHost = add(listPanel, el('div', 'tasks-list-host'));
 
+    // 执行历史（cron.runlog）：每次到点执行的时间 / 状态 / 退出码 / 关键输出，
+    // 与「立即执行」的结果分开——那份是本页点出来的、刷新即丢，这份是持久记录。
+    var runlogPanel = add(root, el('section', 'panel task-runlog-panel'));
+    var runlogHead = add(runlogPanel, el('div', 'panel-head'));
+    add(runlogHead, el('span', 'panel-title', '执行历史'));
+    S.runlogMeta = add(runlogHead, el('span', 'panel-meta', ''));
+    S.runlogToggle = add(runlogHead, el('button', 'btn btn-ghost', '只看失败'));
+    S.runlogToggle.type = 'button';
+    S.runlogToggle.hidden = true;
+    S.runlogToggle.setAttribute('aria-pressed', 'false');
+    on(S.runlogToggle, function () {
+      S.runlog.failuresOnly = !S.runlog.failuresOnly;
+      paintRunlog();
+    });
+    var runlogRefresh = add(runlogHead, el('button', 'btn btn-ghost', '刷新')); runlogRefresh.type = 'button';
+    on(runlogRefresh, loadRunlog);
+    S.runlogHost = add(runlogPanel, el('div', 'task-runlog-host'));
+
     // 内核定时任务（ADR-0019）：这里建的插件任务必须在本页可见——否则"建完就消失"。
     var schedPanel = add(root, el('section', 'panel task-sched-panel'));
     var schedHead = add(schedPanel, el('div', 'panel-head'));
@@ -1537,10 +1944,12 @@
     });
     S.runHost = add(S.runPanel, el('div', 'task-run-host'));
 
-    // 执行日志：默认自动加载一次；来源与 note 照实展示（available=false 不伪装成功）。
+    // 系统 cron 日志：默认自动加载一次；来源与 note 照实展示（available=false 不伪装成功）。
+    // 与上面「执行历史」区分：这里是 cron 守护进程的启动行（谁在什么时候启动了命令），
+    // 不含退出码与输出；每次执行的成败看「执行历史」。
     var logsPanel = add(root, el('section', 'panel task-logs-panel'));
     var logsHead = add(logsPanel, el('div', 'panel-head'));
-    add(logsHead, el('span', 'panel-title', '执行日志'));
+    add(logsHead, el('span', 'panel-title', '系统 cron 日志'));
     S.logsMeta = add(logsHead, el('span', 'panel-meta', ''));
     var logsRefresh = add(logsHead, el('button', 'btn btn-ghost', '刷新日志')); logsRefresh.type = 'button';
     on(logsRefresh, loadLogs);
@@ -1553,6 +1962,8 @@
     S.entries = []; S.editIndex = null; S.warning = ''; S.warnText = ''; S.locked = false; S.lockReason = '';
     S.type = 'shell'; S.selected = {};
     S.logs = { available: null, source: '', entries: [], note: '', loading: false, error: '' };
+    S.runlog = { available: null, entries: [], note: '', loading: false, error: '', failuresOnly: false };
+    S.schedRuns = {};
     S.runs = {}; S.filter = 'all'; S.loadError = '';
     S.result = { visible: false, kind: '', index: null, id: '', title: '', record: null, error: '' };
     S.sched = { host: null, meta: null, loading: false, loaded: false, error: '', tasks: [] };
@@ -1562,6 +1973,7 @@
     setLocked('');
     load();
     loadLogs();
+    loadRunlog();
   }
   window.KoreTasks = { render: render };
 })();

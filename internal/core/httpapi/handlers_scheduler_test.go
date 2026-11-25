@@ -121,6 +121,129 @@ func TestSchedulerCreateRejectsBuiltinPlugin(t *testing.T) {
 	}
 }
 
+// TestSchedulerUpdateInPlace 覆盖 PATCH 语义的就地改计划：
+// 改表达式 / 只改启停 / 两个计划字段同时给被拒 / 未知任务 404 / 非法表达式 400。
+func TestSchedulerUpdateInPlace(t *testing.T) {
+	server, _ := newSchedulerServer(t)
+	body := map[string]any{
+		"name": "ping", "plugin": "echo", "method": "echo.ping", "schedule": "*/5 * * * *",
+	}
+	code, data := doScheduler(t, server, http.MethodPost, schedulerTasksPath, body)
+	if code != http.StatusOK {
+		t.Fatalf("创建应回 200，实际 %d: %s", code, data)
+	}
+	var created scheduler.Task
+	if err := json.Unmarshal(data, &created); err != nil || created.ID == "" {
+		t.Fatalf("创建响应不可解析: %v / %s", err, data)
+	}
+	firstNext := created.NextRunAt
+
+	code, data = doScheduler(t, server, http.MethodPut, schedulerTasksPath+"/"+created.ID,
+		map[string]any{"schedule": "0 4 * * *"})
+	if code != http.StatusOK {
+		t.Fatalf("就地改表达式应回 200，实际 %d: %s", code, data)
+	}
+	var updated scheduler.Task
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("更新响应不可解析: %v / %s", err, data)
+	}
+	if updated.Schedule != "0 4 * * *" || updated.IntervalS != 0 {
+		t.Fatalf("表达式未就地生效: %+v", updated)
+	}
+	if updated.ID != created.ID || updated.CreatedAt != created.CreatedAt {
+		t.Fatalf("就地修改必须保留 id 与创建时刻: %+v", updated)
+	}
+	if updated.NextRunAt.Equal(firstNext) {
+		t.Fatalf("改表达式后下次执行时间应重算，实际仍为 %s", updated.NextRunAt)
+	}
+
+	code, data = doScheduler(t, server, http.MethodPut, schedulerTasksPath+"/"+created.ID,
+		map[string]any{"enabled": false})
+	if code != http.StatusOK {
+		t.Fatalf("只改启停应回 200，实际 %d: %s", code, data)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil || updated.Enabled {
+		t.Fatalf("停用未生效: %v / %s", err, data)
+	}
+
+	code, data = doScheduler(t, server, http.MethodPut, schedulerTasksPath+"/"+created.ID,
+		map[string]any{"schedule": "0 5 * * *", "interval_s": 60})
+	if code != http.StatusBadRequest {
+		t.Fatalf("同时给 schedule 与 interval_s 应回 400，实际 %d: %s", code, data)
+	}
+	if code, _ = doScheduler(t, server, http.MethodPut, schedulerTasksPath+"/"+created.ID,
+		map[string]any{"schedule": "bad"}); code != http.StatusBadRequest {
+		t.Fatalf("非法表达式应回 400，实际 %d", code)
+	}
+	if code, _ = doScheduler(t, server, http.MethodPut, schedulerTasksPath+"/nope",
+		map[string]any{"enabled": true}); code != http.StatusNotFound {
+		t.Fatalf("未知任务应回 404，实际 %d", code)
+	}
+	// 就改结果必须持久化：列表里读到的就是新计划。
+	_, data = doScheduler(t, server, http.MethodGet, schedulerTasksPath, nil)
+	var list schedulerListBody
+	if err := json.Unmarshal(data, &list); err != nil || len(list.Tasks) != 1 {
+		t.Fatalf("列表应回 1 条: %v / %s", err, data)
+	}
+	if list.Tasks[0].Schedule != "0 4 * * *" || list.Tasks[0].Enabled {
+		t.Fatalf("就地修改未持久化: %+v", list.Tasks[0])
+	}
+}
+
+// TestSchedulerRuns 覆盖执行历史端点：跑两次后有两条、最新在前、带保留说明；
+// 未知任务 404、非法 limit 400。
+func TestSchedulerRuns(t *testing.T) {
+	server, _ := newSchedulerServer(t)
+	body := map[string]any{
+		"name": "ping", "plugin": "echo", "method": "echo.ping", "schedule": "*/5 * * * *",
+	}
+	code, data := doScheduler(t, server, http.MethodPost, schedulerTasksPath, body)
+	if code != http.StatusOK {
+		t.Fatalf("创建应回 200，实际 %d: %s", code, data)
+	}
+	var task scheduler.Task
+	if err := json.Unmarshal(data, &task); err != nil {
+		t.Fatalf("创建响应不可解析: %s", data)
+	}
+	for i := 0; i < 2; i++ {
+		if code, runData := doScheduler(t, server, http.MethodPost, schedulerTasksPath+"/"+task.ID+"/run", nil); code != http.StatusOK {
+			t.Fatalf("第 %d 次立即执行应回 200，实际 %d: %s", i+1, code, runData)
+		}
+	}
+
+	code, data = doScheduler(t, server, http.MethodGet, schedulerTasksPath+"/"+task.ID+"/runs", nil)
+	if code != http.StatusOK {
+		t.Fatalf("执行历史应回 200，实际 %d: %s", code, data)
+	}
+	var runs schedulerRunsBody
+	if err := json.Unmarshal(data, &runs); err != nil {
+		t.Fatalf("执行历史不可解析: %v / %s", err, data)
+	}
+	if runs.Count != 2 || len(runs.Runs) != 2 {
+		t.Fatalf("应有 2 条记录，实际 %d / %s", runs.Count, data)
+	}
+	if runs.Runs[0].StartedAt.Before(runs.Runs[1].StartedAt) {
+		t.Fatalf("执行历史应最新在前: %+v", runs.Runs)
+	}
+	if runs.Runs[0].TaskID != task.ID || runs.Runs[0].Status != scheduler.StatusOK {
+		t.Fatalf("记录字段不符: %+v", runs.Runs[0])
+	}
+	if runs.Note == "" {
+		t.Fatal("执行历史必须带保留口径说明（避免把轮转误判成丢记录）")
+	}
+
+	_, data = doScheduler(t, server, http.MethodGet, schedulerTasksPath+"/"+task.ID+"/runs?limit=1", nil)
+	if err := json.Unmarshal(data, &runs); err != nil || runs.Count != 1 {
+		t.Fatalf("limit=1 应只回 1 条，实际 %v / %s", err, data)
+	}
+	if code, _ = doScheduler(t, server, http.MethodGet, schedulerTasksPath+"/"+task.ID+"/runs?limit=abc", nil); code != http.StatusBadRequest {
+		t.Fatalf("非法 limit 应回 400，实际 %d", code)
+	}
+	if code, _ = doScheduler(t, server, http.MethodGet, schedulerTasksPath+"/nope/runs", nil); code != http.StatusNotFound {
+		t.Fatalf("未知任务应回 404，实际 %d", code)
+	}
+}
+
 // TestSchedulerEndpointErrors 覆盖非法输入 / 未知任务 / 未装配三类失败口径。
 func TestSchedulerEndpointErrors(t *testing.T) {
 	server, _ := newSchedulerServer(t)

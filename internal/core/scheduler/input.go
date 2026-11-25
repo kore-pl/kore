@@ -28,6 +28,59 @@ type CreateInput struct {
 	Enabled *bool `json:"enabled"`
 }
 
+// UpdateInput 是就地修改任务的输入（PUT /api/v1/scheduler/tasks/{id}）。
+//
+// 字段一律用指针表达"这次改不改"：缺省（nil）沿用原值，给了就按新值校验。
+// 目标插件与方法不在可改范围内——改它们等于换成另一条任务，请删除后重建，
+// 免得"改了计划却仍在调用旧动作"这种静默错位。
+type UpdateInput struct {
+	// Name 新名称（≤64 字符）。
+	Name *string `json:"name"`
+	// Params 新的方法参数（必须是 JSON 对象）。
+	Params *json.RawMessage `json:"params"`
+	// Schedule 新的 5 段表达式；给了就切到表达式模式（清空 interval_s）。
+	Schedule *string `json:"schedule"`
+	// IntervalS 新的固定周期秒数；给了就切到周期模式（清空 schedule）。
+	IntervalS *int `json:"interval_s"`
+	// TimeoutS 新的单次超时秒数（1–3600）。
+	TimeoutS *int `json:"timeout_s"`
+	// Enabled 新的启停状态；停用后不参与调度，历史记录保留。
+	Enabled *bool `json:"enabled"`
+}
+
+// merge 把就地修改叠加到现有任务上，返回待校验的 CreateInput。
+//
+// schedule 与 interval_s 互斥：两个都显式给属于用法错误（不知道该切到哪种模式），
+// 只给一个时另一个被清空——这是"就地改计划"的核心语义，不能两个都留下。
+func (in UpdateInput) merge(task Task) (CreateInput, bool, error) {
+	merged := CreateInput{
+		Name: task.Name, Plugin: task.Plugin, Method: task.Method, Params: task.Params,
+		Schedule: task.Schedule, IntervalS: task.IntervalS, TimeoutS: task.TimeoutS,
+	}
+	enabled := task.Enabled
+	if in.Name != nil {
+		merged.Name = *in.Name
+	}
+	if in.Params != nil {
+		merged.Params = *in.Params
+	}
+	if in.TimeoutS != nil {
+		merged.TimeoutS = *in.TimeoutS
+	}
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	switch {
+	case in.Schedule != nil && in.IntervalS != nil:
+		return CreateInput{}, false, fmt.Errorf("%w: schedule 与 interval_s 不能同时修改，请只给一个", ErrInvalid)
+	case in.Schedule != nil:
+		merged.Schedule, merged.IntervalS = *in.Schedule, 0
+	case in.IntervalS != nil:
+		merged.IntervalS, merged.Schedule = *in.IntervalS, ""
+	}
+	return merged, enabled, nil
+}
+
 // normalize 校验并归一化输入：字段范围、表达式可解析、Params 为对象。
 func (in CreateInput) normalize(now time.Time) (Task, error) {
 	name := strings.TrimSpace(in.Name)

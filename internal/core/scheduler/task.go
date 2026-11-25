@@ -44,6 +44,8 @@ const (
 	maxIntervalS = 366 * 24 * 3600
 	// maxRuns 是执行记录保留条数（ADR-0019）。
 	maxRuns = 100
+	// defaultRunLimit 是执行历史查询的缺省条数（GET /scheduler/tasks/{id}/runs）。
+	defaultRunLimit = 20
 	// builtinCertRenewID 是迁移进来的内置任务 id（原 cert_renew 定时器）。
 	builtinCertRenewID = "builtin-cert-renew"
 	// builtinAuditCleanID 是审计按龄清理的内置任务 id（ADR-0044）。

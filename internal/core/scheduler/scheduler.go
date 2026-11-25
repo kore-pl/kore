@@ -167,6 +167,91 @@ func (s *Service) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+// Update 就地修改任务计划（表达式 / 周期 / 超时 / 启停 / 名称 / 参数）。
+//
+// 校验口径与 Add 完全一致：复用 CreateInput.normalize，不另写一套规则——
+// 两条路径各写一份校验必然漂移（"创建时非法、修改时合法"）。
+// 目标插件与方法不可改（改了就是另一条任务）；内置任务（plugin="kore"）拒绝就地
+// 修改：它们由内核配置在启动时注册，改完重启会被配置回填，等于"看起来生效、实际被覆盖"。
+func (s *Service) Update(_ context.Context, id string, in UpdateInput) (Task, error) {
+	task, err := s.loadTask(id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Plugin == BuiltinPlugin {
+		return Task{}, fmt.Errorf("%w: 内置任务由内核配置管理，不能就地修改；请修改对应配置项后重启", ErrInvalid)
+	}
+	merged, enabled, err := in.merge(task)
+	if err != nil {
+		return Task{}, err
+	}
+	now := s.now()
+	updated, err := merged.normalize(now)
+	if err != nil {
+		return Task{}, err
+	}
+	// 身份与历史语义沿用原任务：id / 创建时刻 / 错过计数 / 最近执行结果不清空
+	// （前端靠 last_result 标红，清空等于让失败记录凭空消失）。
+	updated.ID, updated.CreatedAt = task.ID, task.CreatedAt
+	updated.MissedCount = task.MissedCount
+	updated.LastRunAt, updated.LastResult = task.LastRunAt, task.LastResult
+	updated.Enabled = enabled
+	next, err := updated.nextRun(now)
+	if err != nil {
+		return Task{}, err
+	}
+	updated.NextRunAt = next
+	if err := s.saveTask(updated); err != nil {
+		return Task{}, err
+	}
+	if updated.Enabled {
+		s.startLoop()
+	} else {
+		s.stopIfIdle()
+	}
+	return updated, nil
+}
+
+// Runs 返回某条任务最近的执行记录（最新在前）；任务不存在返回 ErrNotFound。
+//
+// limit 缺省 20、上限 maxRuns（=100，历史上限即保留条数）。记录只读不写：
+// 访问历史不能改变调度状态（G-21 的同源要求）。
+func (s *Service) Runs(_ context.Context, id string, limit int) ([]Run, error) {
+	if _, err := s.loadTask(id); err != nil {
+		return nil, err
+	}
+	runs, err := s.loadRuns()
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]Run, 0, len(runs))
+	for _, run := range runs {
+		if run.TaskID == id {
+			filtered = append(filtered, run)
+		}
+	}
+	// loadRuns 按 key（时间戳）升序 → 反转成最新在前，与前端列表方向一致。
+	for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
+		filtered[i], filtered[j] = filtered[j], filtered[i]
+	}
+	limit = normalizeRunLimit(limit)
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+
+// normalizeRunLimit 归一执行历史条数：0 取缺省，负数与超上限夹到边界。
+func normalizeRunLimit(limit int) int {
+	if limit <= 0 {
+		return defaultRunLimit
+	}
+	if limit > maxRuns {
+		return maxRuns
+	}
+	return limit
+}
+
 // RunNow 立即执行一次（不改 next_run_at）；执行中或已禁用时拒绝。
 func (s *Service) RunNow(ctx context.Context, id string) (Run, error) {
 	task, err := s.loadTask(id)

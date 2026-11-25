@@ -141,6 +141,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE "+snapshotsPath+"/{id}", s.handleSnapshotsDelete)
 	s.mux.HandleFunc("GET "+schedulerTasksPath, s.handleSchedulerList)
 	s.mux.HandleFunc("POST "+schedulerTasksPath, s.handleSchedulerCreate)
+	s.mux.HandleFunc("PUT "+schedulerTasksPath+"/{id}", s.handleSchedulerUpdate)
+	s.mux.HandleFunc("GET "+schedulerTasksPath+"/{id}/runs", s.handleSchedulerRuns)
 	s.mux.HandleFunc("POST "+schedulerTasksPath+"/{id}/run", s.handleSchedulerRun)
 	s.mux.HandleFunc("DELETE "+schedulerTasksPath+"/{id}", s.handleSchedulerDelete)
 	s.mux.HandleFunc("/api/v1/scheduler/", s.handleNotFound)

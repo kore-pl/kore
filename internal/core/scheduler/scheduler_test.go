@@ -146,3 +146,79 @@ func TestAddValidatesInput(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateKeepsIdentityAndHistory：就地修改保留 id / 创建时刻 / 最近执行结果，
+// 且修改后的表达式马上重算 next_run_at（不是等下一次 tick 才生效）。
+func TestUpdateKeepsIdentityAndHistory(t *testing.T) {
+	service, clock := newTestService(t, &fakeInvoker{})
+	ctx := context.Background()
+	clock.Set(time.Date(2026, 11, 25, 10, 0, 0, 0, time.Local))
+	created, err := service.Add(ctx, CreateInput{
+		Name: "nightly", Plugin: "echo", Method: "echo.ping", Schedule: "0 3 * * *",
+	})
+	if err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	lastRun := clock.Now().Add(-time.Hour)
+	created.LastRunAt, created.LastResult = &lastRun, StatusFailed
+	if err := service.saveTask(created); err != nil {
+		t.Fatalf("写回最近执行结果失败: %v", err)
+	}
+
+	schedule := "0 4 * * *"
+	updated, err := service.Update(ctx, created.ID, UpdateInput{Schedule: &schedule})
+	if err != nil {
+		t.Fatalf("就地修改失败: %v", err)
+	}
+	if updated.ID != created.ID || !updated.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("就地修改必须保留 id / created_at: %+v", updated)
+	}
+	if updated.Schedule != schedule || updated.IntervalS != 0 {
+		t.Fatalf("表达式未生效: %+v", updated)
+	}
+	if updated.LastResult != StatusFailed || updated.LastRunAt == nil {
+		t.Fatalf("最近执行结果不应被清空: %+v", updated)
+	}
+	// 现在 10:00，0 4 * * * 的下一个可行时刻是次日 04:00。
+	want := time.Date(2026, 11, 26, 4, 0, 0, 0, time.Local)
+	if !updated.NextRunAt.Equal(want) {
+		t.Fatalf("next_run_at 应重算为 %s，实际 %s", want, updated.NextRunAt)
+	}
+
+	enabled := false
+	disabled, err := service.Update(ctx, created.ID, UpdateInput{Enabled: &enabled})
+	if err != nil || disabled.Enabled {
+		t.Fatalf("停用失败: %+v err=%v", disabled, err)
+	}
+	if _, err := service.Update(ctx, created.ID, UpdateInput{Schedule: &schedule, IntervalS: intPtr(60)}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("同时给 schedule 与 interval_s 应返回 ErrInvalid，实际 %v", err)
+	}
+	if _, err := service.Update(ctx, "nope", UpdateInput{Enabled: &enabled}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("未知任务应返回 ErrNotFound，实际 %v", err)
+	}
+}
+
+// TestUpdateRejectsBuiltinTask：内置任务由内核配置在启动时注册，就地修改会被
+// 下次启动回填——必须明确拒绝，而不是让用户以为改成功了。
+func TestUpdateRejectsBuiltinTask(t *testing.T) {
+	service, _ := newTestService(t, &fakeInvoker{})
+	builtin := Task{
+		ID: builtinCertRenewID, Name: "证书续期", Plugin: BuiltinPlugin, Method: CertRenewMethod,
+		Schedule: "0 3 * * *", Enabled: true, TimeoutS: DefaultTimeoutS, CreatedAt: time.Now(),
+	}
+	builtin.Params = json.RawMessage(`{}`)
+	if err := service.saveTask(builtin); err != nil {
+		t.Fatalf("写入内置任务失败: %v", err)
+	}
+	enabled := false
+	if _, err := service.Update(context.Background(), builtinCertRenewID, UpdateInput{Enabled: &enabled}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("内置任务就地修改应返回 ErrInvalid，实际 %v", err)
+	}
+	reloaded, err := service.loadTask(builtinCertRenewID)
+	if err != nil || !reloaded.Enabled {
+		t.Fatalf("被拒绝的修改不得写盘: %+v err=%v", reloaded, err)
+	}
+}
+
+// intPtr 是测试里取 *int 的小工具。
+func intPtr(v int) *int { return &v }
