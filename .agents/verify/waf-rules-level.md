@@ -55,7 +55,10 @@ ok  github.com/pengtang1024/kore-plugin-waf/tests/fault
 
 ```
 $ make dist
-打包完成: dist/waf-0.5.0.tar.gz sha256=a94c905d...54a74e89 size_bytes=2947541 实际=2947541
+打包完成: dist/waf-0.5.1.tar.gz sha256=b9714d77...ccf18f2c size_bytes=2947451 实际=2947449
+
+# 说明：0.5.0 先打了一版，随后只改了等级参数的错误文案（G-33 A3），
+# 该改动改变二进制 → 包 sha 变 → 按 RELEASE §1「同 id@version 只允许一个 sha」递增到 0.5.1 重打。
 ```
 
 ### 2.2 前端（kore/web/waf.js）
@@ -108,6 +111,8 @@ $ UI_SHOT_BUILD_SOURCE=head bash scripts/ui-shot.sh --scene waf-rules-level \
 ## 4. 已知边界 / 未验证
 
 - `tests/e2e`（真 nft，私有 netns）本轮未跑通，环境禁止 `unshare`；`tests/fault` 与全部单元测试绿。
-- 插件索引仓 `kore-plugins`（`versions.lock.json` / 索引 sha）不在本卡写域，`waf@0.5.0` 的 dist sha 尚未入索引——需由 lead 统一发版。
+- 插件索引仓 `kore-plugins`（`versions.lock.json` / 索引 sha）不在本卡写域，`waf@0.5.1` 的 dist sha 尚未入索引——需由 lead 统一发版。
+- `make store-check`：`[OK] kore-plugin-waf`（本轮修掉 `README_VERSION_DRIFT`：README 发布产物版本对齐 0.5.1）。
+- 截图/验收是在 `0.5.0 → 0.5.1` 之间完成的；0.5.1 与截图对应代码的差异只有一条错误文案（`level=...` 的提示），页面行为不变。
 - `internal/wafop/zeroparam_test.go` 是本轮开始前就存在的**未跟踪**文件（非本卡产出），未提交、未修改，仅确认它在当前实现下通过。
 - 观察模式日志前缀 `kore-waf-*` 落内核日志，本插件不解析；「防护规则」表的「命中包数」是网络层唯一命中来源。
