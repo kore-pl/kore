@@ -10,6 +10,8 @@
      document.hidden 时暂停。
    - 切割：logs.rotate（confirm=true）把当前文件重命名为同目录带时间戳文件，只保留最近 5 份；
      破坏性操作，先弹确认并说明「写入进程需重载后才会写回原路径」。
+   - 一键维护：logs.maintain 把内核 scheduler 默认执行的「先切割、再清理」暴露为手动入口；
+     一次点击即执行（非破坏性：copytruncate + 过期文件进回收区可撤销），结果直接显示切割/清理计数。
    - 设置：logs.config.get 读取表单 schema 与当前来源，logs.config.set 保存（每行「名称=绝对路径」或
      「名称=journal」），保存即生效、无需重启；来源白名单仍由插件侧校验。
    - 下载：logs.download 导出 <state>/exports/<source>-<ts>.log 并以 Blob 触发浏览器下载（同 file.download 通道）。
@@ -111,9 +113,10 @@
     'background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font:inherit;font-size:var(--kore-font-12);}' +
     '.logs-ret-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--kore-space-2);margin-top:var(--kore-space-2);}' +
     '.logs-ret-note{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;}' +
+    '.logs-notice.is-ok{color:var(--kore-ok,var(--kore-info));border-color:var(--kore-ok,var(--kore-info));background:var(--kore-ok-bg,var(--kore-bg-2));}' +
     '@media (pointer:coarse),(max-width:639px){.logs-chip,.logs-switch{min-height:44px;}.logs-config-actions .btn{min-height:44px;}' +
     '.logs-chart-tab,.logs-chart-row{min-height:44px;}.logs-chart-donut{width:96px;height:96px;}' +
-    '.logs-usage-refresh,.logs-clean-btn,.logs-restore-btn,.logs-ret-actions .btn,.logs-ret-field input,.logs-ret-field select{min-height:44px;}}';
+    '.logs-usage-refresh,.logs-maint-btn,.logs-clean-btn,.logs-restore-btn,.logs-ret-actions .btn,.logs-ret-field input,.logs-ret-field select{min-height:44px;}}';
 
   function fresh() {
     return { root: null, sources: [], selected: '', lines: 200, query: '', mode: 'tail',
@@ -124,7 +127,9 @@
       searchTimer: null, notice: '', error: '', busy: false, destroyed: false,
       /* 清理/保留策略/占用（R19-4）*/
       usage: null, retention: null, cleanPreview: null, cleanOpen: false, cleanBusy: false,
-      restoreBusy: false, retentionOpen: false, retentionBusy: false };
+      restoreBusy: false, retentionOpen: false, retentionBusy: false,
+      /* 一键维护（logs.maintain）：立即执行默认「先切割再清理」 */
+      maintainBusy: false };
   }
   var S = fresh();
   function el(tag, cls, text) {
@@ -612,6 +617,12 @@
       err.setAttribute('role', 'alert');
       err.textContent = S.error;
     }
+    /* 成功/进度提示：clean/rotate/maintain 等写操作的结果必须让用户看见（USABILITY §4）。 */
+    if (S.notice) {
+      var ok = add(host, el('div', 'logs-notice is-ok'));
+      ok.setAttribute('role', 'status');
+      ok.textContent = S.notice;
+    }
     if (S.truncated) add(host, el('div', 'logs-notice', S.mode === 'search' ? '命中超过上限，仅显示前 ' + S.count + ' 行' : '结果已截断（扫描上限 64 MiB）'));
     if (S.lineTruncated) add(host, el('div', 'logs-notice', '部分超长行已截断（单行上限 8 KiB）'));
   }
@@ -975,6 +986,40 @@
       paintNotices(); paintMaint();
     });
   }
+  /* ===== 一键维护（logs.maintain）：把内核 scheduler 每天自动执行的维护暴露为手动「立即执行」 =====
+     后端契约实读 kore-plugin-logs/methods.go:196 + internal/logic/maintain.go:80：
+       maintain {} -> {auto,dry_run:false,sources[],rotated,cleaned,policy,quarantine_dir,note}
+       不传 source = 全部文件来源（journal 来源后端自动跳过）；按天/按大小切割走 copytruncate
+       （写方无需重载），超保留策略的轮转文件移入回收区，可用「撤销上次清理」恢复。
+     后端明确这是「默认行为、非破坏性操作」，无需 confirm；一次点击即执行，结果直接显示计数。
+     不用 dry_run 预演：后端预演不报告切割目标（RotatedTo 只在真执行时赋值），预演页会误导用户。 */
+  function runMaintain() {
+    if (S.maintainBusy) return;
+    S.maintainBusy = true; S.error = ''; S.notice = ''; paintNotices(); paintMaint();
+    invoke('logs.maintain', {}).then(function (d) {
+      if (S.destroyed) return;
+      S.maintainBusy = false;
+      var rotated = d.rotated || 0, cleaned = d.cleaned || 0;
+      var detail = [];
+      (d.sources || []).forEach(function (a) {
+        if (a.skipped) detail.push(a.source + '：跳过（' + a.skipped + '）');
+        else if (a.rotated_to) detail.push(a.source + '：已切割为 ' + a.rotated_to +
+          '（' + (a.rotated_by === 'size' ? '按大小' : '按天') + '）');
+        else if (a.trimmed && a.trimmed.length) detail.push(a.source + '：清理 ' + a.trimmed.length + ' 个');
+      });
+      S.notice = '维护完成：切割 ' + rotated + ' 个文件、清理 ' + cleaned + ' 个过期轮转文件' +
+        (cleaned ? '（进回收区，可「撤销上次清理」恢复）' : '') + '。' +
+        (detail.length ? ' ' + detail.join('；') : '');
+      paintNotices(); paintMaint();
+      loadUsage(); loadSources();
+      if (S.selected) { loadStats(); loadTail(); }
+    }, function (err) {
+      if (S.destroyed) return;
+      S.maintainBusy = false;
+      S.error = '维护失败：' + plainError(err, '维护失败');
+      paintNotices(); paintMaint();
+    });
+  }
   /* 维护区渲染：操作入口常驻；预览/表单按需展开，全部 textContent，不拼 HTML。 */
   function paintMaint() {
     if (!S.maintHost) return;
@@ -982,6 +1027,12 @@
     host.textContent = '';
     var wrap = add(host, el('div', 'logs-usage'));
     var bar = add(wrap, el('div', 'logs-usage-head'));
+    var maintBtn = add(bar, el('button', 'btn btn-primary logs-maint-btn', S.maintainBusy ? '维护中…' : '⚡ 一键维护'));
+    maintBtn.type = 'button';
+    maintBtn.title = '按保留策略先切割、再清理全部日志来源；非破坏性，过期文件进回收区可撤销';
+    maintBtn.setAttribute('aria-label', '立即执行日志自动维护（先切割再清理）');
+    if (S.maintainBusy) { maintBtn.disabled = true; maintBtn.textContent = '维护中…'; }
+    on(maintBtn, runMaintain);
     var retBtn = add(bar, el('button', 'btn btn-ghost logs-clean-btn', '⚙ 保留策略'));
     retBtn.type = 'button';
     retBtn.setAttribute('aria-label', '设置日志保留策略');
