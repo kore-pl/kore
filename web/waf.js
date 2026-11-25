@@ -1,7 +1,7 @@
 /* kore 主壳 · Web 应用防火墙（web/waf.js）——零框架 / 零 CDN / 无外链。
    调用形态（硬约束，docs/FRONTEND.md §业务方法调用形态）：POST /api/v1/invoke/waf/waf.<action>，
    方法名必须带域前缀，裸动词只有插件兼容层才认。
-   读：waf.status / waf.rules / waf.bans / waf.logs；写：waf.toggle / waf.ban / waf.unban；
+   读：waf.status / waf.rules / waf.bans / waf.logs；写：waf.toggle（模式 + 防护等级）/ waf.ban / waf.unban；
    配置：waf.config.get/set 经内核通用配置面板（KoreShell.openConfig）打开。
    两个平面分开呈现：引擎平面（宿主已装的 modsecurity/naxsi/coraza/crowdsec，只读探测）与
    kore 自有的 nft 数据面（封禁集合 + 基础防护规则，可写、经 root-action 通道）。
@@ -32,7 +32,11 @@
       bans: [], bansLoaded: false, bansError: '', bansCode: '', bansHint: '',
       logs: [], logSources: [], logsLoaded: false, logsError: '',
       canWrite: false, locked: true, rootMissing: false, busy: false, notice: '', noticeTone: '',
-      confirmOff: false, modeMsg: '', modeTone: '', banMsg: '', banTone: '',
+      confirmOff: false, confirmMode: '', modeMsg: '', modeTone: '', banMsg: '', banTone: '',
+      // 防护等级（0.5.0+）：值从 status.backend.level 或链上内置规则推断。
+      level: '', levelBusy: false, levelMsg: '', levelTone: '',
+      // 命中分析：独立于「最近记录」列表，按时间范围拉更多记录后在前端聚合。
+      hitSince: '24h', hitLogs: [], hitLoaded: false, hitError: '', hitMsg: '', hitTone: '',
       notInstalled: false, destroyed: false };
   }
   var S = fresh();
@@ -230,6 +234,7 @@
       ['IP 封禁数', be.present ? String(Number(be.banned_count) || 0) : '—'],
       ['已装防护规则', be.present ? String(Number(be.rules_count) || 0) : '—'],
       ['防护模式', modeText(be.mode)],
+      ['防护等级', be.present ? levelText(be.level || levelFromChain()) : '—'],
       ['数据面后端', (be.tool || 'nft') + (be.table ? ' · ' + be.table + '/' + (be.chain || 'input') : '')]
     ].forEach(function (item) {
       var cell = add(grid, el('div', 'waf-cell'));
@@ -259,13 +264,14 @@
     }
     if (S.notice) S.statusHost.parentNode.insertBefore(notice(S.notice, S.noticeTone === 'ok' ? 'ok' : 'fail'),
       S.statusHost.parentNode.firstChild);
-    paintModes(); setLocked(!S.canWrite);
+    S.level = be.level || S.level;
+    paintLevel(); paintModes(); setLocked(!S.canWrite);
   }
 
   // hidePanels：插件未安装时把「模式/名单/添加/规则/日志」面板整体收起。
   function hidePanels(hidden) {
     var flag = hidden === undefined ? true : !!hidden;
-    [S.modePanel, S.bansPanel, S.formPanel, S.rulesPanel, S.addRulePanel, S.logsPanel].forEach(function (p) {
+    [S.modePanel, S.levelPanel, S.hitPanel, S.bansPanel, S.formPanel, S.rulesPanel, S.addRulePanel, S.logsPanel].forEach(function (p) {
       if (p) p.hidden = flag;
     });
   }
@@ -297,11 +303,31 @@
       on(no, function () { S.confirmOff = false; paintModes(); });
       on(yes, function () { S.confirmOff = false; applyMode('off', true, yes); });
     }
+    // 模式切换也要确认：observe → enforce 会立刻开始丢包，enforce → observe 会停止拦截，
+    // 两种都会改变线上行为，不允许「点一下就直接生效」。
+    if (S.confirmMode) {
+      var mbox = add(S.modeHost, el('div', 'waf-confirm'));
+      mbox.setAttribute('role', 'alertdialog');
+      var mtext = S.confirmMode === 'enforce'
+        ? '切换到「直接拦截」后，命中封禁名单 / 扫描限速 / 并发上限的请求会被直接丢弃（客户端看到连接中断）。'
+        : '切换到「只记录不拦截」后，命中规则的请求不再被丢弃，服务器会重新暴露在扫描与暴力破解下（只留日志）。';
+      add(mbox, el('span', null, mtext + '确定切换？'));
+      var myes = add(mbox, el('button', 'btn btn-primary', '确认切换到「' + modeText(S.confirmMode) + '」'));
+      myes.type = 'button';
+      var mno = add(mbox, el('button', 'btn btn-ghost', '取消')); mno.type = 'button';
+      on(mno, function () { S.confirmMode = ''; paintModes(); });
+      on(myes, function () {
+        var target = S.confirmMode; S.confirmMode = ''; applyMode(target, false, myes);
+      });
+    }
   }
   function chooseMode(mode) {
     if (S.busy || S.locked) return;
-    if (mode === 'off') { S.confirmOff = true; S.modeMsg = ''; paintModes(); return; }
-    applyMode(mode, false, null);
+    if (mode === currentMode()) { S.modeMsg = '当前已是「' + modeText(mode) + '」，无需切换。'; S.modeTone = ''; paintModes(); return; }
+    S.modeMsg = ''; S.confirmOff = false; S.confirmMode = '';
+    if (mode === 'off') { S.confirmOff = true; paintModes(); return; }
+    // 观察 ↔ 拦截都是线上行为变化：先给明确提示与确认按钮，再下发。
+    S.confirmMode = mode; paintModes();
   }
   function applyMode(mode, confirmOff, btn) {
     if (S.busy) return;
@@ -433,6 +459,231 @@
     });
   }
 
+  // ---- 防护等级（宽松 / 标准 / 严格）----
+  // 等级是数据面事实：从后端 level 字段读，老版本插件没有该字段时按链上内置规则推断。
+  var LEVELS = [
+    { id: 'loose', title: '宽松', desc: '只保留 IP 封禁名单，不做扫描限速与并发限制。排障或活动期间临时放宽时用。' },
+    { id: 'standard', title: '标准', desc: '封禁名单 + SYN 扫描限速（每源 60 次/秒）+ 单 IP 并发上限 200。日常推荐。' },
+    { id: 'strict', title: '严格', desc: '在标准之上再加：丢弃畸形连接、限制 SSH 暴力破解（每源 10 次/分钟）。对外服务推荐。' }
+  ];
+  function levelText(id) {
+    if (id === 'loose') return '宽松';
+    if (id === 'standard') return '标准';
+    if (id === 'strict') return '严格';
+    return '未启用';
+  }
+  // levelFromChain：老版本插件不给 level 字段时的前端兜底推断（内置规则名判定）。
+  function levelFromChain() {
+    var has = {}, any = false;
+    (S.chain || []).forEach(function (r) {
+      if (!r || !r.builtin || !r.name) return;
+      any = true; has[r.name] = true;
+    });
+    if (!any) return '';
+    if (has['invalid-state'] || has['ssh-rate']) return 'strict';
+    if (has['syn-rate'] || has['conn-rate']) return 'standard';
+    return 'loose';
+  }
+  function currentMode() { return (S.status && S.status.backend && S.status.backend.mode) || 'off'; }
+  function currentLevel() {
+    var be = (S.status && S.status.backend) || {};
+    return be.level || levelFromChain() || S.level || '';
+  }
+  function applyLevel(level) {
+    if (S.levelBusy || S.busy) return;
+    var mode = currentMode();
+    if (mode === 'off') { return; }
+    if (level === currentLevel()) { return; }
+    S.levelBusy = true; S.levelMsg = '正在把防护等级切到「' + levelText(level) + '」并回读校验…'; S.levelTone = '';
+    paintLevel();
+    invoke('waf.toggle', { mode: mode, level: level }).then(function (data) {
+      if (S.destroyed) return;
+      S.levelBusy = false;
+      var applied = !!(data && data.applied && data.verified);
+      S.level = (data && data.level) || level;
+      S.levelMsg = applied
+        ? '已切换为「' + levelText(level) + '」：' + levelText(level) + '等级已生效（' +
+          ((data.rules || []).length) + ' 条内置规则，已回读确认）。'
+        : '等级没有确认生效' + (data && data.hint ? '：' + data.hint : '（请刷新后再看当前等级）');
+      S.levelTone = applied ? 'ok' : 'fail';
+      paintLevel(); refreshAll();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.levelBusy = false;
+      S.levelMsg = failureText(err, '切换防护等级'); S.levelTone = 'fail';
+      if (err && err.code === 'E_NEED_ROOT') setLocked(true);
+      paintLevel();
+    });
+  }
+  function paintLevel() {
+    if (!S.levelHost) return;
+    S.levelHost.textContent = '';
+    var level = currentLevel(), mode = currentMode();
+    var wrap = add(S.levelHost, el('div', 'waf-levels'));
+    LEVELS.forEach(function (item) {
+      var b = add(wrap, el('button', 'waf-level'));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', level === item.id ? 'true' : 'false');
+      b.disabled = S.locked || S.busy || S.levelBusy || mode === 'off';
+      if (mode === 'off') b.title = '先选择一种防护模式（只记录或直接拦截），等级才会生效';
+      else if (S.locked) b.title = '需要 root 提权通道（见状态卡）';
+      add(b, el('span', 'waf-level-title', item.title));
+      add(b, el('span', 'waf-level-desc', item.desc));
+      on(b, function () { applyLevel(item.id); });
+    });
+    if (mode === 'off') {
+      add(S.levelHost, el('p', 'field-hint', '当前防护已关闭：开启「只记录不拦截」或「直接拦截」后再选等级。'));
+    }
+    if (S.levelMsg) {
+      add(S.levelHost, el('div', 'waf-msg' + (S.levelTone === 'fail' ? ' is-fail' : (S.levelTone === 'ok' ? ' is-ok' : '')), S.levelMsg));
+    }
+  }
+
+  // ---- 命中分析（Top 来源 IP / Top 命中规则 + 一键封禁）----
+  // 图表口径（G-32）：这里只用静态 CSS 条，不引入图表库、不建实例、无定时器；
+  // 每个条同时给出数值文本与 title（hover/tap 可读），单位「次」写在值里。
+  var HIT_RANGES = [
+    { v: '1h', label: '最近 1 小时' }, { v: '24h', label: '最近 24 小时' }, { v: '7d', label: '最近 7 天' }
+  ];
+  function loadHits() {
+    if (!S.hitHost) return;
+    S.hitLoaded = false; S.hitError = ''; S.hitMsg = ''; paintHits();
+    invoke('waf.logs', { limit: 200, since: S.hitSince }).then(function (data) {
+      if (S.destroyed) return;
+      S.hitLogs = (data && data.entries) || [];
+      S.hitLoaded = true; paintHits();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.hitError = failureText(err, '读取命中记录'); S.hitLoaded = true; paintHits();
+    });
+  }
+  function aggregateHits(entries) {
+    var ips = {}, rules = {};
+    (entries || []).forEach(function (entry) {
+      var blocked = entry && entry.action === 'blocked';
+      var ip = String((entry && entry.ip) || '').trim();
+      if (ip) {
+        if (!ips[ip]) ips[ip] = { ip: ip, count: 0, blocked: 0, last: '' };
+        ips[ip].count++; if (blocked) ips[ip].blocked++;
+        if (!ips[ip].last && entry.time) ips[ip].last = entry.time;
+      }
+      var rule = String((entry && entry.rule_id) || '').trim() || '（未标注规则）';
+      if (!rules[rule]) rules[rule] = { id: rule, count: 0, blocked: 0 };
+      rules[rule].count++; if (blocked) rules[rule].blocked++;
+    });
+    var ipList = [], ruleList = [];
+    for (var k in ips) if (Object.prototype.hasOwnProperty.call(ips, k)) ipList.push(ips[k]);
+    for (var r in rules) if (Object.prototype.hasOwnProperty.call(rules, r)) ruleList.push(rules[r]);
+    ipList.sort(function (a, b) { return b.count - a.count || (a.ip < b.ip ? -1 : 1); });
+    ruleList.sort(function (a, b) { return b.count - a.count || (a.id < b.id ? -1 : 1); });
+    return { ips: ipList, rules: ruleList };
+  }
+  // hitBar 返回 { row, line }：line 是「进度条 + 操作按钮」那一行，调用方可往里放按钮。
+  function hitBar(label, count, max, detail) {
+    var row = el('div', 'waf-hit-row');
+    var head = add(row, el('div', 'waf-hit-head'));
+    add(head, el('span', 'waf-hit-label', label));
+    add(head, el('span', 'waf-hit-value', count + ' 次'));
+    var line = add(row, el('div', 'waf-hit-line'));
+    var track = add(line, el('div', 'waf-hit-track'));
+    var bar = add(track, el('span', 'waf-hit-bar'));
+    bar.style.width = (max > 0 ? Math.max(2, Math.round(count / max * 100)) : 0) + '%';
+    bar.title = label + '：命中 ' + count + ' 次' + (detail ? '（' + detail + '）' : '');
+    if (detail) add(row, el('span', 'waf-hit-detail', detail));
+    return { row: row, line: line };
+  }
+  function isBanned(ip) {
+    for (var i = 0; i < S.bans.length; i++) if (S.bans[i] && S.bans[i].ip === ip) return true;
+    return false;
+  }
+  function banFromHit(ip, btn) {
+    if (!S.canWrite || S.busy) return;
+    S.busy = true; if (btn) { btn.disabled = true; btn.textContent = '封禁中…'; }
+    S.hitMsg = '正在把 ' + ip + ' 加入封禁名单（1 天）…'; S.hitTone = ''; paintHits();
+    invoke('waf.ban', { ip: ip, ttl_s: 86400, reason: '命中分析：一键封禁' }).then(function (data) {
+      if (S.destroyed) return;
+      S.busy = false;
+      if (data && data.banned) {
+        S.hitMsg = '已封禁 ' + (data.ip || ip) + '（' + setText(data.set) + '，1 天后自动解封；封禁名单里可手动解封）。';
+        S.hitTone = 'ok'; loadBans(); loadHits();
+      } else {
+        S.hitMsg = '没有确认到封禁结果' + (data && data.hint ? '：' + data.hint : '（请刷新封禁名单核对）');
+        S.hitTone = 'fail'; paintHits();
+      }
+    }, function (err) {
+      if (S.destroyed) return;
+      S.busy = false;
+      S.hitMsg = failureText(err, '一键封禁'); S.hitTone = 'fail';
+      if (err && err.code === 'E_NEED_ROOT') setLocked(true);
+      paintHits();
+    });
+  }
+  function paintHits() {
+    if (S.notInstalled) { if (S.hitHost) S.hitHost.textContent = ''; return; }
+    if (!S.hitHost) return;
+    S.hitHost.textContent = '';
+    if (S.hitMeta) S.hitMeta.textContent = S.hitLoaded ? (S.hitLogs.length + ' 条记录') : '';
+    if (S.hitMsg) {
+      add(S.hitHost, el('div', 'waf-msg' + (S.hitTone === 'fail' ? ' is-fail' : (S.hitTone === 'ok' ? ' is-ok' : '')), S.hitMsg));
+    }
+    if (S.hitError) { S.hitHost.appendChild(notice(S.hitError, 'fail')); return; }
+    if (!S.hitLoaded) { add(S.hitHost, el('div', 'waf-loading', '正在统计命中记录…')); return; }
+    var agg = aggregateHits(S.hitLogs);
+    var blocked = 0;
+    S.hitLogs.forEach(function (entry) { if (entry && entry.action === 'blocked') blocked++; });
+    var summary = add(S.hitHost, el('div', 'waf-hit-summary'));
+    [
+      ['记录数', S.hitLogs.length + ' 条'],
+      ['已拦截', blocked + ' 条'],
+      ['仅记录', (S.hitLogs.length - blocked) + ' 条'],
+      ['独立来源 IP', agg.ips.length + ' 个']
+    ].forEach(function (item) {
+      var cell = add(summary, el('div', 'waf-cell'));
+      add(cell, el('span', 'waf-cell-label', item[0]));
+      add(cell, el('span', 'waf-cell-value', item[1]));
+    });
+    if (!S.hitLogs.length) {
+      var sev = S.logSources.filter(function (s) { return s.existing !== false && s.exists !== false; });
+      var text = sev.length
+        ? '这个时间范围内没有命中记录：可以换个时间范围，或确认引擎的审计日志已开启（SecAuditEngine RelevantOnly）。'
+        : '没有可统计的引擎日志：装好 ModSecurity / Naxsi 并启用审计日志后，这里会按来源 IP 与命中规则聚合。' +
+          'kore 自有的 nft 防护是网络层丢包，只记计数器——命中包数在上方「防护规则」表里看。';
+      S.hitHost.appendChild(emptyBlock(text));
+      return;
+    }
+    var topIps = agg.ips.slice(0, 8), topRules = agg.rules.slice(0, 8);
+    var maxIp = topIps.length ? topIps[0].count : 1;
+    var maxRule = topRules.length ? topRules[0].count : 1;
+
+    var ipsPanel = add(S.hitHost, el('div', 'waf-hit-block'));
+    add(ipsPanel, el('div', 'waf-hit-title', 'Top 来源 IP'));
+    topIps.forEach(function (item) {
+      var bar = hitBar(item.ip, item.count, maxIp,
+        '拦截 ' + item.blocked + ' 次 · 仅记录 ' + (item.count - item.blocked) + ' 次' + (item.last ? ' · 最近 ' + item.last : ''));
+      var ops = add(bar.line, el('span', 'waf-hit-ops'));
+      if (isBanned(item.ip)) {
+        add(ops, el('span', 'chip chip-na', '已在封禁名单'));
+      } else {
+        var btn = add(ops, el('button', 'btn btn-ghost waf-hit-ban', '一键封禁 1 天'));
+        btn.type = 'button';
+        btn.disabled = !S.canWrite || S.busy;
+        btn.title = S.canWrite ? '把这个来源 IP 写进 kore 自有 nft 封禁集合（1 天后自动解封）'
+          : '需要 root 提权通道（见状态卡）';
+        on(btn, function () { banFromHit(item.ip, btn); });
+      }
+      ipsPanel.appendChild(bar.row);
+    });
+
+    var rulesPanel = add(S.hitHost, el('div', 'waf-hit-block'));
+    add(rulesPanel, el('div', 'waf-hit-title', 'Top 命中规则'));
+    topRules.forEach(function (item) {
+      rulesPanel.appendChild(hitBar(item.id, item.count, maxRule, '拦截 ' + item.blocked + ' 次').row);
+    });
+    add(S.hitHost, el('p', 'field-hint',
+      '统计来自引擎审计日志；kore 自有 nft 规则（封禁 / 限速 / 并发）只记计数器，其命中在「防护规则」表的「命中包数」列。' +
+      '「一键封禁」写进 kore 自有的 nft 封禁集合，不改宿主已有防火墙；封禁会与「封禁名单」面板同一份数据。'));
+  }
+
   // ---- 防护规则（内置只可启停；自定义可增删启停）----
   // 后端契约（waf 0.4.1+）：waf.rules 额外返回 chain[]（name/expr/action/enabled/builtin/handle）；
   // rule.add 只收 {name, expr, action}，expr 必须命中受控匹配器白名单（不接受自由 nft 语法）；
@@ -445,6 +696,23 @@
     { v: 'ct state', label: '连接状态（ct state）', hint: 'new / established / related / invalid，可逗号组合', need: true },
     { v: 'tcp flags syn', label: 'SYN 扫描（tcp flags syn）', hint: '这个匹配器不需要值', need: false }
   ];
+  // 规则模板：把「用户想干什么」放在前面，匹配器/动作由模板带出（预设优先，仍可改）。
+  var RULE_PRESETS = [
+    { id: 'ip-block', label: '封禁来源 IP（黑名单）', matcher: 'ip saddr', action: 'drop', hint: '203.0.113.7 或 203.0.113.0/24' },
+    { id: 'port-block', label: '限制端口', matcher: 'tcp dport', action: 'drop', hint: '22 或 8080' },
+    { id: 'invalid-drop', label: '丢弃畸形连接', matcher: 'ct state', action: 'drop', value: 'invalid' },
+    { id: 'ip-allow', label: '放行办公 IP（白名单）', matcher: 'ip saddr', action: 'accept', hint: '198.51.100.7' }
+  ];
+  function applyPreset(preset) {
+    if (!S.mMatcher || !S.mAction || !S.mValue) return;
+    S.mMatcher.value = preset.matcher;
+    S.mAction.value = preset.action;
+    var def = matcherDef(preset.matcher);
+    S.mValue.disabled = !def.need;
+    S.mValue.placeholder = preset.hint || def.hint;
+    S.mValue.value = preset.value || '';
+    if (def.need && !preset.value) S.mValue.focus();
+  }
   function matcherDef(v) {
     for (var i = 0; i < MATCHERS.length; i++) if (MATCHERS[i].v === v) return MATCHERS[i];
     return MATCHERS[0];
@@ -630,9 +898,11 @@
         : '后端只接受上面 6 种匹配器，值不合法会被拒绝；提交后会回读 nft 链确认生效。';
     }
     [S.mName, S.mMatcher, S.mValue, S.mAction].forEach(function (n) { if (n) n.disabled = S.locked || S.rBusy; });
-    // 解锁后必须重画模式按钮：它们的 disabled 由 paintModes 读 S.locked 决定，
+    // 解锁后必须重画模式/等级/命中按钮：它们的 disabled 由各自 paint 读 S.locked 决定，
     // 只改 S.locked 不重画会留下「按钮一直灰着」的死状态（真机截图抓到）。
     if (S.modeHost) paintModes();
+    if (S.levelHost) paintLevel();
+    if (S.hitHost && S.hitLoaded) paintHits();
   }
 
   // ---- 数据加载 ----
@@ -680,7 +950,7 @@
       S.logsError = err.message; S.logsLoaded = true; paintLogs();
     });
   }
-  function refreshAll() { loadStatus(); loadBans(); loadRules(); loadLogs(); }
+  function refreshAll() { loadStatus(); loadBans(); loadRules(); loadLogs(); loadHits(); }
 
   function injectCSS() {
     if (document.getElementById('kore-waf-css')) return;
@@ -726,11 +996,36 @@
       '.waf-msg.is-fail{color:var(--kore-danger);}',
       '.waf-msg.is-ok{color:var(--kore-success);}',
       '.waf-empty{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-4);color:var(--kore-text-3);font-size:var(--kore-font-13);}',
+      '.waf-level-host{padding:0 var(--kore-space-4) var(--kore-space-3);}',
+      '.waf-levels{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);}',
+      '.waf-level{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-height:var(--kore-touch);padding:var(--kore-space-2) var(--kore-space-3);text-align:left;color:var(--kore-text-1);background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);cursor:pointer;}',
+      '.waf-level[aria-pressed="true"]{border-color:var(--kore-info);background:var(--kore-bg-2);}',
+      '.waf-level:disabled{cursor:not-allowed;opacity:.6;}',
+      '.waf-level-title{font-weight:600;font-size:var(--kore-font-13);}',
+      '.waf-level-desc{color:var(--kore-text-3);font-size:var(--kore-font-12);line-height:1.5;}',
+      '.waf-hits{display:flex;flex-direction:column;gap:var(--kore-space-3);padding:0 var(--kore-space-4) var(--kore-space-4);}',
+      '.waf-hit-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kore-space-2);}',
+      '.waf-hit-block{display:flex;flex-direction:column;gap:var(--kore-space-2);}',
+      '.waf-hit-title{color:var(--kore-text-2);font-weight:600;font-size:var(--kore-font-13);}',
+      '.waf-hit-row{display:flex;flex-direction:column;gap:2px;min-width:0;}',
+      '.waf-hit-head{display:flex;justify-content:space-between;gap:var(--kore-space-2);font-size:var(--kore-font-12);}',
+      '.waf-hit-label{color:var(--kore-text-2);word-break:break-all;}',
+      '.waf-hit-value{font-variant-numeric:tabular-nums;white-space:nowrap;}',
+      '.waf-hit-line{display:flex;align-items:center;gap:var(--kore-space-2);}',
+      '.waf-hit-track{flex:1 1 auto;height:6px;overflow:hidden;background:var(--kore-bg-2);border-radius:3px;}',
+      '.waf-hit-bar{display:block;height:100%;background:var(--kore-info);border-radius:3px;}',
+      '.waf-hit-ops{flex:0 0 auto;display:flex;gap:var(--kore-space-1);}',
+      '.waf-hit-detail{color:var(--kore-text-3);font-size:var(--kore-font-12);}',
+      '.waf-hit-ban{min-height:32px;padding:var(--kore-space-1) var(--kore-space-2);font-size:var(--kore-font-12);}',
+      '.waf-hit-range{min-height:32px;padding:var(--kore-space-1) var(--kore-space-2);font-size:var(--kore-font-12);}',
       '.waf-empty span{flex:1 1 260px;}',
       '@media (max-width:639px){',
       '.waf-grid{grid-template-columns:1fr;}',
       '.waf-form{grid-template-columns:1fr;}',
       '.waf-mode{flex:1 1 100%;}',
+      '.waf-level{flex:1 1 100%;}',
+      '.waf-hit-summary{grid-template-columns:repeat(2,minmax(0,1fr));}',
+      '.waf-hit-ban{min-height:44px;}',
       '.waf-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}',
       '.waf-table,.waf-table tbody,.waf-table tr,.waf-table td{display:block;width:100%;}',
       '.waf-table tr{padding:var(--kore-space-2) 0 var(--kore-space-3);border-top:1px solid var(--kore-border-2);}',
@@ -775,6 +1070,11 @@
     add(S.root, modeP.panel); S.modePanel = modeP.panel;
     S.modeHost = add(modeP.panel, el('div', 'waf-mode-host'));
 
+    // ②b 防护等级（在模式之下：先有模式，等级才有落点）
+    var levelP = panel('防护等级', '宽松 / 标准 / 严格');
+    add(S.root, levelP.panel); S.levelPanel = levelP.panel;
+    S.levelHost = add(levelP.panel, el('div', 'waf-level-host'));
+
     // ③ 封禁名单
     var bans = panel('封禁名单', ''); add(S.root, bans.panel); S.bansPanel = bans.panel;
     S.banCount = add(bans.meta, el('span', null, ''));
@@ -816,6 +1116,17 @@
     S.mValue.placeholder = matcherDef('ip saddr').hint; S.mValue.setAttribute('autocomplete', 'off');
     S.mAction = el('select', 'field-input');
     [['drop', '拦截（drop）'], ['accept', '放行（accept）']].forEach(function (a) { var o = el('option', null, a[1]); o.value = a[0]; S.mAction.appendChild(o); });
+    var presetSel = el('select', 'field-input');
+    RULE_PRESETS.forEach(function (preset) {
+      var opt = el('option', null, preset.label); opt.value = preset.id; presetSel.appendChild(opt);
+    });
+    var pf = add(rform, el('label', 'field'));
+    add(pf, el('span', 'field-label', '规则模板')); add(pf, presetSel);
+    on(presetSel, function () {
+      var picked = null;
+      RULE_PRESETS.forEach(function (preset) { if (preset.id === presetSel.value) picked = preset; });
+      if (picked) applyPreset(picked);
+    }, 'change');
     var nf = add(rform, el('label', 'field')); add(nf, el('span', 'field-label', '规则名')); add(nf, S.mName);
     var mf = add(rform, el('label', 'field')); add(mf, el('span', 'field-label', '匹配条件')); add(mf, S.mMatcher);
     var vf = add(rform, el('label', 'field')); add(vf, el('span', 'field-label', '匹配值')); add(vf, S.mValue);
@@ -824,12 +1135,31 @@
     S.mBtn = add(rops, el('button', 'btn btn-primary', '新增规则')); S.mBtn.type = 'button'; on(S.mBtn, submitRule);
     S.rMsgHost = add(rops, el('span', 'waf-msg', ''));
     S.ruleHint = add(addRule.panel, el('p', 'field-hint', ''));
+    add(addRule.panel, el('p', 'field-hint',
+      '按 URL 路径 / User-Agent 拦截属于 HTTP 层规则，需要宿主装 ModSecurity / Naxsi 并启用其规则文件——' +
+      'kore 只写自己 kore_waf 表里的网络层规则，不改宿主的 nginx / Apache 配置。'));
     on(S.mMatcher, function () {
       var def = matcherDef(S.mMatcher.value);
       S.mValue.placeholder = def.hint;
       S.mValue.disabled = !def.need;
       if (!def.need) S.mValue.value = '';
     }, 'change');
+
+    // ⑤b 命中分析（Top IP / Top 规则 + 一键封禁）
+    var hits = panel('命中分析', '引擎审计日志聚合 · 一键封禁可疑 IP');
+    add(S.root, hits.panel); S.hitPanel = hits.panel;
+    S.hitMeta = add(hits.meta, el('span', null, ''));
+    var hitCtl = add(hits.meta, el('div', 'actions'));
+    var rangeSel = add(hitCtl, el('select', 'field-input waf-hit-range'));
+    HIT_RANGES.forEach(function (item) {
+      var opt = el('option', null, item.label); opt.value = item.v;
+      if (item.v === S.hitSince) opt.selected = true;
+      rangeSel.appendChild(opt);
+    });
+    on(rangeSel, function () { S.hitSince = rangeSel.value; loadHits(); }, 'change');
+    var hitRefresh = add(hitCtl, el('button', 'btn btn-ghost', '刷新')); hitRefresh.type = 'button';
+    on(hitRefresh, loadHits);
+    S.hitHost = add(hits.panel, el('div', 'waf-hits'));
 
     // ⑥ 拦截日志
     var logs = panel('最近拦截记录', '引擎平面，只读'); add(S.root, logs.panel); S.logsPanel = logs.panel;
@@ -838,7 +1168,7 @@
     S.logsHost = add(logs.panel, el('div', 'waf-logs'));
 
     // fail-closed：状态回来前先锁表单，避免"打开就能填、提交才知道没权限"。
-    setLocked(true); paintStatus(); paintModes(); paintBans(); paintRules(); paintLogs();
+    setLocked(true); paintStatus(); paintModes(); paintLevel(); paintBans(); paintRules(); paintHits(); paintLogs();
     refreshAll();
     return { destroy: function () { S.destroyed = true; } };
   }
