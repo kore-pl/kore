@@ -1,14 +1,18 @@
 /* Kore 主壳 · 关键文件完整性（web/integrity.js）——零框架 / 零 CDN / 无外链。
    依据：kore-plugin-integrity/info.json 的 8 个方法（integrity.baseline / baseline.list / check /
-   restore / status / verify_file / schedule.set / schedule.get）+ internal/integrity 的响应契约，
-   本轮只补前端缺口：不改内核、不加方法、不引依赖。
-   契约（kore-plugin-integrity/internal/integrity/methods.go:88-190）：status{has_baseline,created_at,
-   entries,total_bytes,last_check_at,last_check_ok,baseline_count,latest_id} ·
-   baseline.list{baselines[]{id,created_at,note,entries,total_bytes,last_check_at,last_check_ok,current},
-   count,keep} · baseline{id,entries,total_bytes,duration_ms,warnings?} ·
-   check{ok,added[],removed[],modified[]{path,old_sha256,new_sha256,old_mode,new_mode,changes[]},
-   changes[]{type,path,severity},checked_at,unchanged,truncated,summary,warnings?} ·
-   restore{from_id,to_id,restored,verified,changes,message,hint} · verify_file{match,actual_sha256}。
+   restore / status / verify_file / schedule.set / schedule.get）+ internal/integrity 的响应契约：
+   不改内核、不加方法、不引依赖。
+   契约（0.6.0 起，kore-plugin-integrity/internal/integrity/methods.go）：status{has_baseline,
+   created_at,entries,total_bytes,last_check_at,last_check_ok,baseline_count,latest_id,
+   scan_history[]{checked_at,baseline_id,ok,added,removed,modified,unchanged,skipped,truncated?,
+   duration_ms?}} · baseline.list{baselines[]{id,created_at,note,entries,total_bytes,last_check_at,
+   last_check_ok,current,roots[]},count,keep,roots[]} · baseline{id,entries,total_bytes,duration_ms,
+   warnings?} · check{ok,added[],removed[],modified[]{path,old_sha256,new_sha256,old_mode,new_mode,
+   old_size,new_size,size_delta,changes[]},changes[]{type,path,severity},checked_at,unchanged,
+   truncated,summary,warnings?} · restore{from_id,to_id,restored,verified,changes,message,hint} ·
+   verify_file{match,actual_sha256}。
+   **向后兼容是硬要求**：0.6.0 之前的插件不返回 scan_history / roots / 体积三件套时，
+   本文件逐项回退到旧口径（本页 localStorage 记录 / 记忆路径 / 不显示体积），任何一处都不许崩。
    POST /api/v1/invoke/integrity/integrity.<verb>；写操作带 X-Kore-CSRF 双提交。
    本轮补齐的用户可见缺口：① 变更清单按时间范围 / 类型 / 高危 / 路径筛选，高危目录（/etc、Web 根）
    高亮并在概览计数；② 单条变更「接受」与「恢复…」指引 + 「校验是否已恢复」；③ 一键导出变更清单 CSV；
@@ -120,10 +124,25 @@
     var v = Number(n) || 0; if (v < 1024) return v + ' B'; if (v < 1048576) return (v / 1024).toFixed(1) + ' KiB';
     return v < 1073741824 ? (v / 1048576).toFixed(1) + ' MiB' : (v / 1073741824).toFixed(2) + ' GiB';
   }
+  // 体积差：+200 B / −1.2 KiB / ±0 B。符号用 ASCII +- 以外要保证等宽可读，这里用 + 与 −。
+  function fmtDelta(n) {
+    var v = Number(n) || 0;
+    if (v === 0) return '±0 B';
+    return (v > 0 ? '+' : '−') + fmtBytes(Math.abs(v));
+  }
+  // 后端是否真的给了体积字段：新插件恒给（0 也是有效值），旧插件整个键缺失 → undefined。
+  function hasNum(v) { return typeof v === 'number' && isFinite(v); }
   function fmtTime(s) {
     if (!s) return '—'; var d = new Date(s); if (isNaN(d.getTime())) return String(s);
     function p(v) { return v < 10 ? '0' + v : String(v); }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  // 秒级时间：同一次排查里连扫两次很常见，分钟级两行会显示成同一时刻（看起来像重复记录）。
+  function fmtTimeSec(s) {
+    var base = fmtTime(s);
+    if (!s || base === '—') return base;
+    var d = new Date(s); if (isNaN(d.getTime())) return base;
+    return base + ':' + (d.getSeconds() < 10 ? '0' + d.getSeconds() : String(d.getSeconds()));
   }
   function short(h) { return h ? String(h).slice(0, 8) : '—'; }
   // 基线 id 形如 bl-20261124-0210-7f3c9a12：前 8 位常常相同，列表里必须露出尾部才分得清。
@@ -202,6 +221,38 @@
     if (keys.length > 20) keys.slice(0, keys.length - 20).forEach(function (k) { delete S.rootMap[k]; });
     writeLS(LS_ROOTS, S.rootMap);
   }
+  // ---------------- 扫描历史：插件记录（0.6.0 起）与本页明细的双源 ----------------
+  // 插件的 scan_history 只有汇总计数（落盘上界 ~4 KiB，G-03），逐文件明细仍在本页 history：
+  // 两者按 checked_at 对齐，用户点「看明细」时只有本页存过那一次才能跳。
+  function backendHistory() {
+    var list = S.status && S.status.scan_history;
+    return Array.isArray(list) ? list : null;
+  }
+  function localRunAt(at) {
+    if (!at) return null;
+    var found = null;
+    (S.history || []).forEach(function (run) { if (!found && run.at === at) found = run; });
+    return found;
+  }
+  function historyItems() {
+    var backend = backendHistory(), out = [];
+    if (backend && backend.length) {
+      backend.forEach(function (rec) {
+        out.push({ at: rec.checked_at || '', ok: !!rec.ok, added: rec.added || 0, modified: rec.modified || 0,
+          removed: rec.removed || 0, unchanged: rec.unchanged || 0, skipped: rec.skipped || 0,
+          truncated: !!rec.truncated, duration: rec.duration_ms || 0, baseline: rec.baseline_id || '', source: 'plugin' });
+      });
+      return out;
+    }
+    // 旧插件 / 还没扫描：回退到本页记录（与原行为一致），source 用于如实标注来源。
+    (S.history || []).forEach(function (run) {
+      var sum = run.summary || {};
+      out.push({ at: run.at, ok: !!run.ok, added: sum.added || 0, modified: sum.modified || 0,
+        removed: sum.removed || 0, unchanged: sum.unchanged || (run.unchanged || 0), skipped: sum.skipped || 0,
+        truncated: !!run.truncated, duration: 0, baseline: run.baseline_id || '', source: 'local' });
+    });
+    return out;
+  }
   // ---------------- 变更清单：分类 / 高危判定 / 去重 / 筛选 ----------------
   function startsWithAny(p, list) {
     for (var i = 0; i < list.length; i++) if (p.indexOf(list[i]) === 0) return true;
@@ -216,15 +267,21 @@
   function rowsFromCheck(result, runAt) {
     var rows = [], sev = Object.create(null), changes = result.changes || [], mods = result.modified || [], i;
     for (i = 0; i < changes.length; i++) sev[changes[i].path] = changes[i].severity;
-    function push(type, path, oldSha, newSha, oldMode, newMode, list) {
+    function push(type, path, oldSha, newSha, oldMode, newMode, list, oldSize, newSize, sizeDelta) {
       var risk = riskOf(path);
       rows.push({ type: type, path: path, risk: risk.key, riskLabel: risk.label, riskTone: risk.tone, high: risk.high,
         severity: sev[path] || (risk.high ? 'critical' : 'warning'),
         oldSha: oldSha || '', newSha: newSha || '', oldMode: oldMode || '', newMode: newMode || '',
+        // 体积只在插件真给了数字时才置位；旧插件 → 保持 null，界面显示「—」而不是 0 B。
+        oldSize: hasNum(oldSize) ? oldSize : null, newSize: hasNum(newSize) ? newSize : null,
+        sizeDelta: hasNum(sizeDelta) ? sizeDelta : null,
         changes: list || [], at: runAt });
     }
     for (i = 0; i < (result.removed || []).length; i++) push('removed', result.removed[i]);
-    for (i = 0; i < mods.length; i++) push('modified', mods[i].path, mods[i].old_sha256, mods[i].new_sha256, mods[i].old_mode, mods[i].new_mode, mods[i].changes);
+    for (i = 0; i < mods.length; i++) {
+      push('modified', mods[i].path, mods[i].old_sha256, mods[i].new_sha256, mods[i].old_mode, mods[i].new_mode,
+        mods[i].changes, mods[i].old_size, mods[i].new_size, mods[i].size_delta);
+    }
     for (i = 0; i < (result.added || []).length; i++) push('added', result.added[i]);
     return rows;
   }
@@ -237,6 +294,8 @@
   }
   function runsInRange() {
     var list = (S.history || []).slice(), id = S.filters.range;
+    // 从「扫描历史」锁定了某一次扫描：只看那一次的明细（本页没存过则为空，如实提示）。
+    if (S.filters.pinAt) return list.filter(function (run) { return run.at === S.filters.pinAt; });
     if (id === 'latest') return list.slice(0, 1);
     var from = rangeStart(id);
     if (!from) return list;
@@ -257,13 +316,21 @@
     });
     return out;
   }
+  // 体积变化文案：1.2 KiB → 1.4 KiB (+200 B)。插件只给旧版本（0.6.0 前）没有该字段时返回 ''。
+  function sizeText(row) {
+    // 大小没变就不占版面（只改权限的行会走到这里）：sha256 那一栏已经说明内容变了。
+    if (row.oldSize === null || row.newSize === null || row.oldSize === row.newSize) return '';
+    return fmtBytes(row.oldSize) + ' → ' + fmtBytes(row.newSize) +
+      ' (' + fmtDelta(row.sizeDelta === null ? row.newSize - row.oldSize : row.sizeDelta) + ')';
+  }
   function changeText(row) {
     if (row.type === 'added') return '基线里没有，现在出现';
     if (row.type === 'removed') return '基线里有，现在消失';
     var parts = [];
     if (row.oldSha || row.newSha) parts.push('指纹 ' + short(row.oldSha) + ' → ' + short(row.newSha));
+    var size = sizeText(row); if (size) parts.push('体积 ' + size);
     if (row.oldMode !== row.newMode) parts.push('权限 ' + (row.oldMode || '—') + ' → ' + (row.newMode || '—'));
-    (row.changes || []).forEach(function (c) { if (String(c).indexOf('mode') < 0) parts.push(String(c)); });
+    (row.changes || []).forEach(function (c) { if (String(c).indexOf('mode') < 0 && String(c) !== 'sha256') parts.push(String(c)); });
     return parts.length ? parts.join(' · ') : '内容或权限位有变化';
   }
   function parseParams(raw) {
@@ -271,8 +338,10 @@
     if (typeof raw === 'string') { try { return JSON.parse(raw); } catch (e) { return null; } }
     return typeof raw === 'object' ? raw : null;
   }
-  // 扫描范围：优先本页记录的当前基线路径，其次定时扫描记录里已提交的路径（都不改后端）。
+  // 扫描范围：优先插件回的真值（baseline.list.roots，0.6.0 起），
+  // 其次本页记录的当前基线路径，最后从定时扫描记录里已提交的路径反读（0.6.0 前的旧口径）。
   function scanScope() {
+    if (S.listRoots && S.listRoots.length) return S.listRoots.slice(0, 64);
     var id = S.status && S.status.latest_id;
     if (id && S.rootMap && S.rootMap[id] && S.rootMap[id].length) return S.rootMap[id].slice();
     var roots = [];
@@ -313,7 +382,10 @@
     if (S.notice) host.appendChild(noticeCard(S.notice.title, S.notice.lines, S.notice.tone));
   }
   // ---------------- 概览：基线状态 + 最近一次扫描结论 + 扫描范围 + 一键动作 ----------------
-  function paintOverview() {
+  // 概览与扫描历史共用一次重绘入口：状态一刷新，两处计数必须同时跟上，避免"概览说 2 条、
+  // 历史说 3 次扫描"的自相矛盾。
+  function paintOverview() { paintStatus(); paintHistory(); }
+  function paintStatus() {
     var host = S.overviewHost; if (!host) return; host.textContent = '';
     if (S.error) {
       var ebox = noticeCard('状态读取失败', [S.error + (S.hint ? '（提示：' + S.hint + '）' : '')], 'warn');
@@ -343,18 +415,24 @@
         var cell = add(grid, el('div', 'int-stat'));
         add(cell, el('span', 'int-stat-label', kv[0])); add(cell, el('span', 'int-stat-value', kv[1]));
       });
-    // 最近一次扫描结果摘要：本页有记录就用记录（含高危计数），否则只如实说「本页无记录」。
-    var sum = latest && latest.summary ? latest.summary : null, srow = add(body, el('div', 'int-sumrow'));
+    // 最近一次扫描结果摘要：本页有明细就用明细（含高危计数）；只有插件汇总时（换浏览器后）
+    // 用插件的计数并明说没有逐条明细；两者都没有才说「本页无记录」。
+    var sum = latest && latest.summary ? latest.summary : null;
+    var backendLatest = historyItems()[0] || null;
+    if (!sum && backendLatest) sum = { added: backendLatest.added, modified: backendLatest.modified,
+      removed: backendLatest.removed, unchanged: backendLatest.unchanged, skipped: backendLatest.skipped };
+    var srow = add(body, el('div', 'int-sumrow'));
     if (sum) {
-      var highCount = 0;
-      (latest.rows || []).forEach(function (r) { if (r.high) highCount++; });
+      var highCount = 0, hasDetail = !!(latest && latest.rows);
+      if (hasDetail) (latest.rows || []).forEach(function (r) { if (r.high) highCount++; });
       [['新增', sum.added || 0, 'warn'], ['修改', sum.modified || 0, 'warn'], ['删除', sum.removed || 0, 'fail'],
-        ['高危', highCount, 'fail'], ['未变化', sum.unchanged || (latest.unchanged || 0), 'na']].forEach(function (kv) {
+        ['高危', hasDetail ? highCount : '—', 'fail'], ['未变化', sum.unchanged || (hasDetail && latest.unchanged) || 0, 'na']].forEach(function (kv) {
         var box = add(srow, el('div', 'int-sum int-sum-' + kv[2]));
         add(box, el('span', 'int-sum-num', kv[1])); add(box, el('span', 'int-sum-label', kv[0]));
       });
-      add(body, el('p', 'field-hint', '这次扫描：' + fmtTime(latest.at) +
-        (latest.truncated ? '（结果被条目上限截断，结论可能不完整）' : '') + '；点「变更追踪」可按时间范围回看。'));
+      add(body, el('p', 'field-hint', '这次扫描：' + fmtTime(hasDetail ? latest.at : backendLatest.at) +
+        (hasDetail ? (latest.truncated ? '（结果被条目上限截断，结论可能不完整）' : '') : '（计数来自插件记录；逐条明细不在本浏览器，换回来或用「立即扫描」重跑一次就有了）') +
+        '；点「变更追踪」可按时间范围回看。'));
     } else {
       add(body, el('p', 'field-hint', st.last_check_at
         ? '上次扫描发生在 「' + fmtTime(st.last_check_at) + '」，但本页没有逐条变更记录（换过浏览器或清过存储就会这样）。点「立即扫描」补一次。'
@@ -385,10 +463,18 @@
   }
   // ---------------- 变更追踪：筛选 + 高危高亮 + 单条接受 / 恢复指引 ----------------
   function paintFilterBar(host) {
+    if (S.filters.pinAt) {
+      var pin = add(host, el('div', 'int-pin-row'));
+      pin.appendChild(chip('na', '已锁定 ' + fmtTime(S.filters.pinAt) + ' 这次扫描'));
+      add(pin, el('span', 'muted', '下面只列这一次的逐条变更；换时间范围或点「取消锁定」回到正常筛选。'));
+      btn(pin, '取消锁定', 'btn btn-ghost int-mini', function () {
+        S.filters.pinAt = ''; paintChanges(); paintHistory();
+      });
+    }
     var bar = add(host, el('div', 'int-filters'));
     var g1 = add(bar, el('label', 'int-filter'));
     add(g1, el('span', 'int-label', '时间范围'));
-    g1.appendChild(selectOf(RANGES, S.filters.range, function (v) { S.filters.range = v; paintChanges(); }));
+    g1.appendChild(selectOf(RANGES, S.filters.range, function (v) { S.filters.range = v; S.filters.pinAt = ''; paintChanges(); }));
     var g2 = add(bar, el('label', 'int-filter'));
     add(g2, el('span', 'int-label', '变更类型'));
     g2.appendChild(selectOf(KINDS, S.filters.kind, function (v) { S.filters.kind = v; paintChanges(); }));
@@ -481,6 +567,55 @@
       var rec = btn(td6, '恢复…', 'btn btn-ghost int-mini', function () { openRecover(row); });
       rec.setAttribute('data-action', 'int-recover');
     }
+  }
+  // ---------------- 扫描历史面板：最近 N 次扫描的时刻 / 结论 / 计数 ----------------
+  function paintHistory() {
+    var host = S.historyHost; if (!host) return; host.textContent = '';
+    var items = historyItems();
+    if (!items.length) {
+      var empty = add(host, el('div', 'empty-state int-empty int-empty-small'));
+      add(empty, el('p', 'int-empty-title', '还没有扫描历史'));
+      add(empty, el('p', 'empty-state-text', '点「立即扫描」比对一次当前文件与基线；之后这里会按时间列出最近 ' +
+        HISTORY_RUNS + ' 次扫描的结论与计数（由插件记录，换浏览器/清缓存也在）。'));
+      var go = btn(empty, S.busy ? '正在扫描…' : '立即扫描', 'btn btn-primary', runCheck); go.disabled = S.busy;
+      return;
+    }
+    add(host, el('p', 'field-hint', items[0].source === 'plugin'
+      ? '最近 ' + items.length + ' 次扫描（插件记录：只存汇总计数，落盘上界约 4 KiB）；逐文件明细只在本浏览器存过的那几次能「看明细」。'
+      : '插件没有返回扫描历史（0.6.0 之前的版本），下面是本浏览器记录的最近 ' + items.length +
+        ' 次扫描——换浏览器或清缓存后就没了，升级插件后改为由插件记录。'));
+    var table = add(host, el('table', 'int-table int-history-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    ['扫描时间', '结论', '新增', '修改', '删除', '未变化', '基线', '操作'].forEach(function (c) { add(htr, el('th', null, c)); });
+    var tbody = add(table, el('tbody'));
+    items.forEach(function (item, index) {
+      var tr = add(tbody, el('tr', S.filters.pinAt === item.at ? 'int-row int-row-pin' : 'int-row'));
+      var prev = index > 0 ? items[index - 1] : null;
+      var sameMinute = !!prev && fmtTime(prev.at) === fmtTime(item.at);
+      add(tr, el('td', null, sameMinute ? fmtTimeSec(item.at) : fmtTime(item.at))).setAttribute('data-label', '扫描时间');
+      var st = add(tr, el('td')); st.setAttribute('data-label', '结论');
+      st.appendChild(chip(item.ok ? 'ok' : 'fail', item.ok ? '无改动' : '有改动'));
+      if (item.truncated) st.appendChild(chip('warn', '已截断'));
+      [['新增', item.added], ['修改', item.modified], ['删除', item.removed], ['未变化', item.unchanged]].forEach(function (kv) {
+        add(tr, el('td', 'int-num', String(kv[1]))).setAttribute('data-label', kv[0]);
+      });
+      var base = add(tr, el('td', 'mono', idLabel(item.baseline) || '—'));
+      base.setAttribute('data-label', '基线'); base.title = item.baseline || '';
+      var ops = add(tr, el('td', 'int-actions')); ops.setAttribute('data-label', '操作');
+      var detail = localRunAt(item.at);
+      var label = S.filters.pinAt === item.at ? '取消锁定' : '看明细';
+      var view = btn(ops, label, 'btn btn-ghost int-mini', function () {
+        S.filters.pinAt = S.filters.pinAt === item.at ? '' : item.at;
+        paintChanges(); paintHistory();
+        if (S.changesHost && S.changesHost.scrollIntoView) S.changesHost.scrollIntoView({ block: 'start' });
+      });
+      if (!detail) {
+        // 没有明细就不能假装能跳：禁用按钮并把原因写进 title，不弹空表。
+        view.disabled = true;
+        view.title = '这次扫描的逐文件明细不在本浏览器（可能在另一台设备，或已被清理）；这里只有汇总计数。';
+      }
+      view.setAttribute('data-action', 'int-history-detail');
+    });
   }
   // ---------------- 弹层：通用壳 ----------------
   function closeDialog() {
@@ -619,7 +754,12 @@
       var idText = add(idCell, el('span', null, idLabel(b.id))); idText.title = b.id;
       if (b.current) add(idCell, chip('ok', '当前'));
       add(tr, el('td', null, fmtTime(b.created_at))).setAttribute('data-label', '建立时间');
-      add(tr, el('td', null, (b.entries || 0) + ' 个')).setAttribute('data-label', '文件');
+      var fileCell = add(tr, el('td', null, (b.entries || 0) + ' 个')); fileCell.setAttribute('data-label', '文件');
+      // 每个版本扫的是哪些路径（0.6.0 起随索引落盘）；旧版本没有该字段就不显示，不猜。
+      if (b.roots && b.roots.length) {
+        var scopeTag = add(fileCell, el('span', 'int-scope-inline', b.roots.length + ' 路径'));
+        scopeTag.title = b.roots.join('、');
+      }
       add(tr, el('td', null, fmtBytes(b.total_bytes))).setAttribute('data-label', '体积');
       add(tr, el('td', null, b.last_check_at ? fmtTime(b.last_check_at) : '从未')).setAttribute('data-label', '上次扫描');
       var st = add(tr, el('td')); st.setAttribute('data-label', '状态');
@@ -642,7 +782,15 @@
     invoke('baseline.list', { limit: 20 }).then(function (d) {
       if (S.destroyed) return;
       S.baselines = Array.isArray(d.baselines) ? d.baselines : []; S.keep = d.keep; S.baselineError = '';
-      paintBaselines(); paintBaselinePick();
+      // roots 是 0.6.0 的新字段：旧插件没有 → 空数组，概览自动回退到本页记忆口径。
+      S.listRoots = Array.isArray(d.roots) ? d.roots.slice(0, 64) : [];
+      // 定时扫描的路径输入框按真实扫描根自动填（USABILITY ②「能自动填的已填好」）；
+      // 用户改过就不动。
+      if (S.schedulePaths && !S.rootsTouched) {
+        var auto = scanScope();
+        if (auto.length) S.schedulePaths.value = auto.join(', ');
+      }
+      paintBaselines(); paintBaselinePick(); paintOverview();
     }, function (err) {
       if (S.destroyed) return; S.baselineError = err.message + (err.hint ? '（' + err.hint + '）' : ''); paintBaselines();
     });
@@ -652,8 +800,10 @@
       '恢复的是「基线记录」，不是文件内容：会用这个版本的指纹替换当前基线，并把当前基线备份 + 归档成历史版本（随时能再切回来）。',
       '恢复后插件会自动复核当前文件与目标基线的差异，复核结果会显示在下方通知里。']);
     var kv = add(d.body, el('div', 'int-kv'));
-    [['要恢复到的版本', item.id], ['该版本建立时间', fmtTime(item.created_at)],
-      ['该版本记录文件', (item.entries || 0) + ' 个（' + fmtBytes(item.total_bytes) + '）']].forEach(function (pair) {
+    var rows = [['要恢复到的版本', item.id], ['该版本建立时间', fmtTime(item.created_at)],
+      ['该版本记录文件', (item.entries || 0) + ' 个（' + fmtBytes(item.total_bytes) + '）']];
+    if (item.roots && item.roots.length) rows.push(['该版本扫描范围', item.roots.join('、')]);
+    rows.forEach(function (pair) {
       var line = add(kv, el('div', 'int-kv-row'));
       add(line, el('span', 'int-kv-key', pair[0])); add(line, el('code', 'int-kv-val', pair[1]));
     });
@@ -687,10 +837,13 @@
       S.notice = { tone: 'warn', title: '当前筛选下没有可导出的变更', lines: ['先点「立即扫描」，或把时间范围 / 类型放宽一点再导出。'] };
       paintNotice(); return;
     }
-    var lines = ['类型,风险,路径,变化,旧sha256,新sha256,权限变化,扫描时间,是否已接受'];
+    var lines = ['类型,风险,路径,变化,旧sha256,新sha256,权限变化,原大小,现大小,大小变化,扫描时间,是否已接受'];
     rows.forEach(function (row) {
+      var hasSize = row.oldSize !== null && row.newSize !== null;
       lines.push([(KIND_META[row.type] || {}).text || row.type, row.riskLabel, row.path, changeText(row),
         row.oldSha, row.newSha, row.oldMode === row.newMode ? '' : (row.oldMode + ' -> ' + row.newMode),
+        hasSize ? row.oldSize : '', hasSize ? row.newSize : '',
+        hasSize ? (row.sizeDelta === null ? row.newSize - row.oldSize : row.sizeDelta) : '',
         row.at, ackOf(row) ? '是' : '否'].map(csvCell).join(','));
     });
     var name = 'integrity-changes-' + stamp() + '.csv';
@@ -766,6 +919,9 @@
     var pathField = add(form, el('label', 'int-field'));
     add(pathField, el('span', 'int-label', '要扫描的路径（逗号或空格分隔，至少一个）'));
     var paths = add(pathField, el('input', 'int-input')); paths.type = 'text';
+    // 用户一旦手改过就不再覆盖（自动填只在用户没表达意见时生效）。
+    paths.addEventListener('input', function () { S.rootsTouched = true; });
+    S.schedulePaths = paths;
     var scope = scanScope();
     paths.value = (scope.length ? scope : (S.roots && S.roots.length ? S.roots : ['/etc', '/usr/bin'])).join(', ');
     var excludeField = add(form, el('label', 'int-field'));
@@ -854,25 +1010,29 @@
   function render(container) {
     if (!container || container.nodeType !== 1) return { destroy: function () {} };
     S = { overviewHost: null, noticeHost: null, changesHost: null, baselineHost: null, scheduleHost: null,
+      historyHost: null,
       status: null, error: '', hint: '', busy: false, notice: null, storageNote: '', checkError: '', checkHint: '',
-      history: [], acks: {}, rootMap: {}, baselines: [], schedules: [], roots: [], dialog: null, destroyed: false,
-      filters: { range: 'latest', kind: 'all', high: false, hideAck: false, q: '' } };
+      history: [], acks: {}, rootMap: {}, baselines: [], schedules: [], roots: [], listRoots: [], dialog: null, destroyed: false,
+      filters: { range: 'latest', kind: 'all', high: false, hideAck: false, q: '', pinAt: '' } };
     loadHistory(); loadAcks(); loadRoots();
     ensureCss(); container.textContent = '';
     var root = add(container, el('section', 'int')), head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', '关键文件完整性'));
     add(head, el('p', 'view-sub', '给关键文件建一份 sha256 基线，之后随时比对新增 / 修改 / 删除；高危目录单独高亮，单条变更可接受或按指引恢复。'));
     S.noticeHost = add(root, el('div', 'int-notice'));
-    var op = panel('完整性概览'), cp = panel('变更追踪'), bp = panel('基线版本'), tp = panel('定时扫描'), vp = panel('单文件校验');
-    add(root, op.panel); add(root, cp.panel); add(root, bp.panel); add(root, tp.panel); add(root, vp.panel);
+    var op = panel('完整性概览'), cp = panel('变更追踪'), hp = panel('扫描历史'),
+      bp = panel('基线版本'), tp = panel('定时扫描'), vp = panel('单文件校验');
+    add(root, op.panel); add(root, cp.panel); add(root, hp.panel); add(root, bp.panel); add(root, tp.panel); add(root, vp.panel);
     btn(op.meta, '刷新', 'btn btn-ghost', function () { loadStatus(); loadSchedules(); });
     btn(cp.meta, '刷新', 'btn btn-ghost', function () { loadHistory(); paintChanges(); });
     btn(cp.meta, '导出 CSV', 'btn btn-ghost', exportChanges).setAttribute('data-action', 'int-export');
+    btn(hp.meta, '刷新', 'btn btn-ghost', loadStatus);
     btn(bp.meta, '刷新', 'btn btn-ghost', loadBaselines);
     btn(bp.meta, '新建基线', 'btn btn-ghost', function () { openBaseline(true); });
     btn(tp.meta, '刷新', 'btn btn-ghost', loadSchedules);
     S.overviewHost = add(op.panel, el('div', 'int-status'));
     S.changesHost = add(cp.panel, el('div', 'int-result'));
+    S.historyHost = add(hp.panel, el('div', 'int-history'));
     S.baselineHost = add(bp.panel, el('div', 'int-baselines'));
     S.scheduleHost = add(tp.panel, el('div', 'int-schedules'));
     var form = add(vp.panel, el('div', 'int-form'));
@@ -901,8 +1061,9 @@
       '.int-kv{display:flex;flex-direction:column;gap:6px;margin:4px 0 12px}.int-kv-row{display:flex;gap:8px;font-size:12px}.int-kv-key{flex:0 0 104px;color:var(--kore-text-3)}.int-kv-val{color:var(--kore-text-2);word-break:break-all}.int-steps{margin:0 0 4px;padding-left:20px;color:var(--kore-text-2);font-size:12px;line-height:1.7}.int-step{margin:2px 0}',
       '.int-verdict{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--kore-border-2);font-weight:600}.int-verdict-dot{width:10px;height:10px;border-radius:50%}.int-verdict-meta{color:var(--kore-text-3);font-size:12px;font-weight:400}.int-verdict.is-ok .int-verdict-dot{background:var(--kore-success)}.int-verdict.is-ok .int-verdict-text{color:var(--kore-success)}.int-verdict.is-fail .int-verdict-dot{background:var(--kore-danger)}.int-verdict.is-fail .int-verdict-text{color:var(--kore-danger)}',
       '.int-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}.int-table th{text-align:left;padding:6px 16px;color:var(--kore-text-3);font-weight:400;border-bottom:1px solid var(--kore-border-2);white-space:nowrap}.int-table td{padding:8px 16px;vertical-align:top;border-top:1px solid var(--kore-border-2);word-break:break-all}',
-      '.int-changes th:nth-child(1){width:9%}.int-changes th:nth-child(2){width:13%}.int-changes th:nth-child(3){width:30%}.int-changes th:nth-child(4){width:22%}.int-changes th:nth-child(5){width:12%}.int-changes th:nth-child(6){width:14%}.int-row-high{background:var(--kore-warning-bg);box-shadow:inset 3px 0 0 var(--kore-warning)}.int-row-acked td{opacity:.62}',
+      '.int-changes th:nth-child(1){width:9%}.int-changes th:nth-child(2){width:12%}.int-changes th:nth-child(3){width:28%}.int-changes th:nth-child(4){width:25%}.int-changes th:nth-child(5){width:12%}.int-changes th:nth-child(6){width:14%}.int-row-high{background:var(--kore-warning-bg);box-shadow:inset 3px 0 0 var(--kore-warning)}.int-row-acked td{opacity:.62}',
       '.int-path-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--kore-text-1)}.int-path .chip{margin-left:6px}.int-chg-text{color:var(--kore-text-2)}.int-actions{display:flex;flex-wrap:wrap;gap:6px}.int-actions .btn{white-space:nowrap}.int-mini{min-height:32px;padding:0 10px;font-size:12px}',
+      '.int-history-table th:nth-child(1){width:17%}.int-history-table th:nth-child(2){width:13%}.int-history-table th:nth-child(3){width:8%}.int-history-table th:nth-child(4){width:8%}.int-history-table th:nth-child(5){width:8%}.int-history-table th:nth-child(6){width:10%}.int-history-table th:nth-child(7){width:20%}.int-history-table th:nth-child(8){width:16%}.int-history-table .int-num{font-variant-numeric:tabular-nums}.int-row-pin{box-shadow:inset 3px 0 0 var(--kore-info);background:var(--kore-bg-0)}.int-pin-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px 0;font-size:12px}.int-scope-inline{display:block;margin-top:2px;color:var(--kore-text-3);font-size:11px}' +
       '.int-baselines-table th:nth-child(1){width:14%}.int-baselines-table th:nth-child(2){width:16%}.int-baselines-table th:nth-child(3){width:8%}.int-baselines-table th:nth-child(4){width:9%}.int-baselines-table th:nth-child(5){width:15%}.int-baselines-table th:nth-child(6){width:20%}.int-baselines-table th:nth-child(7){width:18%}.int-baselines-table td .muted{display:block;margin-top:2px;font-size:11px}.int-schedules-table th:nth-child(1){width:30%}.int-schedules-table th:nth-child(2){width:26%}',
       '.int-form{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;padding:12px 16px}.int-verify-out:empty{display:none}.int-pre{margin:0;padding:12px 16px;color:var(--kore-text-2);font-size:12px;white-space:pre-wrap;word-break:break-all}',
       '.int-inline-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px 16px 16px}.int-inline-form .int-field{margin-top:0}.int-inline-form .int-dialog-err,.int-inline-form .int-dialog-ops{grid-column:1/-1}',
