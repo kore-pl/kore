@@ -137,6 +137,23 @@
   }
   var SYSTEM_DBS = ['mysql', 'information_schema', 'performance_schema', 'sys'];
   var PG_SYSTEM_DBS = ['postgres', 'template0', 'template1'];
+  // ensureExec 只在 MySQL 页展开「SQL 写入」时注入 db-mysql.js（exec 面板，db-mysql 插件视图）；
+  // 失败清缓存允许下次重试，与 ensureL2 同款（首屏零注入）。
+  function ensureExec() {
+    if (window.KoreDbMysqlExec) return Promise.resolve(window.KoreDbMysqlExec);
+    if (S.execPromise) return S.execPromise;
+    S.execPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = '/assets/db-mysql.js'; script.async = true;
+      script.onload = function () {
+        if (!window.KoreDbMysqlExec) { S.execPromise = null; reject(new Error('db-mysql.js 未导出 KoreDbMysqlExec')); return; }
+        resolve(window.KoreDbMysqlExec);
+      };
+      script.onerror = function () { S.execPromise = null; reject(new Error('db-mysql.js 加载失败')); };
+      document.head.appendChild(script);
+    });
+    return S.execPromise;
+  }
   // ensureL2 只在首次执行写操作或展开用户区时注入 db-l2.js；失败清缓存，允许下次重试。
   function ensureL2() {
     if (window.KoreDbL2) return Promise.resolve(window.KoreDbL2);
@@ -849,6 +866,35 @@
         if (slow.open) paintSlowlog();
       });
       paintSlowlog();
+    }
+    // SQL 写入（db-mysql.exec，仅 MySQL）：写语句两级确认 —— 折叠区，不展开就不注入
+    // db-mysql.js，首屏零成本。后端 exec 声明 system:admin，未授权用户点了也只收到可执行错误。
+    if (!isPg()) {
+      var execPanel = add(host, el('details', 'panel db-l2-panel'));
+      var execSum = add(execPanel, el('summary', 'db-l2-summary'));
+      add(execSum, el('span', 'panel-title', 'SQL 写入（INSERT / UPDATE / 结构变更）'));
+      add(execSum, el('span', 'panel-meta', '两级确认 · 不可回滚'));
+      var execBody = add(execPanel, el('div', 'db-l2-users'));
+      var execMounted = false;
+      execPanel.addEventListener('toggle', function () {
+        if (!execPanel.open) return;
+        if (execMounted) return;
+        ensureExec().then(function (mod) {
+          if (S.destroyed || !execBody.isConnected) return;
+          mod.render(execBody, {
+            instance: S.selected, instances: S.instances.slice(), invoke: invoke,
+            notice: function (text, tone) {
+              if (!S.l2NoticeHost || !S.l2NoticeHost.isConnected) return;
+              S.l2NoticeHost.textContent = '';
+              S.l2NoticeHost.appendChild(el('p', 'db-l2-notice ' + (tone || 'ok'), text));
+            }
+          });
+          execMounted = true;
+        }, function (err) {
+          if (S.destroyed || !execBody.isConnected) return;
+          execBody.appendChild(el('p', 'db-slow-hint', 'SQL 写入模块加载失败：' + err.message + '。刷新页面后重试。'));
+        });
+      });
     }
     // 用户管理放在折叠区：账号列表要额外查账号表，不展开就不发这次查询。
     // MySQL 查 mysql.user，PG 查 pg_roles；建用户 / 授权 / 改密 / 删除两域都已接好。
