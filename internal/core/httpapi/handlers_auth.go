@@ -20,6 +20,8 @@ const loginRateKey = "admin"
 type loginRequest struct {
 	// Password 是管理员明文口令（仅内存，不写日志）。
 	Password string `json:"password"`
+	// OTP 是可选的两步验证码（6 位动态码或恢复码）；2FA 未开启时忽略。
+	OTP string `json:"otp"`
 }
 
 // sessionBody 是 GET /api/v1/auth/session 的响应体。
@@ -46,6 +48,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.recordLoginFailed(r, loginRateKey, "no_session")
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, "请求体非法", "")
 		return
+	}
+	// 登录来源 IP 白名单（用户主动开启才生效；fail-closed：读配置失败按拒绝处理）。
+	// 先于口令校验：不在允许列表的请求连口令都不试，不泄露"口令是否正确"。
+	if s.auth != nil && s.auth.Security() != nil {
+		allowed, err := s.auth.Security().IPAllowed(auth.ClientIP(r))
+		if err != nil {
+			slog.Warn("读取登录白名单失败，按拒绝处理", "err", err)
+			writeLoginDenied(w)
+			return
+		}
+		if !allowed {
+			s.recordLoginFailed(r, loginRateKey, "ip_denied")
+			writeLoginDenied(w)
+			return
+		}
 	}
 	// 口令校验：单飞串行化 PBKDF2，避免修掉硬锁后并行连接把猜测吞吐放大 N 倍。
 	var (
@@ -97,6 +114,33 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "口令错误", "")
 		return
+	}
+	// 两步验证：口令正确后仍须 OTP 才能签发会话；未开启 2FA 时原流程完全不变。
+	if s.auth.Security() != nil {
+		totpEnabled, err := s.auth.Security().TOTPEnabled()
+		if err != nil {
+			slog.Warn("读取两步验证状态失败，按拒绝处理", "err", err)
+			writeError(w, http.StatusInternalServerError, pluginapi.E_INTERNAL,
+				"安全设置读取失败，请稍后重试", "")
+			return
+		}
+		if totpEnabled {
+			if strings.TrimSpace(req.OTP) == "" {
+				write2FARequired(w)
+				return
+			}
+			valid, err := s.auth.Security().VerifyTOTP(req.OTP)
+			if err != nil {
+				slog.Warn("校验两步验证码失败，按拒绝处理", "err", err)
+				write2FAInvalid(w)
+				return
+			}
+			if !valid {
+				s.recordLoginFailed(r, loginRateKey, "wrong_otp")
+				write2FAInvalid(w)
+				return
+			}
+		}
 	}
 	token, session, err := s.auth.Issue()
 	if err != nil {

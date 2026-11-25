@@ -51,6 +51,9 @@ type Session struct {
 // Manager 负责口令校验与会话签发、校验、滑动续期、吊销，只依赖 store。
 type Manager struct {
 	store *store.Store
+	// security 是登录安全增强（TOTP / IP 白名单 / API token）的存储门面。
+	// 与 store 同源；nil 表示未装配（骨架/测试），三项增强均按"未开启"处理。
+	security *Security
 	// hashMu 保护 passwordHash 的运行期改写：改口令端点写、登录 Verify 读，
 	// 二者并发时不产生数据竞争（G-19/-race 门禁）。
 	hashMu       sync.RWMutex
@@ -96,7 +99,7 @@ func NewManagerWithPolicy(s *store.Store, passwordHash string, ttl time.Duration
 	default:
 		policy = CookiePolicyAuto
 	}
-	return &Manager{store: s, passwordHash: passwordHash, ttl: ttl, cookiePolicy: policy}
+	return &Manager{store: s, security: NewSecurity(s), passwordHash: passwordHash, ttl: ttl, cookiePolicy: policy}
 }
 
 // CookieSecure 返回本次请求的 cookie 是否应带 Secure 属性。

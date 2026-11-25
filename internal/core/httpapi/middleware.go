@@ -37,6 +37,16 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		if len(r.URL.Path) >= 7 && r.URL.Path[:7] == "/api/v1" {
+			// API token（用户主动生成，与会话鉴权并存）：只读 token 只能调 GET/HEAD；
+			// 管理 token 走与会话一致的能力集。token 无效时不回退会话，fail-closed。
+			if strings.HasPrefix(r.Header.Get(authorizationHeader), bearerPrefix) &&
+				!isRootActionPath(r.URL.Path) {
+				if s.authenticateAPIToken(w, r) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				return
+			}
 			if isRootActionPath(r.URL.Path) && r.Header.Get(authorizationHeader) != "" {
 				actor, ok := s.pluginIdentity(r)
 				if !ok {
@@ -88,6 +98,38 @@ func (s *Server) pluginIdentity(r *http.Request) (*pluginActor, bool) {
 		return nil, false
 	}
 	return &pluginActor{id: id, grants: grants}, true
+}
+
+// apiTokenKey 是 API token 身份在请求上下文中的私有键；content type 字段显式。
+type apiTokenKey struct{}
+
+// authenticateAPIToken 校验 Authorization: Bearer <API token>，成功后写入上下文身份。
+// 写请求要求 admin scope；失败一律 401，不回退会话 cookie（防止无效 bearer 绕过 CSRF）。
+func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil || s.auth.Security() == nil {
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "API 令牌不可用", "")
+		return false
+	}
+	plain := strings.TrimSpace(strings.TrimPrefix(r.Header.Get(authorizationHeader), bearerPrefix))
+	rec, valid, err := s.auth.Security().ValidateToken(plain)
+	if err != nil || !valid {
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "API 令牌无效或已过期", "")
+		return false
+	}
+	if rec.Scope == "read" && !isSafeMethod(r.Method) {
+		writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
+			"这个令牌只有读取权限，不能执行修改操作；请在设置页生成 admin 令牌", "")
+		return false
+	}
+	ctx := context.WithValue(r.Context(), apiTokenKey{}, &apiTokenActor{id: rec.ID, scope: rec.Scope})
+	*r = *r.WithContext(ctx)
+	return true
+}
+
+// apiTokenActor 是 API token 身份的请求上下文值。
+type apiTokenActor struct {
+	id    string
+	scope string
 }
 
 // isRootActionPath 判断是否为提权端点（POST root-action / GET confirm-token）。
@@ -159,8 +201,8 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// 插件 bearer 身份不走 cookie，天然无 CSRF 面（withAuth 会校验 token）。
-		if isRootActionPath(r.URL.Path) && r.Header.Get(authorizationHeader) != "" {
+		// 插件 bearer / API token 身份不走 cookie，天然无 CSRF 面（withAuth 会校验 token）。
+		if strings.HasPrefix(r.Header.Get(authorizationHeader), bearerPrefix) {
 			next.ServeHTTP(w, r)
 			return
 		}

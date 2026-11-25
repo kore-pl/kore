@@ -176,6 +176,15 @@ var adminCapabilities = []string{
 // 全权处理；authorizeInvoke 会在首次检查时打一次 WARN 说明降级。多用户接入时
 // 由装配层注入 CapabilityResolver 覆盖本函数即可生效。
 func defaultCapabilityResolver(r *http.Request) (string, []string) {
+	// API token 身份：admin 令牌持 6 项特权能力，read 令牌只有只读能力。
+	if actor, ok := r.Context().Value(apiTokenKey{}).(*apiTokenActor); ok {
+		if actor.scope == "admin" {
+			return "token:" + actor.id, adminCapabilities
+		}
+		return "token:" + actor.id, []string{
+			"system:read", "net:read", "proc:read",
+		}
+	}
 	// 只认会话 cookie：本机通道不是免登录身份（ADR-0043），不再提供
 	// "UDS/loopback 即 admin 全权"的第二条提权路径。
 	cookie, err := r.Cookie(auth.CookieName)

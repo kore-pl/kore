@@ -108,6 +108,16 @@ func (s *Server) routes() {
 	// 否则会被 501 吞掉；不误伤上面三条已注册端点。
 	s.mux.HandleFunc("POST "+authPasswordPath, s.handleChangePassword)
 	s.mux.HandleFunc("/api/v1/auth/", s.handleUnsupported)
+	// 安全设置（2FA / 登录 IP 白名单 / API token）：精确路由均在 /api/v1/security/ 前缀下。
+	s.mux.HandleFunc("GET "+securityStatusPath, s.handleSecurityStatus)
+	s.mux.HandleFunc("POST "+totpBeginPath, s.handleTOTPBegin)
+	s.mux.HandleFunc("POST "+totpEnablePath, s.handleTOTPEnable)
+	s.mux.HandleFunc("POST "+totpDisablePath, s.handleTOTPDisable)
+	s.mux.HandleFunc("GET "+ipAllowPath, s.handleIPAllowGet)
+	s.mux.HandleFunc("POST "+ipAllowPath, s.handleIPAllowSet)
+	s.mux.HandleFunc("GET "+tokensPath, s.handleTokenList)
+	s.mux.HandleFunc("POST "+tokensPath, s.handleTokenCreate)
+	s.mux.HandleFunc("DELETE "+tokenItemPath, s.handleTokenRevoke)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	// 告警中心：列表（system:read）/ 写入 / 标记已读（均 system:admin）。

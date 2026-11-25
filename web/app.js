@@ -513,6 +513,21 @@
     label.appendChild(input);
     card.appendChild(label);
 
+    // 两步验证：服务端要求时（E_2FA_REQUIRED）才显示验证码输入框。
+    var otpLabel = el('label', 'field');
+    otpLabel.id = 'kore-otp-field';
+    otpLabel.hidden = true;
+    otpLabel.appendChild(el('span', 'field-label', '验证码（认证器 6 位数字或恢复码）'));
+    var otp = document.createElement('input');
+    otp.type = 'text';
+    otp.id = 'kore-otp';
+    otp.name = 'otp';
+    otp.className = 'field-input';
+    // 不设 maxLength：恢复码是 11 位（XXXXX-XXXXX），设 6 会把恢复码截断。
+    otp.setAttribute('placeholder', '请输入 6 位验证码');
+    otpLabel.appendChild(otp);
+    card.appendChild(otpLabel);
+
     var submit = el('button', 'btn btn-primary btn-block', '登录');
     submit.type = 'submit';
     card.appendChild(submit);
@@ -526,7 +541,7 @@
 
     card.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      submitLogin(input, submit, errBox);
+      submitLogin(input, submit, errBox, otpLabel, otp);
     });
 
     wrap.appendChild(card);
@@ -535,7 +550,7 @@
     input.focus();
   }
 
-  function submitLogin(input, submit, errBox) {
+  function submitLogin(input, submit, errBox, otpLabel, otp) {
     var password = input.value || '';
     if (!password) {
       showLoginError(errBox, '请输入口令');
@@ -548,15 +563,29 @@
     request(ENDPOINTS.login, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: password })
+      body: JSON.stringify({ password: password, otp: otp && otpLabel && !otpLabel.hidden ? (otp.value || '') : '' })
     }, LOGIN_TIMEOUT_MS).then(function (res) {
       if (res.ok) {
         // 登录成功：服务端已下发 kore_session(HttpOnly) + kore_csrf，回到探测流程重渲染面板。
         start();
         return;
       }
+      var code = (res.data && res.data.code) || '';
+      if (code === 'E_2FA_REQUIRED' && otpLabel && otp) {
+        // 口令正确，只差二次验证：展开输入框，保留口令不清空，等用户输入后重提。
+        otpLabel.hidden = false;
+        showLoginError(errBox, res.data && res.data.message ? res.data.message : '请输入 6 位验证码');
+        submit.disabled = false;
+        submit.textContent = '登录';
+        otp.focus();
+        return;
+      }
       input.value = '';
-      if (res.status === 401) showLoginError(errBox, '口令错误，请重试');
+      if (otp) otp.value = '';
+      if (otpLabel) otpLabel.hidden = true;
+      if (code === 'E_2FA_INVALID') showLoginError(errBox, '验证码或恢复码不正确，请重新输入');
+      else if (code === 'E_IP_DENIED') showLoginError(errBox, '当前网络地址不在允许登录的范围内，请联系管理员');
+      else if (res.status === 401) showLoginError(errBox, '口令错误，请重试');
       else if (res.status === 429) showLoginError(errBox, '尝试过于频繁，已被临时锁定，请稍后再试');
       else showLoginError(errBox, '登录失败：' + describeError(res));
       submit.disabled = false;

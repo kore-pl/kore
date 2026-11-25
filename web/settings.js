@@ -602,6 +602,8 @@
   var auditPromise = null;
   var credHandle = null;
   var credPromise = null;
+  var securityHandle = null;
+  var securityPromise = null;
   var SELECT_CSS = '.settings-select{min-height:36px;padding:0 var(--kore-space-2);color:var(--kore-text-1);' +
     'background:var(--kore-bg-0);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);font:inherit}' +
     '.settings-select:focus{border-color:var(--kore-info);outline:none}' +
@@ -708,16 +710,48 @@
       box.appendChild(el('div', 'stub', '凭据管理不可用：' + (err && err.message ? err.message : '模块加载失败')));
     });
   }
+  // security.js 懒加载：首次切到「安全」才注入，与 audit / credentials 同模式。
+  function releaseSecurity() {
+    if (securityHandle && typeof securityHandle.destroy === 'function') {
+      try { securityHandle.destroy(); } catch (err) { /* 清理失败不阻断切 tab */ }
+    }
+    securityHandle = null;
+  }
+  function mountSecurity(box) {
+    box.appendChild(el('div', 'stub', '正在加载安全设置…'));
+    if (!securityPromise) {
+      securityPromise = new Promise(function (resolve, reject) {
+        var script = document.createElement('script');
+        script.src = '/assets/security.js'; script.async = true;
+        script.onload = function () {
+          var mod = window.KoreSecurity;
+          if (!mod || typeof mod.render !== 'function') { securityPromise = null; reject(new Error('security.js 未导出 KoreSecurity.render')); return; }
+          resolve(mod);
+        };
+        script.onerror = function () { securityPromise = null; reject(new Error('security.js 加载失败')); };
+        document.head.appendChild(script);
+      });
+    }
+    securityPromise.then(function (mod) {
+      if (tab !== 'security' || !box.parentNode) return;
+      box.textContent = '';
+      securityHandle = mod.render(box);
+    }, function (err) {
+      if (tab !== 'security') return;
+      box.textContent = '';
+      box.appendChild(el('div', 'stub', '安全设置不可用：' + (err && err.message ? err.message : '模块加载失败')));
+    });
+  }
   function buildTabs() {
     var bar = el('div', 'settings-tabs');
     bar.setAttribute('role', 'tablist'); bar.setAttribute('aria-label', '设置分区');
-    [['config', '常规设置'], ['audit', '操作审计'], ['credentials', '凭据']].forEach(function (item) {
+    [['config', '常规设置'], ['security', '安全'], ['audit', '操作审计'], ['credentials', '凭据']].forEach(function (item) {
       var b = el('button', 'settings-tab' + (tab === item[0] ? ' is-active' : ''), item[1]);
       b.type = 'button'; b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', tab === item[0] ? 'true' : 'false');
       b.addEventListener('click', function () {
         if (tab === item[0]) return;
-        tab = item[0]; releaseAudit(); releaseCredentials(); paint(host);
+        tab = item[0]; releaseAudit(); releaseCredentials(); releaseSecurity(); paint(host);
       });
       bar.appendChild(b);
     });
@@ -727,7 +761,7 @@
     host = container || host;
     if (!host) return;
     ensureTabCss();
-    releaseAudit(); releaseCredentials(); closePasswordDialog();
+    releaseAudit(); releaseCredentials(); releaseSecurity(); closePasswordDialog();
     var page = el('div', 'settings-page');
     page.appendChild(buildTabs());
     var body = el('div', 'settings-tab-body');
@@ -737,6 +771,8 @@
       mountAudit(body);
     } else if (tab === 'credentials') {
       mountCredentials(body);
+    } else if (tab === 'security') {
+      mountSecurity(body);
     } else {
       var root = el('div', 'settings-root');
       root.appendChild(buildLanguage());
@@ -781,7 +817,7 @@
     cache.loaded = false;
     // 全局搜索的「查看操作审计」在跳转前放这个标记，到达设置页直接落到审计 tab。
     if (window.__koreSettingsTab) {
-      tab = window.__koreSettingsTab === 'audit' ? 'audit' : window.__koreSettingsTab === 'credentials' ? 'credentials' : 'config';
+      tab = window.__koreSettingsTab === 'audit' ? 'audit' : window.__koreSettingsTab === 'credentials' ? 'credentials' : window.__koreSettingsTab === 'security' ? 'security' : 'config';
       window.__koreSettingsTab = '';
     }
     paint(container);
