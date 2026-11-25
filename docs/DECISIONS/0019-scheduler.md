@@ -100,3 +100,13 @@ make docs-check                                        # 文档同步（CORE / R
 - bus 事件投递面落地后，复审内置 `cert.renew_due` 任务的投递实现（当前只日志）。
 - 若出现"单机任务数 > 100"或"需要秒级精度"的需求，重新评估 ticker 间隔与执行记录保留策略。
 - 若 G-19 的白名单被第二个周期源突破（任何新增 ticker），本 ADR 即失效并回退到"仅 scheduler"的强约束检查。
+
+## 修订记录：新增内置任务 `update.check`（2026-11-26，U4 默认关闭；§1–复审条件原文不动）
+
+> 本节是 **append-only 修订记录**，不改上文已 accepted 正文（与 [ADR-0023 §11](./0023-zero-intrusion.md) 同口径）。触发来源：[ADR-0059 §3.1](./0059-silent-update-trigger-and-supply-chain.md)（U4 裁决：允许可选更新源拉取且默认关闭）与 [自更新实现任务图](./self-update-implementation-plan.md) M4。登记本段即解除 M4 的 ADR 门槛（G-06/G-23），实现按 M4 任务卡另行派发。
+
+1. **白名单扩展的合规论证**：在 `internal/core/scheduler/` 的**唯一** ticker 上注册内置任务 `update.check`（`plugin="kore"`，内置方法，仿 `cert_renew` 迁移先例）。这是**同一个通用周期源内部新增一个任务**，不是新增周期源——G-19「定时器仅 scheduler（单实例单 ticker）」的白名单条目数量不变，不新增 `time.NewTicker` / `time.AfterFunc` / 周期循环，全局 ticker 仍唯一（30s 间隔）；请求级 `time.NewTimer` / `context.WithTimeout` 的既有 `Stop()` 口径不变。**被否决项**：独立自更新守护进程 / 独立 ticker——违反 G-19 白名单，且叠加 G-05 常驻组件、G-03 预算、G-31 安装目录外写入三重违规（ADR-0059 §2 表 C、§4）；不新增第二条周期源是本次扩展的不可越界底线。
+2. **默认禁用 + 空闲纪律**：任务默认**不启用**（开关与更新源地址均为用户配置项，`update.source.enabled=false` / 源地址空）。按本 ADR「默认零后台定时器」既有口径，无任何启用任务时 scheduler 不启动 ticker；`update.check` 禁用时空闲行为与今天完全一致（出站 0、CPU/fd/goroutine 达标、零报错）。仅当用户显式开启后出现定时检查，属用户明示授权行为，不是隐藏轮询（G-10 论证见 ADR-0059 §3.3，比 ADR-0054 webhook 例外多一条「默认关闭」）。
+3. **`IsOffline` 短路**：`IsOffline` 为真时任务直接短路返回「离线跳过」，不报错、不重试、不产生出站连接；默认关闭 + 断网时验收为零出站零报错。开启后验签失败按 ADR-0059 §3.1 带 `requires_restart:true`，本次不更新，不把验签失败降级为「用未签名索引继续」。
+4. **不破坏"单实例单 ticker"纪律的实现约束**：任务注册只发生在既有 scheduler 实例的任务表里（bucket `scheduler_tasks`，内置 id 与 `builtin-cert-renew` / `builtin-audit-clean` 同类），不创建第二个 scheduler 实例、不在任何其它包起周期 source；`grep -rn "time.NewTicker\|time.AfterFunc" internal/core` 仍只允许 `internal/core/scheduler/` 命中。事件面若未落地照旧只记日志，不假装已投递（沿用本 ADR「技术债」口径）。
+5. **复审追加**：若未来出现"第二个默认开启的周期任务"或要求把更新检查设为默认开启，须新开 ADR 重审 G-19 白名单与 G-10（默认关闭是本扩展成立的前提），不得援引本段类推放宽。

@@ -122,3 +122,16 @@
 - **不动**：`verify.go` 与 `validate-index.sh` 的公钥常量本轮**未变**（仍 `8b4fe19f…`）；不重签真索引（第 41 把另派）。
 - **自测**：临时密钥目录 + 副本索引：`--generate` 0、缺钥 2、重签 0、验签 0、篡改 1；两端公钥常量 before==after；真索引 `git status` 干净。
 - **残余**：私钥轮换仍需一次 rebuild+restart（二期 B）；`KORE_INDEX_KEY` 旧路径保留一个周期后删除。
+
+## 9. 追加修订记录：验签索引新增内核资产条目（2026-11-26；§0–§8 原文不动）
+
+> 本节是 **append-only 修订记录**，不改上文已 accepted 正文（与 [ADR-0023 §11](./0023-zero-intrusion.md) 同口径）。触发来源：[ADR-0059 §3.2](./0059-silent-update-trigger-and-supply-chain.md)（供应链：已验签索引 → https 资产 → sha256）与 [自更新实现任务图](./self-update-implementation-plan.md) M6。登记本段即解除 M6 的 ADR 门槛，实现（索引字段显式化 + 下载链）按 M6 任务卡另行派发。**本段只定字段语义与验签规则，不改验签体系本身，也不代表索引文件已增条目。**
+
+1. **新增条目类型**：在现有验签索引的条目体系里增加一类**内核资产条目**（与插件条目同属同一已签名索引，共用方案 A 的长期签名密钥与验签链）。它与插件条目的区别只在"下载后交给谁"：插件包交 `store/install`，内核资产交 `kored upgrade --bin`。信任根不变——只消费经 `market.Verify`（ADR-0025 方案 A 固定公钥常量）验过的索引，未验签索引不得作为下载来源。
+2. **字段语义（G-24 显式类型，禁 `any` / `object` / `map[string]any`）**：内核资产条目对外结构体**逐字段显式列类型**——`download_url`（string，发布物地址）、`sha256`（string，64 位小写 hex 摘要）、`version`（string，目标内核版本）、`size_bytes`（int64，包字节数）以及内核资产专属标识字段；不得用 `any` / `object` / `map[string]any` 兜底，也不得用 `json.RawMessage` 承载这些字段（`json.RawMessage` 的受控例外只限插件方法参数/结果载荷，不适用内核资产条目）。内部解析若临时用 `any`，必须在一处收口并转成上述具体类型后才进入下载链。
+3. **`download_url` 与 `sha256` 的验签规则**：
+   - `download_url` 必须是 **https 绝对 URL**；省略、`file:` / `http:` 等非 https scheme 一律拒绝（复用安装器既有校验，`download_test.go:125` 反例），离线包走显式本地路径、不伪装成索引下载。**禁止 URL 拼接猜测**：缺 `download_url` 直接 `E_INVALID`、零下载（`download_test.go:109-118` 先例）。
+   - `sha256` 必须存在且形态合法（64 位小写 hex），缺摘要的条目在加载期即被 `validateIndex` 拒掉。**校验先于替换**：下载流式计算摘要并与索引逐字比对，不一致则目标字节不动（`upgrade.go:12-13` 既有不变量）。
+   - 内核二进制先下载到**本地临时文件**，再交 `kored upgrade --bin <本地文件> --sha256 <hex>`（该命令拒 URL，`upgrade.go:10-14`），复用原子替换 + `.prev` + pending + `--no-block` 重启 + 新进程 finalize 的完整链；market 只负责"从已验签索引取 URL 与摘要并触发"，不自建第二条下载/安装链路（G-01/G-13）。
+4. **公钥轮换口径（沿用 §7，不变）**：验签公钥是编译期常量，**换公钥必须 rebuild + 重启才生效**（`docs/RUNBOOK.md` §1）；日常重签（方案 A，不换钥）仍免 rebuild / 免重启。轮换属事故响应 / 低频操作，不因本段新增内核资产条目而放宽——新二进制重启后自然承接新公钥，验签失败按 fail-closed 处理，绝不降级为"用未签名索引继续"。
+5. **边界与复审**：本段不触发任何远端写操作（全流程零 git push / tag / PR / CI，ADR-0056 §6；GitHub 只 `workflow_dispatch`）；不新增安装目录外写入（G-31 / ADR-0023）；若未来出现第二种资产类型或需要改验签信任根（换组织 / 换算法），须另开 ADR，不得援引本段类推。
