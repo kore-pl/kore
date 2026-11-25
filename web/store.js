@@ -76,8 +76,12 @@
   var S = { plugins: [], presets: [], installed: Object.create(null), status: Object.create(null),
     cat: 'all', scope: 'all', q: '', page: 1, grid: null, empty: null, stats: null, notice: null,
     container: null, searchInput: null,
-    summary: null, batchStatus: null,
-    batch: { running: false, done: 0, total: 0, failed: [], message: '' },
+    summary: null, batchStatus: null, pickbar: null,
+    // 升级中心状态：selected = 勾选的可升级插件 id；notes = 展开过「更新说明」的 id
+    // （details 原生开合，但列表重绘会重建节点，故把开合状态存在这里，重绘后还原）。
+    // batch 记录一次批量升级的进度与逐项结果：ok / fail / restart（需重启 kored 才能继续）。
+    selected: Object.create(null), notes: Object.create(null), batchConfirm: null,
+    batch: { running: false, done: 0, total: 0, failed: [], results: [], message: '', current: '' },
     restart: null, restartCode: null };
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -188,6 +192,105 @@
       if (ins && cardState(ins, p.version) === 'upgradable') out.push({ p: p, ins: ins });
     });
     return out;
+  }
+  // 大版本号：0.x → 1.x 这类跨大版本升级，插件行为/配置项可能不兼容，必须单独提示。
+  function majorOf(v) { var n = parseInt(String(v || '').split('.')[0], 10); return isFinite(n) ? n : 0; }
+  function isMajorJump(from, to) { return majorOf(to) > majorOf(from); }
+  // 更新说明：索引里若带 changelog / release_notes / update_notes / notes 就展示，
+  // 没有就如实说「未提供」——不编造版本变化（G-30 同源的诚实原则，宁缺毋假）。
+  function noteItems(p) {
+    var raw = p && (p.changelog || p.release_notes || p.update_notes || p.notes);
+    if (!raw) return [];
+    if (typeof raw === 'string') raw = raw.split(/\r?\n/);
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    raw.forEach(function (item) {
+      if (item === null || item === undefined) return;
+      var line = '';
+      if (typeof item === 'string') line = item;
+      else if (typeof item === 'object') {
+        var body = item.items || item.notes || item.changes;
+        if (Array.isArray(body)) line = body.join('；');
+        else line = item.text || item.summary || item.title || '';
+      } else { line = String(item); }
+      line = String(line).replace(/^\s*[-*·]\s*/, '').trim();
+      if (line) out.push(line);
+    });
+    return out.slice(0, 12);
+  }
+  // 风险提示：升级一定会重启该插件（先停后拉起），期间调用会短暂失败；
+  // 跨大版本再追加一条更强提示。批量确认与单个确认共用同一段文案。
+  function upgradeRiskLines(ins, target) {
+    var lines = ['升级会重启该插件，重启期间可能短暂不可用（通常几秒到几十秒）；配置与启用状态会保留。'];
+    if (isMajorJump(ins.version, target)) {
+      lines.push('这是一次跨大版本升级（v' + ins.version + ' → v' + target +
+        '）：功能与配置项可能有变化，建议先展开「更新说明」确认后再升级。');
+    }
+    if (ins.enabled === true || ins.desired === 'enabled') {
+      lines.push('该插件当前处于启用状态，升级时会先停一次再重新拉起。');
+    }
+    return lines;
+  }
+  function selectedUpgradable() {
+    return upgradable().filter(function (item) { return S.selected[item.p.id] === true; });
+  }
+  // 升级完成后插件不再可升级：清掉已失效的勾选，避免批量条显示「已选 3 个」却只剩 1 张卡片。
+  function pruneSelection(list) {
+    var live = Object.create(null);
+    list.forEach(function (item) { live[item.p.id] = true; });
+    Object.keys(S.selected).forEach(function (id) { if (!live[id]) delete S.selected[id]; });
+  }
+  // 升级中心自己的样式：写域不含 style.css（多人并行），按外壳同一做法注入一次 scoped 样式；
+  // 只引用设计令牌（无硬编码色值），<640px 触摸目标走 --kore-touch。
+  function ensureUpgradeStyle() {
+    if (document.getElementById('kore-store-upgrade-css')) return;
+    var css = [
+      '.store-pick{display:flex;align-items:center;gap:var(--kore-space-2);min-height:32px}',
+      '.store-pick-cb{width:18px;height:18px;margin:0;flex:0 0 auto;accent-color:var(--kore-info);cursor:pointer}',
+      '.store-pick-text{font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.store-notes{border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);background:var(--kore-bg-2)}',
+      '.store-notes[open] summary{color:var(--kore-text-1)}',
+      '.store-notes>summary{display:flex;align-items:center;gap:var(--kore-space-2);min-height:32px;' +
+        'padding:0 var(--kore-space-3);cursor:pointer;font-size:var(--kore-font-12);color:var(--kore-info)}',
+      '.store-notes>summary:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}',
+      '.store-notes-body{padding:0 var(--kore-space-3) var(--kore-space-2)}',
+      '.store-notes-list{max-height:160px;overflow:auto;margin:0;padding-left:18px;' +
+        'font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.store-notes-list li{margin:2px 0;overflow-wrap:anywhere}',
+      '.store-notes-empty{margin:0;font-size:var(--kore-font-12);color:var(--kore-text-3)}',
+      '.store-batch{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2) var(--kore-space-3);' +
+        'margin:0 0 var(--kore-space-3);padding:var(--kore-space-2) var(--kore-space-3);' +
+        'background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-left:3px solid var(--kore-info);' +
+        'border-radius:var(--kore-radius-container)}',
+      '.store-batch[hidden]{display:none}',
+      '.store-pick-all{display:inline-flex;align-items:center;gap:var(--kore-space-2);min-height:32px;' +
+        'font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.store-batch-count{font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.store-batch-actions{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);margin-left:auto}',
+      '.store-batch-note{flex:1 1 100%;font-size:var(--kore-font-12);color:var(--kore-text-3)}',
+      '.store-batch-confirm{flex:1 1 100%;display:flex;flex-direction:column;gap:var(--kore-space-2)}',
+      '.store-risk{margin:0;font-size:var(--kore-font-12);color:var(--kore-text-2);overflow-wrap:anywhere}',
+      '.store-risk.is-major{color:var(--kore-warning);font-weight:600}',
+      '.store-batch-results{display:flex;flex-direction:column;gap:var(--kore-space-1);flex:1 1 100%}',
+      '.store-batch-result-list{max-height:180px;overflow:auto;margin:0;padding-left:18px;' +
+        'font-size:var(--kore-font-12);color:var(--kore-text-2)}',
+      '.store-batch-result-list li{overflow-wrap:anywhere}',
+      '.store-batch-result-ok{color:var(--kore-success)}',
+      '.store-batch-result-fail{color:var(--kore-danger)}',
+      '.store-batch-result-restart{color:var(--kore-warning)}',
+      '@media (max-width:639px){',
+      '.store-pick{min-height:var(--kore-touch)}',
+      '.store-pick-cb{width:22px;height:22px}',
+      '.store-notes>summary{min-height:var(--kore-touch)}',
+      '.store-pick-all{min-height:var(--kore-touch)}',
+      '.store-batch-actions{width:100%;margin-left:0}',
+      '.store-batch-actions .btn{flex:1 1 auto;min-height:var(--kore-touch)}',
+      '}'
+    ].join('');
+    var st = document.createElement('style');
+    st.id = 'kore-store-upgrade-css';
+    st.textContent = css;
+    document.head.appendChild(st);
   }
   // 已安装但索引未收录的插件也要有卡片——否则四态里的「索引未收录」永远不可见。
   function allCards() {
@@ -338,11 +441,21 @@
     } else if (state === 'upgradable') {
       add(badges, el('span', 'store-badge installed', '已安装'));
       add(badges, el('span', 'store-badge upgrade', '可升级 v' + ins.version + ' → v' + p.version));
+      // 跨大版本（0.x → 1.x）在卡片上就可见，不用等点升级才知道。
+      if (isMajorJump(ins.version, p.version)) {
+        var majorBadge = add(badges, el('span', 'store-badge upgrade', '跨大版本'));
+        majorBadge.title = '这次升级跨越大版本，功能与配置项可能有变化';
+      }
     } else if (state === 'unindexed') {
       add(badges, el('span', 'store-badge installed', '已安装'));
       add(badges, el('span', 'store-badge muted', '索引未收录'));
     }
     add(card, el('p', 'store-desc', descOf(p)));
+    // 可升级卡片才给勾选与更新说明：不可升级项多这两个控件只会制造无效操作。
+    if (state === 'upgradable') {
+      card.appendChild(buildPickRow(p));
+      card.appendChild(buildNotes(p));
+    }
     var st = S.status[p.id];
     var status = add(card, el('div', 'store-card-status' + (st ? ' is-' + st.kind : '')));
     if (st && st.kind === 'ok') status.appendChild(checkSvg()); // 成功勾用 SVG，不用 emoji
@@ -416,6 +529,43 @@
     return card;
   }
 
+  // 可升级卡片的勾选行：勾不勾只影响批量条，不触发任何请求（勾选 ≠ 升级）。
+  function buildPickRow(p) {
+    var row = el('label', 'store-pick');
+    var cb = add(row, el('input', 'store-pick-cb'));
+    cb.type = 'checkbox';
+    cb.checked = S.selected[p.id] === true;
+    cb.setAttribute('aria-label', '选择升级 ' + (p.name || p.id) + ' 到 v' + p.version);
+    add(row, el('span', 'store-pick-text', '勾选后可批量升级'));
+    cb.addEventListener('change', function () {
+      if (cb.checked) S.selected[p.id] = true; else delete S.selected[p.id];
+      renderPickbar();
+    });
+    return row;
+  }
+
+  // 更新说明折叠：原生 details（键盘可达、无需 JS 开合），开合状态存 S.notes 以便列表重绘后保持。
+  // 索引没有说明时如实写「未提供」，不编造版本变化。
+  function buildNotes(p) {
+    var notes = el('details', 'store-notes');
+    var sum = add(notes, el('summary', 'store-notes-summary'));
+    add(sum, el('span', null, '更新说明（v' + p.version + '）'));
+    if (S.notes[p.id]) notes.open = true;
+    notes.addEventListener('toggle', function () {
+      if (notes.open) S.notes[p.id] = true; else delete S.notes[p.id];
+    });
+    var body = add(notes, el('div', 'store-notes-body'));
+    var items = noteItems(p);
+    if (!items.length) {
+      add(body, el('p', 'store-notes-empty',
+        '该插件未提供更新说明（商店索引只记录了版本号）。升级后可在「已装插件」里查看实际变化。'));
+      return notes;
+    }
+    var ul = add(body, el('ul', 'store-notes-list'));
+    items.forEach(function (line) { add(ul, el('li', null, line)); });
+    return notes;
+  }
+
   // 顶部升级汇总：已安装总数 + 可升级数 + 一键全部升级。批量进度就地更新，
   // 不重绘整页（重绘会打断用户对卡片状态的观察）。
   function renderSummary() {
@@ -432,8 +582,8 @@
     btn.type = 'button';
     btn.disabled = S.batch.running || up.length === 0;
     if (!up.length) btn.textContent = '全部已是最新';
-    btn.title = '逐个升级可升级插件；失败项会在下方列出';
-    on(btn, doUpgradeAll);
+    btn.title = '逐个升级全部可升级插件；升级会重启插件，失败项会在下方列出';
+    on(btn, function () { confirmBatch(upgradable(), 'all'); });
     S.batchStatus = add(S.summary, el('span', 'store-upgrade-status'));
     S.batchStatus.setAttribute('role', 'status');
     if (S.batch.running) {
@@ -441,9 +591,194 @@
         '/' + S.batch.total + '…';
     } else if (S.batch.message) {
       S.batchStatus.textContent = S.batch.message;
-      S.batchStatus.className = 'store-upgrade-status' +
-        (S.batch.failed.length ? ' is-fail' : ' is-ok');
+      var bad = S.batch.failed.length > 0 ||
+        S.batch.results.some(function (it) { return it.state === 'restart'; });
+      S.batchStatus.className = 'store-upgrade-status' + (bad ? ' is-fail' : ' is-ok');
     }
+  }
+
+  // 升级中心操作带：勾选 / 全选 / 升级所选 / 批量确认 / 进度 / 逐项结果。
+  // 与顶部汇总分工：汇总说「有多少」，这里说「选哪些、现在到哪、结果如何」。
+  function renderPickbar() {
+    if (!S.pickbar) return;
+    var up = upgradable();
+    var hasResults = S.batch.results.length > 0;
+    if (!up.length && !S.batch.running && !hasResults && !S.batchConfirm) {
+      S.pickbar.hidden = true;
+      return;
+    }
+    S.pickbar.hidden = false;
+    S.pickbar.textContent = '';
+
+    // 进度态：逐项串行，用户能看到当前正在升哪一个。
+    if (S.batch.running) {
+      var box = add(S.pickbar, el('div', 'store-batch-results'));
+      var prog = add(box, el('p', 'store-batch-note',
+        '正在升级 ' + Math.min(S.batch.done + 1, S.batch.total) + '/' + S.batch.total +
+        (S.batch.current ? ' · ' + S.batch.current : '') + '…'));
+      prog.setAttribute('role', 'status');
+      add(box, el('p', 'store-risk',
+        '升级期间该插件会短暂不可用；请勿关闭本页，全部完成后会逐项列出结果。'));
+      return;
+    }
+
+    // 确认态：把「升级什么、有什么风险」摆明，确认后才开始。
+    if (S.batchConfirm) { renderBatchConfirm(); return; }
+
+    // 结果态：成功 / 失败 / 需重启 三态逐项列出，失败项可一键重试。
+    if (hasResults) {
+      var out = add(S.pickbar, el('div', 'store-batch-results'));
+      var okN = 0, failN = 0, restartN = 0;
+      S.batch.results.forEach(function (it) {
+        if (it.state === 'ok') okN++;
+        else if (it.state === 'restart') restartN++;
+        else failN++;
+      });
+      var head = add(out, el('p', 'store-batch-note',
+        '逐项结果：成功 ' + okN + ' 个' + (failN ? ' · 失败 ' + failN + ' 个' : '') +
+        (restartN ? ' · 需重启 kored ' + restartN + ' 个' : '')));
+      head.setAttribute('role', 'status');
+      var ul = add(out, el('ul', 'store-batch-result-list'));
+      S.batch.results.forEach(function (it) {
+        var li = add(ul, el('li', null, ''));
+        var state = it.state === 'restart' ? '需重启 kored' : (it.state === 'ok' ? '成功' : '失败');
+        var cls = it.state === 'restart' ? 'store-batch-result-restart'
+          : (it.state === 'ok' ? 'store-batch-result-ok' : 'store-batch-result-fail');
+        add(li, el('span', cls, it.name + ' v' + it.from + ' → v' + it.to + '：' + state));
+        if (it.message && it.state !== 'ok') add(li, el('span', 'store-risk', '（' + it.message + '）'));
+      });
+      var acts = add(S.pickbar, el('div', 'store-batch-actions'));
+      var retry = retryList();
+      if (retry.length) {
+        var rb = add(acts, el('button', 'btn btn-primary', '重试失败项（' + retry.length + '）'));
+        rb.type = 'button';
+        on(rb, function () { confirmBatch(retry, 'retry'); });
+      }
+      var close = add(acts, el('button', 'btn btn-ghost', '关闭结果'));
+      close.type = 'button';
+      on(close, function () { S.batch.results = []; S.batch.message = ''; renderPickbar(); });
+      return;
+    }
+
+    // 勾选条：全选 + 已选数 + 升级所选。
+    var sel = selectedUpgradable();
+    var allBox = add(S.pickbar, el('label', 'store-pick-all'));
+    var allCb = add(allBox, el('input', 'store-pick-cb'));
+    allCb.type = 'checkbox';
+    allCb.checked = up.length > 0 && sel.length === up.length;
+    allCb.indeterminate = sel.length > 0 && sel.length < up.length;
+    allCb.setAttribute('aria-label', '全选可升级插件（共 ' + up.length + ' 个）');
+    add(allBox, el('span', null, '全选 ' + up.length + ' 个可升级'));
+    allCb.addEventListener('change', function () {
+      S.selected = Object.create(null);
+      if (allCb.checked) up.forEach(function (item) { S.selected[item.p.id] = true; });
+      renderGrid();
+    });
+    add(S.pickbar, el('span', 'store-batch-count', '已选 ' + sel.length + ' 个'));
+    var actions = add(S.pickbar, el('div', 'store-batch-actions'));
+    var go = add(actions, el('button', 'btn btn-primary', '升级所选（' + sel.length + '）'));
+    go.type = 'button';
+    go.disabled = sel.length === 0;
+    go.title = sel.length ? '逐个升级已勾选插件（串行，失败不中断其余）'
+      : '先在卡片上勾选要升级的插件';
+    on(go, function () { confirmBatch(selectedUpgradable(), 'selected'); });
+    if (sel.length) {
+      var clear = add(actions, el('button', 'btn btn-ghost', '清空选择'));
+      clear.type = 'button';
+      on(clear, function () { S.selected = Object.create(null); renderGrid(); });
+    }
+    add(S.pickbar, el('p', 'store-batch-note',
+      '勾选多个可升级插件后一次升级；升级会重启插件，期间可能短暂不可用。'));
+  }
+
+  // 失败/需重启项：按当前索引重新解析成可升级项；已升级成功或已下架的不再重试。
+  function retryList() {
+    var byId = Object.create(null);
+    upgradable().forEach(function (item) { byId[item.p.id] = item; });
+    var out = [];
+    S.batch.results.forEach(function (it) {
+      if (it.state !== 'ok' && byId[it.id]) out.push(byId[it.id]);
+    });
+    return out;
+  }
+
+  function confirmBatch(list, mode) {
+    if (S.batch.running || !list || !list.length) return;
+    S.batchConfirm = { list: list, mode: mode };
+    renderPickbar();
+  }
+
+  function renderBatchConfirm() {
+    var list = S.batchConfirm.list;
+    var box = add(S.pickbar, el('div', 'store-batch-confirm'));
+    add(box, el('p', 'store-batch-count', '确认升级下面 ' + list.length + ' 个插件：'));
+    var ul = add(box, el('ul', 'store-batch-result-list'));
+    var majorNames = [];
+    list.forEach(function (item) {
+      add(ul, el('li', null, (item.p.name || item.p.id) + ' v' + item.ins.version +
+        ' → v' + item.p.version));
+      if (isMajorJump(item.ins.version, item.p.version)) majorNames.push(item.p.name || item.p.id);
+    });
+    add(box, el('p', 'store-risk',
+      '升级会重启这些插件，期间可能短暂不可用（通常几秒到几十秒）；配置与启用状态会保留。'));
+    if (majorNames.length) {
+      add(box, el('p', 'store-risk is-major',
+        '其中 ' + majorNames.join('、') + ' 属于跨大版本升级（如 0.x → 1.x），' +
+        '功能与配置项可能有变化，建议先展开各自的「更新说明」确认。'));
+    }
+    var actions = add(box, el('div', 'store-batch-actions'));
+    var ok = add(actions, el('button', 'btn btn-primary', '确认升级'));
+    ok.type = 'button';
+    on(ok, function () { startBatch(list, S.batchConfirm.mode); });
+    var cancel = add(actions, el('button', 'btn btn-ghost', '取消'));
+    cancel.type = 'button';
+    on(cancel, function () { S.batchConfirm = null; renderPickbar(); });
+    if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest' });
+  }
+
+  // 串行批量升级：固定清单逐个跑（并发安装会争 state.db 与同一插件目录），
+  // 单个失败不中断队列；最后统一给出成功 / 失败 / 需重启三态。
+  function startBatch(list, mode) {
+    if (S.batch.running || !list.length) return;
+    S.batchConfirm = null;
+    S.batch = { running: true, done: 0, total: list.length, failed: [], results: [],
+      message: '', current: '' };
+    renderSummary();
+    renderPickbar();
+    var index = 0;
+    function step() {
+      if (index >= list.length) {
+        var okN = 0, failN = 0, restartN = 0;
+        S.batch.results.forEach(function (it) {
+          if (it.state === 'ok') okN++;
+          else if (it.state === 'restart') restartN++;
+          else failN++;
+        });
+        S.batch.running = false;
+        S.batch.current = '';
+        var scope = mode === 'retry' ? '重试失败项' : (mode === 'selected' ? '所选' : '全部');
+        S.batch.message = '批量升级完成（' + scope + '）：成功 ' + okN + ' 个' +
+          (failN ? '，失败 ' + failN + ' 个' : '') +
+          (restartN ? '，需重启 kored ' + restartN + ' 个' : '');
+        S.selected = Object.create(null);
+        renderSummary();
+        loadInstalled();
+        return;
+      }
+      var item = list[index];
+      S.batch.current = (item.p.name || item.p.id) + '（v' + item.ins.version +
+        ' → v' + item.p.version + '）';
+      renderPickbar();
+      runUpgrade(item.p, item.ins).then(function (res) {
+        S.batch.done++;
+        S.batch.results.push({ id: item.p.id, name: item.p.name || item.p.id,
+          from: item.ins.version, to: item.p.version, state: res.state, message: res.message || '' });
+        if (res.state === 'fail') S.batch.failed.push(item.p.id + '（v' + item.ins.version + '）');
+        index++;
+        step();
+      });
+    }
+    step();
   }
 
   function renderGrid() {
@@ -466,6 +801,7 @@
       : '索引暂不可用') + ' · 匹配 ' + list.length + ' 个 · 第 ' + S.page + '/' + pages +
       ' 页（每页 ' + PAGE_SIZE + ' 个）';
     renderSummary();
+    renderPickbar();
   }
   // renderPager：上一页 / 页码 / 下一页；只有一页时不渲染多余控件。
   function renderPager(total, pages) {
@@ -549,8 +885,11 @@
     }
     if (card.querySelector('.store-confirm')) return;
     var box = el('div', 'store-pkg-inline store-confirm');
-    add(box, el('p', 'store-pkg-inline-label',
-      '当前 v' + ins.version + ' → 新 v' + target + '；升级会保留配置与启用状态。'));
+    add(box, el('p', 'store-pkg-inline-label', '当前 v' + ins.version + ' → 新 v' + target + '。'));
+    // 风险提示与批量确认同一口径：升级会重启插件、跨大版本另有强提示。
+    upgradeRiskLines(ins, target).forEach(function (line, idx) {
+      add(box, el('p', 'store-risk' + (idx === 1 ? ' is-major' : ''), line));
+    });
     var actions = add(box, el('div', 'store-pkg-inline-actions'));
     var ok = add(actions, el('button', 'btn btn-primary', '确认升级'));
     ok.type = 'button';
@@ -559,7 +898,7 @@
     function close() { if (box.parentNode) box.parentNode.removeChild(box); }
     on(ok, function () {
       close();
-      runUpgrade(p, ins).then(function (upgraded) { if (upgraded) loadInstalled(); });
+      runUpgrade(p, ins).then(function (res) { if (res.state === 'ok') loadInstalled(); });
     });
     on(cancel, function () { close(); });
     var status = card.querySelector('.store-card-status');
@@ -617,10 +956,17 @@
         if (restartRequired(res)) {
           setStatus(p.id, 'fail', '索引已更新，需重启 kored');
           showRestartNotice(res);
-          return false;
+          return { state: 'restart', message: '索引刚更新，需重启 kored 后才能继续升级' };
         }
-        if (res.status === 401) { setStatus(p.id, 'fail', '登录已过期，请重新登录'); return false; }
-        if (!res.ok) { setStatus(p.id, 'fail', '升级失败：' + upgradeFailText(res)); return false; }
+        if (res.status === 401) {
+          setStatus(p.id, 'fail', '登录已过期，请重新登录');
+          return { state: 'fail', message: '登录已过期，请重新登录' };
+        }
+        if (!res.ok) {
+          var why = upgradeFailText(res);
+          setStatus(p.id, 'fail', '升级失败：' + why);
+          return { state: 'fail', message: why };
+        }
         var data = res.data || {};
         var reenabled = ins.desired !== 'disabled' && ins.enabled !== false;
         var msg = '已升级到 v' + target + (reenabled ? ' · 已重新启用' : ' · 保持停用');
@@ -630,46 +976,13 @@
             data.stale_versions.join('、data/plugins/' + p.id + '/') + '。';
         }
         setStatus(p.id, 'ok', msg);
-        return true;
+        return { state: 'ok', message: msg };
       }, function (err) {
         stop();
-        setStatus(p.id, 'fail', '升级失败：' + (err && err.message ? err.message : '网络错误'));
-        return false;
+        var net = err && err.message ? err.message : '网络错误';
+        setStatus(p.id, 'fail', '升级失败：' + net);
+        return { state: 'fail', message: net };
       });
-  }
-
-  // 一键全部升级：固定清单逐个升级（串行，避免并发安装争 state.db 与同一插件目录）。
-  // 进度 N/M 写在汇总条；失败项收集后一次性列出，不中断剩余升级。
-  function doUpgradeAll() {
-    if (S.batch.running) return;
-    var list = upgradable();
-    if (!list.length) return;
-    S.batch = { running: true, done: 0, total: list.length, failed: [], message: '' };
-    renderSummary();
-    var index = 0;
-    function step() {
-      if (index >= list.length) {
-        var okCount = list.length - S.batch.failed.length;
-        S.batch.running = false;
-        S.batch.message = '批量升级完成：成功 ' + okCount + ' 个' +
-          (S.batch.failed.length ? '，失败 ' + S.batch.failed.length + ' 个（' +
-            S.batch.failed.join('、') + '）' : '');
-        loadInstalled();
-        return;
-      }
-      var item = list[index];
-      if (S.batchStatus) {
-        S.batchStatus.textContent = '正在升级 ' + (index + 1) + '/' + S.batch.total +
-          ' · ' + (item.p.name || item.p.id) + '（v' + item.ins.version + ' → v' + item.p.version + '）';
-      }
-      runUpgrade(item.p, item.ins).then(function (ok) {
-        if (ok) S.batch.done++;
-        else S.batch.failed.push(item.p.id + '（v' + item.ins.version + '）');
-        index++;
-        step();
-      });
-    }
-    step();
   }
 
   // 重装：download=true + force=true，允许覆盖已装同版本；仍走索引摘要与包校验。
@@ -878,6 +1191,8 @@
     return request(U.installed).then(function (res) {
       S.installed = Object.create(null);
       if (res.ok && res.data && res.data.plugins) res.data.plugins.forEach(function (p) { S.installed[p.id] = p; });
+      // 升级完成后插件不再可升级：清掉失效勾选，避免「已选 3 个」却只剩 1 张可升级卡片。
+      pruneSelection(upgradable());
       renderGrid();
       probeUninstall(); // 首轮加载探一次卸载能力（只读语义的幂等 DELETE，不轮询）
     }, function () { /* 已安装列表失败不阻塞商店主视图 */ });
@@ -906,6 +1221,9 @@
     // 顶部升级汇总：先占位，已安装数据返回后由 renderSummary 填充。
     S.summary = add(root, el('div', 'store-upgrade-summary'));
     S.summary.hidden = true;
+    // 勾选批量操作带：可升级项 > 0 或有批量结果时由 renderPickbar 填充。
+    S.pickbar = add(root, el('div', 'store-batch'));
+    S.pickbar.hidden = true;
     root.appendChild(renderPresets());
     var bar = add(root, el('div', 'store-bar'));
     var search = add(bar, input('store-search', '按 id / 名称搜索插件', '搜索插件', 'search'));
@@ -960,6 +1278,7 @@
   function render(container) {
     if (!container) return Promise.reject(new Error('KoreStore.render 需要容器元素'));
     S.container = container;
+    ensureUpgradeStyle();
     container.textContent = '';
     var root = add(container, el('section', 'store'));
     buildShell(root);
