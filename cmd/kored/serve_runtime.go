@@ -147,6 +147,9 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		auth: auth.NewManagerWithPolicy(db, cfg.snapshot.Auth.AdminPasswordHash,
 			cfg.snapshot.Auth.SessionTTL, cfg.snapshot.Auth.CookieSecure),
 	}
+	// 首登改密提示：must_change 是**非阻断**标记，启动时从配置初始化，
+	// 运行期变动仍由 SIGHUP 走 ApplyCredentialSnapshot 同步。
+	svc.auth.SetMustChange(cfg.snapshot.Auth.MustChangePassword)
 	// 改口令 → 全局吊销（ADR-0041）：`kored admin-password set` 只改配置哈希，
 	// 旧会话仍在 bbolt 里；这里按口令指纹比对，变化即删除全部会话。
 	if revoked, err := svc.auth.ReconcilePasswordFingerprint(); err != nil {

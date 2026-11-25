@@ -232,8 +232,8 @@ func (m *Manager) SetPasswordHash(hash string) {
 	m.hashMu.Unlock()
 }
 
-// MustChange 报告当前口令是否仍是必须改密的一次性初始口令（ADR-0055）。
-// HTTP 中间件据此把会话降级为「只允许改密 / 登出 / 静态壳」。
+// MustChange 报告当前是否处于首登改密提示状态（ADR-0055）。
+// must_change 为非阻断提示标记，登录后全部功能可用；改密为可选，不是访问闸门。
 func (m *Manager) MustChange() bool {
 	m.hashMu.RLock()
 	defer m.hashMu.RUnlock()
