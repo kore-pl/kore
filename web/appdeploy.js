@@ -29,6 +29,12 @@
       tplBusy: false, tplMsg: '', tplResult: null,
       // ② 移除部署：页内二次确认（不可逆，输入部署名解锁），后端强制 confirm:true
       rmConfirm: null,
+      // ③ 部署后管理：行内忙碌标记、页内提示、运行日志面板、资源占用采样失败原因
+      rowBusy: {}, noticeText: '', noticeTone: 'ok',
+      usageError: '',
+      logsName: '', logsTail: 200, logsLines: [], logsErr: '', logsBusy: false,
+      logsTruncated: false, logsMetaText: '',
+      logsHost: null, noticeHost: null,
       progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       destroyed: false };
   }
@@ -267,7 +273,82 @@
     setProgress('fail', label + '失败', msg + '。怎么办：' + hint);
   }
 
-  // ---- ① 应用列表 ----
+  // ---- ① 应用列表（部署后可见：状态 / 端口 / 访问地址 / 资源占用 / 下一步操作） ----
+  // 停止、启动、日志是 0.4.0 引入的方法：版本未探明时照常显示（真不支持会走错误路径说明），
+  // 已探明且确实更旧时隐藏，避免按钮点了必然失败。
+  var MIN_CONTROL_VERSION = '0.4.0';
+  function supportsControl() {
+    if (!S.versionProbed || !S.pluginVersion) return true;
+    return versionAtLeast(S.pluginVersion, MIN_CONTROL_VERSION);
+  }
+  function nameTaken(name) {
+    for (var i = 0; i < S.deployments.length; i++) {
+      if ((S.deployments[i].name || S.deployments[i].id) === name) return true;
+    }
+    return false;
+  }
+  // 应用名建议：重名自动加 -2/-3…（原则②自动发现），用户仍可手改。
+  function suggestName(tplId) {
+    var base = normalizedName('', tplId);
+    if (!nameTaken(base)) return base;
+    for (var i = 2; i <= 99; i++) {
+      var cand = normalizedName(base + '-' + i, tplId);
+      if (!nameTaken(cand)) return cand;
+    }
+    return base;
+  }
+  function portsText(d) {
+    var list = d.ports || [];
+    if (!list.length) return '';
+    return list.map(function (p) { return (p.host_port || '—') + ' → ' + (p.container_port || '—'); }).join(' · ');
+  }
+  function usageText(d) {
+    var u = d.usage;
+    if (!u) return '';
+    var parts = [];
+    if (typeof u.cpu_percent === 'number') parts.push('CPU ' + u.cpu_percent.toFixed(1) + '%');
+    if (typeof u.mem_used_bytes === 'number') {
+      parts.push('内存 ' + fmtBytes(u.mem_used_bytes) +
+        (typeof u.mem_limit_bytes === 'number' && u.mem_limit_bytes > 0 ? ' / ' + fmtBytes(u.mem_limit_bytes) : ''));
+    }
+    return parts.join(' · ');
+  }
+  function linkBtn(href, label) {
+    var a = el('a', 'btn btn-ghost adp-open', label);
+    a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    return a;
+  }
+  function openLogs(name) {
+    if (!name) return;
+    S.logsName = name; paintLogs();
+    loadLogs();
+    if (S.logsHost && S.logsHost.scrollIntoView) S.logsHost.scrollIntoView({ block: 'nearest' });
+  }
+  // 停止 / 启动：一次请求动一条部署的全部容器；成功后回读列表与任务，日志面板跟随刷新。
+  function doControl(name, action) {
+    if (!name || S.rowBusy[name]) return;
+    S.rowBusy[name] = true; paintList();
+    invoke(action, { name: name }).then(function () {
+      if (S.destroyed) return;
+      S.rowBusy[name] = false;
+      S.noticeText = (action === 'stop' ? '已停止「' : '已启动「') + name + '」';
+      S.noticeTone = 'ok';
+      paintNotice(); paintList(); load(); loadJobs();
+      if (S.logsName === name) loadLogs();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.rowBusy[name] = false;
+      S.noticeText = humanError(action === 'stop' ? '停止' : '启动', err);
+      S.noticeTone = 'fail';
+      paintNotice(); paintList();
+    });
+  }
+  function paintNotice() {
+    if (!S.noticeHost) return;
+    S.noticeHost.textContent = '';
+    if (!S.noticeText) return;
+    S.noticeHost.appendChild(notice(S.noticeText, S.noticeTone === 'ok' ? 'ok' : ''));
+  }
   function paintList() {
     if (!S.listHost) return;
     S.listHost.textContent = '';
@@ -275,7 +356,7 @@
       var kind = degrade({ code: S.loadCode, message: S.loadError });
       if (kind === 'notinstalled') {
         S.notInstalled = true;
-        S.listHost.appendChild(emptyBlock('还没有安装应用部署插件（先去商店装，装好回本页即可上传部署）。',
+        S.listHost.appendChild(emptyBlock('还没有安装应用部署插件（先去商店装，装好回本页即可部署）。',
           '去软件商店安装', goStore));
         return;
       }
@@ -287,34 +368,118 @@
     }
     if (S.notInstalled) S.notInstalled = false;
     if (!S.deployments.length) {
-      S.listHost.appendChild(emptyBlock('还没有应用：上传一个 tar.gz/zip 制品即可完成第一次部署。',
-        '上传第一个应用', function () {
-          var n = document.getElementById('adp-up-file'); if (n) n.click();
+      S.listHost.appendChild(emptyBlock('还没有应用：选上面的模板一键部署，或上传自己的 tar.gz/zip 制品。',
+        '从模板部署第一个应用', function () {
+          if (S.tplHost && S.tplHost.scrollIntoView) S.tplHost.scrollIntoView({ block: 'nearest' });
         }));
       return;
     }
-    var wrap = add(S.listHost, el('div', 'plugin-table-wrap'));
-    var table = add(wrap, el('table', 'plugin-table'));
-    var tr = add(add(table, el('thead')), el('tr'));
-    ['应用名', '部署模板', '状态', '创建时间', '操作'].forEach(function (h) { add(tr, el('th', null, h)); });
-    var tb = add(table, el('tbody'));
     S.deployments.forEach(function (d) {
-      var row = add(tb, el('tr'));
-      add(row, el('td', 'mono', d.name || d.id));
-      add(row, el('td', null, d.template || 'artifact'));
-      var st = add(row, el('td'));
+      var name = d.name || d.id;
+      var card = add(S.listHost, el('div', 'adp-app'));
+      var head = add(card, el('div', 'adp-app-head'));
+      add(head, el('span', 'adp-app-name mono', name));
       var tone = d.status === 'running' ? 'ok' : d.status === 'missing' ? 'na' : 'warn';
-      st.appendChild(chip(tone, statusText(d.status)));
-      add(row, el('td', null, fmtTime(d.created_at)));
-      var op = add(row, el('td'));
-      var up = add(op, el('button', 'btn btn-ghost', '升级')); up.type = 'button';
-      on(up, function () { S.upgSel = d.name || d.id; if (S.upgSelSel) S.upgSelSel.value = S.upgSel; paintUpgrade(); focusEl('adp-upg-file'); });
-      var jb = add(op, el('button', 'btn btn-ghost', '看任务')); jb.type = 'button';
-      on(jb, function () { loadJobs(); });
+      head.appendChild(chip(tone, statusText(d.status)));
+      add(head, el('span', 'adp-app-sub', '模板 ' + (d.template || 'artifact') + ' · 创建于 ' + fmtTime(d.created_at)));
+      var meta = add(card, el('div', 'adp-app-meta'));
+      var pText = portsText(d);
+      if (pText) add(meta, el('span', 'adp-app-meta-item', '端口 ' + pText));
+      if (d.access_url) {
+        var acc = add(meta, el('span', 'adp-app-meta-item'));
+        add(acc, el('span', null, '访问 '));
+        var a = add(acc, el('a', 'adp-app-link', d.access_url));
+        a.href = d.access_url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      }
+      var uText = usageText(d);
+      if (uText) add(meta, el('span', 'adp-app-meta-item', '占用 ' + uText));
+      if (d.hint) add(card, el('p', 'adp-app-hint', d.hint));
+      var ops = add(card, el('div', 'adp-app-ops'));
+      if (d.access_url) add(ops, linkBtn(d.access_url, '打开'));
+      if (supportsControl()) {
+        var lb = add(ops, el('button', 'btn btn-ghost', '日志')); lb.type = 'button';
+        on(lb, function () { openLogs(name); });
+        var running = d.status === 'running';
+        var cb = add(ops, el('button', 'btn btn-ghost' + (running ? ' adp-stop' : ''), running ? '停止' : '启动'));
+        cb.type = 'button'; cb.disabled = !!S.rowBusy[name] || d.status === 'missing';
+        if (d.status === 'missing') cb.title = '容器已不在，无法启动；请移除后重新部署';
+        on(cb, function () { doControl(name, running ? 'stop' : 'start'); });
+      }
+      var up = add(ops, el('button', 'btn btn-ghost', '升级')); up.type = 'button';
+      on(up, function () { S.upgSel = name; if (S.upgSelSel) S.upgSelSel.value = S.upgSel; paintUpgrade(); focusEl('adp-upg-file'); });
       // 移除是危险且不可逆操作（删容器 + 命名卷，含数据库数据）：页内二次确认 + 后端 confirm:true。
-      var rm = add(op, el('button', 'btn btn-ghost adp-rm', '移除')); rm.type = 'button';
-      var appName = d.name || d.id;
-      on(rm, function () { openRemove(appName); });
+      var rm = add(ops, el('button', 'btn btn-ghost adp-rm', '删除')); rm.type = 'button';
+      on(rm, function () { openRemove(name); });
+    });
+    if (S.usageError) add(S.listHost, el('p', 'adp-hint', S.usageError));
+  }
+
+  // ---- 运行日志面板 ----
+  function logsCandidates() {
+    return (S.deployments || []).map(function (d) { return d.name || d.id; });
+  }
+  function paintLogs() {
+    if (!S.logsHost) return;
+    S.logsHost.textContent = '';
+    if (!supportsControl()) {
+      S.logsHost.appendChild(el('p', 'adp-hint',
+        '当前插件版本较低（已确认 ' + (S.pluginVersion || '未知') + ' < ' + MIN_CONTROL_VERSION + '），没有日志/停止/启动能力；到软件商店升级后这里就能用。'));
+      return;
+    }
+    var names = logsCandidates();
+    var bar = add(S.logsHost, el('div', 'adp-logs-bar'));
+    var selWrap = add(bar, el('label', 'field adp-field'));
+    add(selWrap, el('span', 'field-label', '应用'));
+    var sel = add(selWrap, el('select', 'field-input'));
+    sel.setAttribute('aria-label', '选择要查看日志的应用');
+    if (!names.length) {
+      var none = el('option', null, '（暂无应用）'); none.value = ''; sel.appendChild(none); sel.disabled = true;
+      S.logsName = '';
+    } else {
+      names.forEach(function (n) { var o = el('option', null, n); o.value = n; sel.appendChild(o); });
+      if (names.indexOf(S.logsName) < 0) S.logsName = names[0];
+      sel.value = S.logsName;
+    }
+    on(sel, function () { S.logsName = sel.value; S.logsLines = []; loadLogs(); });
+    var tailWrap = add(bar, el('label', 'field adp-field adp-logs-tail'));
+    add(tailWrap, el('span', 'field-label', '行数'));
+    var tailSel = add(tailWrap, el('select', 'field-input'));
+    tailSel.setAttribute('aria-label', '日志行数');
+    [100, 200, 500, 1000].forEach(function (n) {
+      var o = el('option', null, n + ' 行'); o.value = String(n);
+      if (n === S.logsTail) o.selected = true;
+      tailSel.appendChild(o);
+    });
+    on(tailSel, function () { S.logsTail = parseInt(tailSel.value, 10) || 200; loadLogs(); });
+    var ops = add(bar, el('div', 'adp-actions'));
+    var rb = add(ops, el('button', 'btn btn-primary', S.logsBusy ? '读取中…' : '刷新日志'));
+    rb.type = 'button'; rb.disabled = S.logsBusy || !S.logsName;
+    on(rb, loadLogs);
+    add(bar, el('span', 'adp-logs-meta', S.logsMetaText || ''));
+    if (S.logsErr) S.logsHost.appendChild(notice(S.logsErr));
+    var pre = add(S.logsHost, el('pre', 'adp-logs'));
+    pre.setAttribute('aria-live', 'polite');
+    pre.textContent = S.logsLines.length ? S.logsLines.join('\n') : (S.logsName ? '（还没有日志；部署后容器启动输出会出现在这里）' : '（先部署一个应用）');
+    if (S.logsTruncated) add(S.logsHost, el('p', 'adp-hint', '日志过长，只显示最近的一段（可把行数调小或到容器插件看完整日志）。'));
+  }
+  function loadLogs() {
+    if (!S.logsHost) return;
+    if (!S.logsName) { S.logsLines = []; S.logsMetaText = ''; paintLogs(); return; }
+    S.logsBusy = true; S.logsErr = ''; paintLogs();
+    invoke('logs', { name: S.logsName, tail: S.logsTail }).then(function (d) {
+      if (S.destroyed) return;
+      S.logsBusy = false;
+      S.logsLines = (d && d.lines) || [];
+      S.logsTruncated = !!(d && d.truncated);
+      var who = (d && d.container) || S.logsName;
+      if (d && d.service) who += ' · ' + d.service + ' 容器';
+      S.logsMetaText = who + ' · 最近 ' + ((d && d.tail) || S.logsTail) + ' 行';
+      paintLogs();
+    }, function (err) {
+      if (S.destroyed) return;
+      S.logsBusy = false; S.logsTruncated = false; S.logsLines = [];
+      S.logsErr = humanError('读取日志', err);
+      paintLogs();
     });
   }
 
@@ -374,7 +539,10 @@
     });
   }
   function statusText(s) {
-    return s === 'running' ? '运行中' : s === 'missing' ? '未启动容器（制品已就位）' : s === 'stopped' ? '已停止' : (s || '未知');
+    if (s === 'running') return '运行中';
+    if (s === 'exited' || s === 'stopped') return '已停止';
+    if (s === 'missing') return '容器已不在';
+    return s || '未知';
   }
 
   // ---- ① 从内置模板一键部署 ----
@@ -478,8 +646,8 @@
       add(b, el('span', 'adp-tpl-req', templateRequirements(t)));
       on(b, function () {
         S.tplSel = t.id; S.tplResult = null; S.tplMsg = '';
-        // 换模板时按新模板重置默认值；保留用户已改过的同名 env/端口键不丢。
-        S.tplName = normalizedName(t.id, t.id);
+        // 换模板时按新模板重置默认值；应用名按现有部署去重后给建议（原则②自动发现）。
+        S.tplName = suggestName(t.id);
         S.tplHostPorts = {}; S.tplEnvVals = {};
         paintTemplates();
       });
@@ -488,24 +656,30 @@
     if (!tpl) return;
     var form = add(S.tplHost, el('div', 'adp-tpl-form'));
     var nameWrap = add(form, el('label', 'field adp-field'));
-    add(nameWrap, el('span', 'field-label', '应用名（自动加 kore-app- 前缀，只能用小写字母/数字/连字符）'));
+    add(nameWrap, el('span', 'field-label', '应用名（已自动填好，可改；自动加 kore-app- 前缀，重名会加 -2）'));
     var nameInp = add(nameWrap, el('input', 'field-input'));
     nameInp.id = 'adp-tpl-name'; nameInp.placeholder = TPL_PREFIX + 'wordpress';
-    nameInp.value = S.tplName || normalizedName(tpl.id, tpl.id);
+    nameInp.value = S.tplName || suggestName(tpl.id);
     on(nameInp, function () { S.tplName = nameInp.value; }, 'input');
+    add(nameWrap, el('span', 'field-hint', '只能用小写字母 / 数字 / 连字符；这个名字同时是容器名，删除时按它定位。'));
 
-    // 端口：模板声明了才显示；默认带推荐端口，用户可改（原则①预设优先，不填也能成功）。
+    // 端口：模板声明了才显示；默认带「已自动检测」的可用端口，用户可改（原则①预设优先，不填也能成功）。
     var ports = tpl.ports || [];
     ports.forEach(function (p) {
+      var def = p.default_host_port || p.container_port || 0;
+      var sug = p.suggested_host_port || 0;
+      var hint = '留空则自动挑一个可用端口。';
+      if (sug && def && sug !== def) hint = '推荐端口 ' + def + ' 已被占用，将自动改用 ' + sug + '；也可自己填一个。';
+      else if (sug) hint = '已自动检测：端口 ' + sug + ' 可用（留空即用它）。';
       var w = add(form, el('label', 'field adp-field'));
-      add(w, el('span', 'field-label', (p.label || '端口') + '（宿主机端口，留空用推荐 ' +
-        (p.default_host_port || p.container_port || '自动') + '）'));
+      add(w, el('span', 'field-label', (p.label || '端口') + '（宿主机端口，留空自动）'));
       var inp = add(w, el('input', 'field-input'));
       inp.type = 'number'; inp.min = '1024'; inp.max = '65535';
-      inp.placeholder = String(p.default_host_port || p.container_port || '');
+      inp.placeholder = String(sug || def || '');
       inp.value = S.tplHostPorts[p.container_port] || '';
       inp.setAttribute('aria-label', (p.label || '端口') + '宿主机端口');
       on(inp, function () { S.tplHostPorts[p.container_port] = inp.value; }, 'input');
+      add(w, el('span', 'field-hint', hint));
     });
 
     // 环境变量：按模板 env 字段生成；必填项标「必填」，口令项用 password 输入框，
@@ -531,13 +705,31 @@
     var rf = add(ops, el('button', 'btn btn-ghost', '刷新模板')); rf.type = 'button'; on(rf, loadTemplates);
     add(form, el('p', 'adp-hint', '部署会启动真实容器；镜像由内置模板固定，不接受自定义镜像。'));
     if (S.tplMsg) S.tplHost.appendChild(notice(S.tplMsg));
-    if (S.tplResult) {
-      var r = S.tplResult, box = add(S.tplHost, el('div', 'adp-result'));
-      box.appendChild(chip(r.deployed ? 'ok' : 'warn', r.deployed ? '已部署' : '部署未确认'));
-      add(box, el('span', 'mono', (r.name || '') + ' · ' + (r.template || '')));
-      if (r.access_url) add(box, el('p', 'adp-path', '访问地址：' + r.access_url));
-      if (r.id) add(box, el('p', 'adp-path mono', '部署 id：' + r.id));
+    if (S.tplResult) paintDeployResult(S.tplResult);
+  }
+  // 部署成功后的「下一步」：访问入口 / 查看日志 / 停止 / 删除，一个都不让人再去找。
+  function paintDeployResult(r) {
+    var appName = r.name || '';
+    var box = add(S.tplHost, el('div', 'adp-result adp-result-done'));
+    box.appendChild(chip(r.deployed ? 'ok' : 'warn', r.deployed ? '已部署' : '部署未确认'));
+    add(box, el('span', 'mono', appName + ' · ' + (r.template || '')));
+    if (r.access_url) add(box, el('p', 'adp-path', '访问地址：' + r.access_url));
+    var ops = add(box, el('div', 'adp-result-ops'));
+    if (r.access_url) add(ops, linkBtn(r.access_url, '打开访问地址'));
+    if (appName && supportsControl()) {
+      var lb = add(ops, el('button', 'btn btn-ghost', '查看日志')); lb.type = 'button';
+      on(lb, function () { openLogs(appName); });
+      var sb = add(ops, el('button', 'btn btn-ghost adp-stop', '停止')); sb.type = 'button';
+      on(sb, function () { doControl(appName, 'stop'); });
     }
+    if (appName) {
+      var rm = add(ops, el('button', 'btn btn-ghost adp-rm', '删除')); rm.type = 'button';
+      on(rm, function () { openRemove(appName); });
+    }
+    add(box, el('p', 'adp-hint', '下一步：点「打开访问地址」看效果；要改代码就改挂载目录里的文件（' +
+      (r.template === 'node-app' || r.template === 'python-app' ? '应用目录' : '站点目录') +
+      '）；用完点「停止」或「删除」。'));
+    if (r.id) add(box, el('p', 'adp-path mono', '部署 id：' + r.id));
   }
   function submitDeploy() {
     if (S.tplBusy) return;
@@ -748,8 +940,9 @@
     return invoke('list', {}).then(function (d) {
       if (S.destroyed) return;
       S.deployments = (d && d.deployments) || [];
+      S.usageError = (d && d.usage_error) || '';
       S.loadError = ''; S.loadCode = '';
-      paintList(); paintUpgrade();
+      paintList(); paintUpgrade(); paintLogs();
     }, function (err) {
       if (S.destroyed) return;
       S.loadError = String(err && err.message || err); S.loadCode = (err && err.code) || '';
@@ -813,6 +1006,28 @@
     'padding:10px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-1)}' +
     '.adp-tpl-form .adp-field{flex:1 1 180px}' +
     '.adp-tpl-form .field-hint{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.4}' +
+    // 部署后可见：卡片式应用行（手机端天然不横向溢出）、日志面板、下一步按钮组。
+    '.adp-notice-host:empty{display:none}' +
+    '.adp-app{border:1px solid var(--kore-border-1);border-radius:6px;padding:10px;margin-bottom:8px;background:var(--kore-bg-0)}' +
+    '.adp-app-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:var(--kore-font-13)}' +
+    '.adp-app-name{font-weight:600;color:var(--kore-text-1);word-break:break-all}' +
+    '.adp-app-sub{color:var(--kore-text-3);font-size:var(--kore-font-12)}' +
+    '.adp-app-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:var(--kore-font-12);color:var(--kore-text-2)}' +
+    '.adp-app-meta-item{word-break:break-all}' +
+    '.adp-app-link{color:var(--kore-info,#58a6ff);word-break:break-all}' +
+    '.adp-app-hint{margin:6px 0 0;font-size:var(--kore-font-12);color:var(--kore-warning,#d29922)}' +
+    '.adp-app-ops{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}' +
+    '.adp-open{text-decoration:none;display:inline-flex;align-items:center}' +
+    '.adp-stop{color:var(--kore-warning,#d29922)}' +
+    '.adp-result-done{flex-direction:column;align-items:flex-start;gap:6px}' +
+    '.adp-result-ops{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}' +
+    '.adp-logs-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px}' +
+    '.adp-logs-bar .adp-field{flex:1 1 180px}' +
+    '.adp-logs-tail{max-width:130px}' +
+    '.adp-logs-meta{font-size:var(--kore-font-12);color:var(--kore-text-3);word-break:break-all}' +
+    '.adp-logs{margin:0;padding:10px;max-height:340px;overflow:auto;border:1px solid var(--kore-border-1);' +
+    'border-radius:6px;background:var(--kore-bg-2);color:var(--kore-text-2);font-size:var(--kore-font-12);' +
+    'line-height:1.5;white-space:pre-wrap;word-break:break-all}' +
     '.adp-rm{color:var(--kore-danger,#f85149)}' +
     '.adp-rm-confirm{border-color:var(--kore-danger,#f85149)}' +
     '.adp-rm-warn{margin:0 0 10px;font-size:var(--kore-font-13);color:var(--kore-danger,#f85149);line-height:1.6}' +
@@ -825,6 +1040,13 @@
     '.adp-tpl-form{flex-direction:column;align-items:stretch}' +
     '.adp-tpl-form .adp-field{min-width:0}.adp-tpl-form .btn{min-height:44px;width:100%}' +
     '.adp-rm-form .btn{min-height:44px;width:100%}' +
+    '.adp-app-ops{flex-direction:column;align-items:stretch}' +
+    '.adp-app-ops .btn,.adp-app-ops .adp-open{min-height:44px;width:100%;justify-content:center}' +
+    '.adp-result-ops{flex-direction:column;align-items:stretch;width:100%}' +
+    '.adp-result-ops .btn,.adp-result-ops .adp-open{min-height:44px;width:100%;justify-content:center}' +
+    '.adp-logs-bar{flex-direction:column;align-items:stretch}' +
+    '.adp-logs-tail{max-width:none}' +
+    '.adp-logs{max-height:260px}' +
     '.plugin-table .adp-rm{min-height:44px}}';
   function ensureCss() {
     if (document.getElementById('kore-appdeploy-css')) return;
@@ -837,13 +1059,21 @@
     add(container, S.root);
 
     S.bannerHost = add(S.root, el('div', 'adp-banner'));
+    S.noticeHost = add(S.root, el('div', 'adp-notice-host'));
     ensureProgress();
 
-    // ① 列表
-    var list = panel('应用列表', '');
+    // ① 列表（状态 / 端口 / 访问地址 / 资源占用 / 行内下一步）
+    var list = panel('应用列表', '状态、端口、访问地址与资源占用一览');
     add(S.root, list.panel);
     S.listMeta = add(list.meta, el('span', null, ''));
+    var listOps = add(list.head, el('span', 'adp-jobs-ops'));
+    var lrf = add(listOps, el('button', 'btn btn-ghost', '刷新列表')); lrf.type = 'button'; on(lrf, load);
     S.listHost = add(list.panel, el('div', 'adp-list'));
+
+    // ①b 运行日志（部署后第一需求：它到底起没起来、为什么退出了）
+    var logs = panel('运行日志', '看容器最近的输出（stdout + stderr）');
+    add(S.root, logs.panel);
+    S.logsHost = add(logs.panel, el('div', 'adp-logs-host'));
 
     // ① 从内置模板部署（预设优先：选中模板即可一键部署，无需填镜像/编排细节）
     var tplPanel = panel('从模板部署', '选内置模板，填个名字就能一键起 WordPress / nginx 等');
@@ -903,7 +1133,7 @@
     // 移除确认宿主：挂在 root 上，列表重绘不影响它。
     S.rmHost = add(S.root, el('div', 'adp-rm-host'));
 
-    paintDenied(); paintList(); paintTemplates(); paintUpload(); paintUpgrade(); paintJobs(); paintRemove();
+    paintDenied(); paintNotice(); paintList(); paintLogs(); paintTemplates(); paintUpload(); paintUpgrade(); paintJobs(); paintRemove();
     probePluginVersion();
     load(); loadJobs(); loadTemplates();
     return { destroy: function () { S.destroyed = true; stopProgress(); } };
