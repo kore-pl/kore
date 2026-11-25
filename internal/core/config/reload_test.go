@@ -72,7 +72,7 @@ func TestReloadPasswordHashWarns(t *testing.T) {
 	}
 	found := false
 	for _, w := range warnings {
-		if strings.Contains(w.String(), "密码已更新，现有会话不吊销（如需强制下线请重启）") {
+		if strings.Contains(w.String(), "密码已更新") && strings.Contains(w.String(), "SIGHUP") {
 			found = true
 		}
 	}

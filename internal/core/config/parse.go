@@ -10,7 +10,7 @@ import (
 var (
 	topKeys       = []string{"profile", "server", "auth", "paths", "log", "resources", "plugins", "store", "security", "audit", "cert_renew"}
 	serverKeys    = []string{"addr", "socket", "tls"}
-	authKeys      = []string{"admin_password_hash", "session_ttl", "cookie_secure", "initialized"}
+	authKeys      = []string{"admin_password_hash", "must_change_password", "session_ttl", "cookie_secure", "initialized"}
 	pathsKeys     = []string{"state_dir", "log_dir", "run_dir", "plugin_dir", "index_dir"}
 	storeKeys     = []string{"allow_unsigned"}
 	logKeys       = []string{"level", "rotate"}
@@ -140,6 +140,11 @@ func (p *parser) decodeAuth(n *yaml.Node, out *Auth) error {
 	}
 	if v := m["initialized"]; v != nil {
 		if out.Initialized, err = p.boolean(v, "auth.initialized"); err != nil {
+			return err
+		}
+	}
+	if v := m["must_change_password"]; v != nil {
+		if out.MustChangePassword, err = p.boolean(v, "auth.must_change_password"); err != nil {
 			return err
 		}
 	}

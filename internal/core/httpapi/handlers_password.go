@@ -10,6 +10,32 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
+// credentialConsumedHook 由 cmd/kored 注入（在 passwordWriterFor 内设置），用于首登
+// 改密成功后删除一次性凭据文件。httpapi 不 import cmd（G-01 薄壳），用函数钩子收口。
+// nil 时跳过（测试骨架没有凭据文件）。
+var credentialConsumedHook func()
+
+// SetCredentialConsumedHook 注入「凭据已消费」回调（cmd 装配期调用一次）。
+func SetCredentialConsumedHook(fn func()) { credentialConsumedHook = fn }
+
+
+// mustChangeBlocked 在 must_change=true 时对非白名单 /api/v1/* 返回 403 白话提示。
+// 白名单：改密端点（唯一能清标志的写操作）与登出（幂等终止会话）；静态壳与
+// 登录端点不在 /api/v1/* 会话分支内，天然放行。这是单管理员一次性状态机，
+// 不是 RBAC（G-11）。API token / 插件 bearer 身份已在 withAuth 前面分支放行，
+// 不走本闸门。
+func (s *Server) mustChangeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil || !s.auth.MustChange() {
+		return false
+	}
+	if r.URL.Path == authPasswordPath || r.URL.Path == "/api/v1/auth/logout" {
+		return false
+	}
+	writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
+		"首次登录请先设置新口令", "")
+	return true
+}
+
 // changePasswordRequest 是 POST /api/v1/auth/password 的显式请求体（snake_case，
 // 与 web/settings.js 逐字对齐）。两个字段只活在内存里：不写日志、不落审计、
 // 不回显、不拼进错误消息（G-30）。
@@ -93,8 +119,20 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 			"口令写入配置失败，请稍后重试或使用命令行修改", "")
 		return
 	}
-	// ③ 切换内存校验基准（原子替换，之后的新登录用新口令）。
-	s.auth.SetPasswordHash(hash)
+	// ③ 切换内存校验基准（原子替换）并清 must_change 一次性标志。
+	//    顺序仍是 fail-secure：持久化成功后才改内存，标志与哈希同锁切换。
+	s.auth.ApplyCredentialSnapshot(hash, false)
+	// ④ 改密成功后删除一次性初始凭据文件（G-30 消费后删）。
+	if credentialConsumedHook != nil {
+		credentialConsumedHook()
+	}
+	// ⑤ 写审计：只记事件元数据，明文/哈希均不落审计（G-30）。
+	s.recordAudit(AuditEvent{
+		Subject: "admin",
+		Action:  "auth.password_initial_changed",
+		Result:  auditResultOK,
+		Detail:  map[string]string{"reason": "first_login_password_change"},
+	})
 	// ④ 记录"上次修改时间 + 强度评估"供账户与安全中心展示（只存标量，不存明文）。
 	//    这一步失败不影响改口令结果（口令已经生效），只记日志。
 	if sec := s.auth.Security(); sec != nil {

@@ -7,7 +7,7 @@ import "log/slog"
 // 解析或校验失败时返回错误且不修改旧快照，调用方必须继续使用旧快照。
 // 白名单：log.*、resources.*（resident_max 除外，需重启）、security.login_rate_limit.*、
 // audit.invoke_all、plugins.allow_unsigned、cert_renew.*、auth.session_ttl、
-// auth.admin_password_hash；其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
+// auth.admin_password_hash、auth.must_change_password；其余（含 paths.*、store.allow_unsigned 信任边界开关）需重启内核。
 func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 	next, warnings, err := load(opts)
 	if err != nil {
@@ -19,7 +19,7 @@ func (old *Snapshot) Reload(opts Options) (*Snapshot, []Warning, error) {
 		warnings = append(warnings, Warning{
 			Source:  next.Source,
 			Key:     "auth.admin_password_hash",
-			Message: "密码已更新，现有会话不吊销（如需强制下线请重启）",
+			Message: "密码已更新；SIGHUP 会同步新哈希与 must_change 标志并吊销旧会话，无需重启",
 		})
 	}
 	for _, key := range ignored {
@@ -78,6 +78,10 @@ func mergeAuth(dst, src *Snapshot) []string {
 	if dst.Auth.AdminPasswordHash != src.Auth.AdminPasswordHash {
 		dst.Auth.AdminPasswordHash = src.Auth.AdminPasswordHash
 		applied = append(applied, "auth.admin_password_hash")
+	}
+	if dst.Auth.MustChangePassword != src.Auth.MustChangePassword {
+		dst.Auth.MustChangePassword = src.Auth.MustChangePassword
+		applied = append(applied, "auth.must_change_password")
 	}
 	return applied
 }

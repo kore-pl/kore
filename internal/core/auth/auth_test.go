@@ -137,3 +137,55 @@ func TestLogoutThen401(t *testing.T) {
 		t.Fatalf("登出后访问状态码 = %d，期望 401；body=%s", rec.Code, rec.Body.String())
 	}
 }
+// TestApplyCredentialSnapshot 覆盖 ADR-0055 §5 的 SIGHUP 同步内核：
+// 新哈希与 must_change 原子应用；无变化时不报变化（避免每次热更踢全员下线）。
+func TestApplyCredentialSnapshot(t *testing.T) {
+	db := newStore(t)
+	oldHash := makeHash(t, testPassword)
+	newHash := makeHash(t, "reset-password-9999")
+	mgr := auth.NewManager(db, oldHash, 0, false)
+	mgr.SetMustChange(true)
+
+	if !mgr.MustChange() {
+		t.Fatal("初始 must_change 应为 true")
+	}
+	// 无变化：不报变化。
+	if mgr.ApplyCredentialSnapshot(oldHash, true) {
+		t.Fatal("同哈希同标志不应报告变化")
+	}
+	// CLI 重置：新哈希 + must_change=true → 报变化并生效。
+	if !mgr.ApplyCredentialSnapshot(newHash, true) {
+		t.Fatal("新哈希应报告变化")
+	}
+	if ok, err := mgr.Verify("reset-password-9999"); err != nil || !ok {
+		t.Fatalf("SIGHUP 后新口令应可登录: ok=%v err=%v", ok, err)
+	}
+	if ok, err := mgr.Verify(testPassword); err != nil || ok {
+		t.Fatalf("SIGHUP 后旧口令应失效: ok=%v err=%v", ok, err)
+	}
+	// 在线改密清标志：报变化且生效。
+	if !mgr.ApplyCredentialSnapshot(newHash, false) {
+		t.Fatal("must_change 清除应报告变化")
+	}
+	if mgr.MustChange() {
+		t.Fatal("改密后 must_change 应为 false")
+	}
+}
+
+// TestMustChangeGateViaAuthManager 通过 newServer 验证 must_change 标志驱动 403 闸门。
+func TestMustChangeGateViaAuthManager(t *testing.T) {
+	s := newServer(t)
+	cookie := cookieValue(t, login(t, s, testPassword))
+	if got := request(t, s, http.MethodGet, "/api/v1/auth/session", "", cookie).Code; got != http.StatusOK {
+		t.Fatalf("must_change=false 时应放行，实际 %d", got)
+	}
+	// 直接通过 server.AuthManager 打开标志（模拟 CLI 重置后 SIGHUP 同步）。
+	s.AuthManager().SetMustChange(true)
+	rec := request(t, s, http.MethodGet, "/api/v1/auth/session", "", cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("must_change=true 时应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "首次登录请先设置新口令") {
+		t.Fatalf("403 应为白话提示，实际 %s", rec.Body.String())
+	}
+}

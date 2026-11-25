@@ -84,6 +84,9 @@ func runPackageInstall(opts installOptions, stdout, stderr io.Writer) int {
 		return exitConfig
 	}
 	printCLITargets(stdout, targets)
+	// ADR-0055：安装期统一入口，在打开 state.db 之前生成/交付一次性管理员凭据。
+	// 凭据只写 config + <install>/data，不碰被 serve 独占的 state.db（规避锁冲突）。
+	ensureInitialAdminCredential(targets.ConfigPath, stderr)
 	if err := installer.ValidatePackage(opts.packagePath); err != nil {
 		fmt.Fprintf(stderr, "安装失败: %v\n", err)
 		return exitConfig

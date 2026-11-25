@@ -60,6 +60,10 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 				return
 			}
+			// ADR-0055 §4：首登强制改密——must_change 时只放行改密/登出/静态壳。
+			if s.mustChangeBlocked(w, r) {
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -361,6 +365,8 @@ func statusFor(code string) int {
 	case pluginapi.E_NEED_ROOT:
 		return http.StatusForbidden
 	case pluginapi.E_NO_SYSTEMD:
+		return http.StatusNotImplemented
+	case "E_NO_SELF_RESTART":
 		return http.StatusNotImplemented
 	default:
 		return http.StatusInternalServerError

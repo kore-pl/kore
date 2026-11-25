@@ -279,18 +279,31 @@ func TestUpsertAdminHashKeepsCommentsAndOtherKeys(t *testing.T) {
 // 重启（哈希已存在）不再打印，配置文件里没有明文。
 func TestFirstRunBootstrapGeneratesOneTimeCredential(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
+	credPath := filepath.Join(t.TempDir(), "initial-admin-credential")
+	oldPathFn := initialAdminCredentialPathFn
+	initialAdminCredentialPathFn = func() string { return credPath }
+	defer func() { initialAdminCredentialPathFn = oldPathFn }()
 	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, true)
 
 	var stderr bytes.Buffer
 	firstRunBootstrap(&cfg, &stderr)
 	out := stderr.String()
-	if !strings.Contains(out, "Kore 首启凭据（只显示这一次）") {
+	if !strings.Contains(out, "Kore 初始管理员凭据（只显示这一次）") {
 		t.Fatalf("首启未打印一次性凭据块:\n%s", out)
 	}
 	plain := bootstrapPassword(t, out)
 	if len(plain) != adminPasswordLength {
 		t.Fatalf("首启口令长度应为 %d，实际 %d: %q", adminPasswordLength, len(plain), plain)
+	}
+	if n := strings.Count(out, plain); n != 1 {
+		t.Fatalf("TTY 明文应只打印一次，实际 %d 次", n)
+	}
+	if !strings.Contains(out, credPath) {
+		t.Fatalf("TTY 应同时打印凭据文件路径: %s", out)
+	}
+	if _, err := os.Stat(credPath); err != nil {
+		t.Fatalf("TTY 也应生成凭据文件: %v", err)
 	}
 
 	raw, err := os.ReadFile(path)
@@ -305,6 +318,9 @@ func TestFirstRunBootstrapGeneratesOneTimeCredential(t *testing.T) {
 	}
 	if cfg.snapshot.Auth.AdminPasswordHash == "" || !cfg.snapshot.Auth.Initialized {
 		t.Fatal("内存快照未同步首启哈希，本次启动将无法登录")
+	}
+	if !cfg.snapshot.Auth.MustChangePassword || !snapHasMustChange(t, path) {
+		t.Fatal("首启应设置 must_change_password=true")
 	}
 
 	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
@@ -325,10 +341,14 @@ func TestFirstRunBootstrapGeneratesOneTimeCredential(t *testing.T) {
 	}
 }
 
-// TestFirstRunBootstrapNonTTYPrintsNoSecret 覆盖 systemd / 重定向场景：不生成、
-// 不写配置、不打印明文，只给不含秘密的 CLI 指引（避免 journald 长期留存）。
+// TestFirstRunBootstrapNonTTYPrintsNoSecret 覆盖 systemd / 重定向场景（ADR-0055 §3）：
+// 也生成哈希与一次性凭据文件，但绝不打印明文，只打印文件路径提示（G-30）。
 func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
+	credPath := filepath.Join(t.TempDir(), "initial-admin-credential")
+	oldPathFn := initialAdminCredentialPathFn
+	initialAdminCredentialPathFn = func() string { return credPath }
+	defer func() { initialAdminCredentialPathFn = oldPathFn }()
 	cfg := bootstrapConfigForTest(t, path)
 	withAdminFakes(t, false)
 
@@ -338,14 +358,35 @@ func TestFirstRunBootstrapNonTTYPrintsNoSecret(t *testing.T) {
 	if strings.Contains(out, "管理员口令: ") {
 		t.Fatalf("非 TTY 不得打印明文口令:\n%s", out)
 	}
-	if !strings.Contains(out, "admin-password --generate") || !strings.Contains(out, path) {
-		t.Fatalf("非 TTY 应给出可照做的 CLI 指引（含同一配置路径）:\n%s", out)
+	if !strings.Contains(out, "初始管理员凭据已生成") || !strings.Contains(out, credPath) {
+		t.Fatalf("非 TTY 应打印凭据文件路径提示:\n%s", out)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("非 TTY 不应写配置，stat err=%v", err)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("非 TTY 也应写配置哈希，stat err=%v", err)
 	}
-	if cfg.snapshot.Auth.AdminPasswordHash != "" {
-		t.Fatal("非 TTY 不应写入哈希")
+	if cfg.snapshot.Auth.AdminPasswordHash == "" || !cfg.snapshot.Auth.MustChangePassword {
+		t.Fatal("非 TTY 也应写哈希并设置 must_change 标志")
+	}
+	// 凭据文件：0600、内容只有明文口令一行；明文不出现在 stderr。
+	info, err := os.Stat(credPath)
+	if err != nil {
+		t.Fatalf("凭据文件未生成: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("凭据文件权限应为 0600，实际 %04o", got)
+	}
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("读凭据文件失败: %v", err)
+	}
+	plain := strings.TrimSpace(string(data))
+	if len(plain) != adminPasswordLength || strings.Contains(out, plain) {
+		t.Fatalf("凭据文件内容/交付异常: len=%d, stderr 含明文=%v", len(plain), strings.Contains(out, plain))
+	}
+	// 首登改密消费后删除（G-30）。
+	ConsumeInitialAdminCredential()
+	if _, err := os.Stat(credPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("凭据文件消费后应删除，stat err=%v", err)
 	}
 }
 
@@ -401,6 +442,16 @@ func TestFirstRunBootstrapWriteFailureKeepsSecretOut(t *testing.T) {
 	if !strings.Contains(out, "写入配置失败") || !strings.Contains(out, "admin-password --generate") {
 		t.Fatalf("写入失败应给出兜底指引:\n%s", out)
 	}
+}
+
+// snapHasMustChange 从配置文件确认 must_change_password=true 已落盘。
+func snapHasMustChange(t *testing.T, path string) bool {
+	t.Helper()
+	snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: path})
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	return snap.Auth.MustChangePassword
 }
 
 // bootstrapConfigForTest 按 serve 同款语义加载配置（文件不存在 → 默认快照 + Source）。

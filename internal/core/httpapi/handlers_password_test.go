@@ -102,6 +102,60 @@ func parseErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
 	return body
 }
 
+// TestMustChangeGateBlocksNonPasswordEndpoints 覆盖 ADR-0055 §4：must_change=true 时，
+// 已登录会话访问非改密/登出端点一律 403 + 白话「首次登录请先设置新口令」；
+// 改密端点可用，且改密成功后标志清除、旧会话全部失效（单管理员一次性状态机，非 RBAC）。
+func TestMustChangeGateBlocksNonPasswordEndpoints(t *testing.T) {
+	env := passwordTestServer(t, pwOld)
+	env.auth.SetMustChange(true)
+	loginRec := passwordLogin(t, env.server, pwOld, true)
+	session := sessionCookieFrom(t, loginRec)
+	csrf := csrfCookieFrom(t, loginRec)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
+	rec := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("must_change 下非改密端点应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := parseErrorBody(t, rec); !strings.Contains(body.Message, "首次登录请先设置新口令") {
+		t.Fatalf("403 文案应为白话首登提示，实际 %q", body.Message)
+	}
+	// 改密端点可用，且成功后清标志 + 吊销旧会话。
+	bodyStr := `{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`
+	changeRec := passwordChange(env.server, session, csrf, bodyStr)
+	if changeRec.Code != http.StatusOK {
+		t.Fatalf("must_change 下改密端点应可用，实际 %d: %s", changeRec.Code, changeRec.Body.String())
+	}
+	if env.auth.MustChange() {
+		t.Fatal("改密成功后 must_change 标志未清除")
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	req2.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
+	rec2 := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("改密后旧会话应失效，实际 %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// sessionCookieFrom / csrfCookieFrom 从登录响应里取 cookie 值。
+func sessionCookieFrom(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.CookieName { return c.Value }
+	}
+	t.Fatal("登录响应未下发会话 cookie")
+	return ""
+}
+func csrfCookieFrom(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == csrfCookieName { return c.Value }
+	}
+	t.Fatal("登录响应未下发 CSRF cookie")
+	return ""
+}
 const (
 	pwOld = "old-pass-1234"
 	pwNew = "brand-new-pass-9999"

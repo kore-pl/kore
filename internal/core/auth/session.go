@@ -100,7 +100,12 @@ type Manager struct {
 	// 二者并发时不产生数据竞争（G-19/-race 门禁）。
 	hashMu       sync.RWMutex
 	passwordHash string
-	ttl          time.Duration
+	// mustChange 是单管理员一次性状态机（ADR-0055）：true 表示当前口令是
+	// 安装期/CLI 重置生成的初始口令，首登后必须改密才能用其它管理端点。
+	// 与 passwordHash 同锁保护，SetPasswordHash / SetMustChange / ApplyCredentialSnapshot
+	// 并发写不产生数据竞争（G-19 / -race 门禁）。
+	mustChange bool
+	ttl        time.Duration
 	// cookiePolicy 取 auto / true / false（auth.cookie_secure 原值）。
 	// auto 需要请求上下文（TLS 或反代声明的 X-Forwarded-Proto），因此
 	// 不在构造期把"是否 Secure"固化成一个 bool——那正是 P1 的根因。
@@ -225,6 +230,37 @@ func (m *Manager) SetPasswordHash(hash string) {
 	m.hashMu.Lock()
 	m.passwordHash = hash
 	m.hashMu.Unlock()
+}
+
+// MustChange 报告当前口令是否仍是必须改密的一次性初始口令（ADR-0055）。
+// HTTP 中间件据此把会话降级为「只允许改密 / 登出 / 静态壳」。
+func (m *Manager) MustChange() bool {
+	m.hashMu.RLock()
+	defer m.hashMu.RUnlock()
+	return m.mustChange
+}
+
+// SetMustChange 设置一次性改密标志（在线改密成功后清标志用）。
+func (m *Manager) SetMustChange(v bool) {
+	m.hashMu.Lock()
+	m.mustChange = v
+	m.hashMu.Unlock()
+}
+
+// ApplyCredentialSnapshot 原子应用配置快照里的新哈希与 must_change 标志。
+// 只有任一字段真的变化时才返回 true，调用方据此决定是否吊销会话——
+// SIGHUP 每次都会调用它，不能因为一次「无变化」的热更把全员踢下线。
+//
+// 这里只改内存；持久化由调用方（cmd 装配层）负责（G-01 薄壳不 import config）。
+func (m *Manager) ApplyCredentialSnapshot(hash string, mustChange bool) bool {
+	m.hashMu.Lock()
+	defer m.hashMu.Unlock()
+	changed := m.passwordHash != hash || m.mustChange != mustChange
+	if changed {
+		m.passwordHash = hash
+		m.mustChange = mustChange
+	}
+	return changed
 }
 
 // Issue 生成 32 字节随机 token（base64url），把 sha256(token) 与过期时刻写入 sessions。

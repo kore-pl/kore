@@ -25,6 +25,10 @@ type Auth struct {
 	CookieSecure string
 	// Initialized 表示是否已完成首启口令生成。
 	Initialized bool
+	// MustChangePassword 是单管理员一次性状态机（ADR-0055）：true 时首登
+	// 只放行改密/登出/静态壳，其余 /api/v1/* 403；改密成功后清标志。
+	// 与 admin_password_hash 同文件、同原子写，并随 SIGHUP 热更。
+	MustChangePassword bool
 }
 
 // Paths 是运行期目录。

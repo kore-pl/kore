@@ -10,10 +10,12 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/httpapi"
 	"github.com/pengtang1024/kore/internal/platform"
 )
 
@@ -103,7 +105,9 @@ func runAdminPassword(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "配置路径解析失败: %v\n", err)
 		return exitConfig
 	}
-	if err := writeAdminPasswordHash(path, hash); err != nil {
+	// ADR-0055 §5：CLI 重置（--generate/--set/--hash）写新哈希时必须置
+	// must_change_password=true，下次登录仍需改密；SIGHUP 同步后旧会话吊销。
+	if err := writeAdminCredentialHash(path, hash, true); err != nil {
 		fmt.Fprintf(stderr, "写入配置失败: %v\n", err)
 		return exitConfig
 	}
@@ -111,7 +115,7 @@ func runAdminPassword(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "\n管理员口令（只显示这一次，请立即保存）：%s\n", plain)
 	}
 	fmt.Fprintf(stdout, "已将口令哈希写入 %s（权限 0600）\n", path)
-	fmt.Fprintln(stdout, "提示：哈希写入后需**重启 kored** 才生效（运行中的进程只在启动时读取口令哈希；SIGHUP 热更只更新配置快照）；重启会踢掉旧会话；忘记口令可再执行 `kored admin-password --set` 重置。")
+	fmt.Fprintln(stdout, "提示：哈希写入后向运行中的 kored 发送 SIGHUP 即生效（自动同步新哈希与 must_change 并吊销旧会话，无需重启）；忘记口令可再执行 `kored admin-password --set` 重置。")
 	return exitOK
 }
 
@@ -230,52 +234,35 @@ func generateAdminPassword(n int) (string, error) {
 	return string(out), nil
 }
 
-// firstRunBootstrap 在缺管理员口令时生成一次性初始凭据（对齐宝塔 / 1Panel 的安装期凭据模型）。
+// ensureInitialAdminCredential 是 ADR-0055 的统一入口：install --package（打开 state.db
+// 前）与 serve bootstrap 共用同一个函数。已有哈希则一行不打、一字节不写（升级行为不变）。
 //
-// 口径（ADR-0043：面板必须有登录页，登录后所有操作免密）：
-//   - 哈希为空 = 从未初始化。此时生成 24 字符随机口令，PBKDF2 哈希**原子写回
-//     serve 自己解析的那个配置文件**（0600），并把 auth.initialized 置 true；
-//     内存快照同步更新，因此**本次启动即可登录**，不需要二次重启。
-//   - 明文只在 stderr 是终端时打印一次；配置、state、日志里只有哈希。
-//     journald 会长期留存输出，所以非 TTY 不生成、不打明文。
-//   - 非 TTY（systemd / 重定向）只给不含秘密的 CLI 指引：用户在自己终端执行
-//     `kored admin-password --generate`，由该命令打印一次。
-//   - 已有哈希的实例：直接返回，一行不打、一个字节不写（升级行为不变）。
+// 触发条件：auth.admin_password_hash 为空。生成链路复用既有实现：
+// generateAdminPassword(24) → auth.HashPassword(PBKDF2) → writeAdminBootstrapHash
+// （原子 0600，同一次写里把 auth.must_change_password=true 落盘）。
 //
-// 无用户名：kore 是单管理员（G-11 不做多用户 RBAC），登录体只有口令。宝塔 /
-// 1Panel 的用户名属于其账号体系；这里补用户名既不增加安全性（用户名不是秘密，
-// 限速已覆盖爆破），又会破坏既有 `{password}` 登录契约与前端登录页，故按最小
-// 改动只保留口令。
-func firstRunBootstrap(cfg *config, stderr io.Writer) {
-	if cfg == nil || cfg.snapshot == nil {
+// 双通道交付（G-30）：
+//   - 一次性凭据文件 <install>/data/initial-admin-credential（0600，gitignore，运行态资产，
+//     消费后删）——非 TTY 场景的唯一交付载体；
+//   - TTY 从当前终端打印一次明文 + 文件路径；非 TTY 绝不打印明文，只打印路径提示。
+//
+// 明文不入 config/state/日志/审计/仓库。无用户名：kore 单管理员（G-11）。
+func ensureInitialAdminCredential(path string, stderr io.Writer) {
+	if strings.TrimSpace(path) == "" {
+		fmt.Fprintln(stderr, "提示：尚未设置管理员口令，且未解析到配置文件路径；请执行 `kored admin-password --generate --config <path>` 后重试。")
 		return
 	}
-	if strings.TrimSpace(cfg.snapshot.Auth.AdminPasswordHash) != "" {
-		return
+	if data, err := os.ReadFile(path); err == nil && hashPresentInConfig(string(data)) {
+		return // 已有哈希：静默，不覆盖
 	}
-	path := cfg.snapshot.Source
-	if path == "" {
-		// 理论上不会发生（loadConfig 总会带 Source）：没有落点就不生成，
-		// 更不能打印一个无法保存的凭据。
-		fmt.Fprintln(stderr, "提示：尚未设置管理员口令，且未解析到配置文件路径；请执行 `kored admin-password --generate --config <path>` 后重启。")
-		return
-	}
-	if !firstRunTerminal() {
-		fmt.Fprintln(stderr, "提示：本实例尚未设置管理员口令。当前输出不是终端（systemd/journald 或重定向），")
-		fmt.Fprintln(stderr, "为避免一次性口令被日志长期留存，kored 不在这里自动生成。请在自己的终端执行一次：")
-		fmt.Fprintf(stderr, "  kored admin-password --generate --config %s\n", path)
-		fmt.Fprintln(stderr, "该命令把哈希写入同一个配置文件，并只显示一次初始口令；然后重启 kored 登录。")
-		return
-	}
-
 	plain, err := generateAdminPassword(adminPasswordLength)
 	if err != nil {
-		fmt.Fprintf(stderr, "首启凭据生成失败（随机源不可用）: %v；请手动执行 `kored admin-password --generate --config %s`\n", err, path)
+		fmt.Fprintf(stderr, "首启凭据生成失败（随机源不可用）: %v\n", err)
 		return
 	}
 	hash, err := auth.HashPassword(plain)
 	if err != nil {
-		fmt.Fprintf(stderr, "首启凭据生成失败（哈希失败）: %v；请手动执行 `kored admin-password --generate --config %s`\n", err, path)
+		fmt.Fprintf(stderr, "首启凭据生成失败（哈希失败）: %v\n", err)
 		return
 	}
 	if err := writeAdminBootstrapHash(path, hash); err != nil {
@@ -283,21 +270,86 @@ func firstRunBootstrap(cfg *config, stderr io.Writer) {
 		fmt.Fprintf(stderr, "首启凭据写入配置失败: %v\n请手动执行 `kored admin-password --generate --config %s`（同样只显示一次）。\n", err, path)
 		return
 	}
-	cfg.snapshot.Auth.AdminPasswordHash = hash
-	cfg.snapshot.Auth.Initialized = true
-
-	if cfg.Addr != "" {
-		fmt.Fprintf(stderr, "\n面板地址: http://%s/\n", cfg.Addr)
+	credPath, err := writeInitialAdminCredentialFile(plain)
+	if err != nil {
+		fmt.Fprintf(stderr, "初始凭据文件写入失败: %v；请手动执行 `kored admin-password --generate --config %s`。\n", err, path)
+		return
 	}
-	fmt.Fprintln(stderr, "================ Kore 首启凭据（只显示这一次）================")
-	fmt.Fprintf(stderr, "管理员口令: %s\n", plain)
-	fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；登录后所有操作免密。")
-	fmt.Fprintf(stderr, "已写入 %s：只存 PBKDF2 哈希，权限 0600；重启或再次启动都不会再显示这个口令。\n", path)
-	fmt.Fprintf(stderr, "再次查看: 口令只存哈希、无法再取；需要轮换请执行 kored admin-password --set --config %s（CLI 重置，不走 Web 找回、不发邮件；改凭据会吊销所有会话）\n", path)
-	fmt.Fprintln(stderr, "==============================================================")
+	if firstRunTerminal() {
+		fmt.Fprintln(stderr, "================ Kore 初始管理员凭据（只显示这一次）================")
+		fmt.Fprintf(stderr, "管理员口令: %s\n", plain)
+		fmt.Fprintf(stderr, "一次性凭据文件: %s（权限 0600，首次登录改密后自动删除）\n", credPath)
+		fmt.Fprintln(stderr, "登录方式: 打开面板 → 输入上面的口令（单管理员，无用户名）；首次登录必须先设置一个新口令。")
+		fmt.Fprintln(stderr, "======================================================================")
+		return
+	}
+	// 非 TTY：绝不打印明文，只给路径（ADR-0055 §3 / G-30）。
+	fmt.Fprintf(stderr, "初始管理员凭据已生成，请在自己的终端读取：%s（权限 0600）。\n", credPath)
+	fmt.Fprintln(stderr, "打开面板输入该口令，首次登录必须先设置一个新口令；改密成功后该文件会自动删除。")
 }
 
-// writeAdminBootstrapHash 把哈希与 auth.initialized=true 一次原子写入配置文件。
+// hashPresentInConfig 从原始 YAML 文本粗判是否已有非空 admin_password_hash。
+// 只用于「已有哈希一行不打一字节不写」的守门；权威解析由 config.Load 承担。
+func hashPresentInConfig(doc string) bool {
+	for _, line := range strings.Split(doc, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "admin_password_hash:") {
+			continue
+		}
+		v := strings.TrimSpace(strings.TrimPrefix(t, "admin_password_hash:"))
+		v = strings.Trim(v, "\"'")
+		return v != "" && v != "null" && v != "~"
+	}
+	return false
+}
+
+// firstRunBootstrap 保留旧名字作薄封装（serve.go 不改），委托统一入口。
+func firstRunBootstrap(cfg *config, stderr io.Writer) {
+	if cfg == nil || cfg.snapshot == nil {
+		return
+	}
+	if strings.TrimSpace(cfg.snapshot.Auth.AdminPasswordHash) != "" {
+		return // 已有哈希：保持 ADR-0043 升级行为，一行不打、一字节不写
+	}
+	ensureInitialAdminCredential(cfg.snapshot.Source, stderr)
+	// 内存快照同步更新，避免本进程仍用旧快照启动鉴权。
+	if snap, _, err := coreconfig.Load(coreconfig.Options{FlagPath: cfg.snapshot.Source}); err == nil {
+		cfg.snapshot.Auth.AdminPasswordHash = snap.Auth.AdminPasswordHash
+		cfg.snapshot.Auth.MustChangePassword = snap.Auth.MustChangePassword
+		cfg.snapshot.Auth.Initialized = true
+	}
+}
+
+// initialAdminCredentialPathFn 是凭据文件路径的注入点：生产取 <install>/data，
+// 测试可指向 t.TempDir()，避免把运行态资产写进共享工作区（G-29）。
+var initialAdminCredentialPathFn = func() string {
+	return filepath.Join(coreconfig.InstallRoot(), "data", "initial-admin-credential")
+}
+
+// initialAdminCredentialPath 返回一次性凭据文件的路径（install/data 下，运行态资产）。
+func initialAdminCredentialPath() string { return initialAdminCredentialPathFn() }
+
+// writeInitialAdminCredentialFile 把明文口令写入 0600 的一次性凭据文件。
+func writeInitialAdminCredentialFile(plain string) (string, error) {
+	path := initialAdminCredentialPath()
+	if err := atomicWrite0600(path, plain+"\n"); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ConsumeInitialAdminCredential 在首登改密成功后删除一次性凭据文件（消费后删）。
+// 文件不存在是幂等成功；删除失败不阻断改密结果。
+func ConsumeInitialAdminCredential() {
+	path := initialAdminCredentialPath()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "警告: 删除一次性凭据文件失败: %v\n", err)
+	}
+}
+
+
+// writeAdminBootstrapHash 把哈希、auth.initialized=true 与 auth.must_change_password=true
+// 在同一次原子写里落盘（ADR-0055 §2）。
 func writeAdminBootstrapHash(path, hash string) error {
 	if err := auth.ValidateHash(hash); err != nil {
 		return err
@@ -308,6 +360,7 @@ func writeAdminBootstrapHash(path, hash string) error {
 	}
 	doc = upsertAdminHash(doc, hash)
 	doc = upsertAuthKey(doc, "initialized", "true")
+	doc = upsertAuthKey(doc, "must_change_password", "true")
 	return atomicWrite0600(path, doc)
 }
 
@@ -465,6 +518,8 @@ func quoteYAML(value string) string {
 // 文件拿到新 hash，而 auth.Manager 的内存基准由 handler 的 SetPasswordHash
 // 切换——配置、内存、reload 三者自然收敛，不引入手动改指针的竞态。
 func passwordWriterFor(cfg config) func(string) error {
+	// 首登改密成功后由 httpapi 回调删除一次性凭据文件（G-30 消费后删）。
+	httpapi.SetCredentialConsumedHook(ConsumeInitialAdminCredential)
 	path := ""
 	if cfg.snapshot != nil {
 		path = cfg.snapshot.Source
@@ -473,6 +528,23 @@ func passwordWriterFor(cfg config) func(string) error {
 		if path == "" {
 			return errors.New("未解析到配置文件路径，无法持久化新口令")
 		}
-		return writeAdminPasswordHash(path, hash)
+		// 在线改密成功必须清 must_change 并落盘（与哈希同一次原子写），
+		// 否则 SIGHUP 会把标志重新推回 true，首登永远改不完（ADR-0055 §4）。
+		return writeAdminCredentialHash(path, hash, false)
 	}
+}
+
+// writeAdminCredentialHash 原子写哈希 + initialized=true + must_change_password。
+func writeAdminCredentialHash(path, hash string, mustChange bool) error {
+	if err := auth.ValidateHash(hash); err != nil {
+		return err
+	}
+	doc, err := readAdminConfigFile(path)
+	if err != nil {
+		return err
+	}
+	doc = upsertAdminHash(doc, hash)
+	doc = upsertAuthKey(doc, "initialized", "true")
+	doc = upsertAuthKey(doc, "must_change_password", strconv.FormatBool(mustChange))
+	return atomicWrite0600(path, doc)
 }
