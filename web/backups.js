@@ -35,6 +35,7 @@
       progWatch: null, progHost: null, progState: null, progText: null, progHint: null,
       stats: null, summaryHost: null, listHost: null, count: null,
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
+      retPresets: [], retPresetSelected: '',
       verify: { supported: null, version: '' } };
   }
   var S = fresh();
@@ -193,6 +194,17 @@
       }
       var paths = (createTask.params && createTask.params.paths) || [];
       if (paths.length) S.sched.paths.value = paths.join('\n');
+      var params = createTask.params || {};
+      var dims = params.dimensions || [];
+      if (S.sched.dims) {
+        S.sched.dims.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+          cb.checked = dims.indexOf(cb.value) >= 0;
+        });
+      }
+      // 回填已生效任务的库名：否则刷新后库名输入框为空，用户一保存就把夜间任务改坏。
+      var database = params.db && params.db.database ? params.db.database : '';
+      if (S.sched.db) S.sched.db.value = database;
+      if (typeof S.sched.syncDbField === 'function') S.sched.syncDbField();
     }
     var keep = keepTask && keepTask.params ? keepTask.params.keep : 0;
     if (keep >= 1 && keep <= 100) {
@@ -254,9 +266,18 @@
     var dims = collectDims(S.sched.dims);
     if (!dims.length) { setNote(S.sched.msg, '请至少选择一个备份对象（站点目录 / MySQL 数据库）', 'fail'); return; }
     if (!paths.length && dims.indexOf('site') >= 0) { setNote(S.sched.msg, '选择了站点目录时请填写至少一个备份路径（每行一个）', 'fail'); return; }
+    // db 维度必须带库名：后端 create 会校验 db.database（create.go:133），
+    // 之前表单没这个输入，定时任务到点必然 E_INVALID——现在保存前就地拦住。
+    var database = S.sched.db ? S.sched.db.value.trim() : '';
+    if (dims.indexOf('db') >= 0 && !database) {
+      setNote(S.sched.msg, '选择了 MySQL 数据库时请填写库名（在下方「备份对象」旁的输入框），例：wordpress', 'fail');
+      return;
+    }
+    var createParams = { name: 'auto', dimensions: dims, paths: paths, compression: 'gzip' };
+    if (dims.indexOf('db') >= 0) createParams.db = { database: database };
     var definitions = [
       { name: '备份 · 自动创建', plugin: 'backup', method: 'backup.create',
-        params: { name: 'auto', dimensions: dims, paths: paths, compression: 'gzip' }, schedule: cron, timeout_s: 1800 },
+        params: createParams, schedule: cron, timeout_s: 1800 },
       { name: '备份 · 保留 ' + keep + ' 份', plugin: 'backup', method: 'backup.retention',
         params: { keep: keep }, schedule: retentionCron(cron), timeout_s: 600 }
     ];
@@ -343,7 +364,11 @@
       if (S.destroyed) return;
       S.presetList = Array.isArray(data.presets) ? data.presets : [];
       S.presetDefault = data.default_preset || '';
+      // retention_presets 是后端已声明、前端此前未消费的能力（preset.go:395-400）：
+      // 一键把「频率 + 保留份数」成套填进定时/保留表单，省去手填 cron。
+      S.retPresets = Array.isArray(data.retention_presets) ? data.retention_presets : [];
       paintPresets();
+      paintRetPresets();
       // 默认预设自动套用：用户零点击也能拿到一份可提交的参数（预设优先）。
       var initial = findPreset(S.presetDefault) || S.presetList[0];
       if (initial) applyPreset(initial, true);
@@ -351,6 +376,44 @@
       if (S.destroyed) return;
       S.presetList = [];
       paintPresets(err);
+    });
+  }
+  // 保留策略预设：点一下同时填好执行频率与保留份数（两处表单同步），仍是自定义兜底。
+  function applyRetPreset(p) {
+    if (!p) return;
+    S.retPresetSelected = p.id || '';
+    var cron = String(p.schedule || '').trim();
+    if (cron) {
+      var matched = false;
+      CRON_PRESETS.forEach(function (c) { if (c.cron === cron) { S.sched.preset.value = c.id; matched = true; } });
+      if (!matched) { S.sched.preset.value = 'custom'; S.sched.custom.value = cron; }
+      S.sched.customField.hidden = matched;
+    }
+    var keep = parseInt(p.keep, 10);
+    if (!isNaN(keep) && keep >= 1 && keep <= 100) {
+      S.sched.keep.value = String(keep); S.ret.keep.value = String(keep);
+    }
+    S.ret.preview = null; S.ret.run.disabled = true;
+    if (S.ret.host) S.ret.host.textContent = '';
+    paintRetPresets();
+    var msg = '已选「' + (p.label || p.id) + '」：' + cronText({ schedule: cron }) +
+      ' 自动备份，保留 ' + keep + ' 份。' + (p.rationale ? p.rationale + '。' : '');
+    setNote(S.sched.msg, msg, 'ok');
+    setRetMsg(msg, 'ok');
+  }
+  function paintRetPresets() {
+    if (!S.retPresetHost) return;
+    S.retPresetHost.textContent = '';
+    if (!S.retPresets.length) return;
+    var row = add(S.retPresetHost, el('div', 'bak-preset-row'));
+    row.setAttribute('role', 'group'); row.setAttribute('aria-label', '保留策略预设');
+    S.retPresets.forEach(function (p) {
+      var b = add(row, el('button', 'btn btn-ghost bak-preset', p.label || p.id));
+      b.type = 'button'; b.dataset.id = p.id || '';
+      b.title = (p.rationale || '') + '（点一下填好频率和保留份数）';
+      b.setAttribute('aria-pressed', S.retPresetSelected === p.id ? 'true' : 'false');
+      if (S.retPresetSelected === p.id) b.classList.add('bak-preset-active');
+      on(b, function () { applyRetPreset(p); });
     });
   }
   function setPresetMsg(text, tone) {
@@ -1008,6 +1071,18 @@
     field(sForm, '定时备份的路径（每行一个）', S.sched.paths, 'span2');
     S.sched.dims = dimsBox(['site', 'db']);
     field(sForm, '备份对象', S.sched.dims, 'span2');
+    S.sched.db = input('text', null, '例：wordpress');
+    S.sched.dbField = field(sForm, '数据库名（选 MySQL 数据库时必填）', S.sched.db, 'span2');
+    function syncSchedDbField() {
+      var checked = false;
+      S.sched.dims.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+        if (cb.checked && cb.value === 'db') checked = true;
+      });
+      S.sched.dbField.hidden = !checked;
+    }
+    S.sched.syncDbField = syncSchedDbField;
+    syncSchedDbField(); // 默认已勾选 db：首屏就必须显示库名输入，不能等着用户改勾选才出现
+    S.sched.dims.addEventListener('change', syncSchedDbField);
     add(sForm, el('p', 'field-hint span2', '保存会创建两条任务：到点打包 + 1 分钟后按保留份数清理；重复保存会替换本页创建的任务。路径必须在「设置」的允许根路径之下。'));
     S.sched.save = add(sForm, el('button', 'btn btn-primary', '保存定时备份')); S.sched.save.type = 'submit';
     sForm.addEventListener('submit', saveSchedule);
@@ -1024,6 +1099,8 @@
     S.jobsHost = add(jobs, el('div', 'bak-jobs'));
 
     var ret = panel(root, '保留策略', '只删本插件创建、且不是最新一份的旧备份');
+    add(ret, el('p', 'field-hint', '常用方案：点一下同时填好上面的定时频率与下面的保留份数。'));
+    S.retPresetHost = add(ret, el('div', 'bak-ret-presets'));
     var rForm = add(ret, el('form', 'bak-sched-grid'));
     S.ret.keep = input('number', null, '7');
     S.ret.keep.value = '7'; S.ret.keep.min = '1'; S.ret.keep.max = '100';
