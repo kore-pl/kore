@@ -85,8 +85,9 @@ func (s *Server) recordAlert(severity, source, title, detail string) {
 		return
 	}
 	// 通知通道（ADR-0054）：只在告警落库成功后派发，事件驱动、零常驻轮询；
-	// 未配置任何通道时 dispatchAlert 立即返回，出站恒 0（G-10/G-19）。
-	s.webhooks.dispatchAlert(source, title, detail)
+	// 按「来源 + 级别」路由（通道可分别订阅），未配置/未启用任何通道时立即返回，
+	// 出站恒 0（G-10/G-19）。
+	s.webhooks.dispatchAlert(severity, source, title, detail)
 }
 
 // noteDeniedAlert 是 auditDenied 的告警埋点：capability.denied / root.action 拒绝

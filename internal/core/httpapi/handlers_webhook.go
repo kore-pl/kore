@@ -9,16 +9,22 @@ import (
 )
 
 // 通知通道管理端点（G-10：用户显式配置的出站推送，非内置遥测）：
-//   - GET  /api/v1/webhook        配置列表 + 投递历史——system:read
-//   - POST /api/v1/webhook        新增一条配置——system:admin
-//   - DELETE /api/v1/webhook/{id} 删除一条配置——system:admin
-//   - POST /api/v1/webhook/{id}/test  发一条测试事件（不落告警库）——system:admin
+//   - GET    /api/v1/webhook        配置列表 + 投递历史——system:read
+//   - POST   /api/v1/webhook        新增一条配置（webhook / 邮件 / IM 机器人）——system:admin
+//   - PATCH  /api/v1/webhook/{id}   启用 / 停用一条配置——system:admin
+//   - DELETE /api/v1/webhook/{id}   删除一条配置——system:admin
+//   - POST   /api/v1/webhook/{id}/test  发一条测试事件（不落告警库）——system:admin
 //
 // 未装配 webhookRegistry 时一律 501 E_UNSUPPORTED（零服务路径不受影响）。
 
 // webhookCreateResp 是新增响应（显式字段，G-24）。
 type webhookCreateResp struct {
-	Target WebhookTarget `json:"target"`
+	Target ChannelTarget `json:"target"`
+}
+
+// webhookUpdateResp 是启停响应。
+type webhookUpdateResp struct {
+	Target ChannelTarget `json:"target"`
 }
 
 // webhookDeleteResp 是删除响应。
@@ -41,7 +47,7 @@ func (s *Server) requireWebhook(w http.ResponseWriter) (*webhookRegistry, bool) 
 	return s.webhooks, true
 }
 
-// authorizeWebhook 列表 system:read，写/删/测试 system:admin（fail-closed）。
+// authorizeWebhook 列表 system:read，写/删/测试/启停 system:admin（fail-closed）。
 func (s *Server) authorizeWebhook(w http.ResponseWriter, r *http.Request, capability string) bool {
 	if !s.authorizeTargetAction(w, r) {
 		return false
@@ -91,6 +97,29 @@ func (s *Server) handleWebhookCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, webhookCreateResp{Target: target})
 }
 
+// handleWebhookUpdate 只允许改启用态（地址/密钥改配置请删除后重建，避免半套配置）。
+func (s *Server) handleWebhookUpdate(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeWebhook(w, r, alertCapAdmin) {
+		return
+	}
+	reg, ok := s.requireWebhook(w)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	var in webhookUpdateBody
+	if err := decodeJSONBody(w, r, &in); err != nil {
+		writeFailure(w, err)
+		return
+	}
+	target, found := reg.updateEnabled(id, in.Enabled)
+	if !found {
+		writeError(w, http.StatusNotFound, pluginapi.E_NOTFOUND, "通知通道不存在", "")
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookUpdateResp{Target: target})
+}
+
 func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeWebhook(w, r, alertCapAdmin) {
 		return
@@ -108,6 +137,7 @@ func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWebhookTest 只向指定通道发一条测试事件；不写告警库、不触发其它通道。
+// 测试不受「未启用」限制：先测试再启用是推荐流程（外发默认关闭）。
 func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeWebhook(w, r, alertCapAdmin) {
 		return
@@ -117,15 +147,13 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	reg.mu.RLock()
-	st := reg.targets[id]
-	reg.mu.RUnlock()
-	if st == nil {
+	st, found := reg.get(id)
+	if !found {
 		writeError(w, http.StatusNotFound, pluginapi.E_NOTFOUND, "通知通道不存在", "")
 		return
 	}
 	var in webhookTestBody
-	// 测试请求允许空 body（无事件参数就用 webhook_test）；非空才解析 JSON。
+	// 测试请求允许空 body（无事件参数就用默认测试事件）；非空才解析 JSON。
 	if r.Body != nil {
 		limited := http.MaxBytesReader(w, r.Body, maxSchedulerBody)
 		data, readErr := io.ReadAll(limited)
@@ -148,6 +176,7 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 			"event 须为 audit/plugin/resource/slot 或留空", "")
 		return
 	}
-	go reg.deliver(st, event, "通知通道测试事件", "这是你在 Kore 配置的通知通道发出的测试消息", true)
+	go reg.deliver(st, event, alertSeverityInfo, "通知通道测试事件",
+		"这是你在 Kore 配置的通知通道发出的测试消息", true)
 	writeJSON(w, http.StatusOK, webhookTestResp{Queued: true, Event: event})
 }

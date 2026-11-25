@@ -266,6 +266,11 @@
       box.appendChild(el('div', null, '最近检查时间 ' + fmtTime(now())));
       box.appendChild(el('small', null, historyOk ?
         '打开面板会检查历史记录与四类告警来源' : '告警历史不可用（已回退本地检查）；打开面板会重新检查'));
+      var cfg = el('button', 'btn btn-ghost kore-alert-act', '配置外部通知');
+      cfg.type = 'button';
+      cfg.style.marginTop = '10px';
+      cfg.addEventListener('click', function () { go('settings/webhook'); });
+      box.appendChild(cfg);
       S.body.appendChild(box);
       return;
     }
@@ -338,6 +343,11 @@
     headline.appendChild(S.head);
     head.appendChild(headline);
     var ops = el('div', 'kore-alert-ops');
+    // 告警外发入口：配置 Webhook / 邮件 / 企业微信 / 钉钉 / 飞书（视图 #/webhook）。
+    var notify = el('button', 'btn btn-ghost', '通知渠道');
+    notify.type = 'button';
+    notify.addEventListener('click', function () { go('settings/webhook'); });
+    ops.appendChild(notify);
     S.seenBtn = el('button', 'btn btn-ghost', '全部标为已读');
     S.seenBtn.type = 'button';
     S.seenBtn.hidden = true;

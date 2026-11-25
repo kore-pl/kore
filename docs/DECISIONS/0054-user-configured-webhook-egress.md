@@ -1,4 +1,4 @@
-> 状态: accepted · 归属: r22-webhook · 更新: 2026-11-24 · 里程碑: R22 · 门禁关联: G-10 / G-19 / G-30 / G-23
+> 状态: accepted · 归属: feat-alert-channels（原 r22-webhook）· 更新: 2026-11-25 · 里程碑: R25 · 门禁关联: G-02 / G-10 / G-19 / G-30 / G-23
 
 # ADR-0054：用户显式配置的出站 Webhook 与 G-10 的边界
 
@@ -38,6 +38,38 @@ QUALITY-GATES §G10 判据原文（核对于本 ADR 落盘时）为：对 `inter
 - `grep -rnE 'http\.Client|net\.Dial|telemetry|analytics|phone-home' internal/core/httpapi/webhook.go` 的命中，仅对应本 ADR 第 2 节六条判据成立的场景；其余禁用词（`telemetry` / `analytics` / `phone-home`）在本文件零命中。
 - 本例外范围仅限本模块（`webhook.go` / `handlers_webhook.go`），不扩散到其它 core 包。
 
-## 5. 复审条件
+## 5. 扩展：邮件与 IM 机器人（2026-11-25，同属本例外边界）
 
-出现下列任一情形，本 ADR 失效、例外收回：① 增加任何定时/自动出站；② 配置改为默认预置或远程下发；③ payload 开始携带会话/评测量/心跳；④ 日志出现完整 URL 或密钥；⑤ 出站地址能被请求体注入（SSRF）。
+R22 只有 Webhook 一种通道。R25 补齐竞品清单条目 4（宝塔自定义消息通道 / 1Panel 三端 IM 告警）：
+同一份告警可推 **Webhook / 邮件（SMTP）/ 企业微信 / 钉钉 / 飞书群机器人**，并按「来源 + 级别」路由。
+
+### 5.1 实现事实（仍满足 §2 六条例外判据）
+
+| # | §2 判据 | 多通道实现 |
+| --- | --- | --- |
+| 1 | 出站目标只来自用户配置 | Webhook/机器人 URL、SMTP 主机、收件人均由管理 API 提交；源码无预置地址 |
+| 2 | 用户显式启用，默认无配置 | 注册表初始为空；**新通道创建后默认未启用**，必须手动「启用推送」，可随时停用/删除 |
+| 3 | 只由告警事件触发 | recordAlert → dispatchAlert 短命 goroutine；无 ticker / AfterFunc / 常驻队列（G-19） |
+| 4 | 不做内置遥测 | 无 session/心跳/评分；payload 只有告警字段；SMTP 只发告警邮件 |
+| 5 | 凭据不落明文日志 | URL/请求头/口令/SMTP 口令均不进日志；历史只记 scheme://host 或 host:port 与状态码 |
+| 6 | UI 明示边界 | 通知通道页写明「Kore 不主动收集数据、未启用时零对外连接」、密钥仅存进程内存 |
+
+补充口径：
+
+- **依赖**：HTTP 用 net/http，SMTP 用 net/smtp + crypto/tls，加签用 crypto/hmac + crypto/sha256 + encoding/base64——全部标准库，未新增第三方依赖（G-02 白名单不变）。
+- **加签**：钉钉 sign=base64(HMAC-SHA256(key=secret, data=timestamp+"\n"+secret)) 拼 URL；飞书 sign=base64(HMAC-SHA256(key=timestamp+"\n"+secret, data="")) 放 body；企业微信不需要加签。三家算法方向不同，**不合并成同一函数**。
+- **失败判定**：Webhook 以 HTTP 2xx 为准；IM 网关会「HTTP 200 + errcode≠0」，必须解析 errcode / code / StatusCode 判失败并把原因写进投递记录，否则是静默丢消息。
+- **重试**：HTTP 最多 3 次、SMTP 最多 2 次，总时长有界；重试不引入常驻 goroutine。
+- **凭据不持久化**：通道配置与密钥只存进程内存（重启需重填，UI 明示）。这是有意的取舍——把 SMTP 口令 / 机器人加签密钥落盘需要密钥管理，R25 不引入；持久化必须先解决「密钥加密 + 迁移」再放开。
+- **路由**：每条通道可分别订阅事件（audit/plugin/resource/slot）与级别（critical/warning/info），未选级别默认全选（与旧 Webhook 请求体兼容）。
+
+### 5.2 被否决的选项
+
+1. **引入第三方 SMTP / 机器人 SDK 或消息队列**：否决——违反 G-02 依赖白名单与 G-05 无中间件；标准库已覆盖三家机器人与 SMTP。
+2. **通道配置（含口令）直接落盘 JSON / bbolt**：否决——明文凭据入库不满足 G-30 精神；在密钥管理落地前，内存态 + UI 明示重启需重填是更安全的默认。
+3. **新通道创建即启用**：否决——违背「外发默认关闭」；改为「先测试、再启用」两步，测试消息不受启用态限制（测试是用户显式动作）。
+4. **新开一组 /api/v1/channels 端点**：否决——沿用 /api/v1/webhook 前缀并扩展 kind，避免前端与文档双份入口；旧请求体（只有 url/events/secret）仍按 Webhook 解析。
+
+## 6. 复审条件
+
+出现下列任一情形，本 ADR 失效、例外收回：① 增加任何定时/自动出站；② 配置改为默认预置或远程下发；③ payload 开始携带会话/评测量/心跳；④ 日志出现完整 URL 或密钥；⑤ 出站地址能被请求体注入（SSRF）；⑥ 通道配置开始持久化而未先做密钥加密；⑦ 出现批量重发 / 定时摘要等自动出站（含 SMTP 批量投递）。

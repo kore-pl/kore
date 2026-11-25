@@ -128,6 +128,7 @@ func (s *Server) routes() {
 	// 通知通道（ADR-0054，用户显式配置的出站推送）：列表 system:read，写/删/测试 system:admin。
 	s.mux.HandleFunc("GET "+webhookPath, s.handleWebhookList)
 	s.mux.HandleFunc("POST "+webhookPath, s.handleWebhookCreate)
+	s.mux.HandleFunc("PATCH "+webhookPath+"/{id}", s.handleWebhookUpdate)
 	s.mux.HandleFunc("DELETE "+webhookPath+"/{id}", s.handleWebhookDelete)
 	s.mux.HandleFunc("POST "+webhookPath+"/{id}/test", s.handleWebhookTest)
 	s.mux.HandleFunc(webhookPath+"/", s.handleNotFound)
