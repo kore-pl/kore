@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,15 @@ const (
 	// passwordFingerprintKey 是口令指纹在 sessions bucket 内的保留键
 	// （不是 token：token 键恒为 64 位 sha256 hex）。用于启动时判断"口令是否被改过"。
 	passwordFingerprintKey = "password-fingerprint"
+	// sessionTouchInterval 是"最后活跃"写库阈值：同一会话最多每 5 分钟写一次
+	// lastSeen，避免每个请求都 fsync（G-19 空闲/写放大）。界面按"约 5 分钟内"
+	// 粒度展示最后活跃时间。
+	sessionTouchInterval = 5 * time.Minute
+	// sessionUserAgentMax 是会话来源 UA 的保留字符数（按 rune 截断，与审计口径一致）。
+	sessionUserAgentMax = 100
+	// sessionIDLen 是对外暴露的会话 id 长度（tokenHash 前缀，64 位 hex 截取）。
+	// 16 个 hex = 64 bit，碰撞概率可忽略；截断值无法反推完整 hash，更无法反推 token。
+	sessionIDLen = 16
 )
 
 // Session 是一次已签发会话的只读视图（不含明文 token）。
@@ -46,6 +56,38 @@ type Session struct {
 	ExpiresAt time.Time
 	// CreatedAt 是首次签发时刻（UTC）；滑动续期不改它，绝对上限由它算。
 	CreatedAt time.Time
+	// LastSeenAt 是最后一次观察到该会话活跃的时刻（约 5 分钟粒度，UTC）。
+	LastSeenAt time.Time
+	// IP 是签发/最近活跃时的来源 IP（会话列表展示用；不落日志、不进审计）。
+	IP string
+	// UserAgent 是签发时的来源 UA 摘要（按 rune 截断到 sessionUserAgentMax）。
+	UserAgent string
+}
+
+// SessionMeta 是签发会话时记录的环境信息（来源 IP 与 UA 摘要）。
+type SessionMeta struct {
+	// IP 是来源 IP（可空；空表示未知，不覆盖已有值）。
+	IP string
+	// UserAgent 是来源 UA（可空；按 rune 截断）。
+	UserAgent string
+}
+
+// ID 返回会话的对外标识：tokenHash 的前 sessionIDLen 个 hex。
+// 只用于列表展示与"踢下线"定位，不是凭据——无法反推 token 或 hash。
+func (s Session) ID() string {
+	if len(s.TokenHash) <= sessionIDLen {
+		return s.TokenHash
+	}
+	return s.TokenHash[:sessionIDLen]
+}
+
+// sessionRecord 是 sessions bucket 中的存储视图（一个 token 一行）。
+type sessionRecord struct {
+	Expiry     time.Time
+	Created    time.Time
+	LastSeen   time.Time
+	IP         string
+	UserAgent  string
 }
 
 // Manager 负责口令校验与会话签发、校验、滑动续期、吊销，只依赖 store。
@@ -186,10 +228,18 @@ func (m *Manager) SetPasswordHash(hash string) {
 }
 
 // Issue 生成 32 字节随机 token（base64url），把 sha256(token) 与过期时刻写入 sessions。
-//
-// value 形如 "<expiryUnixNano> <createdUnixNano>"；旧格式（单个整数，无 created）
-// 仍可读——Validate 会按 ttl 反推 created，不破坏升级前的会话。
+// 不带来源信息的签发（测试 / 内部装配）；登录路径用 IssueWithMeta 记录 IP 与 UA。
 func (m *Manager) Issue() (string, Session, error) {
+	return m.IssueWithMeta(SessionMeta{})
+}
+
+// IssueWithMeta 与 Issue 相同，但把来源 IP 与 UA 摘要一并落库，供「账户与安全中心」
+// 的会话列表展示（登录时间 / 来源 IP / UA 摘要 / 最后活跃）。
+//
+// 存储值形如 "<expiryNano> <createdNano> <lastSeenNano> <b64ip> <b64ua>"；
+// 旧格式（单个整数或两个整数）仍可读——解析时按 ttl 反推 created、meta 置空，
+// 不破坏升级前的会话，也不因新增字段把老用户踢下线。
+func (m *Manager) IssueWithMeta(meta SessionMeta) (string, Session, error) {
 	token, err := newToken()
 	if err != nil {
 		return "", Session{}, err
@@ -201,18 +251,46 @@ func (m *Manager) Issue() (string, Session, error) {
 	if hard := created.Add(AbsoluteTTL); expiry.After(hard) {
 		expiry = hard
 	}
-	if err := m.writeExpiry(hash, expiry, created); err != nil {
+	rec := sessionRecord{
+		Expiry: expiry, Created: created, LastSeen: now,
+		IP: strings.TrimSpace(meta.IP), UserAgent: truncateSessionUA(meta.UserAgent),
+	}
+	if err := m.writeSession(hash, rec); err != nil {
 		return "", Session{}, fmt.Errorf("写入会话失败: %w", err)
 	}
-	return token, Session{TokenHash: hash, ExpiresAt: expiry, CreatedAt: created}, nil
+	return token, rec.session(hash), nil
 }
 
-// writeExpiry 把过期时刻与创建时刻写回 sessions。
-func (m *Manager) writeExpiry(hash string, expiry, created time.Time) error {
-	value := []byte(strconv.FormatInt(expiry.UnixNano(), 10) + " " + strconv.FormatInt(created.UnixNano(), 10))
+// writeSession 把整条会话记录写回 sessions。
+func (m *Manager) writeSession(hash string, rec sessionRecord) error {
 	return m.store.Update(func(tx *store.Tx) error {
-		return tx.Put(sessionsBucket, hash, value)
+		return tx.Put(sessionsBucket, hash, encodeSessionRecord(rec))
 	})
+}
+
+// writeExpiry 只改写过期时刻与创建时刻，保留已有的来源 IP / UA / 最后活跃
+// （滑动续期路径用；meta 缺失时按零值写回，不伪造来源）。
+func (m *Manager) writeExpiry(hash string, expiry, created time.Time) error {
+	rec := sessionRecord{Expiry: expiry, Created: created}
+	if existing, ok := m.readSession(hash); ok {
+		rec.LastSeen = existing.LastSeen
+		rec.IP = existing.IP
+		rec.UserAgent = existing.UserAgent
+	}
+	return m.writeSession(hash, rec)
+}
+
+// readSession 读取单条会话记录的原始形态；不存在或格式非法时 ok=false。
+func (m *Manager) readSession(hash string) (sessionRecord, bool) {
+	var raw []byte
+	if err := m.store.View(func(tx *store.Tx) error {
+		var err error
+		raw, err = tx.Get(sessionsBucket, hash)
+		return err
+	}); err != nil {
+		return sessionRecord{}, false
+	}
+	return parseSessionRecord(string(raw), m.ttl)
 }
 
 // Validate 校验 token：命中 sessions、未过期、且未越过绝对上限才返回会话。
@@ -221,49 +299,115 @@ func (m *Manager) Validate(token string) (Session, error) {
 		return Session{}, ErrNoSession
 	}
 	hash := tokenHash(token)
-	var raw []byte
-	if err := m.store.View(func(tx *store.Tx) error {
-		var err error
-		raw, err = tx.Get(sessionsBucket, hash)
-		return err
-	}); err != nil {
-		return Session{}, ErrNoSession
-	}
-	expiry, created, ok := parseSessionValue(string(raw), m.ttl)
+	rec, ok := m.readSession(hash)
 	if !ok {
 		return Session{}, ErrNoSession
 	}
 	now := time.Now().UTC()
-	hard := created.Add(AbsoluteTTL)
-	if !now.Before(expiry) || !now.Before(hard) {
+	hard := rec.Created.Add(AbsoluteTTL)
+	if !now.Before(rec.Expiry) || !now.Before(hard) {
 		return Session{}, ErrNoSession
 	}
-	if hard.Before(expiry) {
-		expiry = hard
+	if hard.Before(rec.Expiry) {
+		rec.Expiry = hard
 	}
-	return Session{TokenHash: hash, ExpiresAt: expiry, CreatedAt: created}, nil
+	return rec.session(hash), nil
 }
 
-// parseSessionValue 解析存储值；兼容旧格式（单个 expiry 纳秒）。
-func parseSessionValue(raw string, ttl time.Duration) (time.Time, time.Time, bool) {
+// session 把存储记录转成只读视图。
+func (rec sessionRecord) session(hash string) Session {
+	return Session{
+		TokenHash: hash, ExpiresAt: rec.Expiry, CreatedAt: rec.Created,
+		LastSeenAt: rec.LastSeen, IP: rec.IP, UserAgent: rec.UserAgent,
+	}
+}
+
+// encodeSessionRecord 把记录编码成存储值：五个空格分隔字段，IP/UA 走 base64url
+// （不会含空格，也不引入新的转义规则）。
+func encodeSessionRecord(rec sessionRecord) []byte {
+	parts := []string{
+		strconv.FormatInt(rec.Expiry.UnixNano(), 10),
+		strconv.FormatInt(rec.Created.UnixNano(), 10),
+		strconv.FormatInt(rec.LastSeen.UnixNano(), 10),
+		encodeSessionField(rec.IP),
+		encodeSessionField(rec.UserAgent),
+	}
+	return []byte(strings.Join(parts, " "))
+}
+
+// parseSessionRecord 解析存储值，兼容三种历史形态：
+//   - "<expiry>"：最旧格式，无 created / meta；
+//   - "<expiry> <created>"：R? 之后格式，无 meta；
+//   - "<expiry> <created> <lastSeen> <b64ip> <b64ua>"：当前格式。
+func parseSessionRecord(raw string, ttl time.Duration) (sessionRecord, bool) {
 	fields := strings.Fields(raw)
 	if len(fields) == 0 {
-		return time.Time{}, time.Time{}, false
+		return sessionRecord{}, false
 	}
 	expNano, err := strconv.ParseInt(fields[0], 10, 64)
 	if err != nil {
-		return time.Time{}, time.Time{}, false
+		return sessionRecord{}, false
 	}
-	expiry := time.Unix(0, expNano).UTC()
+	rec := sessionRecord{Expiry: time.Unix(0, expNano).UTC()}
 	if len(fields) == 1 {
 		// 旧格式：没有 created，按 ttl 反推（绝对上限从旧会话签发时起算）。
-		return expiry, expiry.Add(-ttl), true
+		rec.Created = rec.Expiry.Add(-ttl)
+		rec.LastSeen = rec.Created
+		return rec, true
 	}
 	createdNano, err := strconv.ParseInt(fields[1], 10, 64)
 	if err != nil {
-		return time.Time{}, time.Time{}, false
+		return sessionRecord{}, false
 	}
-	return expiry, time.Unix(0, createdNano).UTC(), true
+	rec.Created = time.Unix(0, createdNano).UTC()
+	rec.LastSeen = rec.Created
+	// 当前格式从第 3 个字段起是 lastSeen / IP / UA；UA 可能缺（老记录），
+	// 所以按"有就读、没有就空"处理，而不是要求恰好 5 个字段。
+	if len(fields) >= 4 {
+		if seenNano, err := strconv.ParseInt(fields[2], 10, 64); err == nil && seenNano > 0 {
+			rec.LastSeen = time.Unix(0, seenNano).UTC()
+		}
+		rec.IP = decodeSessionField(fields[3])
+		if len(fields) >= 5 {
+			rec.UserAgent = decodeSessionField(fields[4])
+		}
+	}
+	return rec, true
+}
+
+// sessionFieldEmpty 是空字段的占位符：base64 编码空串也是空串，会与分隔空格一起
+// 被 strings.Fields 吃掉，导致后面的字段错位——所以空值必须写成非空占位。
+const sessionFieldEmpty = "-"
+
+// encodeSessionField 编码单个会话字段；空串写成占位符 "-"（不是合法 base64）。
+func encodeSessionField(raw string) string {
+	if raw == "" {
+		return sessionFieldEmpty
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeSessionField 解码 base64url 字段；占位符与非法值都按空串处理
+// （不因坏字段拒绝会话，最坏只是会话列表少显示一个来源信息）。
+func decodeSessionField(raw string) string {
+	if raw == "" || raw == sessionFieldEmpty {
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return ""
+	}
+	return string(decoded)
+}
+
+// truncateSessionUA 按 rune 截断 UA 到 sessionUserAgentMax，避免单条记录撑大状态库。
+func truncateSessionUA(ua string) string {
+	ua = strings.TrimSpace(ua)
+	runes := []rune(ua)
+	if len(runes) > sessionUserAgentMax {
+		runes = runes[:sessionUserAgentMax]
+	}
+	return string(runes)
 }
 
 // Slide 做滑动续期：剩余寿命 < slideThresholdFor(TTL) 时把过期时刻推到
@@ -316,6 +460,165 @@ func slideThresholdFor(ttl time.Duration) time.Duration {
 
 // slideWriteCount 返回 Slide 实际写库次数（测试观测写放大用）。
 func (m *Manager) slideWriteCount() int64 { return m.slideWrites.Load() }
+
+// Touch 记录会话的"最后活跃"与来源 IP / UA，写库按 sessionTouchInterval 节流：
+// 同一会话 5 分钟内只写一次，避免每个请求一次 fsync（G-19 写放大）。
+//
+// 传空 IP/UA 时保留旧值（内部调用 / 无来源信息的场景不覆盖已有值）；
+// 已过期或越过绝对上限的会话不写（下一次 Validate 自会失效）。
+// 返回更新后的会话视图与是否发生写库。
+func (m *Manager) Touch(sess Session, ip, ua string) (Session, bool, error) {
+	if sess.TokenHash == "" {
+		return sess, false, nil
+	}
+	now := time.Now().UTC()
+	if !now.Before(sess.CreatedAt.Add(AbsoluteTTL)) || !now.Before(sess.ExpiresAt) {
+		return sess, false, nil
+	}
+	nextIP, nextUA := strings.TrimSpace(ip), truncateSessionUA(ua)
+	if nextIP == "" {
+		nextIP = sess.IP
+	}
+	if nextUA == "" {
+		nextUA = sess.UserAgent
+	}
+	sameMeta := nextIP == sess.IP && nextUA == sess.UserAgent
+	if sameMeta && !sess.LastSeenAt.IsZero() && now.Sub(sess.LastSeenAt) < sessionTouchInterval {
+		return sess, false, nil
+	}
+	rec := sessionRecord{
+		Expiry: sess.ExpiresAt, Created: sess.CreatedAt, LastSeen: now,
+		IP: nextIP, UserAgent: nextUA,
+	}
+	if err := m.writeSession(sess.TokenHash, rec); err != nil {
+		return sess, false, fmt.Errorf("更新会话活跃时间失败: %w", err)
+	}
+	sess.LastSeenAt = now
+	sess.IP, sess.UserAgent = nextIP, nextUA
+	return sess, true, nil
+}
+
+// ListSessions 列出全部仍然有效的会话（按签发时间倒序），供「账户与安全中心」的
+// 会话管理表使用。已过期或越过绝对上限的会话不返回（它们下一次请求就会失效）。
+//
+// 返回不含明文 token，也不含完整 token hash——只给 Session.ID() 前缀。
+func (m *Manager) ListSessions() ([]Session, error) {
+	var out []Session
+	now := time.Now().UTC()
+	if err := m.store.View(func(tx *store.Tx) error {
+		return tx.ForEach(sessionsBucket, func(k, v []byte) error {
+			key := string(k)
+			if key == passwordFingerprintKey {
+				return nil
+			}
+			rec, ok := parseSessionRecord(string(v), m.ttl)
+			if !ok {
+				return nil
+			}
+			if !now.Before(rec.Expiry) || !now.Before(rec.Created.Add(AbsoluteTTL)) {
+				return nil
+			}
+			out = append(out, rec.session(key))
+			return nil
+		})
+	}); err != nil {
+		return nil, fmt.Errorf("列会话失败: %w", err)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// RevokeByID 按会话 id（Session.ID() 前缀）吊销单个会话；返回是否命中并删除。
+// 前缀至少 8 个 hex（32 bit）才接受，避免过短前缀误删多个会话。
+func (m *Manager) RevokeByID(id string) (bool, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if len(id) < 8 || len(id) > 64 || !isHex(id) {
+		return false, fmt.Errorf("会话标识非法：需要 8-64 位十六进制字符")
+	}
+	keys, err := m.sessionKeys()
+	if err != nil {
+		return false, err
+	}
+	hit := ""
+	for _, key := range keys {
+		if key == id || strings.HasPrefix(key, id) {
+			if hit != "" {
+				return false, fmt.Errorf("会话标识不唯一，请刷新页面后重试")
+			}
+			hit = key
+		}
+	}
+	if hit == "" {
+		return false, nil
+	}
+	if err := m.store.Update(func(tx *store.Tx) error {
+		return tx.Delete(sessionsBucket, hit)
+	}); err != nil {
+		return false, fmt.Errorf("吊销会话失败: %w", err)
+	}
+	return true, nil
+}
+
+// RevokeOthers 吊销除当前会话（keepToken）以外的全部会话，返回被踢掉的数量。
+// 「一键全踢（踢自己除外）」用它——永远不会把正在操作的管理员自己踢下线。
+func (m *Manager) RevokeOthers(keepToken string) (int, error) {
+	keep := tokenHash(keepToken)
+	keys, err := m.sessionKeys()
+	if err != nil {
+		return 0, err
+	}
+	targets := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == keep {
+			continue
+		}
+		targets = append(targets, key)
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+	if err := m.store.Update(func(tx *store.Tx) error {
+		for _, k := range targets {
+			if err := tx.Delete(sessionsBucket, k); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("吊销其他会话失败: %w", err)
+	}
+	return len(targets), nil
+}
+
+// sessionKeys 列出 sessions bucket 中的全部会话键（排除口令指纹保留键）。
+func (m *Manager) sessionKeys() ([]string, error) {
+	var keys []string
+	if err := m.store.View(func(tx *store.Tx) error {
+		return tx.ForEach(sessionsBucket, func(k, _ []byte) error {
+			key := string(k)
+			if key == passwordFingerprintKey {
+				return nil
+			}
+			keys = append(keys, key)
+			return nil
+		})
+	}); err != nil {
+		return nil, fmt.Errorf("列会话失败: %w", err)
+	}
+	return keys, nil
+}
+
+// isHex 判定字符串是否只含十六进制字符（会话 id 形态校验）。
+func isHex(s string) bool {
+	for _, ch := range s {
+		switch {
+		case ch >= '0' && ch <= '9', ch >= 'a' && ch <= 'f', ch >= 'A' && ch <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Revoke 删除会话；key 不存在时幂等成功。
 func (m *Manager) Revoke(token string) error {
@@ -393,6 +696,13 @@ func (m *Manager) ReconcilePasswordFingerprint() (bool, error) {
 		return tx.Put(sessionsBucket, passwordFingerprintKey, []byte(fp))
 	}); err != nil {
 		return revoked, fmt.Errorf("写入口令指纹失败: %w", err)
+	}
+	if revoked {
+		// 口令被面板以外的方式改过（CLI / 手改配置）：记"改过但强度未知"，
+		// 供账户与安全中心如实展示。写失败不阻断启动（只是缺一条展示信息）。
+		if metaErr := m.security.NotePasswordChangedExternally(time.Now().UTC()); metaErr != nil {
+			return revoked, nil
+		}
 	}
 	return revoked, nil
 }

@@ -95,6 +95,13 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// ③ 切换内存校验基准（原子替换，之后的新登录用新口令）。
 	s.auth.SetPasswordHash(hash)
+	// ④ 记录"上次修改时间 + 强度评估"供账户与安全中心展示（只存标量，不存明文）。
+	//    这一步失败不影响改口令结果（口令已经生效），只记日志。
+	if sec := s.auth.Security(); sec != nil {
+		if metaErr := sec.RecordPasswordChange(req.NewPassword); metaErr != nil {
+			slog.Warn("记录口令强度元信息失败", "err", metaErr)
+		}
+	}
 
 	// 清会话 cookie 与 CSRF cookie：前端仍会幂等调 logout，这里再清一次兜底。
 	s.auth.ClearCookie(w, r)

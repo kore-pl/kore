@@ -13,6 +13,7 @@
     'nav.tasks': 'Scheduled Tasks',
     'nav.monitor': 'Monitoring',
     'nav.settings': 'Settings',
+    'nav.userCenter': 'Account & Security',
     'nav.terminal': 'Terminal',
     'nav.db': 'Databases',
     'nav.logs': 'Logs',

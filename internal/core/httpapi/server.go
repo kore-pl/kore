@@ -364,6 +364,8 @@ func New(opts Options, transport platform.Transport) *Server {
 	server.registerLogAlertRoutes()
 	// 站点迁移只读扫描（竞品清单条目 7）：同策略独立注册，不写 handlers.go 的 routes()。
 	server.registerSiteImportRoutes()
+	// 账户与安全中心（会话列表/踢下线/登录记录/账户总览）：同策略独立注册。
+	server.registerSecurityCenterRoutes()
 	// 主壳静态三件套：精确路径注册，优先于 routes() 里的 "/" 404 兜底。
 	// 面板壳无敏感数据，走鉴权白名单（middleware.isPublicPath）；API 仍全量鉴权。
 	server.staticRoutes()

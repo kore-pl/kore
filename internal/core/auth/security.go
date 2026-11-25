@@ -334,6 +334,35 @@ func normalizeRecoveryCode(code string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 }
 
+// TOTPStatusView 是「账户与安全中心」用的两步验证状态视图（显式字段，G-24）。
+type TOTPStatusView struct {
+	// Enabled 表示两步验证是否已开启。
+	Enabled bool `json:"enabled"`
+	// RecoveryCodesLeft 是尚未使用的恢复码数量（明文恢复码只在设置时展示一次）。
+	RecoveryCodesLeft int `json:"recoveryCodesLeft"`
+	// CreatedAt 是开启时刻（RFC3339；未开启为空）。
+	CreatedAt string `json:"createdAt"`
+}
+
+// TOTPStatus 读取两步验证状态与剩余恢复码数量；未开启/未装配时返回零值。
+func (sec *Security) TOTPStatus() (TOTPStatusView, error) {
+	if sec == nil {
+		return TOTPStatusView{}, nil
+	}
+	st, err := sec.loadTOTP()
+	if errors.Is(err, store.ErrNotFound) {
+		return TOTPStatusView{}, nil
+	}
+	if err != nil {
+		return TOTPStatusView{}, err
+	}
+	left := 0
+	if st.Enabled {
+		left = len(st.RecoveryHashes)
+	}
+	return TOTPStatusView{Enabled: st.Enabled, RecoveryCodesLeft: left, CreatedAt: st.CreatedAt}, nil
+}
+
 // --- 登录来源 IP 白名单 ---
 
 // IPAllow 读取白名单配置（未设置时返回开启=false 的空列表）。

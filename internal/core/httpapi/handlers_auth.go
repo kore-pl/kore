@@ -142,7 +142,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	token, session, err := s.auth.Issue()
+	token, session, err := s.auth.IssueWithMeta(auth.SessionMeta{
+		IP: auth.ClientIP(r), UserAgent: r.UserAgent(),
+	})
 	if err != nil {
 		s.recordLoginFailed(r, loginRateKey, "no_session")
 		writeFailure(w, err)

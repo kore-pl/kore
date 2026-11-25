@@ -2338,6 +2338,9 @@
     migrate: ['KoreMigrate', '/assets/migrate.js', 'nav.migrate', '配置迁移'],
     'site-migrate': ['KoreSiteMigrate', '/assets/site-migrate.js', 'nav.siteMigrate', '站点迁移'],
     webhook: ['KoreWebhook', '/assets/webhook.js', 'nav.webhook', '通知通道'],
+    // 账户与安全中心（用户中心）：账户状态总览 / 会话管理 / 登录记录 / 快捷动作，
+    // 挂在「设置」hub 的第二个 tab（默认 tab 仍是常规设置，A7 主流程不变）。
+    'user-center': ['KoreUserCenter', '/assets/user-center.js', 'nav.userCenter', '账户与安全'],
     // R23 第二批 8 个新视图：统一登记懒加载 sub（一级菜单仍 10 项，G-33 A6）。
     // 每项 = [全局名, 脚本, i18n 键, 中文兜底]；带连字符的键必须加引号（否则被解析成减法表达式）。
     // 视图文件由各卡交付，懒加载不进首屏六件套、不计首屏 gzip 预算。
@@ -2414,8 +2417,8 @@
     // R22：设置从单视图改为 hub（原 KoreSettings 通过 SHELL_VIEWS.settings 保留），新增快照/迁移/通知三个 tab。
     // R23：配置漂移挂设置（与快照/迁移同属配置治理闭环）。
     { id: 'settings', label: '设置', views: [
-      { sub: 'settings' }, { sub: 'snapshot' }, { sub: 'migrate' }, { sub: 'webhook' },
-      { sub: 'config-drift' }
+      { sub: 'settings' }, { sub: 'user-center' }, { sub: 'snapshot' }, { sub: 'migrate' },
+      { sub: 'webhook' }, { sub: 'config-drift' }
     ] }
   ];
 

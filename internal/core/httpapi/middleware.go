@@ -286,6 +286,13 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (auth.Sess
 	if err != nil {
 		return auth.Session{}, err
 	}
+	// 记录"最后活跃 / 来源 IP / UA 摘要"，供账户与安全中心的会话管理表使用。
+	// 写库由 auth.Touch 内部按 5 分钟节流；失败只记 WARN，不拒绝请求。
+	if touched, _, touchErr := s.auth.Touch(sess, auth.ClientIP(r), r.UserAgent()); touchErr != nil {
+		slog.Warn("更新会话活跃时间失败", "err", touchErr)
+	} else {
+		sess = touched
+	}
 	next, renewed, slideErr := s.auth.Slide(sess)
 	if slideErr != nil {
 		slog.Warn("会话滑动续期失败", "err", slideErr)

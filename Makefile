@@ -82,7 +82,7 @@ help: ## 显示本帮助（默认目标）
 # + 五个个性化组件（onboarding.js/css、theme.js/css、shortcuts.js；shell 首屏后懒加载，不进首屏六件套）
 # + 英文包（i18n/en-US.js，运行期按需注入，不进首屏）。
 # 只在缺失或源更新时拷贝，不删目录、不跑体积门禁，开销为几次 stat。
-WEB_SRC_FILES := index.html app.js style.css shell.js i18n.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js security.js terminal.js db.js db-l2.js db-mysql.js logs.js process.js ssl.js backups.js redis.js firewall.js waf.js dns.js sshguard.js runtimes.js integrity.js container.js appdeploy.js discover.js search.js audit.js alerts.js credentials.js onboarding.js onboarding.css theme.js theme.css shortcuts.js health.js calendar.js batch.js report.js topology.js snapshot.js webhook.js webhook.css migrate.js site-migrate.js alert-rules.js disk-analysis.js fault-drill.js macros.js cert-lifecycle.js config-drift.js slow-query.js log-alerts.js
+WEB_SRC_FILES := index.html app.js style.css shell.js i18n.js store.js files.js files-l2.js sites.js site-edit.js config-panel.js tasks.js monitor.js monitor-cards.js settings.js security.js terminal.js db.js db-l2.js db-mysql.js logs.js process.js ssl.js backups.js redis.js firewall.js waf.js dns.js sshguard.js runtimes.js integrity.js container.js appdeploy.js discover.js search.js audit.js alerts.js credentials.js onboarding.js onboarding.css theme.js theme.css shortcuts.js health.js calendar.js batch.js report.js topology.js snapshot.js webhook.js webhook.css migrate.js site-migrate.js alert-rules.js disk-analysis.js fault-drill.js macros.js cert-lifecycle.js config-drift.js slow-query.js log-alerts.js user-center.js
 # 语言包源码在 web/i18n/ 下，产物拍平成 web/dist/i18n-<locale>.js：
 # 内核静态路由只托管「单段文件名」（server.go handleAsset 拒绝含 / 的路径），
 # 不为了子目录去放宽内核的遍历面（ADR-0021）。
