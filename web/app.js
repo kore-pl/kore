@@ -9,7 +9,10 @@
    退出登录唯一入口在 设置 → 账户与安全（settings.js，二次确认）。
    概览重排（DESIGN-AUDIT P0-3 / DESIGN-SYSTEM C4）：四张指标卡（32px Display 大数字 +
    迷你进度条 + 状态点）→ 服务/插件两张状态卡 → 告警摘要 → 折叠的系统信息键值。
-   插件 UI 走独立 origin iframe + postMessage 桥（裁决40/41），不进主壳 realm。 */
+   首登改密提示（用户口径 2026-11-25「不能是必选项」）：后端在已鉴权响应上挂
+   X-Kore-Password-Hint: 1，首屏据此渲染一条可关闭的非阻断横幅（建议改初始口令，
+   「去修改」直达设置→账户与安全，「以后再说」关闭后本会话不再出现）；不改密也能
+   正常使用全部功能。插件 UI 走独立 origin iframe + postMessage 桥（裁决40/41），不进主壳 realm。 */
 (function () {
   'use strict';
 
@@ -34,7 +37,10 @@
     plugins: [],
     notice: '',
     pendingNotice: '',
-    ping: Object.create(null)
+    ping: Object.create(null),
+    // 首登改密提示：true 才渲染可关闭横幅；「以后再说」关掉即本会话不再出现（非阻断）。
+    passwordHint: false,
+    passwordHintDismissed: false
   };
   // 一键升级的运行态：放模块级，跨重绘保留（重绘只换 DOM，不丢进度）。
   var upgradeBatch = { running: false, done: 0, total: 0, failed: [], message: '' };
@@ -90,13 +96,17 @@
     if (ctrl) opts.signal = ctrl.signal;
 
     return fetch(url, opts).then(function (res) {
+      // 保留响应头：首登改密的 X-Kore-Password-Hint 走响应头通道（非阻断提示，
+      // 不塞进任何业务 JSON 体，免得每个 handler 都改一遍），消费方只读这一个键。
+      var hint = res.headers && typeof res.headers.get === 'function'
+        ? res.headers.get('X-Kore-Password-Hint') : null;
       return res.text().then(function (raw) {
         if (timer !== null) clearTimeout(timer);
         var data = {};
         if (raw) {
           try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; }
         }
-        return { ok: res.ok, status: res.status, data: data };
+        return { ok: res.ok, status: res.status, data: data, passwordHint: hint === '1' };
       });
     }, function (err) {
       if (timer !== null) clearTimeout(timer);
@@ -470,6 +480,52 @@
     });
     box.appendChild(close);
     return box;
+  }
+
+  // 首登改密提示：非阻断、可关闭。后端 X-Kore-Password-Hint: 1 触发，只说「建议」，
+  // 绝不拦任何功能；「以后再说」只置本会话标记，关掉不再出现（不写 localStorage，
+  // 下次重新登录仍按后端标志提示）。「去修改」直达设置→账户与安全并打开改密弹层。
+  function passwordHintBar() {
+    var box = el('div', 'notice notice-advisory');
+    box.id = 'kore-password-hint';
+    box.setAttribute('role', 'status');
+    box.appendChild(el('span', 'dot warn notice-dot'));
+    var text = el('div', 'notice-body');
+    text.appendChild(el('div', 'notice-title', '建议修改初始口令'));
+    text.appendChild(el('div', 'notice-hint', '当前口令是安装时生成的初始口令。建议现在改一个只有你知道的口令；不改也能正常使用全部功能。'));
+    box.appendChild(text);
+    var ops = el('div', 'notice-ops');
+    var go = el('button', 'btn btn-primary', '去修改');
+    go.type = 'button';
+    go.addEventListener('click', function () {
+      closePasswordHint();
+      if (window.KoreShell && typeof window.KoreShell.navigate === 'function') {
+        window.KoreShell.navigate('settings');
+      }
+      // settings.js 懒加载完成后再打开弹层；render 内已处理账户与安全 tab 的落地。
+      if (window.KoreCtx && typeof window.KoreCtx.ensureModule === 'function') {
+        window.KoreCtx.ensureModule('/assets/settings.js', 'KoreSettings').then(function (mod) {
+          if (mod && typeof mod.openPasswordDialog === 'function') {
+            mod.openPasswordDialog(go);
+          } else if (window.KoreShell && typeof window.KoreShell.navigate === 'function') {
+            window.KoreShell.navigate('settings/user-center');
+          }
+        }, function () { /* 加载失败就留在设置页，用户可手动点「修改口令」 */ });
+      }
+    });
+    var later = el('button', 'btn btn-ghost', '以后再说');
+    later.type = 'button';
+    later.addEventListener('click', closePasswordHint);
+    ops.appendChild(go);
+    ops.appendChild(later);
+    box.appendChild(ops);
+    return box;
+  }
+
+  function closePasswordHint() {
+    state.passwordHintDismissed = true;
+    var box = document.getElementById('kore-password-hint');
+    if (box && box.parentNode) box.parentNode.removeChild(box);
   }
 
   // 仅用于「网络层不可达」：401 不再落到这里。
@@ -2261,6 +2317,19 @@
       top.textContent = '';
       top.appendChild(renderTopbar(false));
     }
+    // 非阻断提示挂载：重绘只换视图内容，横幅按状态补挂一次（不重复、不挡操作）。
+    mountPasswordHint();
+  }
+
+  // 把改密提示挂到主内容区顶部；已关闭或标志为 false 时确保不残留。
+  function mountPasswordHint() {
+    var old = document.getElementById('kore-password-hint');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    if (!state.passwordHint || state.passwordHintDismissed) return;
+    var content = document.getElementById('view') || document.querySelector('.content');
+    if (content && content.insertBefore) {
+      content.insertBefore(passwordHintBar(), content.firstChild);
+    }
   }
 
   // 视图模块（如 settings.js 退出登录）显式回到站点根 = 归位意图：
@@ -2362,6 +2431,9 @@
       }
       state.authed = true;
       state.info = info.res.data || {};
+      // 首屏探测响应头带提示标志才提示；登录失败 5 次锁定等状态与本提示无关。
+      state.passwordHint = !!info.res.passwordHint;
+      state.passwordHintDismissed = false;
       loadDashboard();
     });
   }
@@ -2433,6 +2505,7 @@
     failureReason: failureReason, ensureCsrf: ensureCsrf, writeJson: writeJson,
     statusTag: statusTag, row: row, panel: panel, emptyState: emptyState,
     replaceNode: replaceNode, noticeBar: noticeBar, viewNotice: viewNotice,
+    ensureModule: ensureModule,
     renderLogin: renderLogin, renderDashboard: renderDashboard,
     loadDashboard: loadDashboard, refreshPluginsView: refreshPluginsView,
     buildOverviewInto: buildOverviewInto, pluginCounts: pluginCounts,

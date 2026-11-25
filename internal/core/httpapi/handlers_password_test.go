@@ -102,26 +102,40 @@ func parseErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
 	return body
 }
 
-// TestMustChangeGateBlocksNonPasswordEndpoints 覆盖 ADR-0055 §4：must_change=true 时，
-// 已登录会话访问非改密/登出端点一律 403 + 白话「首次登录请先设置新口令」；
-// 改密端点可用，且改密成功后标志清除、旧会话全部失效（单管理员一次性状态机，非 RBAC）。
-func TestMustChangeGateBlocksNonPasswordEndpoints(t *testing.T) {
+// TestMustChangeIsNotAnAccessGate 覆盖用户口径 2026-11-25：「首次登录请先设置新口令
+// 不能是必选项」。must_change=true 时已登录会话访问首屏/导航/设置依赖的端点
+// （system/info、plugins、auth/session）必须全部 200，且响应头仅带非阻断提示；
+// 改密端点仍可用，成功后标志清除、旧会话全部失效（ADR-0055 一次性凭据消费仍成立）。
+func TestMustChangeIsNotAnAccessGate(t *testing.T) {
 	env := passwordTestServer(t, pwOld)
 	env.auth.SetMustChange(true)
 	loginRec := passwordLogin(t, env.server, pwOld, true)
 	session := sessionCookieFrom(t, loginRec)
 	csrf := csrfCookieFrom(t, loginRec)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
-	rec := httptest.NewRecorder()
-	env.server.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("must_change 下非改密端点应 403，实际 %d: %s", rec.Code, rec.Body.String())
+
+	// ① 首屏/会话等已装配端点全部放行，绝不出现 403/「系统信息读取失败」。
+	for _, path := range []string{"/api/v1/system/info", "/api/v1/auth/session"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: session})
+		rec := httptest.NewRecorder()
+		env.server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("must_change 下 %s 应 200，实际 %d: %s", path, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get(passwordHintHeader) != "1" {
+			t.Fatalf("%s 应带非阻断提示头 %s，实际无", path, passwordHintHeader)
+		}
+		if strings.Contains(rec.Body.String(), "首次登录请先设置新口令") {
+			t.Fatalf("%s 不应返回阻断文案：%s", path, rec.Body.String())
+		}
 	}
-	if body := parseErrorBody(t, rec); !strings.Contains(body.Message, "首次登录请先设置新口令") {
-		t.Fatalf("403 文案应为白话首登提示，实际 %q", body.Message)
+	// 写端点也必须过鉴权而非被闸门拦下：非法请求体得到 400（业务校验），绝不是 403 闸门。
+	badBody := passwordChange(env.server, session, csrf, "{\"current_password\":\"x\"}")
+	if badBody.Code != http.StatusBadRequest {
+		t.Fatalf("must_change 下改密请求应按业务校验 400，实际 %d: %s", badBody.Code, badBody.Body.String())
 	}
-	// 改密端点可用，且成功后清标志 + 吊销旧会话。
+
+	// ② 改密端点可用，且成功后清标志 + 吊销旧会话（凭据消费钩子保持不变）。
 	bodyStr := `{"current_password":"`+pwOld+`","new_password":"`+pwNew+`"}`
 	changeRec := passwordChange(env.server, session, csrf, bodyStr)
 	if changeRec.Code != http.StatusOK {

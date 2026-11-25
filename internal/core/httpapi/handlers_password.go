@@ -19,21 +19,19 @@ var credentialConsumedHook func()
 func SetCredentialConsumedHook(fn func()) { credentialConsumedHook = fn }
 
 
-// mustChangeBlocked 在 must_change=true 时对非白名单 /api/v1/* 返回 403 白话提示。
-// 白名单：改密端点（唯一能清标志的写操作）与登出（幂等终止会话）；静态壳与
-// 登录端点不在 /api/v1/* 会话分支内，天然放行。这是单管理员一次性状态机，
-// 不是 RBAC（G-11）。API token / 插件 bearer 身份已在 withAuth 前面分支放行，
-// 不走本闸门。
-func (s *Server) mustChangeBlocked(w http.ResponseWriter, r *http.Request) bool {
-	if s.auth == nil || !s.auth.MustChange() {
-		return false
+// passwordHintHeader 是 must_change_password 的**非阻断**提示信号：
+// 会话鉴权通过后，若标志仍为 true，在响应上写 X-Kore-Password-Hint: 1。
+// 前端据此给一条可关闭的「建议修改初始口令」提示；"以后再说"关掉就不再出现。
+// 用户口径 2026-11-25：「首次登录请先设置新口令不能是必选项」——本头只提示、
+// 不拦截、不改鉴权，也不泄露任何凭据内容（G-30）。
+const passwordHintHeader = "X-Kore-Password-Hint"
+
+// notePasswordHint 在已鉴权请求的响应上挂提示头（无会话/auth 未装配时不挂）。
+// 必须在 handler 写状态码前调用；withAuth 在会话分支里调用（见 middleware.go）。
+func (s *Server) notePasswordHint(w http.ResponseWriter) {
+	if s.auth != nil && s.auth.MustChange() {
+		w.Header().Set(passwordHintHeader, "1")
 	}
-	if r.URL.Path == authPasswordPath || r.URL.Path == "/api/v1/auth/logout" {
-		return false
-	}
-	writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
-		"首次登录请先设置新口令", "")
-	return true
 }
 
 // changePasswordRequest 是 POST /api/v1/auth/password 的显式请求体（snake_case，

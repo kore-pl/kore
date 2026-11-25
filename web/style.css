@@ -222,6 +222,15 @@ html, body {
 .notice-title { font-weight: 600; }
 .notice-hint { color: var(--kore-text-2); font-size: var(--kore-font-12); word-break: break-word; }
 .notice-close { flex: 0 0 auto; }
+/* 首登改密提示：警告黄而非错误红，明示「可关闭、不影响使用」，不与故障红条混淆。 */
+.notice-advisory { border-color: var(--kore-warning); border-left-color: var(--kore-warning); }
+.notice-advisory .notice-dot { background: var(--kore-warning); }
+.notice-ops { display: flex; flex-wrap: wrap; gap: var(--kore-space-2); flex: 0 0 auto; }
+@media (max-width: 639px) {
+  .notice-advisory { flex-wrap: wrap; }
+  .notice-ops { flex: 1 1 100%; }
+  .notice-ops .btn { min-height: var(--kore-touch); }
+}
 
 /* ===== 面板与表 ===== */
 .panel {

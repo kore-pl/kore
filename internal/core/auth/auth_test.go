@@ -172,8 +172,10 @@ func TestApplyCredentialSnapshot(t *testing.T) {
 	}
 }
 
-// TestMustChangeGateViaAuthManager 通过 newServer 验证 must_change 标志驱动 403 闸门。
-func TestMustChangeGateViaAuthManager(t *testing.T) {
+// TestMustChangeIsNotAccessGateViaAuthManager 通过 newServer 验证用户口径
+// 2026-11-25：「首次登录请先设置新口令不能是必选项」。must_change 标志只驱动
+// 非阻断提示头 X-Kore-Password-Hint，绝不驱动 403 闸门：会话有效即全部业务端点放行。
+func TestMustChangeIsNotAccessGateViaAuthManager(t *testing.T) {
 	s := newServer(t)
 	cookie := cookieValue(t, login(t, s, testPassword))
 	if got := request(t, s, http.MethodGet, "/api/v1/auth/session", "", cookie).Code; got != http.StatusOK {
@@ -182,10 +184,10 @@ func TestMustChangeGateViaAuthManager(t *testing.T) {
 	// 直接通过 server.AuthManager 打开标志（模拟 CLI 重置后 SIGHUP 同步）。
 	s.AuthManager().SetMustChange(true)
 	rec := request(t, s, http.MethodGet, "/api/v1/auth/session", "", cookie)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("must_change=true 时应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("must_change=true 时业务端点仍应 200，实际 %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "首次登录请先设置新口令") {
-		t.Fatalf("403 应为白话提示，实际 %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "首次登录请先设置新口令") {
+		t.Fatalf("响应不应含阻断文案，实际 %s", rec.Body.String())
 	}
 }

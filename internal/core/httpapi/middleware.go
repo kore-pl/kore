@@ -19,6 +19,8 @@ import (
 )
 
 // withAuth 对 /api/v1/* 强制会话校验；/-/healthz、登录端点与主壳壳资源放行。
+// 登录成功后所有已鉴权端点一视同仁放行：首次登录改密提示只作为可选建议，
+// 通过响应头 X-Kore-Password-Hint 告知前端，不作为访问闸门（用户口径 2026-11-25）。
 // 无有效 cookie → 401 E_UNAUTHORIZED（不泄露是"无 cookie"还是"已过期"）。
 //
 // 本机（UDS / loopback）**不是免登录通道**（ADR-0043 更正 ADR-0041 的误读）：
@@ -60,10 +62,10 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "未授权", "")
 				return
 			}
-			// ADR-0055 §4：首登强制改密——must_change 时只放行改密/登出/静态壳。
-			if s.mustChangeBlocked(w, r) {
-				return
-			}
+			// ADR-0055 首登改密为**可选建议**，不是访问闸门：must_change_password
+			// 只作前端提示标记（X-Kore-Password-Hint），不再拦截任何业务端点。
+			// 用户可直接使用控制台全部功能（用户口径 2026-11-25："不能是必选项"）。
+			s.notePasswordHint(w)
 		}
 		next.ServeHTTP(w, r)
 	})

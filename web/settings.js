@@ -1402,5 +1402,8 @@
 
   // confirmDanger 对外公开：清空日志 / 卸载插件 / 删除站点等视图可直接复用同一套
   // 「后果 + 输入确认文字」弹层，避免各处自造确认（本卡不改它们的文件，只留公共入口）。
-  window.KoreSettings = { render: render, endpoints: EP, confirmDanger: openDangerConfirm };
+  // openPasswordDialog 对外暴露：首屏的可关闭改密提示「去修改」直达本弹层，
+  // 不另造第二套改密表单（同一件事只有一份实现）。
+  window.KoreSettings = { render: render, endpoints: EP, confirmDanger: openDangerConfirm,
+    openPasswordDialog: openPasswordDialog };
 })();
