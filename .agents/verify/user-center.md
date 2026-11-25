@@ -109,6 +109,17 @@ bash scripts/secret-check.sh: 0 FAIL / 22 处匹配（占位写法均合规）  
 - 「上次修改时间」对升级前的老实例是未知；命令行改过的记的是**检测时刻**，前端文案已说明。
 - 恢复码剩余数只读展示；重新生成恢复码仍走 security.js（未改既有实现）。
 
+## 6.5 提交事故留痕（G-12，如实记录）
+
+- `e86b97c` 用 `git commit -- web/app.js` 收 tab 改名时，**pathspec 形式取的是工作区内容**，
+  把 `feat-overview-dashboard` 在途的概览页改动（`OV_*` 等 714 行）一并提交了。
+- 处置（按纪律**不改写历史**、不 amend/reset）：`533d938` 把 `web/app.js` 回退到 `afa6061` 内容
+  + 仅保留本卡的 label 改名，他人改动**原样留在工作区未提交**（与其出事前状态一致）。
+  已用临时索引（`GIT_INDEX_FILE` + `read-tree` + `update-index`）提交，**未用 pathspec 形式**。
+- 教训：`git commit -- <path>` 不是"只提交索引里该文件的内容"，而是"提交**工作区**该文件的内容"；
+  共享工作区要只提自己 hunk，必须整份 `GIT_INDEX_FILE` 索引 + 不带 pathspec 的 `git commit`。
+- 已 `send_message` 告知 `feat-overview-dashboard` 与 lead。
+
 ## 7. G-29 声明
 
 本轮**未改动主实例运行态配置与资产**：验证全程使用独立 `--config` + /tmp 的 state/run/log；
