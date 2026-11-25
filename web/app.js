@@ -43,7 +43,12 @@
   var ov = {
     sys: null, sysSrc: '', sysReason: '',
     svc: { sites: null, ssl: null, db: null },
-    alerts: null, alertBusy: false
+    alerts: null, alertBusy: false,
+    // 任务 / 商店 / 采样趋势：任一来源失败只让对应待办缺席，不拖垮整页（诚实降级，不编 0）。
+    jobs: { cron: null, sched: null },
+    store: { entries: null, presets: null },
+    // 会话内趋势采样：monitor 插件无 history 时（内核降级 / 插件未装）用本地重绘采样兜底。
+    sess: { cpu: [], mem: [], disk: [] }
   };
 
   function el(tag, className, text) {
@@ -1760,8 +1765,10 @@
       '.ov-note{margin:0 0 var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-3);' +
         'color:var(--kore-warning);background:var(--kore-warning-bg);border:1px solid var(--kore-warning);' +
         'border-radius:var(--kore-radius-control);font-size:var(--kore-font-12);word-break:break-word}',
-      '.ov-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kore-space-3);' +
-        'margin-bottom:var(--kore-space-6)}',
+      // 5 张指标卡（CPU / 内存 / 磁盘 / 负载 / 网络）：auto-fit 让宽屏一行 5 张、
+      // 窄屏自动折行，不靠固定列数（加卡不用改布局）。
+      '.ov-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));' +
+        'gap:var(--kore-space-3);margin-bottom:var(--kore-space-6)}',
       '.ov-card{display:flex;flex-direction:column;gap:var(--kore-space-2);padding:var(--kore-space-4);' +
         'background:var(--kore-bg-1);border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container);min-width:0}',
       '.ov-card-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-2)}',
@@ -1807,6 +1814,77 @@
       '.ov-alert-time{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
       '.ov-alert-ok{display:flex;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-1) 0}',
       '.ov-alert-ok span:last-child{margin-left:auto}',
+      // 健康状态卡（首屏第一块）：分数 + 一句话结论 + 七项分项；异常项整块可点直达。
+      '.ov-hero{display:flex;flex-direction:column;gap:var(--kore-space-3);margin-bottom:var(--kore-space-4);' +
+        'padding:var(--kore-space-4);background:var(--kore-bg-1);border:1px solid var(--kore-border-1);' +
+        'border-left:4px solid var(--kore-border-2);border-radius:var(--kore-radius-container)}',
+      '.ov-hero.is-ok{border-left-color:var(--kore-success)}' +
+        '.ov-hero.is-warn{border-left-color:var(--kore-warning)}' +
+        '.ov-hero.is-fail{border-left-color:var(--kore-danger)}',
+      '.ov-hero-main{display:flex;align-items:center;gap:var(--kore-space-4);flex-wrap:wrap}',
+      '.ov-hero-score{display:flex;align-items:baseline;gap:2px;min-width:72px}',
+      '.ov-hero-num{font-size:var(--kore-font-32);font-weight:600;line-height:1;' +
+        'font-variant-numeric:tabular-nums;color:var(--kore-text-1)}',
+      '.ov-hero.is-warn .ov-hero-num{color:var(--kore-warning)}' +
+        '.ov-hero.is-fail .ov-hero-num{color:var(--kore-danger)}',
+      '.ov-hero-unit{font-size:var(--kore-font-12);color:var(--kore-text-3)}',
+      '.ov-hero-text{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:2px}',
+      '.ov-hero-line{display:flex;align-items:center;gap:var(--kore-space-2);flex-wrap:wrap}',
+      '.ov-hero-headline{font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1)}',
+      '.ov-hero-tools{display:flex;gap:var(--kore-space-2);flex:0 0 auto}',
+      '.ov-hero-go{min-height:var(--kore-touch)}',
+      '.ov-hero-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--kore-space-2)}',
+      '.ov-check{display:flex;align-items:center;gap:var(--kore-space-2);min-height:36px;min-width:0;' +
+        'padding:var(--kore-space-1) var(--kore-space-2);background:var(--kore-bg-2);' +
+        'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control)}',
+      '.ov-check-label{font-size:var(--kore-font-12);color:var(--kore-text-3);white-space:nowrap}',
+      '.ov-check-value{margin-left:auto;font-size:var(--kore-font-13);font-weight:600;color:var(--kore-text-1);' +
+        'font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ov-check.is-warn .ov-check-value{color:var(--kore-warning)}' +
+        '.ov-check.is-fail .ov-check-value{color:var(--kore-danger)}',
+      '.ov-check-link{cursor:pointer}' +
+        '.ov-check-link:hover{border-color:var(--kore-text-3)}' +
+        '.ov-check-link:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}',
+      '.ov-check-go{color:var(--kore-text-3);font-size:var(--kore-font-16);line-height:1}',
+      // 快捷入口：四个高频动作；手机 2×2，触摸目标 ≥44px（裁决41）。
+      '.ov-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kore-space-2);' +
+        'margin-bottom:var(--kore-space-4)}',
+      '.ov-action{display:flex;flex-direction:column;gap:2px;align-items:flex-start;min-height:var(--kore-touch);' +
+        'padding:var(--kore-space-2) var(--kore-space-3);background:var(--kore-bg-1);' +
+        'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control);' +
+        'color:var(--kore-text-1);font:inherit;text-align:left;cursor:pointer}',
+      '.ov-action:hover{border-color:var(--kore-text-3);background:var(--kore-bg-2)}' +
+        '.ov-action:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}',
+      '.ov-action-label{font-size:var(--kore-font-14);font-weight:600}' +
+        '.ov-action-hint{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.4}',
+      // 待办：一行一件事，右侧「去处理」，整行可点（不用先想这件事在哪个菜单）。
+      '.ov-todo-panel{margin-bottom:var(--kore-space-4)}',
+      '.ov-todo-body{display:flex;flex-direction:column;gap:0;padding:var(--kore-space-2) var(--kore-space-4) var(--kore-space-4)}',
+      '.ov-todo{display:flex;align-items:center;gap:var(--kore-space-3);min-height:var(--kore-touch);' +
+        'padding:var(--kore-space-2);border-bottom:1px solid var(--kore-border-1);' +
+        'border-radius:var(--kore-radius-control);cursor:pointer}',
+      '.ov-todo:last-of-type{border-bottom:0}' +
+        '.ov-todo:hover{background:var(--kore-bg-2)}' +
+        '.ov-todo:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}',
+      '.ov-todo-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}',
+      '.ov-todo-title{font-size:var(--kore-font-14);font-weight:600;color:var(--kore-text-1);overflow-wrap:anywhere}',
+      '.ov-todo.is-fail .ov-todo-title{color:var(--kore-danger)}' +
+        '.ov-todo.is-warn .ov-todo-title{color:var(--kore-warning)}',
+      '.ov-todo-detail{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;overflow-wrap:anywhere}',
+      '.ov-todo-cta{font-size:var(--kore-font-12);color:var(--kore-info);white-space:nowrap;flex:0 0 auto}',
+      // 迷你趋势：静态条形，点一下 / 方向键把单点读数写出来（G-32「数据点可读」）。
+      '.ov-trend{margin-top:var(--kore-space-1)}',
+      '.ov-trend-bars{display:flex;align-items:flex-end;gap:2px;height:26px;cursor:crosshair}',
+      '.ov-trend-bar{flex:1 1 0;min-width:2px;max-width:14px;align-self:flex-end;' +
+        'background:var(--kore-info);opacity:0.55;border-radius:1px 1px 0 0}',
+      '.ov-trend-bar.is-active{opacity:1;background:var(--kore-text-1)}',
+      '.ov-trend-read{margin:2px 0 0;font-size:var(--kore-font-12);color:var(--kore-text-3);' +
+        'font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ov-trend:focus-visible{outline:2px solid var(--kore-info);outline-offset:1px}',
+      '.ov-net{display:flex;flex-wrap:wrap;gap:var(--kore-space-3)}',
+      '.ov-net-line{font-size:var(--kore-font-16);font-weight:600;color:var(--kore-text-1);' +
+        'font-variant-numeric:tabular-nums}',
+      '.ov-card-btn{min-height:var(--kore-touch);align-self:flex-start}',
       '.ov-sysinfo{margin-bottom:var(--kore-space-4);background:var(--kore-bg-1);' +
         'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-container)}',
       '.ov-sysinfo>summary{cursor:pointer;padding:var(--kore-space-3) var(--kore-space-4);' +
@@ -1814,11 +1892,22 @@
       '.ov-sysinfo>summary:hover{color:var(--kore-text-1)}',
       '.ov-sysinfo .rows{margin:0 var(--kore-space-4) var(--kore-space-3)}',
       '.ov-sysinfo .ov-caption{padding:0 var(--kore-space-4) var(--kore-space-3)}',
-      '@media (max-width:1024px){.ov-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+      '@media (max-width:1024px){.ov-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}' +
+        '.ov-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}',
       '@media (max-width:639px){.ov-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--kore-space-2)}' +
         '.ov-status{grid-template-columns:1fr;gap:var(--kore-space-2)}' +
         '.ov-card{padding:var(--kore-space-3)}' +
-        '.ov-head{flex-wrap:wrap}}'
+        '.ov-head{flex-wrap:wrap}' +
+        '.ov-hero{padding:var(--kore-space-3);gap:var(--kore-space-2)}' +
+        '.ov-hero-main{gap:var(--kore-space-3)}' +
+        '.ov-hero-tools{width:100%}' +
+        '.ov-hero-go{width:100%}' +
+        '.ov-hero-checks{grid-template-columns:repeat(2,minmax(0,1fr))}' +
+        '.ov-check{min-height:var(--kore-touch)}' +
+        '.ov-actions{grid-template-columns:repeat(2,minmax(0,1fr))}' +
+        '.ov-todo-body{padding:var(--kore-space-2) var(--kore-space-3) var(--kore-space-3)}' +
+        '.ov-todo{gap:var(--kore-space-2)}' +
+        '.ov-todo-detail{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}'
     ].join('');
     var style = el('style', null, CSS);
     style.id = 'kore-app-css';
@@ -1840,6 +1929,16 @@
   };
   var OV_METRICS = '/api/v1/system/metrics';
   var OV_AUDIT = '/api/v1/audit';
+  var OV_CRON = '/api/v1/invoke/cron/cron.list';
+  var OV_SCHED = '/api/v1/scheduler/tasks';
+  var OV_STORE = '/api/v1/store/plugins';
+  var OV_PRESETS = '/api/v1/store/presets';
+  // 概览阈值：与 alert-rules.js / monitor 插件同一本账（occupancy 80/90、负载 1×/2× 核数）。
+  var OV_DISK_TODO = 85;      // 磁盘到这条线就进「待办」，不再只是变黄
+  var OV_CERT_WARN_DAYS = 30; // 证书剩余天数
+  var OV_CERT_FAIL_DAYS = 7;
+  var OV_TREND_MAX = 24;      // 迷你趋势最多保留的采样点（单图 ≤1000 点，G-32）
+  var OV_TODO_MAX = 8;        // 待办一屏最多 8 条，超出只显示前 8（附「还有 N 项」）
   var OV_ALERT_WINDOW_MS = 5 * 60 * 1000;
   var OV_DENIED_BURST = 5;
   var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝（需要管理员账号；能力由插件声明授予，无逐项授权开关）' };
@@ -1871,7 +1970,7 @@
     bar.appendChild(fill);
     return bar;
   }
-  function ovMetricCard(title, num, unit, toneName, chipText, chipTitle, barPct, caption) {
+  function ovMetricCard(title, num, unit, toneName, chipText, chipTitle, barPct, caption, trend) {
     var card = el('section', 'ov-card');
     var head = el('div', 'ov-card-head');
     head.appendChild(el('span', 'ov-card-title', title));
@@ -1885,8 +1984,517 @@
       card.appendChild(ovBar(barPct, toneName, title + '占用 ' +
         (ovNum(barPct) === null ? '—' : barPct.toFixed(1)) + '%'));
     }
+    if (trend) card.appendChild(trend);
     card.appendChild(el('p', 'ov-caption', caption));
     return card;
+  }
+
+
+  /* ---------- 概览：健康状态 / 待办 / 快捷入口 / 迷你趋势 ----------
+     战略「操作更简便」的首页版本：登录后第一屏用 3 秒回答两件事——
+     「这台机器现在怎么样」（健康分 + 分项）与「有什么要处理」（待办，每条一键直达）。
+     数据全部复用既有 API 与插件方法，一次性拉取，不新增轮询（G-19）、不引依赖；
+     任一来源不可用时该项进「未采集」并如实标注，不编 0（诚实降级）。 */
+
+  var OV_TONE_TEXT = { ok: '正常', warn: '注意', fail: '异常', na: '未采集' };
+  var OV_RANK = { na: 0, ok: 1, warn: 2, fail: 3 };
+
+  function ovWorse(a, b) { return OV_RANK[b] > OV_RANK[a] ? b : a; }
+  function ovPctText(v) { var n = ovNum(v); return n === null ? '—' : n.toFixed(1) + '%'; }
+
+  // 概览内的跳转：'!alerts' 打开告警中心浮层（不是路由），其余走主壳路由。
+  function ovGo(route) {
+    if (!route) return;
+    if (route === '!alerts') { openAlertCenter(); return; }
+    if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate(route);
+  }
+
+  // 版本比较：与 web/store.js 的 cmp 同一口径（按 . - + 分段，纯数字段按数值比）。
+  // 概览只在「有没有新版本」这一处用它；改动时两处必须同步，否则商店与首页会各说一套。
+  function ovVerCmp(a, b) {
+    function segs(v) {
+      return String(v === undefined || v === null ? '' : v).replace(/^v/i, '')
+        .split(/[.+-]/).filter(function (x) { return x !== ''; });
+    }
+    var x = segs(a), y = segs(b), n = Math.max(x.length, y.length);
+    for (var i = 0; i < n; i++) {
+      var p = x[i] === undefined ? '0' : x[i], q = y[i] === undefined ? '0' : y[i];
+      var pn = /^\d+$/.test(p) ? parseInt(p, 10) : null;
+      var qn = /^\d+$/.test(q) ? parseInt(q, 10) : null;
+      if (pn !== null && qn !== null) { if (pn !== qn) return pn > qn ? 1 : -1; continue; }
+      if (p !== q) return p > q ? 1 : -1;
+    }
+    return 0;
+  }
+
+  // 趋势序列：优先用 monitor 插件的 history（一次请求带回来，不额外定时采样）；
+  // 插件缺席时退回「本次会话内每次重绘的采样」，够画一条可信的迷你曲线。
+  function ovSeries(kind) {
+    var hist = (ov.sys && ov.sys.history) || {};
+    var key = { cpu: 'cpu_percent', mem: 'memory_percent', disk: 'disk_percent' }[kind];
+    var arr = key && Array.isArray(hist[key]) ? hist[key] : null;
+    if (arr && arr.length) return arr.slice(-OV_TREND_MAX);
+    return (ov.sess[kind] || []).slice(-OV_TREND_MAX);
+  }
+
+  // 会话采样：每次真正拿到一份系统数据才追加一个点（不在重绘里重复推）。
+  function ovPushSample() {
+    var sys = ov.sys || {}, cpu = sys.cpu || {}, mem = sys.memory || {};
+    var disks = Array.isArray(sys.disks) ? sys.disks : [], root = null;
+    for (var i = 0; i < disks.length; i++) {
+      if (disks[i] && disks[i].mount === '/') { root = disks[i]; break; }
+    }
+    var pts = { cpu: ovNum(cpu.usage_percent), mem: ovNum(mem.used_percent), disk: ovNum(root && root.used_percent) };
+    Object.keys(pts).forEach(function (k) {
+      if (pts[k] === null) return;
+      var arr = ov.sess[k];
+      arr.push(pts[k]);
+      while (arr.length > OV_TREND_MAX) arr.shift();
+    });
+  }
+
+  // 迷你趋势：静态条形（G-32：静态图优先轻量实现，单图点 ≤ OV_TREND_MAX）。
+  // 每个点 hover 有 title、点击/方向键把读数写进下一行——手机上点到哪根就读哪根。
+  function ovTrend(kind, unit) {
+    var values = ovSeries(kind);
+    if (!values.length) return null;
+    var max = 0, min = 1e9;
+    for (var i = 0; i < values.length; i++) {
+      var v = ovNum(values[i]);
+      if (v === null) continue;
+      if (v > max) max = v;
+      if (v < min) min = v;
+    }
+    if (min > max) { min = 0; max = 0; }
+    var scale = Math.max(max, 1);
+    var wrap = el('div', 'ov-trend');
+    wrap.tabIndex = 0;
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', '近 ' + values.length + ' 次采样趋势，方向键逐点读取');
+    var bars = el('div', 'ov-trend-bars');
+    var nodes = [];
+    for (var j = 0; j < values.length; j++) {
+      var n = ovNum(values[j]);
+      var bar = el('div', 'ov-trend-bar');
+      bar.style.height = Math.max(4, Math.min(100, ((n === null ? 0 : n) / scale) * 100)).toFixed(1) + '%';
+      bar.title = (n === null ? '—' : n.toFixed(1) + unit);
+      bar.setAttribute('aria-hidden', 'true');
+      nodes.push(bar);
+      bars.appendChild(bar);
+    }
+    wrap.appendChild(bars);
+    var read = el('p', 'ov-trend-read', '近 ' + values.length + ' 次：最低 ' + min.toFixed(1) + unit +
+      ' · 最高 ' + max.toFixed(1) + unit + ' · 最新 ' + (ovNum(values[values.length - 1]) === null
+        ? '—' : ovNum(values[values.length - 1]).toFixed(1) + unit));
+    wrap.appendChild(read);
+    var active = -1;
+    function pick(idx) {
+      if (idx < 0) idx = 0;
+      if (idx > values.length - 1) idx = values.length - 1;
+      if (idx === active) return;
+      if (active >= 0 && nodes[active]) nodes[active].className = 'ov-trend-bar';
+      active = idx;
+      if (nodes[active]) nodes[active].className = 'ov-trend-bar is-active';
+      var pv = ovNum(values[active]);
+      read.textContent = '第 ' + (active + 1) + ' 次采样 · ' + (pv === null ? '—' : pv.toFixed(1) + unit);
+    }
+    wrap.addEventListener('click', function (ev) {
+      var rect = bars.getBoundingClientRect();
+      if (!rect.width) return;
+      var ratio = (ev.clientX - rect.left) / rect.width;
+      pick(Math.round(ratio * (values.length - 1)));
+    });
+    wrap.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowRight') { ev.preventDefault(); pick(active < 0 ? 0 : active + 1); }
+      else if (ev.key === 'ArrowLeft') { ev.preventDefault(); pick(active < 0 ? values.length - 1 : active - 1); }
+    });
+    return wrap;
+  }
+
+  // 服务聚合检查：告警（严重/警告）+ 插件运行失败，用同一个 tone 表达「要不要管」。
+  function ovServiceCheck() {
+    var alerts = ov.alerts || [], crit = 0, warn = 0;
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i].severity === 'critical') crit++;
+      else if (alerts[i].severity === 'warning') warn++;
+    }
+    var counts = pluginCounts();
+    var tone = counts.failed > 0 || crit > 0 ? 'fail' : warn > 0 ? 'warn' : (ov.alerts === null ? 'na' : 'ok');
+    // 告警还没读到时不冒充「正常」，显示「读取中」；读到 0 条才说正常。
+    var value = counts.failed > 0 ? ('插件异常 ' + counts.failed)
+      : crit > 0 ? ('严重告警 ' + crit) : warn > 0 ? ('告警 ' + warn)
+      : (ov.alerts === null ? '读取中' : '正常');
+    var detail = counts.failed > 0 ? '有插件进程运行失败，去插件管理看日志'
+      : crit > 0 ? '最近 5 分钟有严重告警待处理' : warn > 0 ? '最近 5 分钟有告警待确认' : '无严重告警，插件运行正常';
+    return { tone: tone, value: value, detail: detail };
+  }
+
+  // 证书最差一张：证书插件缺席时返回 null（显示「未启用」，不当作「没有问题」）。
+  function ovCertWorst() {
+    var certs = ov.svc.ssl;
+    if (!Array.isArray(certs)) return null;
+    var worst = null;
+    for (var i = 0; i < certs.length; i++) {
+      var c = certs[i] || {}, d = ovNum(c.days_left);
+      if (d === null) continue;
+      if (!worst || d < worst.days) worst = { days: d, domain: c.domain || '—', expired: c.expired === true || d < 0 };
+    }
+    return worst;
+  }
+
+  // 任务体检：内核 scheduler 的 last_result + cron 的 binary_status（到点会静默失败）。
+  function ovJobsCheck() {
+    var out = { failed: 0, stale: 0, failedNames: [], known: false };
+    var sched = ov.jobs.sched;
+    if (sched && Array.isArray(sched.tasks)) {
+      out.known = true;
+      for (var i = 0; i < sched.tasks.length; i++) {
+        var t = sched.tasks[i] || {};
+        if (t.last_result === 'failed' || t.last_result === 'timeout') {
+          out.failed++;
+          if (out.failedNames.length < 2) out.failedNames.push(t.name || t.id || '未命名任务');
+        }
+      }
+    }
+    var cron = ov.jobs.cron;
+    if (cron && Array.isArray(cron.entries)) {
+      out.known = true;
+      for (var j = 0; j < cron.entries.length; j++) {
+        var en = cron.entries[j] || {};
+        if (en.enabled === false) continue;
+        if (en.binary_status === 'missing' || en.binary_status === 'stale') out.stale++;
+      }
+    }
+    return out;
+  }
+
+  // 可更新插件：索引版本严格高于已装版本（与商店「可更新」筛选同一口径）。
+  function ovUpgradable() {
+    var entries = ov.store.entries;
+    if (!Array.isArray(entries)) return null;
+    var installed = Object.create(null);
+    for (var i = 0; i < state.plugins.length; i++) {
+      var p = state.plugins[i] || {};
+      if (p.id) installed[p.id] = String(p.version || '');
+    }
+    var out = [];
+    for (var j = 0; j < entries.length; j++) {
+      var e = entries[j] || {};
+      var to = String(e.version || ''), from = installed[e.id];
+      if (!from || !to) continue;
+      if (ovVerCmp(to, from) > 0) out.push({ id: e.id, name: e.name || e.id, from: from, to: to });
+    }
+    return out;
+  }
+
+  // 推荐未装插件：只认预设里 out_of_box=true 的条目（就是「开箱该有的」），
+  // 已装（含停用）不算缺；插件显示名优先取索引里的 name。
+  function ovRecommendedMissing() {
+    var presets = ov.store.presets;
+    if (!Array.isArray(presets)) return null;
+    var nameOf = Object.create(null);
+    if (Array.isArray(ov.store.entries)) {
+      for (var i = 0; i < ov.store.entries.length; i++) {
+        var e = ov.store.entries[i] || {};
+        if (e.id) nameOf[e.id] = e.name || e.id;
+      }
+    }
+    var installed = Object.create(null);
+    for (var j = 0; j < state.plugins.length; j++) {
+      if (state.plugins[j] && state.plugins[j].id) installed[state.plugins[j].id] = true;
+    }
+    var seen = Object.create(null), out = [];
+    for (var k = 0; k < presets.length; k++) {
+      var pre = presets[k] || {};
+      if (pre.out_of_box !== true || !Array.isArray(pre.plugins)) continue;
+      for (var m = 0; m < pre.plugins.length; m++) {
+        var id = pre.plugins[m] && pre.plugins[m].id;
+        if (!id || installed[id] || seen[id]) continue;
+        seen[id] = true;
+        out.push({ id: id, name: nameOf[id] || id });
+      }
+    }
+    return out;
+  }
+
+  // 健康分与分项：权重只在「有数据」的项上归一，缺数据不扣分也不冒充正常。
+  function ovHealth() {
+    var sys = ov.sys || {}, cpu = sys.cpu || {}, mem = sys.memory || {}, load = sys.load || {};
+    var disks = Array.isArray(sys.disks) ? sys.disks : [], root = null;
+    for (var i = 0; i < disks.length; i++) {
+      if (disks[i] && disks[i].mount === '/') { root = disks[i]; break; }
+    }
+    var cpuPct = ovNum(cpu.usage_percent), memPct = ovNum(mem.used_percent);
+    var diskPct = ovNum(root && root.used_percent);
+    var load1 = ovNum(load.load1), cores = ovNum(cpu.cores);
+    var checks = [];
+    function push(id, label, tone, value, detail, route, cta, weight) {
+      checks.push({ id: id, label: label, tone: tone, value: value, detail: detail,
+        route: route, cta: cta, weight: weight });
+    }
+
+    push('cpu', 'CPU', ovTone(cpuPct), ovPctText(cpuPct),
+      cores ? (cores + ' 核 · ' + (cpuPct === null ? '无采样' : '阈值 80% / 90%')) : '缺少总使用率',
+      'monitor', '看监控', 15);
+    push('mem', '内存', ovTone(memPct), ovPctText(memPct),
+      mem.total_human ? (mem.used_human + ' / ' + mem.total_human) : '缺少内存明细，需监控插件',
+      'monitor', '看监控', 15);
+    push('disk', '磁盘 /', ovTone(diskPct), ovPctText(diskPct),
+      root ? (root.used_human + ' / ' + root.total_human) : '未读取到根分区',
+      'files/disk-analysis', '查磁盘', 20);
+    var loadTone = 'na';
+    if (load1 !== null && cores) loadTone = load1 > cores * 2 ? 'fail' : load1 > cores ? 'warn' : 'ok';
+    push('load', '负载', loadTone, load1 === null ? '—' : load1.toFixed(2),
+      cores ? ('对照 ' + cores + ' 核 · 1 分钟') : '缺少核数', 'monitor', '看监控', 10);
+
+    var svc = ovServiceCheck();
+    push('svc', '服务', svc.tone, svc.value, svc.detail, svc.tone === 'ok' ? 'monitor' : 'store/plugins', '去处理', 20);
+
+    var cert = ovCertWorst();
+    var certTone = 'na', certValue = '未启用';
+    if (cert) {
+      certTone = cert.expired || cert.days < OV_CERT_FAIL_DAYS ? 'fail'
+        : cert.days < OV_CERT_WARN_DAYS ? 'warn' : 'ok';
+      certValue = cert.expired ? '已过期' : (cert.days + ' 天');
+    } else if (Array.isArray(ov.svc.ssl)) {
+      certValue = '无证书';
+    }
+    push('cert', '证书', certTone, certValue,
+      cert ? (cert.domain + ' 最近到期') : (Array.isArray(ov.svc.ssl) ? '还没有受管证书' : '证书插件未启用'),
+      'security/ssl', '看证书', 10);
+
+    var jobs = ovJobsCheck();
+    var jobTone = 'na', jobValue = '未启用';
+    if (jobs.known) {
+      jobTone = jobs.failed > 0 ? 'fail' : jobs.stale > 0 ? 'warn' : 'ok';
+      jobValue = jobs.failed > 0 ? (jobs.failed + ' 失败') : jobs.stale > 0 ? (jobs.stale + ' 待修') : '正常';
+    }
+    push('job', '任务', jobTone, jobValue,
+      jobs.failed > 0 ? '上次执行失败，去计划任务看输出'
+        : jobs.stale > 0 ? '指向的程序不可用，到点会静默失败' : '计划任务上次执行正常',
+      'tasks', '看任务', 10);
+
+    var tone = 'na', scoreSum = 0, weightSum = 0, count = { ok: 0, warn: 0, fail: 0, na: 0 };
+    for (var k = 0; k < checks.length; k++) {
+      var c = checks[k];
+      count[c.tone]++;
+      if (c.tone !== 'na') {
+        tone = ovWorse(tone, c.tone);
+        weightSum += c.weight;
+        scoreSum += c.weight * (c.tone === 'ok' ? 1 : c.tone === 'warn' ? 0.6 : 0);
+      }
+    }
+    var score = weightSum > 0 ? Math.round((scoreSum / weightSum) * 100) : null;
+    var stateText = (tone === 'fail' || tone === 'warn' || tone === 'ok') ? OV_TONE_TEXT[tone] : '未采集';
+    var need = count.fail + count.warn;
+    var headline = tone === 'fail' ? (need > 0 ? '有 ' + need + ' 项要处理' : '运行异常')
+      : tone === 'warn' ? ('有 ' + need + ' 项建议处理')
+      : tone === 'ok' ? '各项检查正常' : '等待采集指标';
+    // 一半以上分项没数据时明确说「指标不全」，不让 100 分看起来像全都验过了。
+    if (count.na >= 3) headline += '，指标不全';
+    return { tone: tone, score: score, stateText: stateText, headline: headline,
+      counts: count, checks: checks };
+  }
+
+  // 待办：把「需要人动手」的事收成一条清单，每条带直达入口。
+  // 顺序 = 严重度（严重 → 警告 → 提示），同级按影响面（磁盘 / 服务 > 证书 / 任务 > 插件更新）。
+  function ovTodoItems() {
+    var items = [];
+    function add(tone, title, detail, route, cta) {
+      items.push({ tone: tone, title: title, detail: detail, route: route, cta: cta });
+    }
+    var alerts = ov.alerts || [];
+    var crit = 0, warn = 0;
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i].severity === 'critical') crit++;
+      else if (alerts[i].severity === 'warning') warn++;
+    }
+    var counts = pluginCounts();
+    if (crit > 0) add('fail', '有 ' + crit + ' 条严重告警待处理', '最近 5 分钟内的严重告警，先看再决定是否忽略', '!alerts', '查看告警');
+    if (counts.failed > 0) add('fail', '有 ' + counts.failed + ' 个插件运行失败', '插件进程退出后不会自愈，去插件管理看日志并重启', 'store/plugins', '去插件管理');
+
+    var sys = ov.sys || {}, disks = Array.isArray(sys.disks) ? sys.disks : [];
+    var hot = null;
+    for (var d = 0; d < disks.length; d++) {
+      var used = ovNum(disks[d] && disks[d].used_percent);
+      if (used !== null && used >= OV_DISK_TODO && (!hot || used > hot.used)) hot = { used: used, mount: disks[d].mount || '—' };
+    }
+    if (hot) add(hot.used >= 90 ? 'fail' : 'warn', '磁盘 ' + hot.mount + ' 快满了',
+      '已用 ' + hot.used.toFixed(1) + '%，清理大文件或扩容后再继续写入', 'files/disk-analysis', '查磁盘');
+
+    var cert = ovCertWorst();
+    if (cert && (cert.expired || cert.days < OV_CERT_WARN_DAYS)) {
+      add(cert.expired || cert.days < OV_CERT_FAIL_DAYS ? 'fail' : 'warn',
+        cert.expired ? '证书已过期' : '证书即将过期',
+        cert.domain + (cert.expired ? ' 已过期，站点会被浏览器拦' : ' 剩余 ' + cert.days + ' 天，建议现在续期'),
+        'security/ssl', cert.expired ? '去重签' : '去续期');
+    }
+
+    var jobs = ovJobsCheck();
+    if (jobs.failed > 0) add('warn', '有 ' + jobs.failed + ' 个计划任务上次执行失败',
+      '最近失败：' + jobs.failedNames.join('、') + '；去计划任务看输出并重试', 'tasks', '看任务');
+    if (jobs.stale > 0) add('warn', '有 ' + jobs.stale + ' 个计划任务指向的程序不可用',
+      '升级后路径变了，到点会静默失败；去计划任务点「修复路径」', 'tasks', '去修复');
+
+    var memPct = ovNum(sys.memory && sys.memory.used_percent);
+    if (memPct !== null && memPct >= 80) add('warn', '内存占用偏高', '已用 ' + memPct.toFixed(1) + '%，继续涨会拖慢响应；去监控看 Top 进程', 'monitor', '看监控');
+
+    var up = ovUpgradable();
+    if (up && up.length) add('info', '有 ' + up.length + ' 个插件可更新',
+      '例如 ' + up.slice(0, 2).map(function (x) { return x.name + ' ' + x.from + ' → ' + x.to; }).join('、'),
+      'store', '去升级');
+
+    var missing = ovRecommendedMissing();
+    if (missing && missing.length) add('info', '推荐插件还没装',
+      missing.slice(0, 3).map(function (x) { return x.name; }).join('、') + '：装上后概览与监控才能看到完整数据',
+      'store', '去安装');
+
+    if (ov.sysSrc && ov.sysSrc !== 'plugin') add('info', '监控插件未启用，指标不全',
+      '内存占比、磁盘明细与网络收发由监控插件提供；当前只有内核基础采样', 'store', '去安装');
+
+    var rank = { fail: 0, warn: 1, info: 2, ok: 3 };
+    items.sort(function (a, b) { return rank[a.tone] - rank[b.tone]; });
+    return items;
+  }
+
+  // 快捷入口：四个高频动作，点击即到（新站点 / 部署 / 日志 / 终端）。
+  var OV_ACTIONS = [
+    { label: '新建网站', hint: '添加站点、绑域名、开 HTTPS', route: 'sites' },
+    { label: '部署应用', hint: '从模板一键装应用', route: 'sites/appdeploy' },
+    { label: '查日志', hint: '按来源看实时日志', route: 'monitor/logs' },
+    { label: '打开终端', hint: '直接进本机命令行', route: 'terminal' }
+  ];
+
+  function paintOvActions(host) {
+    if (!host || !host.isConnected) return;
+    host.textContent = '';
+    for (var i = 0; i < OV_ACTIONS.length; i++) {
+      (function (a) {
+        var btn = el('button', 'ov-action');
+        btn.type = 'button';
+        btn.appendChild(el('span', 'ov-action-label', a.label));
+        btn.appendChild(el('span', 'ov-action-hint', a.hint));
+        btn.title = a.label + '：' + a.hint;
+        btn.addEventListener('click', function () { ovGo(a.route); });
+        host.appendChild(btn);
+      })(OV_ACTIONS[i]);
+    }
+  }
+
+  function paintOvHero(host) {
+    if (!host || !host.isConnected) return;
+    var h = ovHealth();
+    host.textContent = '';
+    host.className = 'ov-hero is-' + h.tone;
+
+    var main = el('div', 'ov-hero-main');
+    var score = el('div', 'ov-hero-score');
+    score.appendChild(el('span', 'ov-hero-num', h.score === null ? '—' : String(h.score)));
+    score.appendChild(el('span', 'ov-hero-unit', h.score === null ? '' : '分'));
+    main.appendChild(score);
+
+    var text = el('div', 'ov-hero-text');
+    var line = el('div', 'ov-hero-line');
+    line.appendChild(ovChip(h.tone, h.stateText, '综合 CPU / 内存 / 磁盘 / 负载 / 服务 / 证书 / 任务 七项'));
+    line.appendChild(el('span', 'ov-hero-headline', h.headline));
+    text.appendChild(line);
+    var parts = ['正常 ' + h.counts.ok];
+    if (h.counts.warn) parts.push('注意 ' + h.counts.warn);
+    if (h.counts.fail) parts.push('异常 ' + h.counts.fail);
+    if (h.counts.na) parts.push('未采集 ' + h.counts.na);
+    text.appendChild(el('p', 'ov-caption', '7 项检查：' + parts.join(' · ') + ' · 检查于 ' + ovFmtClock('')));
+    main.appendChild(text);
+
+    var tools = el('div', 'ov-hero-tools');
+    var first = null;
+    for (var i = 0; i < h.checks.length; i++) {
+      if (h.checks[i].tone !== 'ok' && h.checks[i].tone !== 'na') { first = h.checks[i]; break; }
+    }
+    if (first) {
+      var go = el('button', 'btn btn-primary ov-hero-go', '去处理 · ' + first.label);
+      go.type = 'button';
+      go.title = first.detail;
+      go.addEventListener('click', function () { ovGo(first.route); });
+      tools.appendChild(go);
+    } else {
+      var again = el('button', 'btn btn-ghost ov-hero-go', '重新检测');
+      again.type = 'button';
+      again.addEventListener('click', function () { start(); });
+      tools.appendChild(again);
+    }
+    main.appendChild(tools);
+    host.appendChild(main);
+
+    var checks = el('div', 'ov-hero-checks');
+    for (var c = 0; c < h.checks.length; c++) {
+      (function (ck) {
+        var chip = el('div', 'ov-check is-' + ck.tone);
+        chip.appendChild(el('span', 'dot ' + (ck.tone === 'na' ? '' : ck.tone)));
+        chip.appendChild(el('span', 'ov-check-label', ck.label));
+        chip.appendChild(el('span', 'ov-check-value', ck.value));
+        chip.title = ck.label + '：' + ck.detail;
+        chip.setAttribute('aria-label', ck.label + ' ' + ck.value + '，' + ck.detail);
+        if (ck.tone === 'fail' || ck.tone === 'warn') {
+          chip.className += ' ov-check-link';
+          chip.setAttribute('role', 'button');
+          chip.tabIndex = 0;
+          var jump = function () { ovGo(ck.route); };
+          chip.addEventListener('click', jump);
+          chip.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(); }
+          });
+          chip.appendChild(el('span', 'ov-check-go', '›'));
+        }
+        checks.appendChild(chip);
+      })(h.checks[c]);
+    }
+    host.appendChild(checks);
+  }
+
+  function paintOvTodos(host) {
+    if (!host || !host.isConnected) return;
+    host.textContent = '';
+    var items = ovTodoItems();
+    var head = el('div', 'panel-head');
+    head.appendChild(el('span', 'panel-title', '待办事项'));
+    if (items.length) head.appendChild(ovChip(items[0].tone === 'fail' ? 'fail' : items[0].tone === 'warn' ? 'warn' : 'na', items.length + ' 项', '需要你决定或动手的事'));
+    host.appendChild(head);
+
+    var body = el('div', 'ov-todo-body');
+    if (!items.length) {
+      var ok = el('div', 'ov-alert-ok');
+      ok.appendChild(el('span', 'dot ok'));
+      ok.appendChild(el('span', null, '一切正常，没有需要处理的事'));
+      body.appendChild(ok);
+      body.appendChild(el('p', 'ov-caption', '磁盘、证书、计划任务、插件与告警都通过检查；建议保持现状，定期回来看一眼。'));
+      host.appendChild(body);
+      return;
+    }
+    var shown = items.slice(0, OV_TODO_MAX);
+    for (var i = 0; i < shown.length; i++) {
+      (function (it) {
+        var row = el('div', 'ov-todo is-' + it.tone);
+        row.appendChild(el('span', 'dot ' + (it.tone === 'info' ? '' : it.tone)));
+        var main = el('div', 'ov-todo-main');
+        main.appendChild(el('span', 'ov-todo-title', it.title));
+        if (it.detail) main.appendChild(el('span', 'ov-todo-detail', it.detail));
+        row.appendChild(main);
+        row.appendChild(el('span', 'ov-todo-cta', it.cta + ' ›'));
+        row.setAttribute('role', 'button');
+        row.tabIndex = 0;
+        row.title = it.title + '：' + it.cta;
+        var jump = function () { ovGo(it.route); };
+        row.addEventListener('click', jump);
+        row.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(); }
+        });
+        body.appendChild(row);
+      })(shown[i]);
+    }
+    if (items.length > shown.length) {
+      body.appendChild(el('p', 'ov-caption', '还有 ' + (items.length - shown.length) + ' 项，处理完上面几条后会自动更新'));
+    }
+    host.appendChild(body);
   }
 
   // 指标卡数据：插件成功 → 全量；失败 → 内核 metrics 降级（缺内存占比，如实标注）。
@@ -1895,6 +2503,7 @@
       if (res.ok && res.data && res.data.cpu) {
         ov.sysSrc = 'plugin'; ov.sysReason = '';
         ov.sys = res.data;
+        ovPushSample();
         return;
       }
       return ovFetchKernelMetrics(res.ok ? 'monitor 插件未返回系统数据' : 'monitor 插件不可用（HTTP ' + res.status + '）');
@@ -1907,8 +2516,35 @@
       ov.sysSrc = res.ok ? 'kernel' : 'none';
       ov.sysReason = reason;
       ov.sys = res.ok ? res.data : null;
+      ovPushSample();
     }, function () {
       ov.sysSrc = 'none'; ov.sysReason = reason; ov.sys = null;
+      ovPushSample();
+    });
+  }
+
+  // 概览待办的两个补充来源（都是一次性拉取，失败只让对应待办缺席）：
+  //   · 任务：内核 scheduler 的 last_result + cron 插件的 binary_status；
+  //   · 商店：索引版本（判「可更新」）与预设（判「推荐未装」）。
+  function ovLoadJobs() {
+    var cron = writeJson(OV_CRON, {}).then(function (res) { return res.ok ? res.data : null; },
+      function () { return null; });
+    var sched = request(OV_SCHED).then(function (res) { return res.ok ? res.data : null; },
+      function () { return null; });
+    return Promise.all([cron, sched]).then(function (out) {
+      ov.jobs.cron = out[0];
+      ov.jobs.sched = out[1];
+    });
+  }
+
+  function ovLoadStore() {
+    var list = request(OV_STORE).then(function (res) { return res.ok ? res.data : null; },
+      function () { return null; });
+    var presets = request(OV_PRESETS).then(function (res) { return res.ok ? res.data : null; },
+      function () { return null; });
+    return Promise.all([list, presets]).then(function (out) {
+      ov.store.entries = out[0] && Array.isArray(out[0].plugins) ? out[0].plugins : null;
+      ov.store.presets = out[1] && Array.isArray(out[1].presets) ? out[1].presets : null;
     });
   }
   // invoke 统一口径：成功回 data，失败/超时/插件未装 → null（视图层显示「未启用」，不编 0）。
@@ -1994,6 +2630,45 @@
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
+  // 网络卡：monitor 插件才带 network（内核基础指标不含网络）。按主要网卡展示累计收发
+  // （除环回，取 rx 最大的一块）；不可用时如实显示「未启用 + 安装入口」，不画 0。
+  function ovNetCard(sys) {
+    var nets = sys && Array.isArray(sys.network) ? sys.network : [];
+    var card = el('section', 'ov-card');
+    var head = el('div', 'ov-card-head');
+    head.appendChild(el('span', 'ov-card-title', '网络'));
+    card.appendChild(head);
+    var primary = null, errs = 0, ifaces = 0;
+    for (var i = 0; i < nets.length; i++) {
+      var n = nets[i] || {};
+      if (!n.name || /^lo(?:opback)?\d*$/.test(n.name)) continue;
+      ifaces++;
+      errs += (ovNum(n.rx_errors) || 0) + (ovNum(n.tx_errors) || 0);
+      if (!primary || (ovNum(n.rx_bytes) || 0) > (ovNum(primary.rx_bytes) || 0)) primary = n;
+    }
+    if (!primary) {
+      head.appendChild(ovChip('na', '未启用', '网络收发统计由监控插件采集'));
+      var empty = el('div', 'ov-value');
+      empty.appendChild(el('span', 'ov-num', '—'));
+      card.appendChild(empty);
+      var btn = el('button', 'btn btn-ghost ov-card-btn', '去商店装监控插件');
+      btn.type = 'button';
+      btn.addEventListener('click', function () { ovGo('store'); });
+      card.appendChild(btn);
+      card.appendChild(el('p', 'ov-caption', '装上「监控」插件后这里是每块网卡的累计收发与错误数'));
+      return card;
+    }
+    head.appendChild(ovChip(errs > 0 ? 'warn' : 'ok', errs > 0 ? ('错误 ' + errs) : '正常',
+      errs > 0 ? '收/发错误累计非零，检查网卡与链路' : '未发现网卡收/发错误'));
+    var val = el('div', 'ov-net');
+    val.appendChild(el('span', 'ov-net-line', '↓ ' + (primary.rx_human || '—')));
+    val.appendChild(el('span', 'ov-net-line', '↑ ' + (primary.tx_human || '—')));
+    card.appendChild(val);
+    card.appendChild(el('p', 'ov-caption', (primary.name || '—') + ' · 累计收发' +
+      (ifaces > 1 ? ' · 共 ' + ifaces + ' 块网卡' : '')));
+    return card;
+  }
+
   function paintOvMetrics(host) {
     if (!host || !host.isConnected) return;
     host.textContent = '';
@@ -2013,12 +2688,14 @@
       ovMetricCard('CPU', cpuPct === null ? '—' : cpuPct.toFixed(1), '%', ovTone(cpuPct),
         cpuPct === null ? '' : (cpuPct >= 90 ? '过高' : cpuPct >= 80 ? '偏高' : '正常'),
         cpuPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', cpuPct,
-        cores ? cores + ' 核 · 采样 ' + (ovNum(cpu.sample_interval_ms) || '—') + ' ms' : '总使用率'),
+        cores ? cores + ' 核 · 采样 ' + (ovNum(cpu.sample_interval_ms) || '—') + ' ms' : '总使用率',
+        ovTrend('cpu', '%')),
       ovMetricCard('内存', memPct === null ? '—' : memPct.toFixed(1), '%', ovTone(memPct),
         memPct === null ? '' : (memPct >= 90 ? '过高' : memPct >= 80 ? '偏高' : '正常'),
         memPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', memPct,
         memPct === null ? '内核指标不含内存占比，需 monitor 插件'
-          : (mem.used_human || '—') + ' / ' + (mem.total_human || '—')),
+          : (mem.used_human || '—') + ' / ' + (mem.total_human || '—'),
+        ovTrend('mem', '%')),
       ovMetricCard('磁盘 /', diskPct === null ? '—' : diskPct.toFixed(1), '%', ovTone(diskPct),
         diskPct === null ? '' : (diskPct >= 90 ? '过高' : diskPct >= 80 ? '偏高' : '正常'),
         diskPct === null ? '' : '阈值：≥80% 偏高、≥90% 过高', diskPct,
@@ -2026,7 +2703,8 @@
           : (src === 'kernel' && ovNum(sys && sys.disk_used_kib) !== null
             ? '内核汇总 ' + ((sys.disk_used_kib / 1048576).toFixed(1)) + ' / ' +
               ((sys.disk_total_kib / 1048576).toFixed(1)) + ' GiB'
-            : '未读取到根分区')),
+            : '未读取到根分区'),
+        ovTrend('disk', '%')),
       ovMetricCard('负载', load1 === null ? '—' : load1.toFixed(2), '', loadTone,
         load1 === null || !cores ? '' : (load1 > cores * 2 ? '过高' : load1 > cores ? '偏高' : '正常'),
         load1 === null ? '' : '对照核数：1× 核数内正常、1–2× 偏高、>2× 过高',
@@ -2034,6 +2712,7 @@
         '5 分钟 ' + (ovNum(load.load5) === null ? '—' : load.load5.toFixed(2)) +
         ' · 15 分钟 ' + (ovNum(load.load15) === null ? '—' : load.load15.toFixed(2)))
     ];
+    cards.push(ovNetCard(sys));
     for (var c = 0; c < cards.length; c++) host.appendChild(cards[c]);
     if (src === 'kernel' || src === 'none') {
       var note = document.getElementById('kore-ov-note');
@@ -2218,6 +2897,26 @@
     note.setAttribute('role', 'status');
     root.appendChild(note);
 
+    // ① 健康状态：先回答「现在怎么样」，异常项直接给入口。
+    var hero = el('section', 'ov-hero is-na');
+    hero.id = 'kore-ov-hero';
+    hero.setAttribute('role', 'status');
+    root.appendChild(hero);
+    paintOvHero(hero);
+
+    // ② 快捷入口：高频动作一步到（放第二屏首位，手机上不用翻菜单）。
+    var actions = el('div', 'ov-actions');
+    actions.id = 'kore-ov-actions';
+    root.appendChild(actions);
+    paintOvActions(actions);
+
+    // ③ 待办：回答「有什么要处理」；为空时明说一切正常，不留白。
+    var todoPanel = el('section', 'panel ov-todo-panel');
+    todoPanel.id = 'kore-ov-todos';
+    root.appendChild(todoPanel);
+    paintOvTodos(todoPanel);
+
+    // ④ 关键指标：CPU / 内存 / 磁盘 / 负载 / 网络，带迷你趋势与阈值提示。
     var metrics = el('div', 'ov-metrics');
     metrics.id = 'kore-ov-metrics';
     root.appendChild(metrics);
@@ -2246,11 +2945,26 @@
     root.appendChild(buildOvSysDetails());
   }
 
+  // 重画「依赖多来源」的三块：任一来源回填后都重画一次，先到先显示，不互相等待。
+  function repaintOvSummary() {
+    paintOvHero(document.getElementById('kore-ov-hero'));
+    paintOvTodos(document.getElementById('kore-ov-todos'));
+  }
+
   // 数据装载：每个来源独立降级，任何一个失败不拖垮整页；回填后原位重绘对应区块。
+  // 全部是一次性拉取（进入视图 / 点「重新检测」触发），没有任何定时器（G-19）。
   function loadOverview() {
-    ovFetchSystem().then(function () { paintOvMetrics(document.getElementById('kore-ov-metrics')); });
-    ovLoadServices().then(function () { paintOvStatus(document.getElementById('kore-ov-status')); });
-    ovCollectAlerts();
+    ovFetchSystem().then(function () {
+      paintOvMetrics(document.getElementById('kore-ov-metrics'));
+      repaintOvSummary();
+    });
+    ovLoadServices().then(function () {
+      paintOvStatus(document.getElementById('kore-ov-status'));
+      repaintOvSummary();
+    });
+    ovLoadJobs().then(repaintOvSummary);
+    ovLoadStore().then(repaintOvSummary);
+    ovCollectAlerts().then(repaintOvSummary);
   }
 
   function renderDashboardView(box) {
@@ -2340,7 +3054,7 @@
     webhook: ['KoreWebhook', '/assets/webhook.js', 'nav.webhook', '通知通道'],
     // 账户与安全中心（用户中心）：账户状态总览 / 会话管理 / 登录记录 / 快捷动作，
     // 挂在「设置」hub 的第二个 tab（默认 tab 仍是常规设置，A7 主流程不变）。
-    'user-center': ['KoreUserCenter', '/assets/user-center.js', 'nav.userCenter', '账户与安全'],
+    'user-center': ['KoreUserCenter', '/assets/user-center.js', 'nav.userCenter', '账户中心'],
     // R23 第二批 8 个新视图：统一登记懒加载 sub（一级菜单仍 10 项，G-33 A6）。
     // 每项 = [全局名, 脚本, i18n 键, 中文兜底]；带连字符的键必须加引号（否则被解析成减法表达式）。
     // 视图文件由各卡交付，懒加载不进首屏六件套、不计首屏 gzip 预算。
