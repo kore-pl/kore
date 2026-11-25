@@ -52,6 +52,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(args[1:], stdout, stderr)
 	case "upgrade":
 		return runUpgrade(args[1:], stdout, stderr)
+	case "restart":
+		return runRestart(args[1:], stdout, stderr)
 	case "admin-password":
 		return runAdminPassword(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -83,6 +85,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  uninstall 卸载链：清 systemd unit / kore-* 用户 / 变更账本（ADR-0023；--dry-run 看计划）")
 	fmt.Fprintln(w, "  status    打印生效配置 / 状态目录 / 实例 healthz 与 state.db 持有者 pid")
 	fmt.Fprintln(w, "  upgrade   自升级 / 回滚（--bin + --sha256 先校验再原子替换；--rollback / --verify）")
+	fmt.Fprintln(w, "  restart   自重启（--reason + --yes/--confirm；同 HTTP 入口共用原语与审计）")
 	fmt.Fprintln(w, "  admin-password 设置管理员口令（--generate / --set [--stdin] / --hash），原子写配置且权限 0600")
 	fmt.Fprintln(w, "  help      打印本帮助")
 	fmt.Fprintln(w, "退出码: 0 正常 / 2 配置 / 3 状态目录或锁 / 4 存储或 schema / 5 监听绑定 / 6 环境不满足")

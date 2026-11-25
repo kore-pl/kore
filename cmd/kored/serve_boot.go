@@ -83,6 +83,8 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		AuditRecorder:     &httpAuditRecorderFromStore{db: svc.db},
 		AuditInvokeAll:    cfg.snapshot != nil && cfg.snapshot.Audit.InvokeAll,
 		CapabilityAuditor: (&capabilityAuditorFromStore{db: svc.db}).Audit,
+		RestartService:    newRestartRuntime(svc.db, cfg),
+		ConfigWriter:      newConfigWriterAdapter(cfg),
 		InstallRefresh:    svc.reloadOne,
 		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),
 		Privilege:         svc.privilege,

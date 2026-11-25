@@ -179,6 +179,8 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 	}
 	svc.sched = sched
 	svc.restoreEnabled()
+	// ADR-0056 T4：新进程补跑上次重启前未消费的 post_upgrade_pending（离线升级收尾闭环）。
+	svc.resumePendingPostUpgrade()
 	return svc, exitOK
 }
 

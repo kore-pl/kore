@@ -136,6 +136,11 @@ type Options struct {
 	// PluginPeer 返回插件当前进程的低权 uid 与 pid（supervisor.PluginPeer 注入），
 	// 供通道 SO_PEERCRED 双校验；nil 表示通道装配不完整（Start 拒绝启用通道）。
 	PluginPeer func(pluginID string) (uid, pid int, ok bool)
+	// RestartService 是自服务重启入口（ADR-0056 T3）；nil 时 /system/restart 回 501。
+	// 由 cmd/kored 注入：复用 privilege.SelfRestart + 一次性 confirm + fail-closed 审计。
+	RestartService RestartServicer
+	// ConfigWriter 是配置写入面（ADR-0056 T4）；nil 时 /system/config 回 501。
+	ConfigWriter ConfigWriter
 	// InstallState 提供"安装一次性"引导标记：公开只读端点 login 前可读，
 	// 完成记录端点需会话。由 cmd/kored 用 store.Store 适配器注入；本包不 import store。
 	// nil 时公开端点返回稳定"不自动弹"默认，写端点回 501（不假装成功）。
@@ -311,6 +316,9 @@ type Server struct {
 	installRefresh func(id string) (string, error)
 	metrics        MetricsCollector
 	privilege      RootActionExecutor
+	// restartService 是自服务重启执行面（ADR-0056 T3）。
+	restartService RestartServicer
+	configWriter   ConfigWriter
 	pluginAuth     PluginTokenAuth
 	taskEvents     *TaskEvents
 	scheduler      *scheduler.Service
@@ -345,7 +353,9 @@ func New(opts Options, transport platform.Transport) *Server {
 		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
-		taskEvents: opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
+		restartService: opts.RestartService,
+		configWriter:   opts.ConfigWriter,
+		taskEvents:     opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
 		webhooks: opts.Webhooks,
 	}
 	if server.webhooks == nil {
@@ -359,6 +369,8 @@ func New(opts Options, transport platform.Transport) *Server {
 		server.capResolver = defaultCapabilityResolver
 	}
 	server.routes()
+	// 自服务重启（ADR-0056）：独立注册，不写 handlers.go 的 routes()（并行写域）。
+	server.registerRestartRoutes()
 	// 日志告警路由（R23）：不写 handlers.go 的 routes()（并行写域），在此独立注册；
 	// Go 1.22 ServeMux 按最长前缀匹配，与注册顺序无关，"/" 兜底不会吞掉更具体的路径。
 	server.registerLogAlertRoutes()
@@ -410,6 +422,9 @@ func New(opts Options, transport platform.Transport) *Server {
 
 // Handler 返回带 request id 中间件的路由处理器，供测试与后续内嵌复用。
 func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
+
+// AuthManager 返回装配的鉴权管理器（SIGHUP 热更同步用，ADR-0055）。
+func (s *Server) AuthManager() *auth.Manager { return s.auth }
 
 // Start 先绑定 UDS（按需追加 TCP），再开始服务；绑定失败原样返回（cmd 映射 exit 5）。
 func (s *Server) Start() error {
