@@ -7,6 +7,8 @@
 
 开源工程标准化补齐：七语言（zh/en/es/fr/de/ru/pt）`DETAIL` 文档与 `locale/*.json`、README 语言切换行与 star 提示、Git Flow 分支模型与 SSH 签名约定、六语言 `SECURITY` 译文、`.github/dependabot.yml` 与 `CODEOWNERS`；无日语文件、无死链，JSON 与 `docs-check` 门禁通过。
 
+> **发布资产口径（瘦包，2026-11-26）**：`kore` 仓 release 只挂 `kored` 静态二进制 + `checksums.txt`（见 `docs/OPEN-SOURCE.md` §8、`docs/REPOS.md` §7.3），**不是全跟踪树源码归档**。`dist/kore-0.1.1.tar.gz` 只打包这两个发布资产，不含 `.agents/verify/screenshots/` 等证据截图或运行态数据；tag 的 peeled sha 必须等于该包的构建 HEAD。
+
 首个 MVP 版本，覆盖 M0（文档与骨架）与 M1（内核骨架 + 首个插件）。
 **0.1.0 从未发布**（仓库与远端都没有内核 tag），首个发布版本直接定为 `0.1.1`：
 它是首个含 `file_write` 受控写的内核版本，与插件 `requires_kore` 的下界自洽（见下）。
