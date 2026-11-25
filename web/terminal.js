@@ -14,6 +14,12 @@
    刷新 / 切走视图不再关闭会话（服务端 30 分钟空闲自动回收），这是"刷新就丢"痛点的根治。 */
 (function () {
   'use strict';
+  /* R25 能力补齐（纯前端、零新依赖、不改内核与插件、不新增 web/*.js）：
+     ① 文件传输：复用 file 插件既有方法（stat / upload / uploadChunk / uploadStatus / download），
+        选文件或把文件拖到终端上即可上传（大文件分块、进度、断点续传），也可按绝对路径从服务器下载；
+     ② 快捷命令：内置看磁盘 / 看内存 / 看服务状态 / 看端口，自定义片段存本机 localStorage，一键发到当前会话；
+     ③ 会话体验：回看缓冲搜索（Ctrl+Shift+F，命中行点击跳转）、右键粘贴、选中即复制（后两项可开关，
+        设置只存本机浏览器）；断线重连与空闲回收保留原有状态机，登录态失效改成明确可重连的提示。 */
   var API = '/api/v1/invoke/terminal/';
   var POLL_MS = 80;    // 交互级延迟，每次都是增量读
   function el(tag, cls, text) {
@@ -30,14 +36,14 @@
     }
     return '';
   }
-  function invoke(method, opts) {
+  // 统一调用口：POST /api/v1/invoke/<id>/<id>.<action> + X-Kore-CSRF（双提交）
+  function callApi(url, params, keepalive) {
     var token = cookie('kore_csrf');
     if (!token) return Promise.reject(new Error('缺少 CSRF 令牌，请刷新页面或重新登录'));
-    opts = opts || {};
-    return fetch(API + method, {
-      method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: !!opts.keepalive,
+    return fetch(url, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: !!keepalive,
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token },
-      body: JSON.stringify(opts.params || {})
+      body: JSON.stringify(params || {})
     }).then(function (res) {
       return res.text().then(function (raw) {
         var data = {};
@@ -48,6 +54,13 @@
       });
     });
   }
+  function invoke(method, opts) {
+    opts = opts || {};
+    return callApi(API + method, opts.params, opts.keepalive);
+  }
+  // 文件传输复用 file 插件（终端的 PTY 通道只走文本，传文件走文件插件的既有方法，不新增后端能力）
+  var FILE_API = '/api/v1/invoke/file/';
+  function fileInvoke(method, params) { return callApi(FILE_API + 'file.' + method, params, false); }
   // base64：字节流是唯一口径（避免截断多字节 UTF-8）；分块编码防 apply 参数超限
   function b64enc(bytes) {
     var bin = '', i = 0;
@@ -113,7 +126,53 @@
       '.term-err-details pre{margin:4px 0 0;padding:6px 8px;max-width:100%;box-sizing:border-box;' +
       'white-space:pre-wrap;word-break:break-all;' +
       'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--kore-bg-0);' +
-      'border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}'
+      'border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}' +
+      // R25 工具条与四个面板（快捷命令 / 传文件 / 搜索回看 / 体验设置）：样式随视图注入，不进首屏预算
+      '.term-tools{display:flex;flex-wrap:wrap;gap:6px;padding:6px 8px;border-bottom:1px solid var(--kore-border-2);background:var(--kore-bg-1)}' +
+      '.term-tools .btn{min-height:36px}' +
+      '.term-panel{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--kore-border-2);' +
+      'background:var(--kore-bg-0);border-radius:var(--kore-radius-control);max-height:42vh;overflow:auto}' +
+      '.term-panel-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:var(--kore-font-12);color:var(--kore-text-3)}' +
+      '.term-panel-title{font-weight:600;color:var(--kore-text-2);font-size:var(--kore-font-13)}' +
+      '.term-panel-ops{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}' +
+      '.term-fld{display:flex;flex-wrap:wrap;align-items:center;gap:6px}' +
+      '.term-fld > input[type=text],.term-fld > input[type=search]{flex:1 1 220px;min-width:0;min-height:34px;' +
+      'padding:0 8px;font-size:var(--kore-font-13);color:var(--kore-text-1);background:var(--kore-bg-1);' +
+      'border:1px solid var(--kore-border-2);border-radius:var(--kore-radius-control)}' +
+      '.term-hint{font-size:var(--kore-font-12);color:var(--kore-text-3);margin:0;line-height:1.5}' +
+      '.term-list{display:flex;flex-direction:column}' +
+      '.term-item{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--kore-border-1)}' +
+      '.term-item:first-child{border-top:0}' +
+      '.term-item-main{flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:2px}' +
+      '.term-item-name{font-size:var(--kore-font-13);color:var(--kore-text-1)}' +
+      '.term-item-cmd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);' +
+      'color:var(--kore-text-3);word-break:break-all}' +
+      '.term-item-ops{display:flex;flex-wrap:wrap;gap:6px}' +
+      '.term-check{display:inline-flex;align-items:center;gap:8px;min-height:34px;font-size:var(--kore-font-13);color:var(--kore-text-1)}' +
+      '.term-check input{width:18px;height:18px;flex:0 0 auto}' +
+      '.term-xfer{display:flex;flex-direction:column;gap:4px;padding:6px 0;border-top:1px solid var(--kore-border-1)}' +
+      '.term-xfer-top{display:flex;align-items:baseline;gap:8px;font-size:var(--kore-font-12)}' +
+      '.term-xfer-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--kore-text-1)}' +
+      '.term-xfer-pct{flex:0 0 auto;color:var(--kore-text-2);font-variant-numeric:tabular-nums}' +
+      '.term-xfer-bar{height:6px;background:var(--kore-bg-3);border-radius:3px;overflow:hidden}' +
+      '.term-xfer-bar > i{display:block;height:100%;width:0;background:var(--kore-info);transition:width .15s linear}' +
+      '.term-xfer-bar.is-done > i{background:var(--kore-success)}' +
+      '.term-xfer-bar.is-fail > i{background:var(--kore-danger)}' +
+      '.term-xfer-msg{font-size:var(--kore-font-12);color:var(--kore-text-3);word-break:break-all}' +
+      '.term-xfer-msg.is-fail{color:var(--kore-danger)}' +
+      '.term-search-hit{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;' +
+      'background:none;border:0;border-top:1px solid var(--kore-border-1);padding:4px 0;font-size:var(--kore-font-12)}' +
+      '.term-search-hit:hover{background:var(--kore-bg-2)}' +
+      '.term-search-at{display:inline-block;min-width:3.5em;color:var(--kore-text-3);font-variant-numeric:tabular-nums}' +
+      '.term-search-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--kore-text-2);word-break:break-all}' +
+      '.term-hit{outline:2px solid var(--kore-warning);outline-offset:-2px;background:var(--kore-warning-bg)}' +
+      '@media (max-width:639px){.term-tools .btn{flex:1 1 auto;min-height:var(--kore-touch)}' +
+      '.term-panel{max-height:none}' +
+      '.term-panel-ops{width:100%;margin-left:0}' +
+      '.term-panel-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}' +
+      '.term-item-ops{width:100%}.term-item-ops .btn{flex:1 1 auto;min-height:var(--kore-touch)}' +
+      '.term-fld > input[type=text],.term-fld > input[type=search]{flex:1 1 100%;min-height:var(--kore-touch);font-size:16px}' +
+      '.term-check{min-height:var(--kore-touch)}}'
     ].join('');
     var style = el('style', null, CSS);
     style.id = 'kore-terminal-extra-css';
@@ -229,6 +288,9 @@
       pre.removeChild(this.pn.shift()); this.ps.shift();
     }
     if (!this.ps.length) {
+      // 全量重建前先清掉旧行节点：resize() / 新 Term 都会把 pn 清空，只靠 append 会把旧行留在
+      // 屏幕里（表现为输出重复、复制/搜索取到的内容与看到的屏幕不一致）。
+      while (pre.firstChild) pre.removeChild(pre.firstChild);
       for (i = 0; i < sigs.length; i++) {
         var node = this.lineNode(lines[i], (i === curAbs && this.cursor) ? this.col : -1);
         pre.appendChild(node); this.pn.push(node); this.ps.push(sigs[i]);
@@ -465,11 +527,21 @@
       else ln.length = cols;
     }
     while (this.grid.length < rows) this.grid.push(this.blank());
-    while (this.grid.length > rows) this.grid.shift();
+    // 变矮时被挤出的顶部行推进滚动历史（备用屏不进）：否则开一次面板/缩一次窗口就把上面的输出吃掉
+    var dropped = 0;
+    while (this.grid.length > rows) {
+      var gone = this.grid.shift();
+      if (!this.alt) {
+        this.hist.push(gone); this.hsig.push(this.sigOf(gone, -1));
+        if (this.hist.length > HIST_MAX) { this.hist.shift(); this.hsig.shift(); }
+      }
+      dropped++;
+    }
     this.cols = cols; this.rows = rows;
     this.top = 0; this.bottom = rows - 1;
+    if (dropped) this.row = Math.max(0, this.row - dropped);
     this.row = Math.min(this.row, rows - 1); this.col = Math.min(this.col, cols - 1);
-    this.pn = []; this.ps = []; // 尺寸变了：整屏重排更省心
+    this.pn = []; this.ps = []; // 尺寸变了：整屏从 hist+grid 重建（paint 会先清旧节点）
   };
 
   /* ===== 视图 ===== */
@@ -481,7 +553,24 @@
     var FONT = loadFont();
     var tabSeq = 0, tabs = [], active = null, tabbar = null, busy = false;
     var S = null, term = null, decoder = new TextDecoder('utf-8'), destroyed = false, ro = null, debounce = 0,
-      stage, screen, input, status, foot, retry, sessHost, histHost;
+      stage, screen, input, status, foot, retry, sessHost, histHost,
+      tools, snipHost, xferHost, searchHost, optHost;
+    // 四个新面板（快捷命令 / 传文件 / 搜索回看 / 体验设置）同一时刻只开一个，避免互相挤占终端高度
+    var panelHosts = {}, openPanel = '';
+    var XFER_INLINE_MAX = 4 * 1024 * 1024; // 单帧可承载约 5.95 MiB（base64 膨胀 4/3），4 MiB 留足余量
+    var XFER_CHUNK = 4 * 1024 * 1024;
+    var SNIP_KEY = 'kore.terminal.snippets';
+    var XFER_DIR_KEY = 'kore.terminal.uploadDir';
+    var UX_KEY = 'kore.terminal.ux';
+    var BUILTIN_SNIPS = [
+      { name: '看磁盘占用', cmd: 'df -h' },
+      { name: '看内存占用', cmd: 'free -h' },
+      { name: '看运行中的服务', cmd: 'systemctl list-units --type=service --state=running --no-pager | head -n 20' },
+      { name: '看端口占用', cmd: 'ss -tulpn' }
+    ];
+    var xfer = { busy: false, items: [], resume: [], dirInput: null, overwriteInput: null };
+    var searchState = { q: '', hits: [], at: 0, timer: 0 };
+    var UX = { rightPaste: false, selectCopy: false };
     // ===== 多标签：每个 tab 持有独立会话/屏幕；别名 S/term/screen/decoder 始终指向 active =====
     function attachActive(T) { active = T; S = T.S; term = T.term; screen = T.screen; decoder = T.decoder; }
     function updateTabs() {
@@ -577,8 +666,25 @@
     ops.appendChild(retry);
     bar.appendChild(ops); root.appendChild(bar);
     tabbar = el('div', 'term-tabs'); root.appendChild(tabbar);
+    // 第二排工具：快捷命令 / 传文件 / 搜索回看 / 体验设置（都是 R25 新能力，窄屏可横向换行）
+    tools = el('div', 'term-tools');
+    var btnSnip = el('button', 'btn', '快捷命令');
+    var btnXfer = el('button', 'btn', '传文件');
+    var btnSearch = el('button', 'btn', '搜索回看');
+    var btnOpt = el('button', 'btn btn-ghost', '体验设置');
+    [btnSnip, btnXfer, btnSearch, btnOpt].forEach(function (b) { b.type = 'button'; tools.appendChild(b); });
+    btnSnip.title = '保存常用命令，一键发到当前会话';
+    btnXfer.title = '把本机文件传到服务器，或从服务器下载（也可把文件直接拖到终端上）';
+    btnSearch.title = '在回看缓冲里搜关键字并跳到那一行（Ctrl+Shift+F）';
+    btnOpt.title = '右键粘贴 / 选中即复制等操作习惯开关';
+    root.appendChild(tools);
     sessHost = el('div', 'term-sess-host'); sessHost.hidden = true; root.appendChild(sessHost);
     histHost = el('div', 'term-hist-host'); histHost.hidden = true; root.appendChild(histHost);
+    snipHost = el('div', 'term-snip-host'); snipHost.hidden = true; root.appendChild(snipHost);
+    xferHost = el('div', 'term-xfer-host'); xferHost.hidden = true; root.appendChild(xferHost);
+    searchHost = el('div', 'term-search-host'); searchHost.hidden = true; root.appendChild(searchHost);
+    optHost = el('div', 'term-opt-host'); optHost.hidden = true; root.appendChild(optHost);
+    panelHosts.snip = snipHost; panelHosts.xfer = xferHost; panelHosts.search = searchHost; panelHosts.opt = optHost;
     stage = el('div', 'term-stage');
     input = el('textarea', 'term-input');
     input.setAttribute('autocomplete', 'off'); input.setAttribute('autocapitalize', 'off');
@@ -625,7 +731,9 @@
       if (S.eof) { foot.textContent = base + ' · 会话已结束（shell 已退出，点「新建会话」继续）'; return; }
       if (S.idleAt) {
         var mins = Math.max(0, Math.round((new Date(S.idleAt).getTime() - Date.now()) / 60000));
-        foot.textContent = base + ' · 空闲 ' + mins + ' 分钟无操作会自动回收';
+        foot.textContent = base + (mins > 0
+          ? ' · 再空闲 ' + mins + ' 分钟无操作会被回收（刷新页面会自动恢复）'
+          : ' · 马上会被回收（再敲一条命令即可续期）');
         return;
       }
       foot.textContent = base;
@@ -680,7 +788,7 @@
     function countLines(text) { var n = 0; for (var i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++; return n || 1; }
     function expireSession(T) {
       T = T || active; stopPoll(T); T.S.session = ''; T.S.cursor = 0; T.S.eof = false;
-      if (active === T) { retry.hidden = true; setStatus('会话已过期，请新建', 'fail'); setFoot(); }
+      if (active === T) { retry.hidden = true; setStatus('会话已被服务器回收（空闲超时），请点「新建会话」重开', 'fail'); setFoot(); }
       updateTabs();
     }
     function reconnect(T, err) {
@@ -714,7 +822,15 @@
       }, function (aerr) {
         s.reconnecting = false;
         if (destroyed) return;
-        if (aerr.code === 'E_NOTFOUND' || aerr.code === 'E_CONFLICT' || aerr.code === 'E_UNAUTHORIZED') { expireSession(T); return; }
+        if (aerr.code === 'E_NOTFOUND' || aerr.code === 'E_CONFLICT') { expireSession(T); return; }
+        // 登录态失效 ≠ 会话消失：会话还在服务器上，重新登录后点「重连」即可恢复，不能提示成"已过期"。
+        if (aerr.code === 'E_UNAUTHORIZED') {
+          if (active === T) {
+            setError('登录状态已失效', '刷新页面重新登录后点「重连」恢复；会话内容仍保留在服务器上', aerr);
+            retry.hidden = false;
+          }
+          return;
+        }
         if (active === T) { setError('重连失败', '点「重连」再试；反复失败请刷新页面', aerr); retry.hidden = false; }
       });
     }
@@ -1004,6 +1120,648 @@
       });
       histHost.appendChild(box);
     }
+
+    /* ===== 面板开关：同一时刻只开一个（窄屏也不会把终端挤没） ===== */
+    function closePanels() {
+      openPanel = '';
+      for (var k in panelHosts) {
+        if (Object.prototype.hasOwnProperty.call(panelHosts, k) && panelHosts[k]) panelHosts[k].hidden = true;
+      }
+    }
+    function openOnly(name) {
+      closePanels();
+      var host = panelHosts[name];
+      if (!host) return;
+      openPanel = name; host.hidden = false;
+    }
+    /* ===== 快捷命令片段（内置几条 + 自定义存本机浏览器） ===== */
+    function loadSnips() {
+      try {
+        var arr = JSON.parse(localStorage.getItem(SNIP_KEY) || '[]');
+        if (!Array.isArray(arr)) return [];
+        return arr.filter(function (x) {
+          return x && typeof x.name === 'string' && typeof x.cmd === 'string' && x.cmd.replace(/\s+/g, '');
+        });
+      } catch (e) { return []; }
+    }
+    function saveSnips(list) {
+      try { localStorage.setItem(SNIP_KEY, JSON.stringify(list)); return true; }
+      catch (e) { setStatus('浏览器不允许保存片段（可能是隐私模式），本次仍可使用但刷新后会丢', 'fail'); return false; }
+    }
+    function snippetShort(cmd) { return cmd.length > 40 ? cmd.slice(0, 40) + '…' : cmd; }
+    function runSnippet(cmd) {
+      if (!S || !S.session || !term) { setStatus('还没有打开会话，请先点上方的「新建会话」再执行片段', 'fail'); return; }
+      if (S.eof) { setStatus('当前会话已结束，请先点「新建会话」再执行片段', 'fail'); return; }
+      send(cmd + '\n');
+      setStatus('已发送到终端：' + snippetShort(cmd), 'ok');
+      if (input.focus) input.focus();
+    }
+    function saveSnippet(name, cmd) {
+      cmd = String(cmd || '').replace(/\s+$/, '');
+      name = String(name || '').trim();
+      if (!cmd.replace(/\s+/g, '')) { setStatus('请先填写要保存的命令（例如 df -h），再点「保存片段」', 'fail'); return false; }
+      if (cmd.length > 2000) { setStatus('命令太长（超过 2000 字），请拆成几条短的再保存', 'fail'); return false; }
+      var list = loadSnips();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].cmd === cmd) { setStatus('这条命令已经在片段里了，请换个名字或直接点「执行」', 'fail'); return false; }
+      }
+      if (!name) name = snippetShort(cmd);
+      list.push({ name: name, cmd: cmd });
+      if (!saveSnips(list)) return false;
+      setStatus('已保存片段「' + name + '」', 'ok');
+      return true;
+    }
+    function snipRow(name, cmd, builtin) {
+      var row = el('div', 'term-item');
+      var main = el('div', 'term-item-main');
+      main.appendChild(el('span', 'term-item-name', name + (builtin ? '（内置）' : '')));
+      var cmdNode = el('span', 'term-item-cmd', cmd);
+      cmdNode.title = cmd;
+      main.appendChild(cmdNode);
+      var ops = el('span', 'term-item-ops');
+      var run = el('button', 'btn btn-ghost', '执行');
+      run.type = 'button'; run.title = '把这条命令发到当前终端并回车';
+      run.addEventListener('click', function () { runSnippet(cmd); });
+      var fill = el('button', 'btn btn-ghost', '填入');
+      fill.type = 'button'; fill.title = '只放进输入框，不会自动执行';
+      fill.addEventListener('click', function () { fillHistory(cmd); });
+      ops.appendChild(run); ops.appendChild(fill);
+      if (!builtin) {
+        var armed = false;
+        var del = el('button', 'btn btn-ghost', '删除');
+        del.type = 'button';
+        del.addEventListener('click', function () {
+          if (!armed) { armed = true; del.textContent = '确认删除？'; setStatus('再点一次「确认删除？」就从片段里移除这条命令', 'ok'); return; }
+          var left = loadSnips().filter(function (x) { return x.cmd !== cmd; });
+          if (saveSnips(left)) { setStatus('已删除片段「' + name + '」', 'ok'); renderSnips(); }
+        });
+        ops.appendChild(del);
+      }
+      row.appendChild(main); row.appendChild(ops);
+      return row;
+    }
+    function renderSnips() {
+      if (!snipHost) return;
+      snipHost.textContent = '';
+      var box = el('div', 'term-panel');
+      var head = el('div', 'term-panel-head');
+      head.appendChild(el('span', 'term-panel-title', '快捷命令'));
+      head.appendChild(el('span', 'term-hint', '「执行」直接发到当前会话，「填入」只放进输入框'));
+      var hOps = el('span', 'term-panel-ops');
+      var shut = el('button', 'btn btn-ghost', '收起');
+      shut.type = 'button'; shut.addEventListener('click', closePanels);
+      hOps.appendChild(shut); head.appendChild(hOps);
+      box.appendChild(head);
+      // 新增一行：名称可留空（用命令本身当名字）
+      var fld = el('div', 'term-fld');
+      var nameInput = el('input'); nameInput.type = 'text';
+      nameInput.placeholder = '名称（可留空）'; nameInput.setAttribute('aria-label', '片段名称');
+      var cmdInput = el('input'); cmdInput.type = 'text';
+      cmdInput.placeholder = '命令，例如 df -h'; cmdInput.setAttribute('aria-label', '片段命令');
+      var saveBtn = el('button', 'btn', '保存片段'); saveBtn.type = 'button';
+      function doSave() { if (saveSnippet(nameInput.value, cmdInput.value)) renderSnips(); }
+      saveBtn.addEventListener('click', doSave);
+      cmdInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); doSave(); } });
+      fld.appendChild(nameInput); fld.appendChild(cmdInput); fld.appendChild(saveBtn);
+      box.appendChild(fld);
+      var mine = loadSnips();
+      box.appendChild(el('p', 'term-hint', '片段只保存在这台电脑的浏览器里，不会上传服务器；内置的几条删不掉。'));
+      var listBox = el('div', 'term-list');
+      if (!mine.length) listBox.appendChild(el('div', 'term-hint', '还没有自定义片段：把常敲的命令填在上面一行，点「保存片段」。'));
+      mine.forEach(function (x) { listBox.appendChild(snipRow(x.name, x.cmd, false)); });
+      box.appendChild(listBox);
+      box.appendChild(el('div', 'term-panel-head', '内置常用'));
+      var builtinBox = el('div', 'term-list');
+      BUILTIN_SNIPS.forEach(function (x) { builtinBox.appendChild(snipRow(x.name, x.cmd, true)); });
+      box.appendChild(builtinBox);
+      snipHost.appendChild(box);
+    }
+    /* ===== 文件传输（file 插件既有方法；大文件分块 + 断点续传 + 进度） ===== */
+    function fmtSize(n) {
+      n = Number(n) || 0;
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
+      if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MiB';
+      return (n / 1024 / 1024 / 1024).toFixed(2) + ' GiB';
+    }
+    function errText(err) {
+      if (!err) return '未知错误';
+      var msg = err.message || (typeof err === 'string' ? err : '');
+      return (err.code ? '[' + err.code + '] ' : '') + (msg || '未知错误');
+    }
+    function loadDir() {
+      try { return localStorage.getItem(XFER_DIR_KEY) || '/tmp'; } catch (e) { return '/tmp'; }
+    }
+    function saveDir(v) { try { localStorage.setItem(XFER_DIR_KEY, v); } catch (e) { /* 隐私模式：本次仍生效 */ } }
+    // file 插件的路径口径是「配置根目录内的相对路径」（默认根是整机 /，见插件 fileop/path.go），
+    // 所以这里把用户习惯的绝对路径前导 / 去掉：默认根下 /tmp 与 tmp 等价，用户不必学新写法。
+    function toPluginPath(raw) {
+      var p = String(raw || '').trim();
+      if (!p || p === '/') return '.';
+      p = p.replace(/^\/+/, '').replace(/\/+$/, '');
+      return p || '.';
+    }
+    function joinPath(dir, name) { return dir === '.' ? name : dir + '/' + name; }
+    // 展示口径：默认根是整机 /，给用户看带前导 / 的路径更像他输入的样子
+    function dispPath(p) { return p.charAt(0) === '/' ? p : '/' + p; }
+    function dirValue() {
+      var raw = (xfer.dirInput && xfer.dirInput.value) || loadDir();
+      var d = String(raw || '').trim();
+      if (!d) d = '/tmp';
+      if (d.indexOf('..') >= 0) { setStatus('路径里不能有 .. 段，请填一个具体目录（例如 /tmp）', 'fail'); return ''; }
+      return toPluginPath(d);
+    }
+    // 只读 [start,end) 一段，避免把整个大文件读进内存
+    function readSlice(file, start, end) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var text = String(reader.result || ''), comma = text.indexOf(',');
+          resolve(comma >= 0 ? text.slice(comma + 1) : text);
+        };
+        reader.onerror = function () {
+          reject(new Error('读取本机文件失败：' + file.name + '（' + fmtSize(start) + '–' + fmtSize(end) + '）'));
+        };
+        reader.readAsDataURL(file.slice(start, end));
+      });
+    }
+    function paintXfer(item) {
+      var d = item.dom;
+      if (!d || !d.pct || !d.pct.isConnected) return;
+      var pct = item.size ? Math.floor(item.sent * 100 / item.size) : 0;
+      if (item.state === 'ok') pct = 100;
+      d.bar.style.width = pct + '%';
+      d.pct.textContent = item.state === 'ok' ? '完成' : item.state === 'fail' ? '未完成' : pct + '%';
+      d.msg.textContent = item.msg;
+      d.msg.className = 'term-xfer-msg' + (item.state === 'fail' ? ' is-fail' : '');
+      d.barWrap.className = 'term-xfer-bar' + (item.state === 'ok' ? ' is-done' : item.state === 'fail' ? ' is-fail' : '');
+    }
+    function xferRow(item) {
+      var row = el('div', 'term-xfer');
+      var top = el('div', 'term-xfer-top');
+      top.appendChild(el('span', 'term-xfer-name', item.name + ' · ' + fmtSize(item.size)));
+      var pct = el('span', 'term-xfer-pct', item.state === 'ok' ? '完成' : item.state === 'fail' ? '未完成' : '0%');
+      top.appendChild(pct); row.appendChild(top);
+      var barWrap = el('div', 'term-xfer-bar');
+      var bar = el('i');
+      bar.style.width = (item.size ? Math.floor(item.sent * 100 / item.size) : 0) + '%';
+      barWrap.appendChild(bar); row.appendChild(barWrap);
+      var msg = el('div', 'term-xfer-msg' + (item.state === 'fail' ? ' is-fail' : ''), item.msg);
+      row.appendChild(msg);
+      item.dom = { pct: pct, bar: bar, barWrap: barWrap, msg: msg };
+      return row;
+    }
+    function chunkLoop(file, target, start, item) {
+      var offset = start;
+      function step() {
+        if (offset >= file.size) { item.sent = file.size; return Promise.resolve(); }
+        var end = Math.min(offset + XFER_CHUNK, file.size);
+        item.sent = offset;
+        item.msg = '已上传 ' + fmtSize(offset) + ' / ' + fmtSize(file.size);
+        paintXfer(item);
+        return readSlice(file, offset, end).then(function (b64) {
+          return fileInvoke('uploadChunk', { path: target, offset: offset, data_base64: b64, total_size: file.size });
+        }).then(function (res) {
+          var next = res && typeof res.received === 'number' ? res.received : end;
+          if (next <= offset) { // 服务端没前进：以 uploadStatus 的权威字节为准，绝不本地硬推（会跳空冲突）
+            return fileInvoke('uploadStatus', { path: target }).then(function (st) {
+              offset = st && typeof st.received === 'number' && st.received > offset ? st.received : end;
+              return step();
+            }, function () { offset = end; return step(); });
+          }
+          offset = next;
+          return step();
+        });
+      }
+      return step();
+    }
+    // 传输失败的「怎么办」：把插件的高频报错翻成下一步动作，而不是只甩错误码
+    function xferHint(err) {
+      var m = String((err && err.message) || '');
+      if (m.indexOf('目标目录不存在') >= 0) return '。怎么办：先在上方终端里 mkdir -p 建好这个目录，或换一个已有目录';
+      if (m.indexOf('相对路径') >= 0) return '。怎么办：路径按「文件管理」页的根目录算，去掉开头的 / 再试（例如 tmp）';
+      if (err && err.code === 'E_NOTFOUND') return '。怎么办：确认路径拼写正确，或先在终端里 ls 看一下';
+      if (err && err.code === 'E_NEED_ROOT') return '。怎么办：这个目录需要更高权限，换一个有写权限的目录';
+      return '。可点上方「从断点续传」接着传';
+    }
+    function uploadFile(file, dir, item, overwrite) {
+      var target = joinPath(dir, file.name);
+      if (!file.size) {
+        item.msg = '正在创建空文件…'; paintXfer(item);
+        return fileInvoke('write', { path: target, content: '', create_if_missing: true });
+      }
+      if (file.size <= XFER_INLINE_MAX) {
+        item.msg = '正在上传（' + fmtSize(file.size) + '，一次传完）…'; paintXfer(item);
+        return readSlice(file, 0, file.size).then(function (b64) {
+          return fileInvoke('upload', { path: dir, filename: file.name, data_base64: b64, overwrite: !!overwrite });
+        }).then(function () { item.sent = file.size; });
+      }
+      item.msg = '正在查询服务器已收到的字节…'; paintXfer(item);
+      return fileInvoke('uploadStatus', { path: target }).then(function (st) {
+        var received = st && typeof st.received === 'number' ? st.received : 0;
+        var exists = !!(st && st.exists);
+        if (!exists) return chunkLoop(file, target, 0, item);
+        if (!overwrite) {
+          if (received >= file.size) { item.sent = file.size; item.msg = '服务器上已有同名且大小一致的文件，已跳过（未覆盖）'; return; }
+          item.sent = received;
+          item.msg = '同名文件上次只收到 ' + fmtSize(received) + '，接着往下传（不覆盖已有内容）';
+          paintXfer(item);
+          return chunkLoop(file, target, received, item);
+        }
+        item.msg = '覆盖同名文件：先清空旧内容…'; paintXfer(item);
+        return fileInvoke('write', { path: target, content: '', create_if_missing: true }).then(function () {
+          return chunkLoop(file, target, 0, item);
+        });
+      });
+    }
+    function doUpload(files, overwrite) {
+      var dir = dirValue();
+      if (!dir) return;
+      if (xfer.busy) { setStatus('还有文件在传，请等这一批传完再选下一批', 'fail'); return; }
+      var arr = [];
+      for (var i = 0; i < files.length; i++) arr.push(files[i]);
+      if (!arr.length) return;
+      saveDir(dir);
+      xfer.busy = true;
+      if (openPanel === 'xfer') renderXfer();
+      var chain = Promise.resolve(), failed = 0;
+      arr.forEach(function (f) {
+        var item = { name: f.name, size: f.size, sent: 0, state: 'wait', msg: '排队中…', dom: null };
+        xfer.items.push(item);
+        var rowBox = xferHost.querySelector('.term-xfer-list');
+        if (rowBox) {
+          var emptyHint = rowBox.querySelector('.term-hint');
+          if (emptyHint) rowBox.removeChild(emptyHint);
+          rowBox.appendChild(xferRow(item));
+        }
+        chain = chain.then(function () {
+          item.state = 'run'; item.msg = '准备上传…'; paintXfer(item);
+          return uploadFile(f, dir, item, overwrite).then(function () {
+            item.state = 'ok'; item.sent = f.size;
+            item.msg = '已上传到 ' + dispPath(joinPath(dir, f.name));
+            paintXfer(item);
+          }, function (err) {
+            item.state = 'fail';
+            item.msg = errText(err) + xferHint(err);
+            paintXfer(item);
+            xfer.resume.push({ file: f, dir: dir, item: item });
+            failed++;
+          });
+        });
+      });
+      chain.then(function () {
+        xfer.busy = false;
+        setStatus(failed
+          ? '上传结束：' + (arr.length - failed) + ' 个成功、' + failed + ' 个未完成（可点「从断点续传」）'
+          : '已上传 ' + arr.length + ' 个文件到 ' + dir, failed ? 'fail' : 'ok');
+      });
+    }
+    function resumeUpload() {
+      if (xfer.busy) { setStatus('还有文件在传，请等这一批传完再续传', 'fail'); return; }
+      if (!xfer.resume.length) { setStatus('现在没有未完成的上传，请先点「选择文件」上传；传失败后才需要续传', 'fail'); return; }
+      var list = xfer.resume.slice(); xfer.resume = []; xfer.busy = true;
+      var chain = Promise.resolve(), failed = 0;
+      list.forEach(function (r) {
+        chain = chain.then(function () {
+          var target = joinPath(r.dir, r.file.name);
+          r.item.state = 'run'; r.item.msg = '正在查询服务器已收到的字节…'; paintXfer(r.item);
+          return fileInvoke('uploadStatus', { path: target }).then(function (st) {
+            var received = st && typeof st.received === 'number' ? st.received : 0;
+            if (received >= r.file.size) {
+              r.item.state = 'ok'; r.item.sent = r.file.size;
+              r.item.msg = '服务器上已完整收到这个文件，无需再传';
+              paintXfer(r.item); return;
+            }
+            if (received > 0) { r.item.msg = '从 ' + fmtSize(received) + ' 处续传…'; paintXfer(r.item); }
+            return chunkLoop(r.file, target, received, r.item).then(function () {
+              r.item.state = 'ok'; r.item.sent = r.file.size;
+              r.item.msg = '续传完成，已上传到 ' + dispPath(target);
+              paintXfer(r.item);
+            });
+          }).then(undefined, function (err) {
+            failed++; r.item.state = 'fail';
+            r.item.msg = errText(err) + '；可再点「从断点续传」';
+            paintXfer(r.item); xfer.resume.push(r);
+          });
+        });
+      });
+      chain.then(function () {
+        xfer.busy = false;
+        setStatus(failed ? '续传未全部完成，请再点一次「从断点续传」' : '断点续传完成', failed ? 'fail' : 'ok');
+      });
+    }
+    function saveBlob(data, p) {
+      var b64 = (data && data.data_base64) || '';
+      if (!b64) { setStatus('下载失败：服务器没有返回文件内容，请确认这是一个普通文件而不是目录', 'fail'); return; }
+      var bin = atob(b64), bytes = new Uint8Array(bin.length), i;
+      for (i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var name = (data && data.filename) || p.split('/').pop() || 'download';
+      var url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+      var a = document.createElement('a');
+      a.href = url; a.download = name; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      setStatus('已下载 ' + name + '（' + fmtSize(bytes.length) + '）', 'ok');
+    }
+    function downloadPath(p) {
+      p = String(p || '').trim();
+      if (!p) { setStatus('请填写服务器上的文件路径（例如 /var/log/syslog）再点「下载」', 'fail'); return; }
+      if (p.indexOf('..') >= 0) { setStatus('路径里不能有 .. 段，请填一个具体文件（例如 /var/log/syslog）', 'fail'); return; }
+      var target = toPluginPath(p);
+      setStatus('正在检查 ' + p + ' …');
+      fileInvoke('stat', { path: target }).then(function (st) {
+        if (st && st.is_dir) {
+          setStatus('这是一个目录，不能直接下载，请填具体文件；或先在终端里打包成压缩包再下载', 'fail');
+          return;
+        }
+        var size = st && typeof st.size === 'number' ? st.size : 0;
+        if (size > XFER_INLINE_MAX) {
+          setStatus('未下载：' + p + ' 有 ' + fmtSize(size) + '，超过单次下载上限 4 MiB。怎么办：先在终端里压缩，或到「文件」页处理', 'fail');
+          return;
+        }
+        setStatus('正在下载 ' + p + ' …');
+        return fileInvoke('download', { path: target }).then(function (data) { saveBlob(data, p); });
+      }).then(undefined, function (err) {
+        setStatus('下载失败：' + errText(err) + '。怎么办：确认路径存在且有读权限（可在终端里 ls 看一下）', 'fail');
+      });
+    }
+    function renderXfer() {
+      if (!xferHost) return;
+      xferHost.textContent = '';
+      var box = el('div', 'term-panel');
+      var head = el('div', 'term-panel-head');
+      head.appendChild(el('span', 'term-panel-title', '文件传输'));
+      head.appendChild(el('span', 'term-hint', '大文件自动分块，断了能续传'));
+      var hOps = el('span', 'term-panel-ops');
+      var resumeBtn = el('button', 'btn btn-ghost', '从断点续传');
+      resumeBtn.type = 'button'; resumeBtn.addEventListener('click', resumeUpload);
+      var shut = el('button', 'btn btn-ghost', '收起');
+      shut.type = 'button'; shut.addEventListener('click', closePanels);
+      hOps.appendChild(resumeBtn); hOps.appendChild(shut); head.appendChild(hOps);
+      box.appendChild(head);
+      // 上传：目标目录 + 选择文件（也可把文件拖到终端上）
+      var up = el('div', 'term-fld');
+      up.appendChild(el('span', 'term-hint', '上传到'));
+      var dirInput = el('input'); dirInput.type = 'text';
+      dirInput.placeholder = '/tmp 或 tmp（按「文件管理」的根目录算，默认根是整机 /）';
+      dirInput.value = loadDir(); dirInput.setAttribute('aria-label', '上传目标目录');
+      up.appendChild(dirInput);
+      var pick = el('button', 'btn', '选择文件'); pick.type = 'button';
+      var fileInput = el('input'); fileInput.type = 'file'; fileInput.multiple = true; fileInput.hidden = true;
+      up.appendChild(pick); up.appendChild(fileInput);
+      box.appendChild(up);
+      var owRow = el('div', 'term-fld');
+      var owLabel = el('label', 'term-check');
+      var ow = el('input'); ow.type = 'checkbox'; ow.checked = true;
+      owLabel.appendChild(ow); owLabel.appendChild(el('span', null, '覆盖同名文件'));
+      owRow.appendChild(owLabel);
+      owRow.appendChild(el('span', 'term-hint', '不勾选：同名大文件从断点续传，已传完的跳过'));
+      box.appendChild(owRow);
+      var listBox = el('div', 'term-list term-xfer-list');
+      if (!xfer.items.length) listBox.appendChild(el('div', 'term-hint', '还没有传输任务：点「选择文件」，或把文件直接拖到终端上。'));
+      xfer.items.forEach(function (item) { listBox.appendChild(xferRow(item)); });
+      box.appendChild(listBox);
+      // 下载：服务器路径 → 浏览器下载
+      var dl = el('div', 'term-fld');
+      dl.appendChild(el('span', 'term-hint', '下载'));
+      var pathInput = el('input'); pathInput.type = 'text';
+      pathInput.placeholder = '/var/log/syslog（服务器上的绝对路径）';
+      pathInput.setAttribute('aria-label', '要下载的服务器文件路径');
+      dl.appendChild(pathInput);
+      var dlBtn = el('button', 'btn', '下载'); dlBtn.type = 'button';
+      dlBtn.addEventListener('click', function () { downloadPath(pathInput.value); });
+      dl.appendChild(dlBtn);
+      box.appendChild(dl);
+      box.appendChild(el('p', 'term-hint',
+        '路径按「文件管理」页的根目录算：默认根是整机 /，所以 /tmp 和 tmp 指同一个地方；若文件管理收窄过根目录，填相对路径（如 www/html）。' +
+        '单次下载上限 4 MiB，更大的文件请先压缩或到「文件」页处理；上传失败后点「从断点续传」不会重传已落盘的部分。'));
+      pick.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', function () {
+        var fs = fileInput.files;
+        if (fs && fs.length) { fileInput.value = ''; doUpload(fs, !!ow.checked); }
+      });
+      xfer.dirInput = dirInput; xfer.overwriteInput = ow;
+      xferHost.appendChild(box);
+    }
+    // 拖拽：只接管本地文件；普通文字拖拽保持浏览器默认（不抢输入框行为）
+    function hasFiles(ev) {
+      var dt = ev.dataTransfer;
+      if (!dt || !dt.types) return false;
+      for (var i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+      return false;
+    }
+    function onDragOver(ev) {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+    }
+    function onDrop(ev) {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      var files = ev.dataTransfer.files;
+      if (!files || !files.length) return;
+      openOnly('xfer'); renderXfer(); // 幂等打开：拖拽时面板一定可见，不会"传了但看不到"
+      doUpload(files, xfer.overwriteInput ? !!xfer.overwriteInput.checked : true);
+    }
+    /* ===== 回看缓冲搜索（term.pn 与 hist+grid 一一对应，命中行可点击跳转） ===== */
+    function toggleSearch(focus) {
+      if (openPanel === 'search') { closePanels(); return; }
+      openOnly('search'); renderSearch();
+      if (focus) {
+        var si = searchHost.querySelector('.term-search-input');
+        if (si && si.focus) si.focus();
+      }
+    }
+    function collectHits() {
+      var text = term ? term.text() : '';
+      var lines = text ? text.split('\n') : [];
+      var q = searchState.q.toLowerCase();
+      var hits = [];
+      if (q) {
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().indexOf(q) >= 0) {
+            hits.push({ line: i, text: lines[i] });
+            if (hits.length >= 300) break;
+          }
+        }
+      }
+      searchState.hits = hits;
+      if (searchState.at >= hits.length) searchState.at = 0;
+    }
+    function jumpHit(idx) {
+      var hit = searchState.hits[idx];
+      if (!hit || !term || !stage) return;
+      var node = term.pn[hit.line];
+      if (node) { // 行节点已画出：精确滚到那一行并高亮
+        var sr = stage.getBoundingClientRect(), nr = node.getBoundingClientRect();
+        var top = nr.top - sr.top + stage.scrollTop;
+        stage.scrollTop = Math.max(0, top - Math.round(stage.clientHeight / 3));
+        node.classList.add('term-hit');
+        setTimeout(function () { node.classList.remove('term-hit'); }, 1600);
+      } else { // 刚 resize / 还没重绘：按行高估算，至少滚到附近，不让点击看起来没反应
+        var lh = Math.max(12, Math.round(FONT * 1.5));
+        stage.scrollTop = Math.max(0, Math.round(hit.line * lh) - Math.round(stage.clientHeight / 3));
+      }
+      setStatus('第 ' + (hit.line + 1) + ' 行：' + (hit.text.trim().slice(0, 60) || '（空行）'), 'ok');
+    }
+    function stepHit(delta) {
+      collectHits();
+      if (!searchState.hits.length) { renderSearch(true); return; }
+      searchState.at = (searchState.at + delta + searchState.hits.length) % searchState.hits.length;
+      jumpHit(searchState.at);
+      renderSearch(true);
+    }
+    function renderSearch(keepFocus) {
+      if (!searchHost) return;
+      var prevInput = searchHost.querySelector('.term-search-input');
+      var typed = prevInput ? prevInput.value : searchState.q;
+      searchHost.textContent = '';
+      var box = el('div', 'term-panel');
+      var head = el('div', 'term-panel-head');
+      head.appendChild(el('span', 'term-panel-title', '搜索回看'));
+      head.appendChild(el('span', 'term-hint', searchState.q
+        ? (searchState.hits.length
+          ? '找到 ' + searchState.hits.length + ' 行' + (searchState.hits.length >= 300 ? '（只列出前 300 行）' : '')
+          : '没有匹配的行')
+        : '只在已经显示过的输出里搜，不会去服务器查文件'));
+      var hOps = el('span', 'term-panel-ops');
+      var prevBtn = el('button', 'btn btn-ghost', '上一处'); prevBtn.type = 'button';
+      var nextBtn = el('button', 'btn btn-ghost', '下一处'); nextBtn.type = 'button';
+      var shut = el('button', 'btn btn-ghost', '收起'); shut.type = 'button';
+      prevBtn.addEventListener('click', function () { stepHit(-1); });
+      nextBtn.addEventListener('click', function () { stepHit(1); });
+      shut.addEventListener('click', closePanels);
+      hOps.appendChild(prevBtn); hOps.appendChild(nextBtn); hOps.appendChild(shut);
+      head.appendChild(hOps); box.appendChild(head);
+      var fld = el('div', 'term-fld');
+      var si = el('input', 'term-search-input');
+      si.type = 'search'; si.value = typed;
+      si.placeholder = '搜索回看缓冲（例如 error、failed、端口号）';
+      si.setAttribute('aria-label', '搜索终端回看缓冲');
+      si.addEventListener('input', function () {
+        searchState.q = si.value;
+        if (searchState.timer) clearTimeout(searchState.timer);
+        searchState.timer = setTimeout(function () {
+          searchState.timer = 0; collectHits(); renderSearch(true);
+        }, 180);
+      });
+      si.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); searchState.q = si.value; searchState.at = 0; collectHits(); jumpHit(0); renderSearch(true); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); closePanels(); if (input.focus) input.focus(); }
+      });
+      fld.appendChild(si); box.appendChild(fld);
+      var listBox = el('div', 'term-list');
+      if (!searchState.q) {
+        listBox.appendChild(el('div', 'term-hint', '输入关键字后按 Enter；命中行点一下就能跳到终端里那一行。'));
+      } else if (!searchState.hits.length) {
+        listBox.appendChild(el('div', 'term-hint', '没有匹配：换个关键字，或让终端先输出更多内容。'));
+      } else {
+        searchState.hits.slice(0, 200).forEach(function (hit, idx) {
+          var row = el('button', 'term-search-hit');
+          row.type = 'button';
+          row.appendChild(el('span', 'term-search-at', String(hit.line + 1)));
+          row.appendChild(el('span', 'term-search-text', hit.text.trim().slice(0, 300) || '（空行）'));
+          row.addEventListener('click', function () { searchState.at = idx; jumpHit(idx); });
+          listBox.appendChild(row);
+        });
+      }
+      box.appendChild(listBox);
+      searchHost.appendChild(box);
+      if (keepFocus) {
+        var again = searchHost.querySelector('.term-search-input');
+        if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+      }
+    }
+    /* ===== 操作习惯：右键粘贴 / 选中即复制（存本机浏览器） ===== */
+    function loadUx() {
+      try {
+        var obj = JSON.parse(localStorage.getItem(UX_KEY) || '{}');
+        return { rightPaste: !!(obj && obj.rightPaste), selectCopy: !!(obj && obj.selectCopy) };
+      } catch (e) { return { rightPaste: false, selectCopy: false }; }
+    }
+    function saveUx() {
+      try { localStorage.setItem(UX_KEY, JSON.stringify(UX)); }
+      catch (e) { setStatus('浏览器不允许保存设置（可能是隐私模式），本次仍然生效', 'fail'); }
+    }
+    function copyText(text, okMsg) {
+      if (!text) { setStatus('没有可复制的内容：请先选中文字，或连上会话后再试', 'fail'); return; }
+      function ok() { setStatus(okMsg || ('已复制 ' + text.length + ' 字符'), 'ok'); }
+      function fallback() { // 非安全上下文（http + 非 localhost）没有 clipboard API
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', 'readonly');
+        ta.style.position = 'fixed'; ta.style.top = '-1000px'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        var done = false;
+        try { done = document.execCommand('copy'); } catch (e) { done = false; }
+        document.body.removeChild(ta);
+        if (done) ok(); else setStatus('复制被浏览器拒绝：请手动选中后按 Ctrl+C', 'fail');
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+      else fallback();
+    }
+    function pasteText(text) {
+      if (!S || !S.session || !term) { setStatus('还没有打开会话，请先点「新建会话」再粘贴', 'fail'); return; }
+      text = String(text || '');
+      if (!text) { setStatus('剪贴板是空的，请先复制要粘贴的内容', 'fail'); return; }
+      var lines = text.split('\n').length;
+      if ((text.length > 2000 || lines > 30) && !window.confirm('内容较大（' + text.length + ' 字符 / ' + lines + ' 行），确认粘贴到终端？')) return;
+      send(text);
+      setStatus('已粘贴 ' + text.length + ' 字符到终端', 'ok');
+      if (input.focus) input.focus();
+    }
+    function readClipboard() {
+      if (!(navigator.clipboard && navigator.clipboard.readText)) {
+        setStatus('这个浏览器不支持直接读剪贴板，请用 Ctrl+Shift+V 或在输入框长按粘贴', 'fail');
+        return;
+      }
+      navigator.clipboard.readText().then(function (text) {
+        pasteText(text);
+      }, function () {
+        setStatus('浏览器没允许读取剪贴板，请先在页面上点一下再试，或用 Ctrl+Shift+V 粘贴', 'fail');
+      });
+    }
+    function onContextMenu(ev) {
+      if (!UX.rightPaste) return; // 未开启：保留浏览器菜单（用户可手动粘贴）
+      ev.preventDefault();
+      readClipboard();
+    }
+    function onSelectCopy() {
+      if (!UX.selectCopy) return;
+      setTimeout(function () {
+        var sel = window.getSelection ? String(window.getSelection()) : '';
+        sel = sel.replace(/\s+$/, '');
+        if (sel) copyText(sel, '已复制选中内容 ' + sel.length + ' 字符');
+      }, 10);
+    }
+    function renderOpt() {
+      if (!optHost) return;
+      optHost.textContent = '';
+      var box = el('div', 'term-panel');
+      var head = el('div', 'term-panel-head');
+      head.appendChild(el('span', 'term-panel-title', '操作习惯'));
+      var hOps = el('span', 'term-panel-ops');
+      var shut = el('button', 'btn btn-ghost', '收起'); shut.type = 'button';
+      shut.addEventListener('click', closePanels);
+      hOps.appendChild(shut); head.appendChild(hOps); box.appendChild(head);
+      function check(key, label, hint) {
+        var line = el('label', 'term-check');
+        var cb = el('input'); cb.type = 'checkbox'; cb.checked = !!UX[key];
+        cb.addEventListener('change', function () {
+          UX[key] = cb.checked; saveUx();
+          setStatus(label + '：' + (cb.checked ? '已开启' : '已关闭'), 'ok');
+        });
+        line.appendChild(cb); line.appendChild(el('span', null, label));
+        box.appendChild(line);
+        if (hint) box.appendChild(el('p', 'term-hint', hint));
+      }
+      check('rightPaste', '右键粘贴', '在终端上点右键就粘贴剪贴板内容；浏览器不允许读剪贴板时会提示改用 Ctrl+Shift+V。');
+      check('selectCopy', '选中即复制', '鼠标选中文字就自动复制，适合经常复制报错信息排查。');
+      box.appendChild(el('p', 'term-hint',
+        '设置只保存在这台电脑的浏览器里，不影响其他人和服务器。快捷键：Ctrl+Shift+F 搜索回看，Esc 收起面板。'));
+      optHost.appendChild(box);
+    }
+    UX = loadUx();
+
     // 键盘 → 字节：Enter=\r、Backspace=\x7f，方向键走 CSI，Ctrl+字母走 0x01–0x1a
     var KEYS = {
       Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b',
@@ -1029,6 +1787,12 @@
     }
     function onKey(ev) {
       if (ev.isComposing) return;
+      // Ctrl+Shift+F 打开回看搜索（Ctrl+F 留给 shell 的前向字符移动）；Esc 只在新面板打开时拦截，
+      // 否则 vim / less 里的 Esc 会被吞掉。
+      if (ev.ctrlKey && ev.shiftKey && !ev.altKey && (ev.key === 'F' || ev.key === 'f')) {
+        ev.preventDefault(); toggleSearch(true); return;
+      }
+      if (ev.key === 'Escape' && openPanel) { ev.preventDefault(); closePanels(); return; }
       // ↑/↓ 检索输入历史：仅在光标贴边且单行输入时拦截，避免抢走 shell 的方向键。
       // 只在「历史已加载且非空」且输入框是单行、光标贴边时拦截；否则交给 shell——
       // 历史为空/未加载时吞掉 ↑↓ 会让 vim、less 里按上键毫无反应（实测踩到）。
@@ -1099,21 +1863,11 @@
     }
     function copyOut() {
       var sel = window.getSelection ? String(window.getSelection()) : '';
-      var text = sel.replace(/\s+$/, '') ? sel : (term ? term.text() : '');
-      if (!text) { setStatus('没有可复制的输出', 'fail'); return; }
-      function ok() { setStatus('已复制 ' + text.length + ' 字符', 'ok'); }
-      function fallback() { // 非安全上下文（http + 非 localhost）没有 clipboard API
-        var ta = document.createElement('textarea');
-        ta.value = text; ta.setAttribute('readonly', 'readonly');
-        ta.style.position = 'fixed'; ta.style.top = '-1000px'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.select();
-        var done = false;
-        try { done = document.execCommand('copy'); } catch (e) { done = false; }
-        document.body.removeChild(ta);
-        if (done) ok(); else setStatus('复制被浏览器拒绝：请手动选中后 Ctrl+C', 'fail');
-      }
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
-      else fallback();
+      sel = sel.replace(/\s+$/, '');
+      if (sel) { copyText(sel, '已复制选中的文字 ' + sel.length + ' 字符'); return; }
+      var text = term ? term.text() : '';
+      if (!text) { setStatus('没有可复制的输出：请先选中文字，或连上会话后再试', 'fail'); return; }
+      copyText(text, '已复制整屏 ' + text.length + ' 字符（含回看缓冲）');
     }
     function toggleFull() {
       if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); return; }
@@ -1127,6 +1881,24 @@
     btnFontUp.addEventListener('click', function () { applyFont(1); });
     btnCopy.addEventListener('click', copyOut);
     btnFull.addEventListener('click', toggleFull);
+    // R25 工具条：快捷命令 / 传文件 / 搜索回看 / 体验设置 + 文件拖拽 + 右键粘贴 / 选中即复制
+    btnSnip.addEventListener('click', function () {
+      if (openPanel === 'snip') { closePanels(); return; }
+      openOnly('snip'); renderSnips();
+    });
+    btnXfer.addEventListener('click', function () {
+      if (openPanel === 'xfer') { closePanels(); return; }
+      openOnly('xfer'); renderXfer();
+    });
+    btnSearch.addEventListener('click', function () { toggleSearch(true); });
+    btnOpt.addEventListener('click', function () {
+      if (openPanel === 'opt') { closePanels(); return; }
+      openOnly('opt'); renderOpt();
+    });
+    stage.addEventListener('contextmenu', onContextMenu);
+    stage.addEventListener('mouseup', onSelectCopy);
+    root.addEventListener('dragover', onDragOver);
+    root.addEventListener('drop', onDrop);
     document.addEventListener('fullscreenchange', onFsChange);
     retry.addEventListener('click', function () { if (S.session) reconnect(active); else connect(active); });
     function focusInput() { // 有文字选区时不清选区——鼠标复制是终端的第一诉求
@@ -1165,6 +1937,7 @@
       destroy: function () { // 切视图：停轮询 + 断观察，**不关会话**（下次进入自动恢复；空闲由服务端回收）
         destroyed = true; stopAllPoll();
         if (debounce) clearTimeout(debounce);
+        if (searchState.timer) clearTimeout(searchState.timer);
         if (ro) ro.disconnect();
         if (window.visualViewport) window.visualViewport.removeEventListener('resize', onVisualViewport);
         window.removeEventListener('pagehide', onPageHide);
