@@ -175,6 +175,11 @@ func buildService(cfg config, app *platform.Platform, db *store.Store) (*service
 		AuditCleanEnabled:  cfg.snapshot.Audit.CleanEnabled,
 		AuditCleanInterval: cfg.snapshot.Audit.CleanInterval,
 		AuditCleanBatch:    cfg.snapshot.Audit.CleanBatch,
+		// U4（ADR-0059）：更新检查内置任务默认关闭、源空、零出站。
+		// update.source.* 配置键与「已验签索引 → https → sha256」检查器属 M6 写域，
+		// 本检查点只把装配位显式钉死为 fail-closed 零值（不碰 M1 自更新装配段）。
+		UpdateCheckEnabled: false,
+		UpdateSource:       "",
 	})
 	if err != nil {
 		slog.Error("调度器装配失败", "err", err)

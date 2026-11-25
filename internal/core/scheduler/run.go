@@ -35,11 +35,15 @@ func (s *Service) execute(ctx context.Context, task Task) Run {
 }
 
 // invoke 分流内置任务与插件任务；内置处理器缺失时返回错误（不假装执行）。
-// audit.clean 由 scheduler 直接执行（需要状态库句柄，不经装配层处理器）。
+// audit.clean / update.check 由 scheduler 直接执行（前者需要状态库句柄，
+// 后者需要离线短路与验签失败映射），不经装配层通用处理器。
 func (s *Service) invoke(ctx context.Context, task Task) (json.RawMessage, error) {
 	if task.Plugin == BuiltinPlugin {
 		if task.Method == AuditCleanMethod {
 			return s.cleanAudit(ctx, task)
+		}
+		if task.Method == UpdateCheckMethod {
+			return s.runUpdateCheck(ctx, task)
 		}
 		if s.builtin == nil {
 			return nil, fmt.Errorf("内置任务处理器未装配")
