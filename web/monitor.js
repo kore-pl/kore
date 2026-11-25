@@ -40,7 +40,7 @@
   var RESIZE_DEBOUNCE_MS = 100;
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
-    procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null,
+    procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null, pluginSource: '',
     cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null };
   /* 图表注册表（模块级，唯一真源）：charts 里的实例即 window.__koreMonitorChart.count()；
      chartPanelEl 是持久面板节点，刷新时复用同一个 canvas，不重建 DOM；
@@ -201,8 +201,16 @@
   function setSource() {
     if (!S.src) return;
     S.src.textContent = '';
-    S.src.appendChild(S.mode === 'plugin' ? chip('ok', '数据来源：monitor 插件 · /proc')
-      : chip('na', '数据来源：内核基础指标'));
+    if (S.mode !== 'plugin') {
+      S.src.appendChild(chip('na', '数据来源：内核基础指标'));
+      return;
+    }
+    // 真实来源从插件结果体读：Linux 报 /proc；macOS 报 sysctl/ps；Windows 报 PowerShell/WMI。
+    var source = S.pluginSource || '';
+    var label = source === 'sysctl/ps' ? 'macOS 系统命令'
+      : source === 'powershell/wmi' ? 'Windows 系统信息'
+        : source === 'proc' ? 'Linux 系统文件' : 'monitor 插件';
+    S.src.appendChild(chip('ok', '数据来源：monitor 插件 · ' + label));
   }
 
   function notice(lines, fail) {
@@ -846,7 +854,11 @@
       invoke('system', { per_cpu: false, thresholds: THRESHOLDS }).then(function (d) {
         if (stale(gen)) return;
         S.mode = 'plugin';
-        setSource(); notice([]);
+        S.pluginSource = d && d.source ? String(d.source) : '';
+        setSource();
+        /* 降级逐项可见：命令不可读时后端写 warnings，不在界面上伪造读数。 */
+        var degraded = Array.isArray(d && d.warnings) ? d.warnings : [];
+        notice(degraded.length ? [el('span', 'mon-degraded', '部分指标不可用：' + degraded[0])] : []);
         paintPlugin(d || {});
         finish(gen);
         loadProcs();
@@ -865,7 +877,7 @@
   function teardown() {
     S.gen++;
     disposeCharts();
-    S.box = null; S.procs = null; S.procErr = '';
+    S.box = null; S.procs = null; S.procErr = ''; S.pluginSource = '';
     S.refresh = null; S.tsEl = null; S.notice = null; S.cards = null; S.panels = null;
     S.warn = null; S.procBody = null; S.sortCpu = null; S.sortMem = null; S.src = null;
     S.C = null; S.cardsReady = null; S.mode = '';
