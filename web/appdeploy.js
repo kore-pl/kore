@@ -1045,8 +1045,12 @@
     '.adp-result-ops{flex-direction:column;align-items:stretch;width:100%}' +
     '.adp-result-ops .btn,.adp-result-ops .adp-open{min-height:44px;width:100%;justify-content:center}' +
     '.adp-logs-bar{flex-direction:column;align-items:stretch}' +
+    '.adp-logs-bar .adp-field{flex:0 0 auto}' +
     '.adp-logs-tail{max-width:none}' +
     '.adp-logs{max-height:260px}' +
+    '.adp-root .panel-head{flex-wrap:wrap;row-gap:4px}' +
+    '.adp-app-ops{display:grid;grid-template-columns:1fr 1fr;gap:8px}' +
+    '.adp-app-ops .btn,.adp-app-ops .adp-open{width:100%;justify-content:center}' +
     '.plugin-table .adp-rm{min-height:44px}}';
   function ensureCss() {
     if (document.getElementById('kore-appdeploy-css')) return;
