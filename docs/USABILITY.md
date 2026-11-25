@@ -73,10 +73,9 @@
 | 位置 | 现状 | 违反哪条 |
 | --- | --- | --- |
 | SSL 页 | 粘贴 PEM 文本 | 1、4 |
-| 备份页 | 备份源路径列表仍需手填（目录与白名单已可界面配置） | 1 |
 | 网站页 | ~~填域名 + 填站点根目录~~（已改造：域名一次提交，目录自动推断并可选自动创建，SSL/伪静态折叠进高级选项，见 web/site-edit.js 一键建站表单） | 3（已消除） |
 
-这张表是**欠账登记**，不是免责声明：Round 2 每改一处删一行，并在 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 留证据；表清空前不得声称"产品易用"。已改造：数据库页 / Redis 页打开即调 `discover.discover.services`，本机服务可用时显示「自动检测横幅 + 一键连接」，host/port/user 预填并标「已自动填入」，只需填密码；保存通过 `db-mysql.config.set` / `redis.config.set` 热生效、无需重启；证据见 `.agents/verify/autofill-db-redis.md`。日志页与备份页的备份目录/白名单改用统一插件配置面板（[PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)），证据见 `.agents/verify/plugin-config.md`。
+这张表是**欠账登记**，不是免责声明：Round 2 每改一处删一行，并在 [.agents/JOURNAL.md](../.agents/JOURNAL.md) 留证据；表清空前不得声称"产品易用"。已改造：数据库页 / Redis 页打开即调 `discover.discover.services`，本机服务可用时显示「自动检测横幅 + 一键连接」，host/port/user 预填并标「已自动填入」，只需填密码；保存通过 `db-mysql.config.set` / `redis.config.set` 热生效、无需重启；证据见 `.agents/verify/autofill-db-redis.md`。日志页与备份页的备份目录/白名单改用统一插件配置面板（[PLUGIN-CONFIG.md](./PLUGIN-CONFIG.md)），证据见 `.agents/verify/plugin-config.md`。备份页备份源已改造（2026-11-25）：打开即调 `backup.sources.detect` 只读探测本机站点根 / 应用目录 / 配置目录，填好并标「已自动检测」（新建备份 + 定时备份两处），可点 chip 改、点「重新检测」重填、探测不到给三条「怎么办」；证据 `.agents/verify/backup-path-detect.md`。
 
 ### 5.1 改造顺序（按违反条数排，先建可复用模式）
 
