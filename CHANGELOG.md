@@ -3,7 +3,7 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.1.1] - 未发布
+## [0.1.1] - 2026-11-26
 
 开源工程标准化补齐：七语言（zh/en/es/fr/de/ru/pt）`DETAIL` 文档与 `locale/*.json`、README 语言切换行与 star 提示、Git Flow 分支模型与 SSH 签名约定、六语言 `SECURITY` 译文、`.github/dependabot.yml` 与 `CODEOWNERS`；无日语文件、无死链，JSON 与 `docs-check` 门禁通过。
 
