@@ -200,7 +200,8 @@ go test -run TestHello -v ./...                     # 8. hello 往返 EXIT 0
 | `AGENTS.md` | **≤20 行**（R5），只写本仓事实 + 指向 `kore` 治理真源 | 同上；`wc -l` 核对 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板：留 `make check` 与两次 `make dist` sha 一致输出位 | 同上 |
 | `.github/ISSUE_TEMPLATE/` 三件 | `bug_report.yml` / `feature_request.yml` / `config.yml`（`blank_issues_enabled: false`） | 同上 |
-| `.github/workflows/ci.yml` | **少触发**：`push main` / tag `v*` / PR / `workflow_dispatch`；Gitea 不配 | 同上；check 脚本校验触发块 |
+| `.github/workflows/ci.yml` | **只手动触发**：`workflow_dispatch`（无 `push` / PR） | 同上；check 脚本校验 GitHub 无自动触发 |
+| `.gitea/workflows/ci.yml` | Gitea 按版本触发：`push` tag `v*` + `workflow_dispatch` | 同上；check 脚本校验含 `tags:` |
 | `README` 开源段 | `<!-- oss:begin -->` … `<!-- oss:end -->` 之间由模板渲染，标记块外一字节不改 | 同上 |
 
 ```bash

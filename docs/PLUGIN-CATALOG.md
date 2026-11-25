@@ -209,30 +209,30 @@
 
 | id | 仓库（GitHub 镜像） | 许可 | Issues（Gitea 权威源） | Releases（GitHub 镜像） | 维护状态 | 验证方式 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `site` | <https://github.com/kore-pl/kore-plugin-site> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-site/issues> | <https://github.com/kore-pl/kore-plugin-site/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `ssl` | <https://github.com/kore-pl/kore-plugin-ssl> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssl/issues> | <https://github.com/kore-pl/kore-plugin-ssl/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `runtime-php` | <https://github.com/kore-pl/kore-plugin-runtime-php> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-php/issues> | <https://github.com/kore-pl/kore-plugin-runtime-php/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `runtime-node` | <https://github.com/kore-pl/kore-plugin-runtime-node> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-node/issues> | <https://github.com/kore-pl/kore-plugin-runtime-node/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `runtime-python` | <https://github.com/kore-pl/kore-plugin-runtime-python> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-python/issues> | <https://github.com/kore-pl/kore-plugin-runtime-python/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `db-mysql` | <https://github.com/kore-pl/kore-plugin-db-mysql> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-mysql/issues> | <https://github.com/kore-pl/kore-plugin-db-mysql/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `db-postgres` | <https://github.com/kore-pl/kore-plugin-db-postgres> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-postgres/issues> | <https://github.com/kore-pl/kore-plugin-db-postgres/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `redis` | <https://github.com/kore-pl/kore-plugin-redis> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-redis/issues> | <https://github.com/kore-pl/kore-plugin-redis/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `file` | <https://github.com/kore-pl/kore-plugin-file> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-file/issues> | <https://github.com/kore-pl/kore-plugin-file/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `cron` | <https://github.com/kore-pl/kore-plugin-cron> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-cron/issues> | <https://github.com/kore-pl/kore-plugin-cron/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `logs` | <https://github.com/kore-pl/kore-plugin-logs> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-logs/issues> | <https://github.com/kore-pl/kore-plugin-logs/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `monitor` | <https://github.com/kore-pl/kore-plugin-monitor> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-monitor/issues> | <https://github.com/kore-pl/kore-plugin-monitor/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `backup` | <https://github.com/kore-pl/kore-plugin-backup> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-backup/issues> | <https://github.com/kore-pl/kore-plugin-backup/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `firewall` | <https://github.com/kore-pl/kore-plugin-firewall> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-firewall/issues> | <https://github.com/kore-pl/kore-plugin-firewall/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `waf` | <https://github.com/kore-pl/kore-plugin-waf> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-waf/issues> | <https://github.com/kore-pl/kore-plugin-waf/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `ssh-guard` | <https://github.com/kore-pl/kore-plugin-ssh-guard> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssh-guard/issues> | <https://github.com/kore-pl/kore-plugin-ssh-guard/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `integrity` | <https://github.com/kore-pl/kore-plugin-integrity> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-integrity/issues> | <https://github.com/kore-pl/kore-plugin-integrity/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `app-deploy` | <https://github.com/kore-pl/kore-plugin-app-deploy> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-app-deploy/issues> | <https://github.com/kore-pl/kore-plugin-app-deploy/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `dns` | <https://github.com/kore-pl/kore-plugin-dns> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-dns/issues> | <https://github.com/kore-pl/kore-plugin-dns/releases> | 维护中 | `make check` 本地 + CI 少触发 |
-| `container` | <https://github.com/kore-pl/kore-plugin-container> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-container/issues> | <https://github.com/kore-pl/kore-plugin-container/releases> | 维护中 | `make check` 本地 + CI 少触发 |
+| `site` | <https://github.com/kore-pl/kore-plugin-site> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-site/issues> | <https://github.com/kore-pl/kore-plugin-site/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `ssl` | <https://github.com/kore-pl/kore-plugin-ssl> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssl/issues> | <https://github.com/kore-pl/kore-plugin-ssl/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `runtime-php` | <https://github.com/kore-pl/kore-plugin-runtime-php> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-php/issues> | <https://github.com/kore-pl/kore-plugin-runtime-php/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `runtime-node` | <https://github.com/kore-pl/kore-plugin-runtime-node> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-node/issues> | <https://github.com/kore-pl/kore-plugin-runtime-node/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `runtime-python` | <https://github.com/kore-pl/kore-plugin-runtime-python> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-runtime-python/issues> | <https://github.com/kore-pl/kore-plugin-runtime-python/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `db-mysql` | <https://github.com/kore-pl/kore-plugin-db-mysql> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-mysql/issues> | <https://github.com/kore-pl/kore-plugin-db-mysql/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `db-postgres` | <https://github.com/kore-pl/kore-plugin-db-postgres> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-db-postgres/issues> | <https://github.com/kore-pl/kore-plugin-db-postgres/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `redis` | <https://github.com/kore-pl/kore-plugin-redis> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-redis/issues> | <https://github.com/kore-pl/kore-plugin-redis/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `file` | <https://github.com/kore-pl/kore-plugin-file> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-file/issues> | <https://github.com/kore-pl/kore-plugin-file/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `cron` | <https://github.com/kore-pl/kore-plugin-cron> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-cron/issues> | <https://github.com/kore-pl/kore-plugin-cron/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `logs` | <https://github.com/kore-pl/kore-plugin-logs> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-logs/issues> | <https://github.com/kore-pl/kore-plugin-logs/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `monitor` | <https://github.com/kore-pl/kore-plugin-monitor> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-monitor/issues> | <https://github.com/kore-pl/kore-plugin-monitor/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `backup` | <https://github.com/kore-pl/kore-plugin-backup> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-backup/issues> | <https://github.com/kore-pl/kore-plugin-backup/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `firewall` | <https://github.com/kore-pl/kore-plugin-firewall> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-firewall/issues> | <https://github.com/kore-pl/kore-plugin-firewall/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `waf` | <https://github.com/kore-pl/kore-plugin-waf> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-waf/issues> | <https://github.com/kore-pl/kore-plugin-waf/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `ssh-guard` | <https://github.com/kore-pl/kore-plugin-ssh-guard> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-ssh-guard/issues> | <https://github.com/kore-pl/kore-plugin-ssh-guard/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `integrity` | <https://github.com/kore-pl/kore-plugin-integrity> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-integrity/issues> | <https://github.com/kore-pl/kore-plugin-integrity/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `app-deploy` | <https://github.com/kore-pl/kore-plugin-app-deploy> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-app-deploy/issues> | <https://github.com/kore-pl/kore-plugin-app-deploy/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `dns` | <https://github.com/kore-pl/kore-plugin-dns> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-dns/issues> | <https://github.com/kore-pl/kore-plugin-dns/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
+| `container` | <https://github.com/kore-pl/kore-plugin-container> | MIT | <https://gitea.iouf.cn/kore-pl/kore-plugin-container/issues> | <https://github.com/kore-pl/kore-plugin-container/releases> | 维护中 | `make check` 本地 + GitHub 手动/Gitea tag CI |
 
 **`echo` 单列**：`kore-plugin-echo` 是 M1 验证件（Walking Skeleton），`depth_level=basic`，**不参与产品评级**，也不计入 §6.1 的「12 生产级 / 8 基础级」。它有同样的九件套与 MIT 许可，仓库为 <https://github.com/kore-pl/kore-plugin-echo>，仅用于验证 `info.json` + `Makefile dist` + `CHANGELOG` 三件套与 `pluginapi` 调用链。
 
-**验证口径**：每仓本地跑该仓 `make check`；CI 少触发（`push main` / tag / PR / `workflow_dispatch`，Gitea 不配），只做"能否拉取 / 能否构建"的兜底。九件套的唯一真源与同步命令见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
+**验证口径**：每仓本地跑该仓 `make check`；GitHub CI 只手动触发（`workflow_dispatch`），Gitea CI 按版本 tag 触发（`push` tag `v*` + 手动），都只做"能否拉取 / 能否构建"的兜底；GitHub 绝不被 push / tag 自动触发。九件套的唯一真源与同步命令见 [OPEN-SOURCE.md](./OPEN-SOURCE.md) §4。
 
 ## 16. 与其他文档的关系
 

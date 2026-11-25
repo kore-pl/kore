@@ -115,7 +115,7 @@
 
 **为什么否掉「只跑 `./internal/...` + `./cmd/kored`」（`bd3ac83` 提的折中）**：实测 `./internal/... ./cmd/kored` = **51.84s**，`./...` = **52.16s**，只差 **0.32s**。`go test` 包级并行，`cmd/kored` 51.3s 独占墙钟，其余 internal 包并进去几乎不占时间——「10s + 51s = 61s」的算法不成立。省不下时间，却把固定面从 `./...` 缩成手写包清单（新增包 / 新目录要人记得加，漏了就是静默放行）。
 
-**代价与取舍（实测）**：本地 `make check` 18 段 **110.31s** → 19 段 **162s 量级**（+52s，+47%）。选择「进 `make check`」而不是「只进 CI」的理由：本仓日常反馈的权威入口是本地 `make check`（§6：CI 只在 `push main` / tag / PR 跑），把唯一能抓数据竞争的检查只放 CI，等于让它退回「合入时才第一次执行」；而同一判据在 Makefile 与 ci.yml 各写一份必然漂移，**写一份、两处跑**才是闭环。CI 的 `make check` 因此自动带上第 19 段（`ubuntu-latest` 自带 gcc，cgo 可用），不重复执行同一条命令。
+**代价与取舍（实测）**：本地 `make check` 18 段 **110.31s** → 19 段 **162s 量级**（+52s，+47%）。选择「进 `make check`」而不是「只进 CI」的理由：本仓日常反馈的权威入口是本地 `make check`（§6：CI 只手动触发 / Gitea 按版本 tag 触发），把唯一能抓数据竞争的检查只放 CI，等于让它退回「合入时才第一次执行」；而同一判据在 Makefile 与 ci.yml 各写一份必然漂移，**写一份、两处跑**才是闭环。CI 的 `make check` 因此自动带上第 19 段（`ubuntu-latest` 自带 gcc，cgo 可用），不重复执行同一条命令。
 
 **接线防漂移**：第 18 段 `scripts/race-gate-check.sh` 增加本仓 1b 接线核对——`Makefile` 必须有 `^race-full:` 目标、`check` 目标必须独立调用 `scripts/race-full-check.sh`、`ci.yml` 必须 `run: make check`；缺任一条 `[FAIL]`（有目标但 check 不调 = 本地不跑；check 调了但 CI 看不到 = 合入前不跑）。
 
@@ -130,7 +130,7 @@
 
 ### 1.4 第 16 段 · market 子检查（索引 → 市场页派生一致，阻断级，2026-11-24 接入 kore 侧）
 
-**防的事故**：`kore-plugins` 侧本来就有两道判据——`validate-index.sh` 第 1c 步与 `build-market.sh --check`——但 `kore` 自己的 `make check` **从不调用它们**，第 16 段只比公钥（`scripts/pubkey-sync-check.sh`）。日常反馈的权威入口是本地 `kore` 的 `make check`（§6：CI 只在 `push main` / tag / PR 跑），于是「改了 `index/plugins.json` 没同轮重建 `market/plugins.js`」在 kore 仓跑门禁时**抓不到**：商店页把旧版本当现行版本展示，只能靠 `cd kore-plugins && make check` 或索引仓 CI 才拦得住。判据存在、执行面缺失——与 G13 的 2026-11-23 教训同型（只验参数不真跑 = 假绿）。
+**防的事故**：`kore-plugins` 侧本来就有两道判据——`validate-index.sh` 第 1c 步与 `build-market.sh --check`——但 `kore` 自己的 `make check` **从不调用它们**，第 16 段只比公钥（`scripts/pubkey-sync-check.sh`）。日常反馈的权威入口是本地 `kore` 的 `make check`（§6：CI 只手动触发 / Gitea 按版本 tag 触发），于是「改了 `index/plugins.json` 没同轮重建 `market/plugins.js`」在 kore 仓跑门禁时**抓不到**：商店页把旧版本当现行版本展示，只能靠 `cd kore-plugins && make check` 或索引仓 CI 才拦得住。判据存在、执行面缺失——与 G13 的 2026-11-23 教训同型（只验参数不真跑 = 假绿）。
 
 **执行方式**（`make market-check`，`make check` 第 16 段·market 子步骤，阻断级；不联网、不调用 git、不写状态）：
 
@@ -288,37 +288,35 @@ M0 只有文档与骨架，没有业务源码，以下门禁记 **N/A + 原因**
 
 5. 每条门禁的负责人：G1/G2/G4 由 implementer 自跑，G3/G5/G6/G7/G8/G9/G10 由 verifier 复跑；verifier 不复用实现者输出。
 
-## 6. CI 执行策略（2026-11-23 用户要求：CI 要少执行）
+## 6. CI 执行策略（2026-11-25 用户裁决：gitea 可以按版本 ci，github 必须是主动触发）
 
 ### 为什么少跑
 
-本地 `make check` 已覆盖 **21 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / 索引↔市场页派生一致（第 16 段·market 子检查，`make market-check`：kore-plugins 缺失 SKIP、存在但不一致 FAIL，阻断级，见 §1.4）/ race 门禁（第 18 段 boundary 面，见 §1.2）+ 全仓 `-race`（第 19 段，见 §1.3）+ 嵌套 module `pkg/pluginapi` 全量 `-race`（第 21 段，阻断级，见 §1.5），均阻断级），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**保护分支不被坏代码合入的兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
+本地 `make check` 已覆盖 **21 段门禁**（第 20 段 G-33 产品可用性为 WARN 级）（docs-check / 依赖白名单 + 兼容基线（参数钉死）/ 交叉编译（G-16 五目标真编译，第 17 段，阻断级）/ 薄壳边界 / 跨仓库边界 / 口径唯一性 / 台账 / worktree / oss / 大小写 / 前端首屏 / 零侵入 / 明文凭据 / 插件仓九件套 / 插件仓规范 / 预设一致性 / 公钥单一真源 / 索引↔市场页派生一致（第 16 段·market 子检查，`make market-check`：kore-plugins 缺失 SKIP、存在但不一致 FAIL，阻断级，见 §1.4）/ race 门禁（第 18 段 boundary 面，见 §1.2）+ 全仓 `-race`（第 19 段，见 §1.3）+ 嵌套 module `pkg/pluginapi` 全量 `-race`（第 21 段，阻断级，见 §1.5），均阻断级），CI 重复执行既慢又浪费 runner 分钟。CI 的定位是**合入 / 发版兜底**，不是日常反馈手段——日常反馈用本地 `make check`。
 
-### 触发规则（`kore`）
+### 触发规则（26 仓统一）
 
-| 事件 | 是否跑 | 说明 |
-| --- | --- | --- |
-| `push` 到 `main` | ✅ | 主干必须始终可构建 |
-| 打 tag（`v*` / `pkg/pluginapi/v*`） | ✅ | 发布物必须过门禁 |
-| `pull_request` | ✅ | 合入兜底 |
-| `workflow_dispatch` | ✅ | 手动触发（排查 CI 自身） |
-| 日常 feature 分支 push | ❌ | 本地 `make check` 即可，不占 runner |
+| 事件 | GitHub Actions | Gitea Actions | 说明 |
+| --- | --- | --- | --- |
+| `push` 到 `main` | ❌ | ❌ | 本地 `make check` 即可，不占 runner |
+| 打 tag（`v*`；kore 另含 `pkg/pluginapi/v*`） | ❌（绝不自动触发） | ✅ | 版本触发收敛到权威源 Gitea |
+| `pull_request` | ❌ | ❌ | GitHub 上不再接受新 PR（见 OPEN-SOURCE §6），Gitea PR 由本地门禁守护 |
+| `workflow_dispatch` | ✅（**唯一触发方式**） | ✅ | 手动触发，排查 CI 自身 / 补跑 |
+| 日常 feature 分支 push | ❌ | ❌ | 本地 `make check` 即可 |
 
-**被否决的触发方案**：①保留全触发（每次 push 都跑，重复劳动）；②用 `[skip ci]` 提交标记逐次控制（依赖人工纪律，会漏）；③只配 Gitea CI（见下）。
+**硬约束**：GitHub `.github/workflows/ci.yml` 的 `on:` 段**只留 `workflow_dispatch`**，不得出现 `push:` / `pull_request:`——这是"GitHub 绝不被 push/tag 自动触发"的唯一安全形态（`if: false` 之类的条件控制仍会在 push 时创建 run，不算安全）。Gitea `.gitea/workflows/ci.yml` = `push: tags: ['v*']` + `workflow_dispatch`，job 主体复用 GitHub ci.yml 的 steps（单一真源）。
 
-### Gitea 不配 CI
+**被否决的触发方案**：①保留 GitHub 全触发（push + PR 全跑——镜像侧 push / tag 会重复触发，且用户明确要求 GitHub 只主动触发）；②只删 GitHub tag 触发、保留 push main / PR（仍会被 push 自动触发，不满足"绝不自动触发"）；③用 `if:` 条件区分事件（run 仍会被创建、只是 step 被跳过，不是"不被触发"）；④`[skip ci]` 逐次标记（依赖人工纪律，会漏）；⑤两处各写一份 job 主体（必漂移，模板 + sync 才是单一真源）。
 
-自建 Gitea（`gitea.iouf.cn/kore-pl`）**不配置任何 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）。理由：
+### Gitea Actions 前置（服务端，未验证）
 
-1. 本地门禁已是权威（`make check` 21 段——第 13 段 `plugin-oss-check` 扫 25 个兄弟仓九件套，第 18 段 race 门禁跨仓核对 24 份模板接线，第 19 段全仓 `-race`（实测 +52s），第 21 段嵌套 module `pkg/pluginapi` 全量 `-race`（实测 +1.3s），+ 各插件仓自己的 `make check`）；
-2. Gitea 是内网自建，跑 CI 会占用本机资源；
-3. 减少维护面：26 个仓 × CI 配置 = 26 份需要同步的 YAML。
+自建 Gitea（`gitea.iouf.cn/kore-pl`）作为权威源，版本触发放在 Gitea Actions：26 仓各新增 `.gitea/workflows/ci.yml`（`push` tag `v*` + 手动）。**服务端前置**：Gitea 实例必须启用 Actions、注册至少一名可用 `act_runner`，并为对应仓库开放 workflow 执行权限；本次只落配置文件，**服务端启用状态 / runner 可用性未验证**（不在本地门禁判据内，需服务端运维确认）。
 
-### 插件仓配 CI，但少触发（2026-11-23 修正）
+### 插件仓 CI（2026-11-25 翻转）
 
-24 个插件仓 + `kore-plugins` 索引仓**都配 CI**，触发条件与 kore 一致（`push main` + tag `v*` + PR + `workflow_dispatch`）。理由：没有 CI，贡献者无法在 PR 上得到"能否拉取/能否构建"的反馈。发布前门禁仍由发版流程保证：`gofmt -l` + `go vet` + `go test` + `make dist` 两次 sha 一致 + 干净树复现（见 [docs/RELEASE.md](../docs/RELEASE.md)）。
+24 个插件仓 + `kore-plugins` 索引仓的 GitHub ci.yml 同样只留 `workflow_dispatch`，Gitea ci.yml = `push` tag `v*` + 手动；`kore` 本仓 Gitea ci.yml 另含 `pkg/pluginapi/v*`。发布前门禁仍由发版流程保证：`gofmt -l` + `go vet` + `go test` + `make dist` 两次 sha 一致 + 干净树复现（见 [docs/RELEASE.md](../docs/RELEASE.md)）。
 
-九件套（含 `.github/workflows/ci.yml`）由 `scripts/plugin-oss-sync.sh` 按 `scripts/plugin-templates/` 渲染；`make check` 第 **13 段**（`scripts/plugin-oss-check.sh`）逐仓校验九件套存在、README oss 标记块、ci.yml 为少触发。
+九件套（含 `.github/workflows/ci.yml`）+ Gitea ci.yml 由 `scripts/plugin-oss-sync.sh` 按 `scripts/plugin-templates/` 渲染；`make check` 第 **13 段**（`scripts/plugin-oss-check.sh`）逐仓校验：GitHub ci.yml 含 `workflow_dispatch` 且**不含** `push:` / `pull_request:`；Gitea ci.yml 含 `tags:` 与 `workflow_dispatch`。手改兄弟仓生成文件会被 `plugin-oss-sync.sh --check` 判漂移。
 
 ## 7. G-33 产品可用性门禁（第 20 段，WARN 级）
 

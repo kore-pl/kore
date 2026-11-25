@@ -8,8 +8,9 @@
 #
 # 只写九件套（CONTRIBUTING / SECURITY / CODE_OF_CONDUCT / AGENTS /
 # .github/PULL_REQUEST_TEMPLATE.md / .github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml /
-# .github/workflows/ci.yml）与 README 的 <!-- oss:begin -->…<!-- oss:end --> 块；
-# CI 与 kore 同一策略：25 仓都配 CI 但少触发（push main + tag v* + PR + 手动）。
+# .github/workflows/ci.yml、.gitea/workflows/ci.yml）与 README 的 <!-- oss:begin -->…<!-- oss:end --> 块；
+# 触发策略（2026-11-25 用户裁决）：GitHub ci.yml 只有 workflow_dispatch（绝不自动触发），
+# Gitea ci.yml = push tag v* + workflow_dispatch（版本触发在 Gitea 侧）。
 # 不碰 LICENSE / CHANGELOG.md / info.json / manifest.json / Makefile。
 # 不联网、不调用 git、不提交；同一输入重复运行必须 0 变更。
 set -euo pipefail
@@ -78,6 +79,7 @@ FILES=(
   ".github/ISSUE_TEMPLATE/feature_request.yml"
   ".github/ISSUE_TEMPLATE/config.yml"
   ".github/workflows/ci.yml"
+  ".gitea/workflows/ci.yml"
 )
 
 # 模板渲染后不允许残留 {{...}}（${{ ... }} 属 GitHub 表达式，排除）。

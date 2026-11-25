@@ -7,7 +7,7 @@
 # 逐仓检查：九件套存在 / LICENSE 与 kore/LICENSE 一致且含 MIT 特征串 /
 # YAML 可解析 / README 含 oss 标记块且块内有 CONTRIBUTING+SECURITY 链接 /
 # 生成文件无 {{ 残留与 TODO / 插件 info.json.id 与目录名一致 / 索引 JSON 可解析 /
-# ci.yml 为少触发（push main + tag + PR + workflow_dispatch）。
+# GitHub ci.yml 只含 workflow_dispatch（绝不自动触发），Gitea ci.yml 含 push tags + workflow_dispatch。
 # 不联网、不调用 git、不修改任何文件。
 set -euo pipefail
 
@@ -56,6 +56,7 @@ FILES=(
   ".github/ISSUE_TEMPLATE/feature_request.yml"
   ".github/ISSUE_TEMPLATE/config.yml"
   ".github/workflows/ci.yml"
+  ".gitea/workflows/ci.yml"
 )
 
 N_PASS=0
@@ -191,17 +192,24 @@ for raw in "${REPOS[@]}"; do
     if [ -n "$todos" ]; then bad "$rel 含 TODO/待补充/待定"; fi
   done
 
-  # 6) CI 少触发（2026-11-23 策略：push main / tag / PR / workflow_dispatch）
+  # 6) CI 触发口径（2026-11-25 用户裁决）：GitHub 只 workflow_dispatch（绝不自动触发）；
+  #    Gitea = push tags + workflow_dispatch（版本触发）。
   ci_file="$repo/.github/workflows/ci.yml"
   if [ -f "$ci_file" ]; then
     if ! grep -q 'workflow_dispatch' "$ci_file"; then
-      bad "ci.yml 缺 workflow_dispatch（手动触发）"
+      bad "GitHub ci.yml 缺 workflow_dispatch（手动触发）"
     fi
-    if ! grep -q 'branches:' "$ci_file"; then
-      bad "ci.yml 的 push 未限定 branches（应为 main）"
+    if grep -qE '^[[:space:]]*(push|pull_request):' "$ci_file"; then
+      bad "GitHub ci.yml 含 push:/pull_request: 自动触发（只允许 workflow_dispatch）"
     fi
-    if ! grep -q 'tags:' "$ci_file"; then
-      warn "ci.yml 未限定 tags（发布 tag 不会触发 CI）"
+  fi
+  gitea_ci="$repo/.gitea/workflows/ci.yml"
+  if [ -f "$gitea_ci" ]; then
+    if ! grep -q 'workflow_dispatch' "$gitea_ci"; then
+      bad "Gitea ci.yml 缺 workflow_dispatch（手动触发）"
+    fi
+    if ! grep -q 'tags:' "$gitea_ci"; then
+      bad "Gitea ci.yml 缺 push tags（版本触发）"
     fi
   fi
 
@@ -263,7 +271,7 @@ except Exception:
 done
 
 echo ""
-echo "检查范围: 九件套 + README 开源段（CI 少触发：push main / tag / PR / 手动）"
+echo "检查范围: 九件套 + Gitea CI + README 开源段（GitHub 只手动触发；Gitea 按版本 tag + 手动）"
 echo "per-repo 结果："
 printf '%-32s %-6s %s\n' "REPO" "结果" "缺失项 / 问题"
 for row in "${ROWS[@]}"; do

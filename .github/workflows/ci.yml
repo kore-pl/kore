@@ -1,14 +1,13 @@
 name: CI
 
-# 触发（2026-11-23 用户要求：CI 要少执行，见 .agents/QUALITY-GATES.md §6）：
-#   push main / tag（v*、pkg/pluginapi/v*）/ PR / 手动；日常 feature 分支 push 不跑。
-#   本地 `make check`（20 段，含第 13 段 plugin-oss-check 扫 25 个兄弟仓九件套）是日常反馈主手段，CI 只做合入兜底；门禁不绿不得合并。
+# 触发（2026-11-25 用户裁决「gitea 可以按版本 ci，github 必须是主动触发」）：
+#   GitHub Actions **只保留 workflow_dispatch**——push（main / tag）与 pull_request 全部删掉，
+#   保证镜像侧的任何 push / tag 都不会自动触发 GitHub CI。版本触发在 Gitea Actions
+#   (.gitea/workflows/ci.yml，push tags v* / pkg/pluginapi/v* + 手动) 上做，见 .agents/QUALITY-GATES.md §6。
+#   本地 `make check`（21 段）始终是日常反馈主手段。
 on:
-  push:
-    branches: [main]
-    tags: ['v*', 'pkg/pluginapi/v*']
-  pull_request:
   workflow_dispatch:
+
 
 # 说明：CI 只跑能在托管 runner 上稳定复现的门禁。
 # `make idle` / `make budget-check` 依赖真实 kored 进程、systemd/cgroup 与 60s 空闲采样，

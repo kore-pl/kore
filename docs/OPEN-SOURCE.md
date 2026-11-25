@@ -76,9 +76,10 @@ DCO 的声明文本固定为：`Signed-off-by: 名字 <邮箱>`，含义是"我�
 | `.github/PULL_REQUEST_TEMPLATE.md` | 有 | 有（模板渲染） | 有（模板渲染） |
 | `.github/ISSUE_TEMPLATE/` 三件（`bug_report.yml` / `feature_request.yml` / `config.yml`） | 有 | 有（模板渲染） | 有（模板渲染） |
 | `README` 开源段（`<!-- oss:begin -->`…`<!-- oss:end -->`） | 有（原生「## 开源」段） | 有（模板渲染） | 有（模板渲染） |
-| `.github/workflows/ci.yml` | 有，少触发：`push main` / tag / PR / `workflow_dispatch` | 有，少触发：同左；**Gitea 不配** | 有，少触发：同左；**Gitea 不配** |
+| `.github/workflows/ci.yml` | 有，**只手动触发**（`workflow_dispatch`） | 有，只手动触发 | 有，只手动触发 |
+| `.gitea/workflows/ci.yml` | 有，`push` tag `v*` / `pkg/pluginapi/v*` + 手动 | 有，`push` tag `v*` + 手动 | 有，`push` tag `v*` + 手动 |
 
-**CI 口径**（2026-11-23 用户要求，正文见 [.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §6）：`kore` 与 25 个兄弟仓（共 26 个仓）**都配 CI，但只在 `push main` / tag（`v*`）/ `pull_request` / `workflow_dispatch` 时跑**，日常 feature 分支 push 不跑；Gitea 侧不配 CI（无 `.gitea/workflows/`、无 woodpecker / drone）。日常反馈用本地 `make check`，CI 只做合入兜底。
+**CI 口径**（2026-11-25 用户裁决「gitea 可以按版本 ci，github 必须是主动触发」，正文见 [.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §6）：26 仓都配双 CI——GitHub `.github/workflows/ci.yml` **只含 `workflow_dispatch`**（push main / tag / PR 全删，GitHub 绝不自动触发）；Gitea `.gitea/workflows/ci.yml` = `push` tag `v*`（kore 另含 `pkg/pluginapi/v*`）+ `workflow_dispatch`，版本触发收敛到权威源 Gitea。Gitea 服务端 Actions 启用 / act_runner 注册属服务端前置，**未验证**。日常反馈用本地 `make check`，CI 只做手动 / 发版兜底。
 
 **不归模板管的三类文件**：`LICENSE`（逐字同一份）、`CHANGELOG.md`（各仓版本条目独立）、`info.json` / `manifest.json` / `Makefile`（各仓事实）。同步脚本不读不写这些文件。
 
@@ -96,7 +97,8 @@ DCO 的声明文本固定为：`Signed-off-by: 名字 <邮箱>`，含义是"我�
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | 缺陷模板 | 必填：插件版本 / `requires_kore` / 平台 / 复现步骤 / 日志片段；字段预填本仓 `id` |
 | `.github/ISSUE_TEMPLATE/feature_request.yml` | 需求模板 | 必填：使用场景 / 期望行为 / 能否用现有能力替代 |
 | `.github/ISSUE_TEMPLATE/config.yml` | issue 入口配置 | `blank_issues_enabled: false`，外链到安全披露与 discussions；避免漏洞走公开 issue |
-| `.github/workflows/ci.yml` | 仓内 CI | **少触发**：`push main` / `tag v*` / `pull_request` / `workflow_dispatch`；只跑 `gofmt` / `go vet` / `go test` / `make dist`；Gitea 不配 |
+| `.github/workflows/ci.yml` | 仓内 GitHub CI | **只手动触发**：`workflow_dispatch`（无 `push` / `pull_request`）；只跑 `gofmt` / `go vet` / `go test` / `make dist` |
+| `.gitea/workflows/ci.yml` | 仓内 Gitea CI | `push` tag `v*` + `workflow_dispatch`；job 主体复用 GitHub ci.yml 的 steps |
 
 **唯一真源**：[scripts/plugin-templates/](../scripts/plugin-templates/README.md) —— `plugin-repo/`（24 个插件仓）与 `index-repo/`（`kore-plugins`）。改文案只在模板改，**不直接编辑兄弟仓**，否则下一次同步覆盖。
 
@@ -109,7 +111,7 @@ bash scripts/plugin-oss-sync.sh --dry-run        # 只打印将写哪些文件
 bash scripts/plugin-oss-sync.sh --check          # 只报差异，全绿 exit 0
 bash scripts/plugin-oss-sync.sh ../kore-plugin-echo ../kore-plugins   # 指定仓库
 
-# 2) 校验：跨仓检查九件套 / LICENSE / YAML / README 标记块 / 占位残留 / id 一致性 / CI 少触发
+# 2) 校验：跨仓检查九件套 + Gitea CI / LICENSE / YAML / README 标记块 / 占位残留 / id 一致性 / CI 触发口径
 bash scripts/plugin-oss-check.sh
 ```
 
@@ -190,7 +192,7 @@ bash scripts/plugin-oss-check.sh
 
 - **修复优先**：安全修复**可以跳过常规流程**（不等完整评审队列），**不发预公告**，优先出 patch 版本；公开披露时间由报告者与维护者共同商定，默认在补丁可用后。
 
-**CI 少触发与无遥测互不影响**：CI 只在主干、tag 与 PR 上跑，省的是 runner 分钟，不是为了收集数据——项目仍按 G-10 保持**无账号、无使用统计、无崩溃上报、无联网校验**；空载出站连接为 0，这一点与 CI 触发频率无关，也不因 CI 跑得多而改变。
+**CI 触发与无遥测互不影响**：GitHub CI 只手动触发、Gitea CI 按版本 tag 触发，省的是 runner 分钟，不是为了收集数据——项目仍按 G-10 保持**无账号、无使用统计、无崩溃上报、无联网校验**；空载出站连接为 0，这一点与 CI 触发频率无关，也不因 CI 跑得多而改变。
 
 ## 10. 不做什么（开源侧）
 

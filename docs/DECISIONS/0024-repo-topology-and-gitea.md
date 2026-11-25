@@ -106,3 +106,8 @@
 2. v1.0 前若 module 路径必须迁 → 单独立 ADR；
 3. 组织权限或仓库数量变化 → 重审决策 A；
 4. GitHub 限流解除且社区要求回归 → 重审决策 B。
+
+## 7. 追加说明（2026-11-25，CI 触发翻转；本 ADR §1–§6 原文不改）
+
+本 ADR §2 决策 B 的「CI 优先跑在 Gitea Actions 或本地门禁（`make check`），GitHub Actions 保留为镜像侧抽查」在 2026-11-25 用户裁决「gitea 可以按版本 ci，github 必须是主动触发」后进一步收紧：26 仓 GitHub `.github/workflows/ci.yml` 的 `on:` 只留 `workflow_dispatch`（push main / tag / PR 全删），版本触发放 Gitea `.gitea/workflows/ci.yml`（push tag `v*`，kore 另含 `pkg/pluginapi/v*`）+ 手动。§2 原文本身支持该口径（CI 优先 Gitea），本次只是把"GitHub 镜像侧抽查"从自动触发改为手动触发，先例细节见 `.agents/LOG/DECISIONS.md` 2026-11-25 条。**本说明是 append-only，§0–§6 原文（含第 55 行的后果 3）保持不动。**
+

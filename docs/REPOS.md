@@ -18,9 +18,9 @@
 
 | 仓库 | 定位 | module 路径 | 内容 | 发布物 | 开源资产 | CI 触发 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/pengtang1024/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | 九件套齐备（手工维护，唯一非模板仓） | 少触发：`push main` / tag / PR / 手动 |
-| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/pengtang1024/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | 九件套齐备（模板渲染） | 少触发：同左；**Gitea 不配** |
-| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/pengtang1024/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | 九件套齐备（模板渲染） | 少触发：`push main` / tag `v*` / PR / 手动；**Gitea 不配** |
+| `kore` | 内核 + 主壳（唯一内核仓库） | `github.com/pengtang1024/kore` | `cmd/kored/`、`internal/core/*`、`pkg/pluginapi/`、`web/`、`docs/`、`.agents/`、`scripts/`、`Makefile` | `kored` 单二进制 + checksums | 九件套齐备（手工维护，唯一非模板仓） | GitHub 只手动触发；Gitea `push` tag `v*` + `pkg/pluginapi/v*` + 手动 |
+| `kore-plugins` | 插件中心/索引（纯静态聚合） | `github.com/pengtang1024/kore-plugins` | `index/plugins.json`、`cmd/indexer/`、`scripts/validate.sh`、`site/`（M4） | 索引 JSON + 静态市场页（M4） | 九件套齐备（模板渲染） | GitHub 只手动触发；Gitea `push` tag `v*` + 手动 |
+| `kore-plugin-<id>` | 每个插件一个仓库（模板行） | `github.com/pengtang1024/kore-plugin-<id>` | `main.go`、`info.json`、`web/`（可选）、`Makefile`、`CHANGELOG.md` | `<id>-<version>.tar.gz` + `.sha256` | 九件套齐备（模板渲染） | GitHub 只手动触发；Gitea `push` tag `v*` + 手动 |
 | `kore-plugin-echo` | M1 验证件（Walking Skeleton） | `github.com/pengtang1024/kore-plugin-echo` | 同上，仅实现 hello/ping/echo 与 `kore.event` | 同上 | 同模板行（模板渲染） | 同上 |
 | `kore-plugin-site` | 常驻插件（M2） | `github.com/pengtang1024/kore-plugin-site` | 同上 + 站点管理能力 + `web/` | 同上 | 同模板行（模板渲染） | 同上 |
 | `kore-plugin-backup` | 一次性插件（M2） | `github.com/pengtang1024/kore-plugin-backup` | 同上 + 触发式备份 | 同上 | 同模板行（模板渲染） | 同上 |
@@ -153,7 +153,7 @@ G-17 的 grep **只拦后者**：`git grep -nE "replace .*=> (\.\./|/)" -- '*/go
 3. 校验包内容：`tar -tzf` 必须只含 `info.json`、`bin/<id>`、`web/**`（可选）、`signature`（M4 可选）。
 4. `git tag -a v<version> -m "<id> v<version>"` 并 push tag（三端：Gitea 权威源 + GitHub / gitee 镜像，见 [ADR-0024](./DECISIONS/0024-repo-topology-and-gitea.md)）。
 5. **release 必须挂两个资产**：`kore-plugin-<id>-<version>.tar.gz` 与 `kore-plugin-<id>-<version>.tar.gz.sha256`，外加 CHANGELOG 摘要；release 是索引的唯一数据源，缺 `.sha256` 的 release 不可被索引收录。
-6. **CI 的 tag 触发只做构建与打包**（交叉编译 + `make dist` + 挂 release），不重跑全量门禁；门禁由发版前的本地 `make check` 保证（触发口径见 [.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §6：`push main` / tag / PR / `workflow_dispatch`，Gitea 不配）。
+6. **Gitea CI 的 tag 触发只做构建与打包**（交叉编译 + `make dist` + 挂 release），不重跑全量门禁；GitHub CI 只手动触发（`workflow_dispatch`），绝不因 push / tag 自动触发；门禁由发版前的本地 `make check` 保证（触发口径见 [.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §6）。Gitea 服务端 Actions / act_runner 前置未验证。
 7. 九件套随仓提交（R9）：发版 PR 不得顺手改 `CONTRIBUTING.md` / `SECURITY.md` / `.github/` —— 要改文案就改 `scripts/plugin-templates/` 再 `bash scripts/plugin-oss-sync.sh`。
 
 ### 7.2 索引仓库（`kore-plugins`）

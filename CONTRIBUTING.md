@@ -55,7 +55,7 @@ go work sync
 | `AGENTS.md` | **≤20 行**（R5），只写本仓事实 + 指向 `kore` 治理真源 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | 留 `make check` 与两次 `make dist` sha 一致的输出位 |
 | `.github/ISSUE_TEMPLATE/` 三件 | `bug_report.yml`（版本 / `requires_kore` / 平台 / 复现 / 日志）、`feature_request.yml`、`config.yml`（`blank_issues_enabled: false`） |
-| `.github/workflows/ci.yml` | **少触发**：`push main` / tag `v*` / PR / `workflow_dispatch`；Gitea 不配 |
+| `.github/workflows/ci.yml` | **只手动触发**：`workflow_dispatch`（无 `push` / PR）；Gitea 侧 `.gitea/workflows/ci.yml` = push tag `v*` + 手动 |
 | `README` 开源段 | `<!-- oss:begin -->` … `<!-- oss:end -->` 之间由模板渲染 |
 
 ```bash
@@ -70,10 +70,10 @@ bash scripts/plugin-oss-check.sh
 
 **新插件仓建仓时**：新建 `kore-plugin-<id>` 仓 → 填 `info.json` / `Makefile`（含 `dist`）/ `CHANGELOG.md` → `bash scripts/plugin-oss-sync.sh ../kore-plugin-<id>` → `bash scripts/plugin-oss-check.sh ../kore-plugin-<id>`，两条都 exit 0 即完成九件套。逐文件职责与硬要求见 [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) §4。
 
-### 2.2 CI 触发口径（少触发）
+### 2.2 CI 触发口径（GitHub 只手动 / Gitea 按版本）
 
-- **26 个仓都配 CI**（`kore` + 24 个插件仓 + `kore-plugins`），但只在 `push main` / tag / `pull_request` / `workflow_dispatch` 时跑；日常 feature 分支 push 不跑。
-- **Gitea 不配 CI**（无 `.gitea/workflows/`、无 woodpecker / drone）；issue / PR 与日常提交在 Gitea（权威源，[ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md)），GitHub / gitee 是镜像。
+- **26 个仓都配双 CI**（`kore` + 24 个插件仓 + `kore-plugins`）：GitHub `.github/workflows/ci.yml` **只含 `workflow_dispatch`**（push main / tag / PR 全删，绝不自动触发）；Gitea `.gitea/workflows/ci.yml` = push tag `v*`（kore 另含 `pkg/pluginapi/v*`）+ `workflow_dispatch`。日常 feature 分支 push 两端都不跑。Gitea 服务端 Actions 启用 / act_runner 注册属服务端前置，未验证。
+- issue / PR 与日常提交在 Gitea（权威源，[ADR-0024](docs/DECISIONS/0024-repo-topology-and-gitea.md)），GitHub / gitee 是镜像；版本触发收敛到 Gitea Actions。
 - **日常反馈用本地 `make check`**，CI 只做"能否拉取 / 能否构建"的合入兜底；`make idle` / `make budget-check` 需要真实进程，CI 不跑。
 
 ## 3. 提交规范
@@ -124,7 +124,7 @@ bash scripts/plugin-oss-check.sh
 | G-23 | 判断留痕：`DECISIONS.md` / `DISPATCH.md` 台账 |
 | G-24 | 无 any / object 逃逸：对外 schema 禁 `any` / `object` / `map[string]any` |
 | G-25 | worktree 卫生：无残留 worktree 与 `wt-*` / `tmp-*` 分支 |
-| G-26 | 开源资产完整：根资产（`LICENSE`(MIT) / `CONTRIBUTING` / `CODE_OF_CONDUCT` / `SECURITY` / `CHANGELOG` / CI）+ 25 个兄弟仓九件套（含 CI 少触发） |
+| G-26 | 开源资产完整：根资产（`LICENSE`(MIT) / `CONTRIBUTING` / `CODE_OF_CONDUCT` / `SECURITY` / `CHANGELOG` / CI）+ 25 个兄弟仓九件套（含 GitHub 只手动触发 + Gitea 按版本触发） |
 | G-27 | 大小写一致性：module 全小写无 `!` 转义、无同目录大小写冲突、插件 id 小写、文档 URL owner 小写 |
 
 > G-26 由 `make oss-check`（本仓根资产，第 8 段）+ `make check` 第 13 段 `plugin-oss-check`（25 个兄弟仓九件套）共同守护；G-27 由 `make case-check`（第 9 段）守护。
