@@ -103,7 +103,7 @@ if [ -f "$TMP/data/state.db" ]; then ok "状态库落在 <install>/data/state.db
 # 写一次，验证 0600 + 账本 file.remove + 白名单回滚，全程不碰真实 <install>/data。
 ZI_STATE="$TMP/zi-state"
 mkdir -p "$ZI_STATE"
-if KORE_ZI_STATE_DIR="$ZI_STATE" GOCACHE="$ROOT/.gocache-m5" CGO_ENABLED=0 \
+if KORE_ZI_STATE_DIR="$ZI_STATE" GOCACHE="$TMP/gocache" CGO_ENABLED=0 \
     go test -count=1 -run '^TestZeroIntrusionFixture$' ./cmd/kored >"$TMP/zi-fixture.log" 2>&1; then
   ok "隔离实例写入状态文件（隔离目录 $ZI_STATE，不碰真实 <install>/data）"
 else

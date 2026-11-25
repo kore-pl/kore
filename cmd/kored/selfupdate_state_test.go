@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,8 +44,10 @@ func TestUpdateStatePathRejectsOutOfWhitelist(t *testing.T) {
 			t.Errorf("updateStatePath(%q) 应拒绝，实际通过", stateDir)
 		}
 	}
-	path, err := updateStatePath("/opt/kore/data")
-	if err != nil || path != "/opt/kore/data/update-state.json" {
+	// 正例用 t.TempDir()（无 symlink），不依赖机器上是否存在 /opt/kore。
+	stateDir := t.TempDir()
+	path, err := updateStatePath(stateDir)
+	if err != nil || path != filepath.Join(stateDir, updateStateFileName) {
 		t.Fatalf("portable 状态路径 = %q, err=%v", path, err)
 	}
 }
@@ -197,24 +200,188 @@ func TestPurgeUpdateStateRemovesFileAndLedgerEntryStays(t *testing.T) {
 }
 
 func TestExecutePurgeOpFromLedger(t *testing.T) {
-	// 模拟 kore uninstall --purge：只读账本里登记的结构化操作，逐条执行。
+	// 模拟 kore uninstall --purge 走 M5 收口：只读本模块登记的条目，逐条先过 D-2 范围校验。
 	stateDir := t.TempDir()
 	path, err := writeUpdateState(stateDir, testUpdateState())
 	if err != nil {
 		t.Fatalf("写状态: %v", err)
 	}
-	entries, _, err := readChanges(changesPath(stateDir))
-	if err != nil {
-		t.Fatalf("读账本: %v", err)
-	}
-	for _, e := range entries {
-		if e.PurgeOp != nil {
-			if err := executePurgeOp(*e.PurgeOp); err != nil {
-				t.Fatalf("按账本回滚失败: %v", err)
-			}
-		}
+	if err := purgeStateFileFromLedger(stateDir); err != nil {
+		t.Fatalf("按账本回滚失败: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("按账本回滚后状态文件仍存在: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 红队 1d26977 4 缺陷回归（D-1~D-4）
+// ---------------------------------------------------------------------------
+
+// D-1：删账本 / 删条目 / 账本解析失败 → 读路径 fail-closed。
+func TestD1ReadUpdateStateFailClosedOnOrphanState(t *testing.T) {
+	t.Run("ledger_deleted", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		if err := os.Remove(changesPath(stateDir)); err != nil {
+			t.Fatalf("删账本: %v", err)
+		}
+		if _, err := readUpdateState(stateDir); err == nil {
+			t.Fatal("删账本后 readUpdateState 必须 fail-closed，实际返回 nil error")
+		}
+	})
+	t.Run("m5_entry_removed", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		// 覆盖账本为空：孤儿状态仍在，但无 file.remove 条目。
+		if err := os.WriteFile(changesPath(stateDir), nil, 0o600); err != nil {
+			t.Fatalf("清空账本: %v", err)
+		}
+		if _, err := readUpdateState(stateDir); err == nil {
+			t.Fatal("M5 账本条目被删后 readUpdateState 必须 fail-closed")
+		}
+	})
+	t.Run("normal_path_still_passes", func(t *testing.T) {
+		stateDir := t.TempDir()
+		st := testUpdateState()
+		if _, err := writeUpdateState(stateDir, st); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		got, err := readUpdateState(stateDir)
+		if err != nil || got != st {
+			t.Fatalf("正常路径应 PASS，got=%+v err=%v", got, err)
+		}
+	})
+}
+
+// D-2：账本 purge_op 越界路径 / file.restore / 参数篡改 → 拒绝执行、目标不变。
+func TestD2ScopedPurgeRejectsTamperedLedger(t *testing.T) {
+	t.Run("outside_path", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		victimDir := t.TempDir()
+		victim := filepath.Join(victimDir, "victim.txt")
+		if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+			t.Fatalf("建 victim: %v", err)
+		}
+		// 篡改账本：target / purge_op.args 都改成 stateDir 外绝对路径。
+		entries, _, err := readChanges(changesPath(stateDir))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("读账本: entries=%d err=%v", len(entries), err)
+		}
+		entries[0].Target = victim
+		entries[0].PurgeOp = &purgeOp{Kind: purgeKindFileRemove, Args: []string{victim}}
+		if err := rewriteLedger(t, changesPath(stateDir), entries); err != nil {
+			t.Fatalf("重写账本: %v", err)
+		}
+		if err := purgeStateFileFromLedger(stateDir); err == nil {
+			t.Fatal("越界路径必须被拒绝，实际执行成功")
+		}
+		if data, err := os.ReadFile(victim); err != nil || string(data) != "keep" {
+			t.Fatalf("victim 应保持不变，data=%q err=%v", data, err)
+		}
+	})
+	t.Run("file_restore", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		entries, _, err := readChanges(changesPath(stateDir))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("读账本: entries=%d err=%v", len(entries), err)
+		}
+		entries[0].PurgeOp = &purgeOp{Kind: purgeKindFileRestore, Args: []string{"src", "victim"}}
+		if err := rewriteLedger(t, changesPath(stateDir), entries); err != nil {
+			t.Fatalf("重写账本: %v", err)
+		}
+		if err := purgeStateFileFromLedger(stateDir); err == nil {
+			t.Fatal("非白名单 file.restore 必须被拒绝")
+		}
+	})
+	t.Run("malformed_args", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+			t.Fatalf("写状态: %v", err)
+		}
+		entries, _, err := readChanges(changesPath(stateDir))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("读账本: entries=%d err=%v", len(entries), err)
+		}
+		entries[0].PurgeOp = &purgeOp{Kind: purgeKindFileRemove, Args: []string{"a", "b"}}
+		if err := rewriteLedger(t, changesPath(stateDir), entries); err != nil {
+			t.Fatalf("重写账本: %v", err)
+		}
+		if err := purgeStateFileFromLedger(stateDir); err == nil {
+			t.Fatal("参数个数异常的 purge op 必须被拒绝")
+		}
+	})
+}
+
+// rewriteLedger 把账本条目重写为给定内容（测试用；保持 0600）。
+func rewriteLedger(t *testing.T, path string, entries []changeEntry) error {
+	t.Helper()
+	var buf strings.Builder
+	for _, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(buf.String()), 0o600)
+}
+
+// D-3：symlink stateDir → updateStatePath/writeUpdateState 拒绝，无穿透写盘。
+func TestD3SymlinkStateDirRejected(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real-state")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatalf("建真实目录: %v", err)
+	}
+	link := filepath.Join(base, "link-state")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("建 symlink: %v", err)
+	}
+	if _, err := updateStatePath(link); err == nil {
+		t.Fatal("symlink stateDir 必须被 updateStatePath 拒绝")
+	}
+	if _, err := writeUpdateState(link, testUpdateState()); err == nil {
+		t.Fatal("symlink stateDir 必须被 writeUpdateState 拒绝")
+	}
+	if _, err := os.Stat(filepath.Join(real, updateStateFileName)); !os.IsNotExist(err) {
+		t.Fatalf("symlink 穿透写盘：真实目录出现状态文件: %v", err)
+	}
+	// 指向清单外目录（只建链接、不写盘）：也必须拒绝。
+	forbiddenLink := filepath.Join(base, "link-to-etc")
+	if err := os.Symlink("/etc/kore", forbiddenLink); err != nil {
+		t.Fatalf("建 forbidden symlink: %v", err)
+	}
+	if _, err := updateStatePath(forbiddenLink); err == nil {
+		t.Fatal("symlink 指向 /etc/kore 必须被拒绝")
+	}
+}
+
+// D-4：预置 0644 账本 → 写状态后必须收紧到 0600。
+func TestD4PreexistingLooseLedgerTightened(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(changesPath(stateDir), nil, 0o644); err != nil {
+		t.Fatalf("预置 0644 账本: %v", err)
+	}
+	if _, err := writeUpdateState(stateDir, testUpdateState()); err != nil {
+		t.Fatalf("写状态: %v", err)
+	}
+	info, err := os.Stat(changesPath(stateDir))
+	if err != nil {
+		t.Fatalf("stat 账本: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("预置 0644 账本写后权限 = %04o，要求 0600（D-4）", perm)
 	}
 }

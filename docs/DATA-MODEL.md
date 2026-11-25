@@ -311,10 +311,11 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 - **权限与属主**：`0600`，属主 = kored 运行 uid（root 服务即 root、portable 即当前用户，由同目录 `CreateTemp` 继承）；`umask` 不影响 0600。
 - **原子写**：同目录临时文件 + `fsync` + `rename` + 目录 `fsync`（与 `upgrade.go` 的二进制原子替换同口径）；不成功即清理临时文件，目标字节不动。
-- **账本先行**：创建 / 覆写前先向 `<state>/changes.jsonl` 追加一条（`target` = 实际绝对路径、`summary` = 「更新状态记录」、`purge_op` = `file.remove`）；登记失败即**拒绝写盘**（复用 §9.1 账本，不造第二套）。重复覆写逐条登记，账本 append-only。
+- **账本先行**：创建 / 覆写前先向 `<state>/changes.jsonl` 追加一条（`target` = 实际绝对路径、`summary` = 「更新状态记录」、`purge_op` = `file.remove`）；登记失败即**拒绝写盘**（复用 §9.1 账本，不造第二套）。重复覆写逐条登记，账本 append-only；写前 / 写后显式 `Chmod 0600`，预置 0644 也会被收紧。
 - **schema 边界**：显式字段全为 string，禁止 `object` / `any` / `map[string]any`；读取用 `DisallowUnknownFields`，**状态文件里永远不出现 `password` / `secret` / `token`**（G-30）。
-- **回滚**：`kore uninstall --purge` 遍历账本按 `file.remove` 白名单逐条删（不执行 shell 字符串，重复删幂等）；手工回滚 = `rm <path>` 后从 `changes.jsonl` 删该行（避免幽灵条目）。
-- **禁止**：不写 `/etc`、`/var/lib`、`/var/log`、`/run`、`/usr/lib/systemd` 等 ADR-0023 清单外路径；不新增常驻任务落盘 / 新 unit / 新用户（U3 点名排除的三类）。
+- **读路径 fail-closed**：`readUpdateState` 必须复核账本含本文件的 `file.remove` 条目；账本缺失 / 条目被删 / 解析失败 → 报错拒绝（孤儿状态绝不当作合法状态继续），调用侧不得降级为"无状态"。
+- **回滚收口**：仅处理本模块登记条目（plugin=`kore` + action=`selfupdate.state.write`），`purge_op` 只允许 `file.remove`（禁 `file.restore`），目标必须精确等于 `updateStatePath(stateDir)`；越界路径 / 篡改 kind / 参数异常 → WARN + 拒绝执行（fail-closed），重复删幂等；手工回滚 = `rm <path>` 后从 `changes.jsonl` 删该行。
+- **路径解析**：`stateDir` / 账本 / 状态文件经 `EvalSymlinks` 解析后仍须落在允许根内；符号链接重定向（含指向 `/etc` 等清单外目录）一律拒绝，防穿透。不写 `/etc`、`/var/lib`、`/var/log`、`/run`、`/usr/lib/systemd`；不新增常驻任务落盘 / 新 unit / 新用户（U3 排除的三类）。
 
 实现：`cmd/kored/selfupdate_state.go`（读写 + 账本登记 + 白名单回滚）；门禁：`scripts/zero-intrusion-check.sh`（§11 追加判据）。
 

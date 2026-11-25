@@ -6,17 +6,23 @@ package main
 // <install>/data/update-state.json）。它只记录更新链的阶段与版本等状态元数据，
 // **不写凭据 / token / 口令**（G-30）；不新增 unit / 系统用户 / 常驻任务落盘。
 //
-// 契约（三条，缺一不可）：
+// 契约（红队 1d26977 后加固为五条，缺一不可）：
 //  1. 创建或覆写前先向 <state>/changes.jsonl 追加一条 purge_op=file.remove 的
 //     账本记录（复用 §3.5 豁免 #3 的既有账本，不造第二套）；登记失败即拒绝写盘。
 //  2. 状态文件 0600、属主为当前 kored 进程 uid（root 服务即 root、portable 即当前
 //     用户，由 CreateTemp 天然继承），写盘走"临时文件 + fsync + rename + fsync 目录"。
 //  3. 回滚只走白名单 file.remove：kore uninstall --purge 读账本逐条执行本模块登记
 //     的操作；手工回滚 = rm <path> 后从账本删该行（见 RUNBOOK-INSTALL §6.2）。
+//  4. 【D-1】读路径 fail-closed：状态文件必须能对应到账本里的 file.remove 条目，
+//     账本缺失 / 条目被删 / 解析失败一律拒绝读取，绝不把孤儿状态当真。
+//  5. 【D-2/D-3】回滚范围收口 + 路径解析：purge 仅允许 file.remove 且目标必须
+//     精确等于本模块的 updateStatePath(stateDir)，越界 fail-closed + WARN；
+//     路径经 EvalSymlinks 解析，符号链接重定向（含指向清单外目录）一律拒绝。
 
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,9 +63,78 @@ const (
 	updateStateAction = "selfupdate.state.write"
 )
 
+// forbiddenStateRoots 是 ADR-0023 §3.5 明列的清单外系统路径（字符串层 + 解析后都要挡）。
+var forbiddenStateRoots = []string{"/etc", "/var/lib", "/var/log", "/run", "/usr/lib/systemd"}
+
+// validateStateDirBoundary 校验单个路径不在清单外系统目录下（字符串层与解析后共用）。
+func validateStateDirBoundary(path string) error {
+	for _, forbidden := range forbiddenStateRoots {
+		if path == forbidden || strings.HasPrefix(path, forbidden+"/") {
+			return fmt.Errorf("更新状态: 拒绝清单外系统路径 %s（ADR-0023 §3.5）", path)
+		}
+	}
+	return nil
+}
+
+// evalSymlinksAllowMissing 解析符号链接；目录尚未创建时解析已存在的最近祖先再拼回尾部。
+// 这样首次写盘（stateDir 不存在）与已存在目录走同一套解析口径，不给 symlink 留缝。
+func evalSymlinksAllowMissing(path string) (string, error) {
+	return evalSymlinksDepth(path, 0)
+}
+
+// evalSymlinksDepth 是 evalSymlinksAllowMissing 的带深度上限实现（防 symlink 环）。
+func evalSymlinksDepth(path string, depth int) (string, error) {
+	if depth > 16 {
+		return "", fmt.Errorf("更新状态: 符号链接层级过深（>16）: %s", path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("更新状态: 解析路径 %s 失败: %w", path, err)
+	}
+	// 悬空 symlink：EvalSymlinks 也返回 IsNotExist，但父目录解析会把链接名
+	// 原样拼回，从而漏掉重定向（S5-c）。这里显式 Readlink 取真实目标再校验。
+	if info, lerr := os.Lstat(path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		target, rerr := os.Readlink(path)
+		if rerr != nil {
+			return "", fmt.Errorf("更新状态: 读取符号链接 %s 失败: %w", path, rerr)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		return evalSymlinksDepth(filepath.Clean(target), depth+1)
+	}
+	// 从目标本身开始向上收集"不存在的后缀分量"，直到某个祖先存在；
+	// 解析该祖先后再按原顺序拼回全部后缀（含目标自身的 basename）。
+	missing := []string{filepath.Base(path)}
+	cur := filepath.Dir(path)
+	for {
+		resolved, err = filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("更新状态: 解析路径 %s 失败: %w", path, err)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", fmt.Errorf("更新状态: 解析路径 %s 失败: 找不到已存在的祖先目录", path)
+		}
+		missing = append(missing, filepath.Base(cur))
+		cur = parent
+	}
+}
+
 // updateStatePath 计算状态文件绝对路径并做边界校验。
 //
 // 拒绝：空 / 相对 / 非规范（含 ..）/ 根路径 / ADR-0023 §3.5 明列的清单外系统目录。
+// 【D-3】解析符号链接后复核：解析结果与输入不同（即存在重定向）一律拒绝，
+// 既挡 symlink stateDir 穿透（S5-b），也挡 symlink 指向 /etc 等清单外目录（S5-c）。
 // 本模块**不提供安装目录外路径注入**：用户显式配置的外置单文件路径属另一个决策，
 // 不在 U3 有限放宽范围内，避免借配置项把"一个文件"变成"任意路径"。
 func updateStatePath(stateDir string) (string, error) {
@@ -76,14 +151,20 @@ func updateStatePath(stateDir string) (string, error) {
 	if clean == "/" {
 		return "", fmt.Errorf("更新状态: 拒绝根状态目录")
 	}
-	for _, forbidden := range []string{
-		"/etc", "/var/lib", "/var/log", "/run", "/usr/lib/systemd",
-	} {
-		if clean == forbidden || strings.HasPrefix(clean, forbidden+"/") {
-			return "", fmt.Errorf("更新状态: 拒绝清单外系统路径 %s（ADR-0023 §3.5）", clean)
-		}
+	if err := validateStateDirBoundary(clean); err != nil {
+		return "", err
 	}
-	return filepath.Join(clean, updateStateFileName), nil
+	resolved, err := evalSymlinksAllowMissing(clean)
+	if err != nil {
+		return "", err
+	}
+	if err := validateStateDirBoundary(resolved); err != nil {
+		return "", err
+	}
+	if resolved != clean {
+		return "", fmt.Errorf("更新状态: 拒绝符号链接 / 路径重定向（%s → %s），防止穿透清单外目录（D-3）", clean, resolved)
+	}
+	return filepath.Join(resolved, updateStateFileName), nil
 }
 
 // validateUpdateState 校验显式 schema：阶段白名单 + 版本必填。
@@ -102,9 +183,23 @@ func validateUpdateState(st updateState) error {
 }
 
 // recordUpdateStateChange 在写盘**之前**落账。登记失败即 fail-closed（ADR-0023 §11）。
-// 账本 append-only + 0600 + fsync 由 appendChange 保证（changes.go，未改动）。
+// 账本 append-only + fsync 由 appendChange 保证（changes.go，未改动）。
+// 【D-4】changes.go 的 OpenFile mode 对已存在文件无效，故在本层**写前 + 写后**都
+// 显式 Chmod 0600：写前收紧消除 0644 暴露窗口，写后兜底 NEW/EXIST 两种路径。
 func recordUpdateStateChange(stateDir, path string) error {
-	return appendChange(changesPath(stateDir), changeEntry{
+	ledger := changesPath(stateDir)
+	// 账本本身若是 symlink，Chmod 会穿透到外部文件——先拒绝（D-3 同源）。
+	if info, err := os.Lstat(ledger); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("更新状态: 账本路径是符号链接，拒绝登记: %s", ledger)
+		}
+		if err := os.Chmod(ledger, 0o600); err != nil {
+			return fmt.Errorf("更新状态: 收紧账本权限失败: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("更新状态: 检查账本失败: %w", err)
+	}
+	if err := appendChange(ledger, changeEntry{
 		Summary:    updateStateSummary,
 		Plugin:     updateStatePlugin,
 		Action:     updateStateAction,
@@ -114,7 +209,13 @@ func recordUpdateStateChange(stateDir, path string) error {
 			Kind: purgeKindFileRemove,
 			Args: []string{path},
 		},
-	})
+	}); err != nil {
+		return err
+	}
+	if err := os.Chmod(ledger, 0o600); err != nil {
+		return fmt.Errorf("更新状态: 写后收紧账本权限失败（fail-closed）: %w", err)
+	}
+	return nil
 }
 
 // writeUpdateState 创建 / 覆写状态文件：先落账，再原子写盘。
@@ -184,10 +285,19 @@ func writeUpdateState(stateDir string, st updateState) (string, error) {
 }
 
 // readUpdateState 严格读取状态文件：未知字段一律拒绝，防止有人往文件里塞凭据字段。
+// 【D-1】读路径复核账本：状态文件存在但账本缺失 / file.remove 条目被删 / 账本解析
+// 失败时一律 fail-closed。调用侧（未来的升级链 / M6）必须把本函数的 error 当作
+// "不可继续"，不得降级为"无状态"。当前 M5 是唯一读写点，暂无其它生产调用者。
 func readUpdateState(stateDir string) (updateState, error) {
 	path, err := updateStatePath(stateDir)
 	if err != nil {
 		return updateState{}, err
+	}
+	// 状态文件本身是 symlink → 读取会穿透到外部，拒绝（D-3 同源）。
+	if info, err := os.Lstat(path); err != nil {
+		return updateState{}, fmt.Errorf("更新状态: 检查 %s 失败: %w", path, err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return updateState{}, fmt.Errorf("更新状态: 状态文件是符号链接，拒绝读取: %s", path)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -203,21 +313,96 @@ func readUpdateState(stateDir string) (updateState, error) {
 	if err := validateUpdateState(st); err != nil {
 		return updateState{}, err
 	}
+	// 【D-1】孤儿状态 fail-closed：账本探针从"仅门禁使用"提升为读路径必经校验。
+	ok, err := updateStateLedgerHasRemove(stateDir)
+	if err != nil {
+		return updateState{}, fmt.Errorf("更新状态: 账本校验失败，拒绝读取孤儿状态: %w", err)
+	}
+	if !ok {
+		return updateState{}, fmt.Errorf("更新状态: 账本缺少 %s 的 file.remove 条目，拒绝读取孤儿状态（D-1）", path)
+	}
 	return st, nil
 }
 
-// purgeUpdateState 走既有白名单 file.remove 回滚单个状态文件（不执行 shell 字符串）。
-// kore uninstall --purge 会遍历账本执行同一操作，这里给手工回滚与门禁提供同一原语。
+// validateM5PurgeOp 是本模块回滚操作的唯一收口（D-2）。
+//
+// 三条硬约束：
+//  1. kind 只允许 file.remove（file.restore 等可被篡改用于覆盖任意文件，M5 不用）；
+//  2. 参数恰好 1 个绝对路径，且解析 symlink 后仍规范；
+//  3. 目标必须**精确等于** updateStatePath(stateDir) —— 账本被篡改指向 stateDir
+//     外任意路径时拒绝执行并 WARN（fail-closed），杜绝把 purge 变成任意删除器。
+func validateM5PurgeOp(stateDir string, op purgeOp) error {
+	if op.Kind != purgeKindFileRemove {
+		slog.Warn("更新状态: 拒绝非白名单 purge kind", "kind", op.Kind, "state_dir", stateDir)
+		return fmt.Errorf("更新状态: 拒绝 purge kind %q（M5 仅允许 file.remove，D-2）", op.Kind)
+	}
+	if len(op.Args) != 1 {
+		slog.Warn("更新状态: 拒绝参数个数异常的 purge op", "count", len(op.Args), "state_dir", stateDir)
+		return fmt.Errorf("更新状态: file.remove 需要 1 个参数，实际 %d（D-2）", len(op.Args))
+	}
+	if err := validatePurgePath(op.Args[0]); err != nil {
+		slog.Warn("更新状态: 拒绝非法 purge 路径", "target", op.Args[0], "err", err)
+		return fmt.Errorf("更新状态: purge 路径非法（D-2）: %w", err)
+	}
+	expected, err := updateStatePath(stateDir)
+	if err != nil {
+		return err
+	}
+	target, err := evalSymlinksAllowMissing(op.Args[0])
+	if err != nil {
+		return err
+	}
+	if target != expected {
+		slog.Warn("更新状态: 拒绝越界 purge 目标", "target", target, "expected", expected, "state_dir", stateDir)
+		return fmt.Errorf("更新状态: purge 目标 %s 不在允许范围（应为 %s，D-2）", target, expected)
+	}
+	return nil
+}
+
+// purgeUpdateState 走收口后的白名单回滚单个状态文件（不执行 shell 字符串）。
+// kore uninstall --purge 遍历账本执行本模块登记的操作；这里给手工回滚与门禁提供
+// 同一原语，且额外做 D-2 范围校验（老 executePurgeOp 只校验绝对/非根/无 ..）。
 func purgeUpdateState(stateDir string) error {
 	path, err := updateStatePath(stateDir)
 	if err != nil {
 		return err
 	}
-	return executePurgeOp(purgeOp{Kind: purgeKindFileRemove, Args: []string{path}})
+	op := purgeOp{Kind: purgeKindFileRemove, Args: []string{path}}
+	if err := validateM5PurgeOp(stateDir, op); err != nil {
+		return err
+	}
+	return executePurgeOp(op)
+}
+
+// purgeStateFileFromLedger 是 uninstall --purge 对 M5 条目的收口入口：
+// 只处理本模块登记的条目（plugin=kore + action=selfupdate.state.write），逐条先
+// 过 validateM5PurgeOp 再执行；其它宿主变更条目不归本模块，原样留给 uninstall。
+// 篡改账本（越界路径 / 换成 file.restore）→ 返回错误并 WARN，目标文件不变。
+func purgeStateFileFromLedger(stateDir string) error {
+	entries, _, err := readChanges(changesPath(stateDir))
+	if err != nil {
+		return fmt.Errorf("更新状态: 读取账本失败，拒绝 purge: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Plugin != updateStatePlugin || entry.Action != updateStateAction {
+			continue
+		}
+		if entry.PurgeOp == nil {
+			return fmt.Errorf("更新状态: M5 账本条目缺少 purge_op，拒绝 purge（D-2）")
+		}
+		if err := validateM5PurgeOp(stateDir, *entry.PurgeOp); err != nil {
+			return err
+		}
+		if err := executePurgeOp(*entry.PurgeOp); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // updateStateLedgerHasRemove 判断账本里是否有指向该状态文件的 file.remove 条目。
-// 门禁用它断言"有状态文件 ⟹ 有可回滚账本条目"（ADR-0023 §11 第 2 条）。
+// 既供门禁断言"有状态文件 ⟹ 有可回滚账本条目"（ADR-0023 §11 第 2 条），
+// 也被 readUpdateState 调用做 D-1 fail-closed 复核。
 func updateStateLedgerHasRemove(stateDir string) (bool, error) {
 	path, err := updateStatePath(stateDir)
 	if err != nil {

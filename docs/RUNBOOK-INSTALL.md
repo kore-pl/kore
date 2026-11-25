@@ -165,7 +165,7 @@ rm -rf /opt/kore
 
 静默更新链会在 `<state>/update-state.json`（portable 即 `<install>/data/update-state.json`）留下跨重启的状态元数据；每次创建或覆写前都先向 `<state>/changes.jsonl` 追加一条 `purge_op=file.remove` 的结构化账本记录（`summary` = 「更新状态记录」）。该文件只含版本 / 阶段 / 校验值等状态元数据，**不含任何口令 / token / 凭据**。
 
-- `kored uninstall --yes --purge`：与其余宿主变更一起，从账本读取 `file.remove` 白名单操作逐条删除该文件（不执行 shell 字符串，重复执行幂等）；
+- `kored uninstall --yes --purge`：与其余宿主变更一起，从账本读取 `file.remove` 白名单操作逐条删除该文件（不执行 shell 字符串，重复执行幂等）。M5 条目额外收口：只认 `plugin=kore` + `action=selfupdate.state.write`，`purge_op` 只允许 `file.remove` 且目标必须精确等于 `<state>/update-state.json`，越界路径 / 改成 `file.restore` / 参数异常一律 WARN + 拒绝执行（账本被篡改时不会误删 / 误覆盖清单外文件）；状态文件与账本都不接受符号链接重定向；
 - 手工回滚（卸载命令不可用、或只想清这一项）：
 
 ```bash
