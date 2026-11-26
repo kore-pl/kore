@@ -173,41 +173,62 @@ func TestStatusNotRunning(t *testing.T) {
 	}
 }
 
-// TestRunScenarioInstallUnimplemented 验证 --scenario 明确回 E_UNSUPPORTED，
-// 且替代路径都是当前真实可用的能力（不宣传尚未实现的批量预设安装）。
-func TestRunScenarioInstallUnimplemented(t *testing.T) {
+// TestRunScenarioInstallOfflineBatch 验证 --scenario 走离线批量（不再是 E_UNSUPPORTED 桩）：
+// 先如实提示停服 / bbolt 独占锁，缺预设目录时 fail-closed（exitConfig）。
+func TestRunScenarioInstallOfflineBatch(t *testing.T) {
+	// 清空指向真实目录的环境变量，确保规划期 fail-closed，不碰运行态。
+	t.Setenv(envScenarioPresetsDir, "")
+	t.Setenv(envScenarioPackagesDir, "")
 	var stdout, stderr bytes.Buffer
 	code := runInstall([]string{"--scenario", "web"}, &stdout, &stderr)
 	if code != exitConfig {
-		t.Fatalf("--scenario 未实现应返回 exitConfig(2)，实际 %d", code)
+		t.Fatalf("缺预设目录应返回 exitConfig(2)，实际 %d", code)
 	}
 	text := stderr.String()
 	for _, want := range []string{
-		"E_UNSUPPORTED",
-		`"web"`,
-		"未实现（M2 支持批量预设安装）",
-		"替代路径（当前可用）",
-		"kored install --package",
-		"POST /api/v1/store/install",
-		"禁用态",
+		"需先停止 Kore 服务", // 停服提示（G-33 A3）
+		"bbolt",
+		"独占",
+		"state.db",
+		"未提供预设目录", // fail-closed 说明可执行的下一步
+		"--presets-dir",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("--scenario 输出缺少 %q：\n%s", want, text)
 		}
 	}
+	for _, stale := range []string{
+		"E_UNSUPPORTED",
+		"未实现（M2 支持批量预设安装）",
+		"替代路径（当前可用）",
+	} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("--scenario 仍残留旧桩文案 %q：\n%s", stale, text)
+		}
+	}
 }
 
-// TestInstallUsageMarksScenarioUnimplemented 验证帮助文案不把 --scenario 说成可用。
-func TestInstallUsageMarksScenarioUnimplemented(t *testing.T) {
+// TestInstallUsageMarksScenarioOfflineBatch 验证帮助文案如实说明 --scenario 可用与停服限制。
+func TestInstallUsageMarksScenarioOfflineBatch(t *testing.T) {
 	var buf bytes.Buffer
 	printInstallUsage(&buf)
 	text := buf.String()
 	for _, want := range []string{
-		"（--scenario 未实现，M2）",
-		"--scenario 场景预设批量安装：未实现（M2）",
+		"--scenario <预设id>",
+		"离线批量",
+		"需先停服",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("帮助文案缺少 %q：\n%s", want, text)
+		}
+	}
+	for _, stale := range []string{
+		"（--scenario 未实现，M2）",
+		"--scenario 场景预设批量安装：未实现（M2）",
+		"E_UNSUPPORTED",
+	} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("帮助文案仍残留旧桩文案 %q：\n%s", stale, text)
 		}
 	}
 }

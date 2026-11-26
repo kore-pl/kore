@@ -10,7 +10,6 @@ import (
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
 	"github.com/pengtang1024/kore/internal/core/installer"
 	"github.com/pengtang1024/kore/internal/core/store"
-	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // installOptions 是 install 子命令解析后的参数。
@@ -21,8 +20,14 @@ type installOptions struct {
 	stateDir string
 	// packagePath 是本地包路径（--package）。
 	packagePath string
-	// scenario 是场景预设 id（--scenario）：批量预设安装归 M2，当前明确返回 E_UNSUPPORTED。
+	// scenario 是场景预设 id（--scenario）：离线批量预设安装（需停服，不进静默主链）。
 	scenario string
+	// presetsDir 是预设目录（--presets-dir，缺省取 KORE_PRESETS_DIR）。
+	presetsDir string
+	// packagesDir 是离线包目录（--packages-dir，缺省取 KORE_PACKAGES_DIR）。
+	packagesDir string
+	// indexDir 是索引目录（--index-dir，缺省取 KORE_INDEX_DIR）；依赖序取自其中的 plugins.json。
+	indexDir string
 }
 
 // parseInstallFlags 解析 install 参数；flag 自身错误由调用方映射退出码 2。
@@ -33,7 +38,10 @@ func parseInstallFlags(args []string, stderr io.Writer) (installOptions, error) 
 	fs.StringVar(&opts.config, "config", "", "配置文件路径（默认取 KORE_CONFIG）")
 	fs.StringVar(&opts.stateDir, "state-dir", "", "状态目录（默认取 KORE_STATE_DIR / 配置文件）")
 	fs.StringVar(&opts.packagePath, "package", "", "插件包路径 <id>-<version>.tar.gz")
-	fs.StringVar(&opts.scenario, "scenario", "", "场景预设 id（未实现，M2；请用 --package 或面板商店逐插件安装）")
+	fs.StringVar(&opts.scenario, "scenario", "", "场景预设 id（离线批量安装预设插件，需先停服；单包请用 --package）")
+	fs.StringVar(&opts.presetsDir, "presets-dir", "", "预设目录（缺省取 KORE_PRESETS_DIR）")
+	fs.StringVar(&opts.packagesDir, "packages-dir", "", "离线包目录（缺省取 KORE_PACKAGES_DIR，包文件名 <id>-<version>.tar.gz）")
+	fs.StringVar(&opts.indexDir, "index-dir", "", "索引目录（缺省取 KORE_INDEX_DIR，读 plugins.json 的 depends_on 排依赖序）")
 	fs.Usage = func() { printInstallUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return installOptions{}, err
@@ -41,7 +49,7 @@ func parseInstallFlags(args []string, stderr io.Writer) (installOptions, error) 
 	return opts, nil
 }
 
-// runInstall 是 install 子命令入口：--package 走单包装载，--scenario 明确未实现。
+// runInstall 是 install 子命令入口：--package 走单包装载，--scenario 走离线批量预设安装。
 func runInstall(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseInstallFlags(args, stderr)
 	if err != nil {
@@ -49,9 +57,9 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case opts.scenario != "":
-		return runScenarioInstall(opts.scenario, stderr)
+		return runScenarioInstall(opts, stdout, stderr)
 	case opts.packagePath == "":
-		fmt.Fprintln(stderr, "install: 必须指定 --package（单包）；--scenario 未实现（M2）")
+		fmt.Fprintln(stderr, "install: 必须指定 --package（单包）或 --scenario（离线批量预设，需先停服）")
 		printInstallUsage(stderr)
 		return exitConfig
 	default:
@@ -59,18 +67,13 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// runScenarioInstall 明确回 E_UNSUPPORTED：批量预设安装归 M2，不假装成功。
+// runScenarioInstall 离线批量安装场景预设：读 presets/*.json → 解析插件 id/版本 →
+// 按依赖序逐条调现有单条安装（CLI 离线路径，需停服）→ 汇总成功/失败。
 //
-// 错误文本必须给出**当前真实可用**的替代路径：单包 CLI 安装 + 面板商店逐插件安装。
-// 刻意不写「面板一键装预设」——商店预设卡片的「一键安装」当前是禁用态（M2 才落地），
-// 指向不存在的批量路径就是另一种「点了才发现不行」（G-06）。
-func runScenarioInstall(id string, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "%s: 安装场景预设 %q 未实现（M2 支持批量预设安装）\n", pluginapi.E_UNSUPPORTED, id)
-	fmt.Fprintln(stderr, "替代路径（当前可用）：")
-	fmt.Fprintln(stderr, "  1) 单包安装：kored install --package <id>-<version>.tar.gz")
-	fmt.Fprintln(stderr, "  2) 面板商店：商店页逐个插件点「安装」（POST /api/v1/store/install）；预设卡片「一键安装」当前为禁用态")
-	fmt.Fprintln(stderr, "  3) 查看可用预设：GET /api/v1/store/presets（只读元数据，需 KORE_PRESETS_DIR）")
-	return exitConfig
+// 只作离线 / 演练补充，不进静默主链，不改对外 schema（G-24）；停服限制如实提示
+// （store.go:95-100 的 bbolt 独占锁）。实现与测试见 install_scenario.go / _test.go。
+func runScenarioInstall(opts installOptions, stdout, stderr io.Writer) int {
+	return runScenarioBatch(opts, stdout, stderr)
 }
 
 // runPackageInstall 先做无副作用的包前置校验，再打开状态库并原子安装单个包。
@@ -181,9 +184,9 @@ func storeExitCode(err error) int {
 
 // printInstallUsage 打印 install 参数说明。
 func printInstallUsage(w io.Writer) {
-	fmt.Fprintln(w, "用法: kored install --package <tar.gz>   （--scenario 未实现，M2）")
-	fmt.Fprintln(w, "  --package  安装本地插件包 <id>-<version>.tar.gz（当前唯一可用的安装方式）")
-	fmt.Fprintln(w, "  --scenario 场景预设批量安装：未实现（M2），会返回 E_UNSUPPORTED 并列出替代路径")
+	fmt.Fprintln(w, "用法: kored install --package <tar.gz>   |   kored install --scenario <预设id>（离线批量，需先停服）")
+	fmt.Fprintln(w, "  --package  安装本地插件包 <id>-<version>.tar.gz")
+	fmt.Fprintln(w, "  --scenario 场景预设离线批量安装：读 presets/<id>.json，按依赖序安装；需先停服（CLI 独占 state.db）")
 	fmt.Fprintln(w, "  --config    配置文件路径（缺省按 profile 解析）")
 	fmt.Fprintln(w, "  --state-dir 状态目录（覆盖配置）")
 	fmt.Fprintln(w, "注意: install 与 serve 独占同一 state.db，serve 运行时请用 POST /api/v1/store/install 安装；CLI install 仅离线使用（在线运行会撞锁 exit 3）")
