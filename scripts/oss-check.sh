@@ -99,6 +99,9 @@ fi
 
 # ---------------------------------------------------------------- 8/8 Go 协议头
 section "8/8 Go 协议头（Copyright 必须为 MIT）"
+# 只扫入库源码：工作区里 gitignored 的临时/运行态目录（.tmp/gomodcache、.gocache-*、
+# .verify-tmp、.kore-local-* 等）不属于发布资产，第三方依赖的非 MIT 头不得计入本仓门禁；
+# 干净树（git archive HEAD）不含这些目录，显式 -prune 后工作区与干净树口径一致。
 GO_BAD=0
 while IFS= read -r f; do
   HEAD10="$(head -n 10 "$f" 2>/dev/null || true)"
@@ -108,9 +111,12 @@ while IFS= read -r f; do
       GO_BAD=$((GO_BAD + 1))
     fi
   fi
-done < <(find . -name '*.go' -not -path './.git/*' | sort)
+done < <(find . \
+  \( -name .git -o -name .tmp -o -name tmp -o -name '.gocache-*' -o -name '.verify-tmp' \
+     -o -name '.kore-local-*' -o -path './web/node_modules' -o -path './web/dist' -o -path './web/.cache' \) -prune -o \
+  -name '*.go' -print | sort)
 if [ "$GO_BAD" -eq 0 ]; then
-  pass "全部 *.go 头部未发现非 MIT 协议声明"
+  pass "全部入库 *.go 头部未发现非 MIT 协议声明（已排除 gitignored 临时/运行态目录）"
 fi
 
 # ---------------------------------------------------------------- 汇总
