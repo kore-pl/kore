@@ -37,7 +37,7 @@ func (l *auditListerFromStore) ListAudit(q AuditQuery) (AuditPage, error) {
 		}
 		out = append(out, AuditRecordView{
 			Key: rec.Key, Subject: rec.Subject, Action: rec.Action, Plugin: rec.Plugin,
-			Target: rec.Target, Result: rec.Result, Detail: rec.Detail,
+			Target: rec.Target, Result: rec.Result, Capability: rec.Capability, Detail: rec.Detail,
 		})
 	}
 	total := len(out)
@@ -83,7 +83,7 @@ func TestAuditQueryEndToEnd(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	if err := db.PutAudit(store.AuditRecord{
 		Subject: "admin", Action: "plugins.enable", Plugin: "site", Target: "site",
-		Result: store.AuditResultOK, Detail: map[string]string{"version": "0.1.0"},
+		Result: store.AuditResultOK, Capability: "system:admin", Detail: map[string]string{"version": "0.1.0"},
 	}); err != nil {
 		t.Fatalf("注入审计事件失败: %v", err)
 	}
@@ -124,6 +124,9 @@ func TestAuditQueryEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "plugins.enable") || !strings.Contains(string(body), "site") {
 		t.Fatalf("200 响应应含注入的事件，实际 %s", body)
+	}
+	if !strings.Contains(string(body), `"capability":"system:admin"`) {
+		t.Fatalf("200 响应应含结构化 capability=system:admin，实际 %s", body)
 	}
 
 	// 2) 无 since → 400（全量导出拒绝）。

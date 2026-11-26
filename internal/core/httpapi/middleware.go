@@ -252,7 +252,7 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 	}
 	if isManagementPath(r.URL.Path) && !hasCapability(granted, "system:admin") {
 		plugin := managementPluginID(r.URL.Path)
-		s.auditDenied(subject, plugin, managementAction(r.URL.Path), "缺少 system:admin 特权能力")
+		s.auditDenied(subject, plugin, managementAction(r.URL.Path), "", "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
 		return false
 	}
@@ -261,12 +261,14 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 
 // auditDenied 走注入的审计出口；未注入时只记 WARN（挂点见 server.go）。
 // target 是被拒的目标动作：invoke 传方法名，enable/disable 传动作名，空串表示不细分。
+// capability 是触发拒绝的真实能力名，仅 invoke 路径有值；其余出口传空串（不得编造）。
 // 同时写一条告警埋点（capability.denied / root.action 拒绝，见 alerts.go）。
-func (s *Server) auditDenied(subject, plugin, target, reason string) {
+func (s *Server) auditDenied(subject, plugin, target, capability, reason string) {
 	if s.capAuditor != nil {
-		s.capAuditor(subject, plugin, target, reason)
+		s.capAuditor(subject, plugin, target, capability, reason)
 	} else {
-		slog.Warn("capability.denied", "subject", subject, "plugin", plugin, "target", target, "reason", reason)
+		slog.Warn("capability.denied", "subject", subject, "plugin", plugin,
+			"target", target, "capability", capability, "reason", reason)
 	}
 	s.noteDeniedAlert(subject, plugin, target, reason)
 }

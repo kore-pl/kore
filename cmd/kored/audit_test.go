@@ -23,7 +23,7 @@ func auditSeed(t *testing.T, stateDir string) {
 	defer func() { _ = db.Close() }()
 	records := []store.AuditRecord{
 		{Subject: "admin", Action: "plugins.enable", Plugin: "site", Target: "site", Result: store.AuditResultOK,
-			Detail: map[string]string{"version": "0.1.0"}},
+			Capability: "system:admin", Detail: map[string]string{"version": "0.1.0"}},
 		{Subject: "admin", Action: "plugins.disable", Plugin: "echo", Target: "echo", Result: store.AuditResultOK},
 	}
 	for _, rec := range records {
@@ -48,18 +48,18 @@ func TestAuditCSVHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CSV 解析失败: %v out=%s", err, out.String())
 	}
-	want := []string{"time", "subject", "action", "plugin", "target", "result", "detail"}
+	want := []string{"time", "subject", "action", "plugin", "target", "result", "capability", "detail"}
 	if len(rows) == 0 || !equalStrings(rows[0], want) {
 		t.Fatalf("CSV 表头不符: got=%v want=%v", rows[0], want)
 	}
 	found := false
 	for _, row := range rows[1:] {
-		if len(row) >= 6 && row[2] == "plugins.enable" && row[3] == "site" {
+		if len(row) >= 7 && row[2] == "plugins.enable" && row[3] == "site" && row[6] == "system:admin" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("CSV 未含目标事件行: %s", out.String())
+		t.Fatalf("CSV 未含目标事件行（含 capability=system:admin）: %s", out.String())
 	}
 }
 

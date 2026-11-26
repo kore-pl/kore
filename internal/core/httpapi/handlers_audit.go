@@ -31,13 +31,14 @@ type auditDetailEntry struct {
 // auditRecordDTO 是单条审计记录的对外视图（全为显式字段，遵守 G-24 无动态类型逃逸）。
 // At 由存储键（unix 纳秒前缀）派生，只是响应字段，不落库（DATA-MODEL §9）。
 type auditRecordDTO struct {
-	At      string             `json:"at"`
-	Subject string             `json:"subject"`
-	Action  string             `json:"action"`
-	Plugin  string             `json:"plugin"`
-	Target  string             `json:"target"`
-	Result  string             `json:"result"`
-	Detail  []auditDetailEntry `json:"detail"`
+	At         string             `json:"at"`
+	Subject    string             `json:"subject"`
+	Action     string             `json:"action"`
+	Plugin     string             `json:"plugin"`
+	Target     string             `json:"target"`
+	Result     string             `json:"result"`
+	Capability string             `json:"capability,omitempty"`
+	Detail     []auditDetailEntry `json:"detail"`
 }
 
 // auditListBody 是 GET /api/v1/audit 的成功响应体。
@@ -81,13 +82,14 @@ type AuditQuery struct {
 // AuditRecordView 是 httpapi 侧审计记录视图（显式字段）。由装配层把 store.AuditRecord
 // 转成此类型，httpapi 不 import store（G-01 薄壳边界）。Key 供 since 下界过滤。
 type AuditRecordView struct {
-	Key     string
-	Subject string
-	Action  string
-	Plugin  string
-	Target  string
-	Result  string
-	Detail  map[string]string
+	Key        string
+	Subject    string
+	Action     string
+	Plugin     string
+	Target     string
+	Result     string
+	Capability string
+	Detail     map[string]string
 }
 
 // AuditPage 是一次审计查询的结果：Records 为当前页，Total 为筛选后未分页的总数。
@@ -258,6 +260,6 @@ func toAuditDTO(row AuditRecordView) auditRecordDTO {
 	sort.Slice(detail, func(i, j int) bool { return detail[i].Key < detail[j].Key })
 	return auditRecordDTO{
 		At: auditAt(row.Key), Subject: row.Subject, Action: row.Action, Plugin: row.Plugin,
-		Target: row.Target, Result: row.Result, Detail: detail,
+		Target: row.Target, Result: row.Result, Capability: row.Capability, Detail: detail,
 	}
 }

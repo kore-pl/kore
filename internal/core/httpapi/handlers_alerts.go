@@ -72,7 +72,7 @@ func (s *Server) authorizeAlerts(w http.ResponseWriter, r *http.Request, capabil
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, capability) {
-		s.auditDenied(subject, "alerts", "", "需要 "+capability+" 能力")
+		s.auditDenied(subject, "alerts", "", "", "需要 "+capability+" 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：告警中心需要 "+capability+" 能力", capability)
 		return false

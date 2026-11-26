@@ -127,10 +127,10 @@ func capEnableRequest(t *testing.T, ts *httptest.Server, cookie string) (int, st
 
 // TestCapabilityDeniedWritesAudit 低权 subject 访问管理端点 → 401、不触发 Enable、审计收到一条 denied。
 func TestCapabilityDeniedWritesAudit(t *testing.T) {
-	type denied struct{ subject, plugin, target, reason string }
+	type denied struct{ subject, plugin, target, capability, reason string }
 	var records []denied
-	auditor := func(subject, plugin, target, reason string) {
-		records = append(records, denied{subject, plugin, target, reason})
+	auditor := func(subject, plugin, target, capability, reason string) {
+		records = append(records, denied{subject, plugin, target, capability, reason})
 	}
 	backend := &capBackend{enabled: make(map[string]bool)}
 	ts, cookie := capSetup(t, capLowPrivResolver, auditor, backend)
@@ -143,8 +143,8 @@ func TestCapabilityDeniedWritesAudit(t *testing.T) {
 		t.Errorf("越权不得触发 Enable，实际 %v", backend.enableLog)
 	}
 	if len(records) != 1 || records[0].plugin != "system-admin" || records[0].subject != "plugin-site" ||
-		records[0].target != "enable" {
-		t.Errorf("应有一条 capability.denied 审计（target=enable），实际 %+v", records)
+		records[0].target != "enable" || records[0].capability != "" {
+		t.Errorf("应有一条 capability.denied 审计（target=enable、capability 为空），实际 %+v", records)
 	}
 }
 

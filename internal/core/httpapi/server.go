@@ -185,9 +185,14 @@ type PasswordWriter func(hash string) error
 // subject 为空表示无凭证；granted 为 6 特权能力或 <plugin-id>:<action> 语法。
 type CapabilityResolver func(*http.Request) (string, []string)
 
-// CapabilityAuditor 记录一次 capability.denied（subject / 插件 id / 目标动作 / 原因）。
+// CapabilityAuditor 记录一次 capability.denied（subject / 插件 id / 目标动作 / 能力 / 原因）。
 // 目标动作：invoke 传方法名，管理端点传 enable|disable，提权端点传 action_id。
-type CapabilityAuditor func(subject, plugin, target, reason string)
+//
+// capability 是触发拒绝的**真实能力名**（invoke 路径为 requirement.name，如
+// system:admin / net:write；宿主不支持时为该未知能力名）。非 invoke 拒绝没有
+// 「以哪个能力授权」的判定来源，调用方必须传空串——不得编造能力名（DATA-MODEL §9）。
+// 装配层把它结构化写入 AuditRecord.Capability，不再只塞 reason 文本。
+type CapabilityAuditor func(subject, plugin, target, capability, reason string)
 
 // 单管理员语义下的 6 个宿主特权能力（与 registry/validate.go 同源，不重复名词表）。
 var adminCapabilities = []string{
@@ -286,7 +291,7 @@ func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, tar
 			return "", false
 		}
 		if !hasCapability(actor.grants, "system:admin") {
-			s.auditDenied(actor.id, target, "", "插件未获 system:admin 能力")
+			s.auditDenied(actor.id, target, "", "", "插件未获 system:admin 能力")
 			writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：插件需要 system:admin 能力", "system:admin")
 			return "", false
 		}
@@ -301,7 +306,7 @@ func (s *Server) authorizeRootAction(w http.ResponseWriter, r *http.Request, tar
 		return "", false
 	}
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, target, "", "缺少 system:admin 特权能力")
+		s.auditDenied(subject, target, "", "", "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：管理端点需要 system:admin 能力", "system:admin")
 		return "", false
 	}
@@ -393,7 +398,7 @@ func New(opts Options, transport platform.Transport) *Server {
 		restartService: opts.RestartService,
 		configWriter:   opts.ConfigWriter,
 		taskEvents:     opts.TaskEvents, scheduler: opts.Scheduler, alerts: opts.Alerts,
-		webhooks: opts.Webhooks,
+		webhooks:                     opts.Webhooks,
 		selfUpdateCapabilityResolver: opts.SelfUpdateCapabilityResolver,
 		selfUpdateAuditRecorder:      opts.SelfUpdateAuditRecorder,
 	}

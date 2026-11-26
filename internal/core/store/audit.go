@@ -33,14 +33,20 @@ const (
 
 // AuditRecord 是一条审计记录。字段全为标量或受控 map[string]string（G-24：无 any/object）。
 // Key 只在查询结果里回填（存储值不含键），格式 `%020d-%06d`（unix 纳秒 + 序号）。
+//
+// Capability 是「以哪个能力授权/被拒」的结构化标量（语法见 PLUGIN-PROTOCOL：
+// 6 项宿主特权 system:/net:/proc: 或 <plugin-id>:<action>）。仅 capability.denied
+// 出口填真实能力名；其余出口无「以哪个能力授权」语义，填空串（omitempty 不落库）。
+// 旧记录没有该字段，json.Unmarshal 缺省空串，向后兼容（DATA-MODEL §9）。
 type AuditRecord struct {
-	Key     string            `json:"-"`
-	Subject string            `json:"subject"`
-	Action  string            `json:"action"`
-	Plugin  string            `json:"plugin"`
-	Target  string            `json:"target"`
-	Result  string            `json:"result"`
-	Detail  map[string]string `json:"detail,omitempty"`
+	Key        string            `json:"-"`
+	Subject    string            `json:"subject"`
+	Action     string            `json:"action"`
+	Plugin     string            `json:"plugin"`
+	Target     string            `json:"target"`
+	Result     string            `json:"result"`
+	Capability string            `json:"capability,omitempty"`
+	Detail     map[string]string `json:"detail,omitempty"`
 }
 
 // PutAudit 追加一条审计记录。键 = 20 位 unix 纳秒 + "-" + 6 位序号，字典序即时间序

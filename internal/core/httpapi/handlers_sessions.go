@@ -246,7 +246,7 @@ func (s *Server) requireSecurityAdmin(w http.ResponseWriter, r *http.Request, wh
 		return false
 	}
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, "security", what, "安全写操作需要 system:admin 能力")
+		s.auditDenied(subject, "security", what, "", "安全写操作需要 system:admin 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：这个操作需要管理权限，请用管理员会话或 admin 令牌", "system:admin")
 		return false

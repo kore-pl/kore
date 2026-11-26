@@ -127,10 +127,10 @@ func TestRequiredInvokeCapability(t *testing.T) {
 
 // TestInvokeCapabilityDeniedWithoutAdmin：插件声明 system:admin，低权会话 → 403 + 审计 denied + 不执行。
 func TestInvokeCapabilityDeniedWithoutAdmin(t *testing.T) {
-	type denied struct{ subject, plugin, target, reason string }
+	type denied struct{ subject, plugin, target, capability, reason string }
 	var records []denied
-	auditor := func(subject, plugin, target, reason string) {
-		records = append(records, denied{subject, plugin, target, reason})
+	auditor := func(subject, plugin, target, capability, reason string) {
+		records = append(records, denied{subject, plugin, target, capability, reason})
 	}
 	backend := &capDeclBackend{caps: map[string][]string{"db-mysql": {"system:admin", "db-mysql:drop"}}}
 	ts, cookie := capSetup(t, capLowPrivResolver, auditor, backend)
@@ -155,7 +155,7 @@ func TestInvokeCapabilityDeniedWithoutAdmin(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("应写一条 capability.denied 审计，实际 %+v", records)
 	}
-	want := denied{"plugin-site", "db-mysql", "db-mysql.dropDatabase", "调用该插件需要 system:admin 能力"}
+	want := denied{"plugin-site", "db-mysql", "db-mysql.dropDatabase", "system:admin", "调用该插件需要 system:admin 能力"}
 	if records[0] != want {
 		t.Errorf("审计记录 = %+v，期望 %+v", records[0], want)
 	}
@@ -222,10 +222,10 @@ func TestInvokeCapabilitySpecificGranted(t *testing.T) {
 
 // TestInvokeCapabilityUnsupportedHostAction：未知宿主动作 → 501 E_UNSUPPORTED + 审计 denied。
 func TestInvokeCapabilityUnsupportedHostAction(t *testing.T) {
-	type denied struct{ subject, plugin, target, reason string }
+	type denied struct{ subject, plugin, target, capability, reason string }
 	var records []denied
-	auditor := func(subject, plugin, target, reason string) {
-		records = append(records, denied{subject, plugin, target, reason})
+	auditor := func(subject, plugin, target, capability, reason string) {
+		records = append(records, denied{subject, plugin, target, capability, reason})
 	}
 	backend := &capDeclBackend{caps: map[string][]string{"evil": {"system:superuser"}}}
 	ts, cookie := capSetup(t, capFullAdminResolver, auditor, backend)
@@ -247,8 +247,8 @@ func TestInvokeCapabilityUnsupportedHostAction(t *testing.T) {
 	if len(backend.invoked) != 0 {
 		t.Errorf("fail-closed 不得触达 Invoke，实际 %v", backend.invoked)
 	}
-	if len(records) != 1 || records[0].plugin != "evil" || records[0].target != "evil.run" {
-		t.Errorf("应写一条 capability.denied 审计，实际 %+v", records)
+	if len(records) != 1 || records[0].plugin != "evil" || records[0].target != "evil.run" || records[0].capability != "system:superuser" {
+		t.Errorf("应写一条 capability.denied 审计（capability=system:superuser），实际 %+v", records)
 	}
 }
 

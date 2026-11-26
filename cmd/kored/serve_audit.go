@@ -58,21 +58,25 @@ const auditActionCapabilityDenied = "capability.denied"
 // capabilityAuditorFromStore 把 httpapi 的 capability.denied 出口接到 audit bucket。
 //
 // 这是 invoke 越权审计的落库点：只有拒绝才走本出口，故 result 恒为 denied。
-// 字段映射：subject → subject、插件 id → plugin、被拒方法 → target、原因 → detail.reason。
-// 写入失败只记 WARN（鉴权已是 fail-closed，不因审计失败放行）。
+// 字段映射：subject → subject、插件 id → plugin、被拒方法 → target、真实能力名 →
+// capability、原因 → detail.reason（DATA-MODEL §9）。写入失败只记 WARN（鉴权已是
+// fail-closed，不因审计失败放行）。
 type capabilityAuditorFromStore struct {
 	db *store.Store
 }
 
 // Audit 实现 httpapi.CapabilityAuditor。
-func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, reason string) {
+// capability 是触发拒绝的真实能力名（invoke 路径的 requirement.name）；非 invoke
+// 出口传空串，omitempty 下不落库——绝不编造能力名（DATA-MODEL §9）。
+func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, capability, reason string) {
 	if err := a.db.PutAudit(store.AuditRecord{
-		Subject: subject,
-		Action:  auditActionCapabilityDenied,
-		Plugin:  plugin,
-		Target:  target,
-		Result:  store.AuditResultDenied,
-		Detail:  map[string]string{"reason": reason},
+		Subject:    subject,
+		Action:     auditActionCapabilityDenied,
+		Plugin:     plugin,
+		Target:     target,
+		Result:     store.AuditResultDenied,
+		Capability: capability,
+		Detail:     map[string]string{"reason": reason},
 	}); err != nil {
 		slog.Warn("capability.denied 审计写入失败", "plugin", plugin, "target", target, "err", err)
 	}

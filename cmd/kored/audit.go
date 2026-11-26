@@ -59,7 +59,7 @@ func (l *auditListerFromStore) ListAudit(q httpapi.AuditQuery) (httpapi.AuditPag
 		}
 		out = append(out, httpapi.AuditRecordView{
 			Key: rec.Key, Subject: rec.Subject, Action: rec.Action, Plugin: rec.Plugin,
-			Target: rec.Target, Result: rec.Result, Detail: rec.Detail,
+			Target: rec.Target, Result: rec.Result, Capability: rec.Capability, Detail: rec.Detail,
 		})
 	}
 	total := len(out)
@@ -209,16 +209,17 @@ func runAudit(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// writeAuditCSV 导出带表头的 CSV（表头固定 7 列）。
+// writeAuditCSV 导出带表头的 CSV（表头固定 8 列；capability 空串输出为空单元格）。
 func writeAuditCSV(w io.Writer, rows []httpapi.AuditRecordView) {
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"time", "subject", "action", "plugin", "target", "result", "detail"})
+	_ = cw.Write([]string{"time", "subject", "action", "plugin", "target", "result", "capability", "detail"})
 	for _, row := range rows {
 		ts := ""
 		if tsNum, ok := parseKeyTS(row.Key); ok {
 			ts = time.Unix(0, tsNum).UTC().Format(time.RFC3339Nano)
 		}
-		_ = cw.Write([]string{ts, row.Subject, row.Action, row.Plugin, row.Target, row.Result, flattenDetail(row.Detail)})
+		_ = cw.Write([]string{ts, row.Subject, row.Action, row.Plugin, row.Target, row.Result,
+			row.Capability, flattenDetail(row.Detail)})
 	}
 	cw.Flush()
 }
@@ -226,8 +227,9 @@ func writeAuditCSV(w io.Writer, rows []httpapi.AuditRecordView) {
 // writeAuditText 以对齐列输出审计记录（人类可读）。
 func writeAuditText(w io.Writer, rows []httpapi.AuditRecordView) {
 	for _, row := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.Key, row.Subject, row.Action, row.Plugin, row.Target, row.Result, flattenDetail(row.Detail))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Key, row.Subject, row.Action, row.Plugin, row.Target, row.Result,
+			row.Capability, flattenDetail(row.Detail))
 	}
 }
 

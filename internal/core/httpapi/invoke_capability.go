@@ -129,14 +129,14 @@ func (s *Server) authorizeInvoke(w http.ResponseWriter, r *http.Request) (invoke
 	}
 	result := invokeAuth{subject: subject, needAdmin: requirement.needAdmin}
 	if requirement.unsupported {
-		s.auditDenied(subject, plugin, method, "插件声明了内核不支持的特权能力 "+requirement.name)
+		s.auditDenied(subject, plugin, method, requirement.name, "插件声明了内核不支持的特权能力 "+requirement.name)
 		writeError(w, http.StatusNotImplemented, pluginapi.E_UNSUPPORTED,
 			"插件 "+plugin+" 声明了内核不支持的特权能力 "+requirement.name, requirement.name)
 		return result, false
 	}
 	if requirement.needAdmin &&
 		!hasCapability(granted, requirement.name) && !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, plugin, method, "调用该插件需要 "+requirement.name+" 能力")
+		s.auditDenied(subject, plugin, method, requirement.name, "调用该插件需要 "+requirement.name+" 能力")
 		writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
 			"该方法需要 "+requirement.name+" 权限", requirement.name)
 		return result, false

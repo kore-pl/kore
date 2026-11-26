@@ -11,7 +11,8 @@ import (
 // TestAuditQueryNormal 带 since 的管理员查询返回记录（200 + count）。
 func TestAuditQueryNormal(t *testing.T) {
 	lister := &auditTestLister{rows: []AuditRecordView{
-		{Key: "0001-000000", Subject: "admin", Action: "plugins.enable", Plugin: "site", Result: "ok"},
+		{Key: "0001-000000", Subject: "admin", Action: "capability.denied", Plugin: "site",
+			Result: "denied", Capability: "system:admin"},
 	}}
 	ts, cookie := auditSetup(t, adminResolver, lister)
 	status, body := auditRequest(t, ts, cookie, "?since=2020-01-01T00%3A00%3A00Z")
@@ -22,8 +23,11 @@ func TestAuditQueryNormal(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("响应不是合法 JSON: %v body=%s", err, body)
 	}
-	if got.Count != 1 || len(got.Records) != 1 || got.Records[0].Action != "plugins.enable" {
+	if got.Count != 1 || len(got.Records) != 1 || got.Records[0].Action != "capability.denied" {
 		t.Fatalf("查询记录不符合预期: %+v", got)
+	}
+	if got.Records[0].Capability != "system:admin" {
+		t.Fatalf("响应应含结构化 capability=system:admin: %+v", got.Records[0])
 	}
 	if got.Records[0].At == "" {
 		t.Fatalf("响应应含由键派生的 at 时间字段: %+v", got.Records[0])

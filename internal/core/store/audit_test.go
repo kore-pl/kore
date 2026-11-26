@@ -1,7 +1,9 @@
 package store
 
 import (
+	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,7 +14,7 @@ func TestAuditPutAndListRoundTrip(t *testing.T) {
 	s := openAuditStore(t)
 	want := []AuditRecord{
 		{Subject: "admin", Action: "plugin.enable", Plugin: "echo", Target: "ready",
-			Result: AuditResultOK, Detail: map[string]string{"state": "ready"}},
+			Result: AuditResultOK, Capability: "system:admin", Detail: map[string]string{"state": "ready"}},
 		{Subject: "system", Action: "plugin.crash", Plugin: "echo",
 			Result: AuditResultError, Detail: map[string]string{"err": "signal: killed", "pid": "4242"}},
 		{Subject: "admin", Action: "plugin.disable", Plugin: "echo", Target: "stopped",
@@ -35,7 +37,7 @@ func TestAuditPutAndListRoundTrip(t *testing.T) {
 		keys = append(keys, rec.Key)
 		if rec.Subject != want[i].Subject || rec.Action != want[i].Action ||
 			rec.Plugin != want[i].Plugin || rec.Target != want[i].Target ||
-			rec.Result != want[i].Result {
+			rec.Result != want[i].Result || rec.Capability != want[i].Capability {
 			t.Errorf("第 %d 条字段回读不符: got=%+v want=%+v", i, rec, want[i])
 		}
 		if len(rec.Detail) != len(want[i].Detail) {
@@ -53,6 +55,32 @@ func TestAuditPutAndListRoundTrip(t *testing.T) {
 	only, err := s.ListAudit(AuditFilter{Action: "plugin.crash"})
 	if err != nil || len(only) != 1 || only[0].Subject != "system" {
 		t.Fatalf("按 action 过滤应只返回 1 条 crash，实际 %d 条 err=%v", len(only), err)
+	}
+}
+
+// TestAuditCapabilityCompatibility 验证 capability 字段的序列化与向后兼容（G-24 显式 string）：
+// ① 有值时 json key=capability；② 空值因 omitempty 不落库；③ 旧记录（无该字段）读回空串。
+func TestAuditCapabilityCompatibility(t *testing.T) {
+	filled, err := json.Marshal(AuditRecord{Action: "capability.denied", Capability: "system:admin"})
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if !json.Valid(filled) || !strings.Contains(string(filled), `"capability":"system:admin"`) {
+		t.Fatalf("capability 应显式落库为 string，实际 %s", filled)
+	}
+	empty, err := json.Marshal(AuditRecord{Action: "plugin.enable"})
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if strings.Contains(string(empty), `"capability"`) {
+		t.Fatalf("空 capability 因 omitempty 不应落库，实际 %s", empty)
+	}
+	var legacy AuditRecord
+	if err := json.Unmarshal([]byte(`{"subject":"admin","action":"login.success","result":"ok"}`), &legacy); err != nil {
+		t.Fatalf("旧记录反序列化失败: %v", err)
+	}
+	if legacy.Capability != "" {
+		t.Fatalf("旧记录缺字段应读空串，实际 %q", legacy.Capability)
 	}
 }
 

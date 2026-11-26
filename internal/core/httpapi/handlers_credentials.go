@@ -20,7 +20,7 @@ func (s *Server) authorizeCredentials(w http.ResponseWriter, r *http.Request) bo
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, "credentials", "", "需要 system:admin 能力")
+		s.auditDenied(subject, "credentials", "", "", "需要 system:admin 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：凭据管理需要 system:admin 能力", "system:admin")
 		return false

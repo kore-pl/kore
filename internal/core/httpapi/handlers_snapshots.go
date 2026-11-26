@@ -115,7 +115,7 @@ func (s *Server) authorizeSnapshots(w http.ResponseWriter, r *http.Request, capa
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, capability) {
-		s.auditDenied(subject, "snapshots", "", "需要 "+capability+" 能力")
+		s.auditDenied(subject, "snapshots", "", "", "需要 "+capability+" 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：配置快照需要 "+capability+" 能力", capability)
 		return false

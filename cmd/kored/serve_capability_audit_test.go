@@ -43,7 +43,7 @@ func TestCapabilityAuditWritesDenied(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	auditor := &capabilityAuditorFromStore{db: db}
-	auditor.Audit("plugin-site", "db-mysql", "db-mysql.dropDatabase", "调用该插件需要 system:admin 能力")
+	auditor.Audit("plugin-site", "db-mysql", "db-mysql.dropDatabase", "system:admin", "调用该插件需要 system:admin 能力")
 
 	rows, err := db.ListAudit(store.AuditFilter{})
 	if err != nil {
@@ -61,6 +61,9 @@ func TestCapabilityAuditWritesDenied(t *testing.T) {
 	}
 	if rec.Subject != "plugin-site" || rec.Plugin != "db-mysql" || rec.Target != "db-mysql.dropDatabase" {
 		t.Errorf("字段映射不符: %+v", rec)
+	}
+	if rec.Capability != "system:admin" {
+		t.Errorf("capability = %q，期望 system:admin", rec.Capability)
 	}
 	if rec.Detail["reason"] != "调用该插件需要 system:admin 能力" {
 		t.Errorf("detail.reason = %q", rec.Detail["reason"])

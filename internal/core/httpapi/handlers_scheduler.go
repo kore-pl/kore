@@ -63,7 +63,7 @@ func (s *Server) authorizeScheduler(w http.ResponseWriter, r *http.Request, targ
 		return false
 	}
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, "scheduler", target, "缺少 system:admin 特权能力")
+		s.auditDenied(subject, "scheduler", target, "", "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：定时任务端点需要 system:admin 能力", "system:admin")
 		return false

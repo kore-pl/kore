@@ -57,7 +57,7 @@ func (s *Server) authorizeWebhook(w http.ResponseWriter, r *http.Request, capabi
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, capability) {
-		s.auditDenied(subject, "webhook", "", "需要 "+capability+" 能力")
+		s.auditDenied(subject, "webhook", "", "", "需要 "+capability+" 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：通知通道需要 "+capability+" 能力", capability)
 		return false

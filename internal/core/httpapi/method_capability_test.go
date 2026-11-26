@@ -82,10 +82,10 @@ func TestInvokeMethodCapabilityDottedMethod(t *testing.T) {
 
 // TestInvokeMethodCapabilityFallbackToPluginLevel：未声明的方法回退插件级 capabilities。
 func TestInvokeMethodCapabilityFallbackToPluginLevel(t *testing.T) {
-	type denied struct{ subject, plugin, target, reason string }
+	type denied struct{ subject, plugin, target, capability, reason string }
 	var records []denied
-	auditor := func(subject, plugin, target, reason string) {
-		records = append(records, denied{subject, plugin, target, reason})
+	auditor := func(subject, plugin, target, capability, reason string) {
+		records = append(records, denied{subject, plugin, target, capability, reason})
 	}
 	caps, methodCaps := methodCapFixture()
 	backend := &capDeclBackend{caps: caps, methodCaps: methodCaps}
@@ -98,8 +98,8 @@ func TestInvokeMethodCapabilityFallbackToPluginLevel(t *testing.T) {
 	if len(backend.invoked) != 0 {
 		t.Fatalf("越权请求不得触达 Invoke，实际 %v", backend.invoked)
 	}
-	if len(records) != 1 || records[0].reason != "调用该插件需要 system:admin 能力" {
-		t.Fatalf("应写一条回退到插件级的 capability.denied 审计，实际 %+v", records)
+	if len(records) != 1 || records[0].reason != "调用该插件需要 system:admin 能力" || records[0].capability != "system:admin" {
+		t.Fatalf("应写一条回退到插件级的 capability.denied 审计（capability=system:admin），实际 %+v", records)
 	}
 }
 

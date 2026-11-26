@@ -135,7 +135,7 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 // authorizeRestart 校验会话 + system:admin；未登录 401、能力不足 401 + deny 审计。
 func (s *Server) authorizeRestart(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if isPluginActor(r) {
-		s.auditDenied("plugin", "system", "restart", "插件不得调用系统重启")
+		s.auditDenied("plugin", "system", "restart", "", "插件不得调用系统重启")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "插件不能重启内核", "")
 		return "", false
 	}
@@ -147,7 +147,7 @@ func (s *Server) authorizeRestart(w http.ResponseWriter, r *http.Request) (strin
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, "system:admin") {
-		s.auditDenied(subject, "system", "restart", "缺少 system:admin 特权能力")
+		s.auditDenied(subject, "system", "restart", "", "缺少 system:admin 特权能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "越权：系统重启需要 system:admin 能力", "system:admin")
 		return "", false
 	}

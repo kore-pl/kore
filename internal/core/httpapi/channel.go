@@ -101,6 +101,6 @@ func (s *Server) channelHandler() http.Handler {
 // denyChannel 统一返回 401（不向调用方暴露具体失败原因），原因落审计与日志。
 func (s *Server) denyChannel(w http.ResponseWriter, pluginID, reason string) {
 	slog.Warn("通道请求被拒绝", "plugin_id", pluginID, "reason", reason)
-	s.auditDenied("channel", pluginID, "root-action", reason)
+	s.auditDenied("channel", pluginID, "root-action", "", reason)
 	writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "通道校验失败", "")
 }

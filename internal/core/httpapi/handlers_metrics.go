@@ -26,7 +26,7 @@ func (s *Server) authorizeMetricsRead(w http.ResponseWriter, r *http.Request) bo
 	}
 	subject, granted := s.capResolver(r)
 	if !hasCapability(granted, "system:read") {
-		s.auditDenied(subject, "system", "", "读取资源采样需要 system:read 能力")
+		s.auditDenied(subject, "system", "", "", "读取资源采样需要 system:read 能力")
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED,
 			"越权：资源采样需要 system:read 能力", "system:read")
 		return false
