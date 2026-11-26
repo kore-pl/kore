@@ -1,5 +1,6 @@
 > 状态: draft · 归属: ui-designer · 更新: 2026-11-26 · 里程碑: M5
 > 定位: task-73 UI 堆砌只读审计的 doc-first 后续方案；供用户审阅后再决定是否进入实现。
+> 裁决: 用户已裁决：tab 数推荐制非强制；文档漂移并入 P0。
 
 # DESIGN-REDUCTION — UI 减法设计方案（doc-first）
 
@@ -32,6 +33,16 @@
 - **项目反样板红线**：同屏内容区最多 2 个容器级区块（`docs/FRONTEND.md:228`）、KPI 磁贴 ≤4 且每个可下钻（`docs/FRONTEND.md:240`）、禁用「...」菜单藏关键操作（`docs/FRONTEND.md:237`）、触摸目标 ≥44px（`docs/FRONTEND.md:67`）。
 
 **判定口径（供后续每项验收）**：新增一个可见控件，必须同时说明它替换了哪个旧控件，或证明它属于「选中后才出现」的上下文态；只加不减的改动不予合入。
+
+**口径分层（避免把设计建议误当 FAIL 门禁）**：本方案涉及的数字分三类，验收时不得混用——
+
+| 类别 | 判据 | 性质 | 检查方式 |
+| --- | --- | --- | --- |
+| 硬门禁（自动 FAIL） | A6 原判据「一级菜单 ≤10 且 store/plugins 不并存」（`scripts/usability-check.sh:269-279`） | G-33 自动判据，违规 FAIL / exit 1，**不动** | `bash scripts/usability-check.sh` |
+| 设计红线（人工评审） | 同屏容器区块 ≤2（`docs/FRONTEND.md:228`）、KPI 磁贴 ≤4 且可下钻（`:240`）、禁 `...` 藏关键操作（`:237`）、触摸目标 ≥44px（`:67`） | FRONTEND §6「反样板红线」，评审口径；**不是** usability-check.sh 的自动 FAIL 判据，不擅自升级为门禁 | 评审对照 FRONTEND §6 + G-28 截图复核 |
+| 设计建议（仅提示） | tab 数：单 hub ≤6 / 全站 ≤24（推荐值，**非强制**） | 用户已裁决为推荐制：只 INFO/WARN 计数，不改 exit code、不 FAIL（见 §3） | 脚本输出计数提示，仅供回读 |
+
+每期 UI 交付的 G-28 双端截图是独立的硬门禁（见 §4），与上述自动判据分开核对。
 
 ## 2. 五个堆砌点的逐一减法方案
 
@@ -201,39 +212,43 @@
 
 **用户动线影响**：查看/改配置从「行内直接点」变「行内点详情再点设置」（+1 点击）；启用/停用主操作不变；N 行 × 5 按钮变成 N 行 × 2 + 1 个抽屉，列表宽度释放后手机端不再横向挤。
 
-## 3. A6 门禁扩展的具体改法（使减法可回读验证）
+## 3. A6 推荐提示的具体改法（tab 计数只提示、不阻断）
 
-判据真源：`scripts/usability-check.sh:6-32`（A1–A7 + 分层口径），A6 现仅两条断言在 `scripts/usability-check.sh:269-279`。扩展为三条 A6 判据，保留原两条不动：
+判据真源：`scripts/usability-check.sh:6-32`（A1–A7 + 分层口径），A6 现仅两条断言在 `scripts/usability-check.sh:269-279`。本次扩展**只增加 tab 计数提示**，原两条硬判据原文不动；tab 数是**设计建议值，不是硬门禁，超出仅提示不阻断**。
 
-- **A6-a（存量）**：一级菜单 ≤10 且 store / plugins 不并存（现 `:276-279` 原文不动）。
-- **A6-b（新增）**：单 hub tab 数 ≤5，违规写 `A6-tab <hub_id>`，detail 带实际数。
-- **A6-c（新增）**：全站 tab 总数 ≤20，违规写 `A6-total all`。
+**用户裁决口径（本节最高优先级）**：新增的 tab 计数**只输出 INFO/WARN 计数**，**不改变 `scripts/usability-check.sh` 的 exit code、不产生 FAIL**；禁止把它登记进 `usability-pending.txt` 当作豁免判据，也禁止新增「tab 超标 → FAIL」的反例。§2.1 的 ≤20 / 单 hub ≤5 是映射落地的设计目标；脚本计数提示采用更宽松的**推荐阈值：单 hub ≤6 / 全站 ≤24（推荐非强制）**，两者都是建议，不是门禁。
+
+- **A6-a（存量硬判据，不动）**：一级菜单 ≤10 且 store / plugins 不并存（现 `:276-279` 原文不动）。违反仍走现有 FAIL / exit 1 路径。
+- **A6-tab-hint（新增，推荐提示）**：逐 hub 输出 `tab` 计数；单 hub 数 > 6（推荐值）时输出 `WARN`，否则输出 `INFO`。建议 detail 形如 `单 hub <hub_id> 有 N 个 tab（推荐 ≤6，非强制）`。
+- **A6-total-hint（新增，推荐提示）**：输出全站 tab 总数；总数 > 24（推荐值）时输出 `WARN`，否则输出 `INFO`。建议 detail 形如 `全站共 M 个 tab（推荐 ≤24，非强制）`。
+
+两条 hint **不调用 `add()`**（`add()` 会把违规计入 `violations` 并影响 `report()` 的 FAIL 判定），直接 `print()` 到 stdout；不计入 summary 的 `pass / warn / fail` 违规数，也不参与 `if fail: return 1`。即使所有 hub 都超出推荐值，脚本退出码仍由 A1–A7 的真实违规决定。
 
 具体改动点（行号按现状，实施时以实际 diff 为准）：
 
 | 位置 | 改法 |
 | --- | --- |
-| `scripts/usability-check.sh:19` | 注释判据行把 A6 改为「一级菜单 ≤10、store/plugins 不并存、**单 hub tab ≤5、全站 tab ≤20**」 |
+| `scripts/usability-check.sh:19` | 注释判据行在 A6 硬判据后补一行说明：「tab 数（单 hub ≤6 / 全站 ≤24）为推荐提示，只 INFO/WARN 计数，不 FAIL、不改 exit code」；硬判据原文保留 |
 | `scripts/usability-check.sh:219` | 复用现有 `REGISTRY`（已含 `HUB_DEFS`），无需新增注册表常量；勿绑死单一文件名 |
-| `scripts/usability-check.sh:234-238` 后 | 新增 `hub_tabs(found)`：在同一 registry block 内按 `id: 'x' ... views: [ ... ]` 逐 hub 扫描 `sub: '...'`；每个 hub 的 `views: [...]` 用配对中括号扫描而非贪婪正则，避免嵌套误吞；返回 `[(hub_id, count)]` |
-| `scripts/usability-check.sh:270-279` | `a6(ids, found)` → `a6(ids, found, tabs)`；在原两条断言之后追加：`if count > 5: add("A6-tab", hub, ...)`；`if sum(counts) > 20: add("A6-total", "all", ...)`。解析不到任何 hub 时沿用 `:273` 的「注册表缺失」FAIL，不允许静默跳过 |
-| `scripts/usability-check.sh:348-360` | `run()` 计算 `tabs = hub_tabs(found)` 并传入 `a6` |
-| `scripts/usability-check.sh:366-377` | `main()`/summary 行加 tab 计数输出（`N hub / M tab`），便于每期回读 |
-| `scripts/usability-check.sh:389-426` | `write_fixture()` 造一个含 6 个 `sub` 的 hub 与一个总数 21 的 fixture |
-| `scripts/usability-check.sh:429-436` | self-test 增反例⑤「单 hub 6 tab → FAIL」与反例⑥「全站 21 tab → FAIL」，正例仍 PASS |
-| `scripts/usability-pending.txt:16-18` | 现有注释写 A5/A6/A7 因 registry 漂移未登记；HUB_DEFS 已在 `web/app.js:2346` 落地，须按新注册表重新基线，**不允许用清单掩盖「找不到注册表」** |
+| `scripts/usability-check.sh:234-238` 后 | 新增 `hub_tabs(found)`：在同一 registry block 内按 `id: 'x' ... views: [ ... ]` 逐 hub 扫描 `sub: '...'`；每个 hub 的 `views: [...]` 用配对中括号扫描而非贪婪正则，避免嵌套误吞；返回 `[(hub_id, count)]`。解析不到任何 hub 时仍按 A6-a 现有 `:273` 的「注册表缺失」FAIL 处理（这是硬判据，保留），hint 本身不新增失败路径 |
+| `scripts/usability-check.sh:270-279` | `a6()` 硬判据函数体**不改**；在原两条断言之后追加提示段（单独函数或在 `run()` 内调用）：逐 hub `print("[INFO/WARN] A6-tab-hint ...")`，最后 `print("[INFO/WARN] A6-total-hint ...")`。**不得 `add()`、不得修改 exit code 逻辑** |
+| `scripts/usability-check.sh:348-360` | `run()` 计算 `tabs = hub_tabs(found)` 用于提示输出；传给 `a6()` 的入参保持原样（硬判据不需要 tabs） |
+| `scripts/usability-check.sh:366-377` | `main()`/summary 行加 tab 计数输出（`N hub / M tab`，推荐 ≤6/≤24 非强制），便于每期回读；summary 里注明「tab 计数为推荐提示，不影响判定」 |
+| `scripts/usability-check.sh:389-426` | `write_fixture()` 可选造一个含 7 个 `sub` 的 hub（用于验证提示文案），但**不需要**为 tab 提示造 FAIL fixture |
+| `scripts/usability-check.sh:429-436` | self-test 只验证「tab 超推荐值时输出 WARN 且 exit code 仍为 0」这一项（可断言 stdout 含 hint 文案）；正例仍 PASS，原四个反例（A1/A3/A4/A6-a）不动。**不新增「tab 超标 → FAIL」反例** |
+| `scripts/usability-pending.txt:16-18` | 现有注释写 A5/A6/A7 因 registry 漂移未登记；HUB_DEFS 已在 `web/app.js:2346` 落地，须按新注册表重新基线，**不允许用清单掩盖「找不到注册表」**。tab 计数是提示，**永不登记进此清单** |
 
-**存量不掩盖**：按 `scripts/usability-check.sh:25-32` 的分层口径，当前 40 tab 应先在 `scripts/usability-pending.txt` 登记为 `A6-tab <hub> <当前数>` 逐 hub 条目与 `A6-total all 1`，并写明逐期下调到 0 的时间点；登记只能豁免「已登记的条数」，新增第 6 个 tab 或新增 hub 仍 FAIL。每完成一期就把对应 hub 的 N 下调或删除，条目消失即转硬判据（`:30`）。**本方案文本不改脚本与清单，以上是实施卡的操作说明。**
+**存量不掩盖**：当前 40 tab 不再做任何「登记 / 豁免 / 打红」处理——它只是提示文案里的一个数字，不进 `scripts/usability-pending.txt`，不影响 `make check` 第 20 段判定、不影响单脚本 exit 1 的判据集合。§2.1 的映射表照常按设计目标推进，tab 数逐期下降的过程通过提示输出回读即可。**本方案文本不改脚本与清单，以上是实施卡的操作说明；任何把 tab 提示升级为 FAIL 的实现都视为脱离本方案。**
 
 ## 4. 分期实施建议（P0 → P1 → P2）
 
 | 期 | 范围 | 目标可回读状态 | 成本 |
 | --- | --- | --- | --- |
-| **P0**（最严重且低成本） | 顶栏 9→4（§2.3）；文件 10→3 + 选择态（§2.4）；A6-b/c 脚本扩展与 self-test（§3）；`PLUGIN-MATURITY.md` 漂移修订（§6，单独文档卡） | 顶栏常驻控件 4；文件默认按钮 3；A6 单 hub ≤5 / 全站 ≤20 有自证反例；tab 存量登记进清单 | S–M |
-| **P1**（层级重塑） | tab 40→20 映射表落地（§2.1）；首页 21→5（§2.2） | 每 hub tab ≤5、全站 ≤20；首页首屏 3 块；`usability-pending.txt` 的 A6 条目下调 | M–L |
+| **P0**（最严重且低成本） | 顶栏 9→4（§2.3）；文件 10→3 + 选择态（§2.4）；A6 tab 计数推荐提示与 self-test（§3，只 INFO/WARN 不改 exit code）；`PLUGIN-MATURITY.md:127/130/128` 漂移修订**并入 P0 实现期同步完成**（§6，不单独卡、不单独开文档卡） | 顶栏常驻控件 4；文件默认按钮 3；tab 计数提示（单 hub≤6 / 全站≤24 推荐非强制）可回读且不 FAIL；三处漂移修正落地 | S–M |
+| **P1**（层级重塑） | tab 40→20 映射表落地（§2.1）；首页 21→5（§2.2） | 每 hub tab ≤5、全站 ≤20（设计目标，非门禁）；首页首屏 3 块 | M–L |
 | **P2**（行密度与体验回收） | 插件行 5→2 + 详情抽屉 / 批量态（§2.5）；撤销手机隐藏帮助/快捷键补丁（`docs/FRONTEND.md:71`）；按 `docs/DESIGN-AUDIT.md:118` 顺序处理 3 页焦点（概览 / 日志 / 已装插件） | 插件行 2 按钮；手机顶栏无隐藏控件也能一屏；18 页焦点自评见 G-28 | M |
 
-分期理由：P0 全部是「改出现时机 / 改门禁」，不动数据结构与路由，风险最低且立刻缓解首屏与手机拥挤；P1 动路由与 tab 结构，需要在 A6 扩展已上线后才可回读验证；P2 动交互容器（抽屉、批量态），放在层级稳定后做。
+分期理由：P0 全部是「改出现时机 / 加推荐提示 / 同步文档漂移」，不动数据结构与路由，也不新增 FAIL 门禁，风险最低且立刻缓解首屏与手机拥挤；P1 动路由与 tab 结构，需要在 A6 计数提示已上线后才可回读验证（提示不影响门禁判定）；P2 动交互容器（抽屉、批量态），放在层级稳定后做。
 
 **G-28 双端截图要求（每期硬门禁）**：任何 UI 改动声明「完成」时，必须同时提交 ① PC 截图 `1440×900`（full-page）② 手机截图 `390×844` ③ 产品定位自评三问（本页解决什么用户问题 / 与宝塔、1Panel 同类功能的差距 / 当前是「可用」还是「占位」）。截图存 `.agents/verify/screenshots/`，命名 `<场景>-desktop-*.png` / `<场景>-mobile-*.png`；用 `file` / `identify -format '%wx%h'` 读实际宽高，禁止同图缩放冒充双端、禁止拿接口 200 / DOM 断言 / 设计稿替代。缺任一项记 **BLOCKED**，不记 PASS（[AGENTS.md](../AGENTS.md) G-28 行、[.agents/QUALITY-GATES.md](../.agents/QUALITY-GATES.md) §3.1）。
 
@@ -257,11 +272,11 @@
 | 文件批量操作 | 工具栏常显（1） | 勾选后上下文栏（2） | 新用户可能不知道要先勾选 | 列表空态/表头给「勾选文件后可批量操作」提示 |
 | 运维日历 / 操作宏 / 站点迁移等 10+ tab | 独立 tab（2） | 区内视图切换（3） | tab 名不再出现在 tab 条 | 保留原 hash 为深链；全局搜索 `page:` 前缀可搜到页面功能（`web/search.js:902`） |
 
-**其他风险**：① A6-b/c 上线初期会把存量 40 tab 全部打红，必须先按 §3 分层登记，否则 `make check` 第 20 段 WARN 级但单脚本 exit 1；② 首页砍 KPI 卡后，若监控 hub 的指标区不具备同等数据精度（`web/app.js:1966` 已注明内存占比依赖 monitor 插件），会被误读为「数据丢了」，需要在监控区保留同等降级说明；③ 顶栏合并健康/信息灯后，角标遮挡旧根因（`docs/DESIGN-AUDIT.md:49`）可能复现，必须在 G-28 手机截图里逐项复核。
+**其他风险**：① A6 tab 计数提示上线后，存量 40 tab 只会输出 WARN 计数、**不会打红也不会改 exit code**（用户裁决：推荐制非强制）；实现时须防止误把提示接进 `add()` / `violations` 或新增超标反例，一旦接进即判脱离本方案；② 首页砍 KPI 卡后，若监控 hub 的指标区不具备同等数据精度（`web/app.js:1966` 已注明内存占比依赖 monitor 插件），会被误读为「数据丢了」，需要在监控区保留同等降级说明；③ 顶栏合并健康/信息灯后，角标遮挡旧根因（`docs/DESIGN-AUDIT.md:49`）可能复现，必须在 G-28 手机截图里逐项复核。
 
-## 6. 文档漂移核实与修订建议（不直接改 PLUGIN-MATURITY.md）
+## 6. 文档漂移核实与修订建议（并入 P0 实现期同步修订）
 
-只读核对结论：**两处均漂移，且原「现状证据」的检索口径本身已过期**。修订由独立文档卡执行，本文不修改该文件。
+只读核对结论：**两处均漂移（127 / 130），且原「现状证据」的检索口径本身已过期**；同段 `:128` 快捷键也有同类漂移。按用户裁决（ui_review4）：**修订并入 P0 实现期同步完成，不单独开文档卡、不单独设卡点**——P0 实现卡在改动 `web/` 的同时，把 `docs/PLUGIN-MATURITY.md:127/130/128` 一并改掉；本方案文档本身不修改该文件。
 
 ### 6.1 `:127` 首次使用引导
 
@@ -270,7 +285,7 @@
 | 文档现状 | 「首次使用引导 \| 有（新手任务/检查清单）\| **无** \| `grep -rn "onboard\|guide" web/*.js` 仅命中 firewall 提权指引 \| P2」 |
 | 代码事实 | `web/onboarding.js:1` 自述「首次使用引导 / 新手检查清单（R6-4）」；`web/onboarding.js:144` 读 `/-/onboarding` 权威状态、`:166` 写 `/api/v1/onboarding/done`；`web/shell.js:910-916` 顶栏入口、`:958-974` 首屏后 mount 接线；`web/shortcuts.js:320-334` 帮助面板含「重新查看新手引导」 |
 | 判定 | 原 grep 证据只搜 `onboard\|guide` 且限定 `web/*.js`，命中 `onboarding.js` 大量行，结论「无」与证据自相矛盾；功能**已落地** |
-| 修订建议 | 「有（R6-4：`web/onboarding.js` + `shell.js:910-916`，服务端 `/-/onboarding` 定自动弹出）；优先级 P2 可改为『引导覆盖面与完成率仍可增强』，不再写无」 |
+| 修订建议（P0 实现期同步修订 `:127`） | 「有（R6-4：`web/onboarding.js` + `shell.js:910-916`，服务端 `/-/onboarding` 定自动弹出）；优先级 P2 可改为『引导覆盖面与完成率仍可增强』，不再写无」 |
 
 ### 6.2 `:130` 主题（深色）
 
@@ -279,18 +294,18 @@
 | 文档现状 | 「主题（深色）\| 有 \| **无** \| `web/*.css` 无 `prefers-color-scheme` / `data-theme` \| P3」 |
 | 代码事实 | `web/theme.js:44-45` 写 `data-kore-theme` / `data-kore-effective`；`:79` 用 `matchMedia('(prefers-color-scheme: light)')`；`:103-104` 应用到 `<html>`；`web/theme.css:27-58` 浅/深令牌覆盖，`:61` 未加载 JS 兜底深色；`web/shell.js:884-902` 顶栏三档下拉「跟随系统 / 浅色 / 深色」 |
 | 判定 | 属性名口径不对：实际用的是 `data-kore-effective` 而非 `data-theme`，但功能**已落地**且跟随系统；原证据的 `prefers-color-scheme` 在 JS 而非 CSS，按 `web/*.css` 检索当然零命中 |
-| 修订建议 | 「有（轻量三档：跟随系统 / 浅色 / 深色，R6-5，`web/theme.js:79/103` + `web/theme.css:27-61` + `shell.js:884-902`）；P3 保留为『扩展主题覆盖面』而非『无主题』」。注明这是令牌覆盖，不触碰 G-11「重型主题」禁区 |
+| 修订建议（P0 实现期同步修订 `:130`） | 「有（轻量三档：跟随系统 / 浅色 / 深色，R6-5，`web/theme.js:79/103` + `web/theme.css:27-61` + `shell.js:884-902`）；P3 保留为『扩展主题覆盖面』而非『无主题』」。注明这是令牌覆盖，不触碰 G-11「重型主题」禁区 |
 
-### 6.3 同段相邻行的附带核对（不在本方案内修改）
+### 6.3 同段相邻行的附带核对（P0 实现期同步修订 `:128`）
 
-`docs/PLUGIN-MATURITY.md:128` 写「快捷键：局部有（全局 Ctrl/Cmd+K；其余仅 db.js Ctrl+Enter、files.js Esc）」，而 `web/shortcuts.js` 已实现帮助面板与多动作绑定（`web/shortcuts.js:23/233-234`）、`web/shell.js:904-907` 接线；建议同一文档卡把它更新为「有（R6-6：全局 Ctrl/Cmd+K + 帮助面板）」，避免下一轮审计再次发现同类漂移。`docs/PLUGIN-MATURITY.md:115` 已记录 Round 4/5 的搜索/告警/审计等落地，说明 §3.3.2 表格是逐轮回填、但 127/130 两行漏改。
+`docs/PLUGIN-MATURITY.md:128` 写「快捷键：局部有（全局 Ctrl/Cmd+K；其余仅 db.js Ctrl+Enter、files.js Esc）」，而 `web/shortcuts.js` 已实现帮助面板与多动作绑定（`web/shortcuts.js:23/233-234`）、`web/shell.js:904-907` 接线；P0 实现期把它一并更新为「有（R6-6：全局 Ctrl/Cmd+K + 帮助面板）」，避免下一轮审计再次发现同类漂移。`docs/PLUGIN-MATURITY.md:115` 已记录 Round 4/5 的搜索/告警/审计等落地，说明 §3.3.2 表格是逐轮回填、但 127/128/130 三行漏改。
 
 ## 7. 审阅要点（请用户确认后进入实现）
 
 1. 是否接受 §2.1 映射表的 17 项合并 / 下沉（尤其磁盘分析跨 hub、故障演练与通知通道下沉）。
 2. 是否接受首页只保留 3 块（KPI 5 卡迁往监控 hub）。
 3. 是否接受顶栏 4 控件（主题 / 帮助 / 快捷键 / 引导收进设置）。
-4. 是否接受 A6-b/c 的阈值（单 hub ≤5、全站 ≤20）与存量分层登记方式。
-5. 是否按 §6 单独开文档卡修订 `PLUGIN-MATURITY.md` 的 127/128/130 行。
+4. 是否接受 A6 tab 数改为推荐制（单 hub ≤6 / 全站 ≤24 仅 INFO/WARN 提示、不 FAIL、不改 exit code），并确认存量 40 tab 只计数不登记清单。
+5. 是否确认 §6 的 `PLUGIN-MATURITY.md` 127/128/130 行漂移修订并入 P0 实现期同步完成（不单独开卡）。
 
 **验证状态**：本文为 doc-first 方案，未改代码 / CSS / HTML、未生成截图、未执行门禁；所有引用行号来自本轮只读核对，实施期若行号漂移以符号名与文件内容为准。
