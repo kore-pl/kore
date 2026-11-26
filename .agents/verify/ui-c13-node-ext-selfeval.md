@@ -1,6 +1,6 @@
 # C13 Node 扩展管理 · UI 自评（G-28）
 
-> 2026-11-26 · 执行者 `c13-node-ext`（task-139）· 隔离实例 `127.0.0.1:18963`（独立 config/state/run/log/bin，非 8787）· runtime-node 0.4.0 · playwright 1.65.1 headless Chromium · 收工已停实例并删临时目录/脚本。
+> 2026-11-26 · 执行者 `c13-node-ext`（task-139）· 隔离实例 `127.0.0.1:18963`（独立 config/state/run/log/bin，非 8787）· 截图时安装 runtime-node 0.4.0（最终发布版 0.4.1，仅把两处服务端 `invalid()` 文案补齐引导词以满足 G-33 A3，UI 与截图逐字一致）· playwright 1.65.1 headless Chromium · 收工已停实例并删临时目录/脚本。
 
 ## 0. 交付概览
 
