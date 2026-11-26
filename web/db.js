@@ -26,7 +26,12 @@
       // 慢查询分析（db-mysql.slowlog）：阈值/条数只存预设档位，schema 空串=全部库。
       slowlog: null, slowlogError: '', slowlogBusy: false, slowlogLoaded: false,
       slowlogSchema: '', slowlogMinMS: 500, slowlogLimit: 20, slowlogOpen: false,
-      slowlogFormHost: null, slowlogMetaHost: null, slowlogHost: null };
+      slowlogFormHost: null, slowlogMetaHost: null, slowlogHost: null,
+      // 表结构只读浏览（C7）：表列表来自上一次 SHOW TABLES / pg_tables 结果，
+      // 结构查询走既有 query 通道；所有标识符拼接前先过 isSafeIdent 白名单。
+      tables: [], tableDb: '', tableListHost: null, structHost: null,
+      structResult: null, structError: '', structBusy: false, structOpen: false,
+      structLabel: '' };
   }
   var S = fresh();
   // 本地化（ADR-0021）：与 shell.js tr 同范式——当前语言→中文表→key，缺键回退中文。
@@ -259,10 +264,22 @@
     '.db-l2-files-table td{border:0;padding:0 var(--kore-space-1)}' +
     '.db-l2-files-table .db-l2-row-ops{display:flex;gap:var(--kore-space-1);flex-wrap:wrap;padding-top:var(--kore-space-1)}' +
     '.db-l2-files-table .db-l2-row-ops .btn{min-height:var(--kore-touch);flex:1 1 auto}}';
+  // 表结构（C7）样式：表名按钮做成 chip，点开后在查询结果位显示列信息，复用 paintResult 的表格样式。
+  var TABLES_CSS = '.db-tables{margin-top:var(--kore-space-3);padding:0 var(--kore-space-4) var(--kore-space-3)}' +
+    '.db-tables-head{display:flex;align-items:center;justify-content:space-between;gap:var(--kore-space-2);flex-wrap:wrap;margin-bottom:var(--kore-space-2)}' +
+    '.db-tables-title{font-size:var(--kore-font-13);font-weight:600;color:var(--kore-text-1)}' +
+    '.db-tables-meta{font-size:var(--kore-font-12);color:var(--kore-text-3)}' +
+    '.db-table-chips{display:flex;flex-wrap:wrap;gap:var(--kore-space-1)}' +
+    '.db-table-chip{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);' +
+    'min-height:32px;padding:0 var(--kore-space-3);border:1px solid var(--kore-border-1);background:var(--kore-bg-0);' +
+    'border-radius:var(--kore-radius-control);color:var(--kore-text-2);cursor:pointer}' +
+    '.db-table-chip:hover{border-color:var(--kore-info);color:var(--kore-info)}' +
+    '.db-table-chip.is-active{border-color:var(--kore-info);color:var(--kore-info);background:var(--kore-info-bg,var(--kore-bg-1))}' +
+    '.db-struct-title{margin:var(--kore-space-2) 0 0;font-size:var(--kore-font-13);color:var(--kore-text-2)}';
   function ensureL2Style() {
     if (document.getElementById('kore-db-l2-style')) return;
     var style = document.createElement('style');
-    style.id = 'kore-db-l2-style'; style.textContent = L2_CSS;
+    style.id = 'kore-db-l2-style'; style.textContent = L2_CSS + TABLES_CSS;
     document.head.appendChild(style);
   }
   function currentInstance() {
@@ -593,6 +610,107 @@
       }
     });
   }
+
+  // ── 表结构只读浏览（C7）──
+  // 安全硬约束：库名/表名来自后端 databases/query 结果，但在拼进 SQL 前一律再过一道
+  // 标识符白名单（只接受 [A-Za-z0-9_$] 且首字符为字母/下划线）。后端 query 白名单只校验
+  // 首关键字、不防标识符注入，所以这里必须拒绝任何含引号/分号/空格/注释/反斜杠的名称，
+  // 绝不让数据库返回的任意字符串直接进 SQL。所有查询均为 SELECT/SHOW 只读前缀。
+  var IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+  function isSafeIdent(name) {
+    return typeof name === 'string' && name.length > 0 && name.length <= 128 && IDENT_RE.test(name);
+  }
+  // quoteIdent 仅接受白名单内的标识符；用反引号（MySQL）/双引号（PG）包裹作为纵深防御。
+  // 返回空串表示校验失败，调用方据此拒绝执行，不产生任何 SQL。
+  function quoteIdent(name, pg) {
+    if (!isSafeIdent(name)) return '';
+    var q = pg ? '"' : '`';
+    return q + name + q;
+  }
+  // parseTableNames 从 SHOW TABLES / pg_tables 的 query 结果里取第一列的表名。
+  function parseTableNames(r) {
+    var out = [], rows = (r && r.rows) || [], cols = (r && r.columns) || [];
+    var key = cols[0];
+    if (!key) return out;
+    rows.forEach(function (row) {
+      if (!row || row[key] === null || row[key] === undefined) return;
+      var name = String(row[key]);
+      // 只放行白名单内的表名：注入型/异常名称直接不进入列表，用户看不到更点不到。
+      if (isSafeIdent(name) && out.indexOf(name) < 0) out.push(name);
+    });
+    return out;
+  }
+  // structSQL 为一张表生成只读结构查询：MySQL 用 SHOW FULL COLUMNS，PG 用 information_schema.columns。
+  // 库名与表名都先过 quoteIdent（白名单失败返回空串 → 拒查）。
+  function structSQL(dbName, tableName) {
+    if (!isSafeIdent(tableName)) return '';
+    // 库名一旦提供就必须过白名单：fail-closed 拒绝，不静默丢弃后继续拼表查询。
+    if (dbName && !isSafeIdent(dbName)) return '';
+    if (isPg()) {
+      if (!isSafeIdent(dbName)) return '';
+      return "SELECT column_name AS 列名, data_type AS 类型, is_nullable AS 可空, column_default AS 默认值 " +
+        "FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '" + tableName + "' " +
+        "ORDER BY ordinal_position";
+    }
+    // MySQL：SHOW FULL COLUMNS 在连接默认库上执行，库名先经 SELECT 校验存在但不拼进语句；
+    // 用 db.`table` 形式带上库名（quoteIdent 已保证两段都是安全标识符）。
+    var db = dbName ? quoteIdent(dbName, false) : '';
+    return 'SHOW FULL COLUMNS FROM ' + (db ? db + '.' : '') + quoteIdent(tableName, false);
+  }
+  function showTableStructure(dbName, tableName) {
+    // 注入防护：任何非白名单表名在这里就被拒绝，不发请求、不拼 SQL。
+    if (!isSafeIdent(tableName)) {
+      S.structError = tr('db.struct.invalidName', '表名含非法字符，已拒绝查询');
+      S.structResult = null; paintStruct(); return;
+    }
+    var sql = structSQL(dbName, tableName);
+    if (!sql) {
+      S.structError = tr('db.struct.invalidName', '库名或表名含非法字符，已拒绝查询');
+      S.structResult = null; paintStruct(); return;
+    }
+    var instance = S.selected;
+    S.structBusy = true; S.structError = ''; S.structResult = null;
+    S.structLabel = (dbName ? dbName + '.' : '') + tableName;
+    paintTables(); paintStruct();
+    invoke(methodFor('query'), { instance: instance, sql: sql }).then(function (data) {
+      if (S.destroyed || S.selected !== instance) return;
+      S.structBusy = false; S.structResult = data;
+      paintStruct();
+    }, function (err) {
+      if (S.destroyed || S.selected !== instance) return;
+      S.structBusy = false; S.structError = (err && err.message) || String(err);
+      paintStruct();
+    });
+  }
+  function paintTables() {
+    var host = S.tableListHost;
+    if (!host) return;
+    host.textContent = '';
+    if (!S.tableDb) { add(host, el('span', 'db-tables-meta', tr('db.tables.hint', '点上方数据库加载表'))); return; }
+    add(host, el('span', 'db-tables-meta', S.tableDb + ' · ' + S.tables.length + tr('db.tables.count', ' 张表')));
+    var chips = add(host, el('div', 'db-table-chips'));
+    if (!S.tables.length) {
+      add(chips, el('span', 'db-tables-meta muted', tr('db.tables.empty', '（无表）')));
+      return;
+    }
+    S.tables.forEach(function (name) {
+      var b = add(chips, el('button', 'db-table-chip' + (S.structLabel && S.structLabel.slice(S.structLabel.lastIndexOf('.') + 1) === name ? ' is-active' : ''), name));
+      b.type = 'button'; b.setAttribute('data-table', name);
+      on(b, function () { showTableStructure(S.tableDb, name); });
+    });
+  }
+  function paintStruct() {
+    var host = S.structHost;
+    if (!host) return;
+    host.textContent = '';
+    if (!S.structLabel) { add(host, el('div', 'db-result-empty muted', tr('db.tables.structHint', '点表名查看列结构（只读）'))); return; }
+    // 标题与结果分两个子节点：renderResultInto 会清空传入的 host，不能把标题塞进同一个节点。
+    add(host, el('div', 'db-struct-title', tr('db.tables.structOf', '表结构：') + S.structLabel));
+    var resultHost = add(host, el('div', 'db-result'));
+    if (S.structError) { resultHost.appendChild(notice(stripErrCode(S.structError))); return; }
+    if (S.structBusy) { add(resultHost, el('div', 'db-result-empty muted', tr('db.tables.loading', '正在读取表结构…'))); return; }
+    renderResultInto(resultHost, S.structResult, tr('db.tables.structHint', '点表名查看列结构（只读）'));
+  }
   function paintQueryNotice() {
     if (!S.queryNoticeHost) return; S.queryNoticeHost.textContent = '';
     if (S.queryError) S.queryNoticeHost.appendChild(notice(S.queryError));
@@ -601,15 +719,14 @@
     if (!S.run) return; S.run.disabled = S.busy;
     S.runState.textContent = S.busy ? tr('db.query.running', '执行中…') : '';
   }
-  function paintResult() {
-    if (!S.resultHost) return;
-    var host = S.resultHost;
+  // renderResultInto 把 query 结构化结果渲染进指定 host；paintResult 与表结构列信息共用同一渲染器。
+  function renderResultInto(host, r, emptyText) {
     host.textContent = '';
-    if (!S.result) {
-      add(host, el('div', 'db-result-empty muted', S.queryError ? tr('db.result.noRows', '查询未返回结果') : tr('db.result.hint', '执行 SQL 后在此查看结果')));
+    if (!r) {
+      add(host, el('div', 'db-result-empty muted', emptyText || tr('db.result.hint', '执行 SQL 后在此查看结果')));
       return;
     }
-    var r = S.result, rows = r.rows || [], cols = r.columns || [];
+    var rows = r.rows || [], cols = r.columns || [];
     var meta = add(host, el('div', 'db-result-meta'));
     add(meta, el('span', null, fmtInt(r.row_count != null ? r.row_count : rows.length) + tr('db.unit.rows', ' 行')));
     if (r.truncated) add(meta, el('span', 'db-truncated', tr('db.result.truncated', '已截断，仅显示前 {n} 行', { n: rows.length })));
@@ -632,6 +749,11 @@
         else cell.textContent = String(value);
       });
     });
+  }
+  function paintResult() {
+    if (!S.resultHost) return;
+    renderResultInto(S.resultHost, S.result,
+      S.queryError ? tr('db.result.noRows', '查询未返回结果') : tr('db.result.hint', '执行 SQL 后在此查看结果'));
   }
   // ── 慢查询分析（db-mysql.slowlog，仅 MySQL/MariaDB）──
   // 数据来自 performance_schema 的 digest 聚合：只读、不改服务端状态。
@@ -801,6 +923,7 @@
     host.textContent = '';
     S.l2UsersHandle = null; S.l2NoticeHost = null;
     S.slowlogFormHost = null; S.slowlogMetaHost = null; S.slowlogHost = null;
+    S.tableListHost = null; S.structHost = null;
     var inst = currentInstance();
     if (!inst) return;
     var statusPanel = add(host, el('section', 'panel'));
@@ -875,6 +998,15 @@
     S.queryNoticeHost = add(sqlPanel, el('div', 'db-query-notice'));
     S.resultHost = add(sqlPanel, el('div', 'db-result'));
     paintQueryNotice(); paintRunState(); paintResult();
+    // 表结构折叠区（C7）：不改一级导航、不新建 hub；点库→表名 chip→列结构。
+    // 表名展示与结构查询都只走既有 query 通道；查询只读，标识符先过白名单。
+    var tablesPanel = add(sqlPanel, el('details', 'db-tables'));
+    tablesPanel.open = true;
+    var tablesSum = add(tablesPanel, el('summary', 'db-l2-summary'));
+    add(tablesSum, el('span', 'db-tables-title', tr('db.tables.title', '表结构')));
+    S.tableListHost = add(tablesPanel, el('div'));
+    S.structHost = add(tablesPanel, el('div', 'db-result'));
+    paintTables(); paintStruct();
     // 慢查询分析放在折叠区：不展开就不发查询；PG 无 db-mysql.slowlog，不渲染。
     if (!isPg()) {
       var slow = add(host, el('details', 'panel db-l2-panel'));
@@ -944,6 +1076,7 @@
     S.statusError = ''; S.dbError = ''; S.queryError = ''; S.dbLoaded = false; S.busy = false;
     S.slowlog = null; S.slowlogError = ''; S.slowlogBusy = false; S.slowlogLoaded = false;
     S.slowlogSchema = '';
+    S.tables = []; S.tableDb = ''; S.structResult = null; S.structError = ''; S.structLabel = '';
     paintInstances();
     paintDetail();
     loadStatus();
@@ -952,17 +1085,44 @@
   function useDb(name) {
     if (!S.sql) return;
     S.selectedDb = name;
+    // C7：点库后同步切换表结构区的库上下文（清掉上一库的表名/列结构），再复用既有 SHOW TABLES 查询。
+    S.tableDb = name; S.tables = []; S.structResult = null; S.structError = ''; S.structLabel = '';
+    paintTables(); paintStruct();
+    if (!isSafeIdent(name)) {
+      // 库名未过白名单：不发任何含该名称的 SQL，避免标识符注入。
+      S.sql.value = isPg() ? 'SELECT datname FROM pg_database WHERE false' : 'SHOW TABLES';
+      S.sql.focus();
+      return;
+    }
     if (isPg()) {
-      // PG 插件在连接默认库上执行只读查询，没有跨库 USE；这里给可直接执行的库信息查询。
+      // PG 插件在连接默认库上执行只读查询，没有跨库 USE；库名先过白名单再拼进单引号字面量
+      // （只用于显示库大小，不进结构查询）。
       S.sql.value = "SELECT datname AS database, pg_size_pretty(pg_database_size(datname)) AS size " +
-        "FROM pg_database WHERE datname = '" + String(name).replace(/'/g, "''") + "'";
+        "FROM pg_database WHERE datname = '" + name + "'";
+      // PG 表结构查 information_schema（public schema），表列表另发一条只读查询。
+      loadPgTables(name);
     } else {
-      S.sql.value = 'SHOW TABLES FROM `' + String(name).replace(/`/g, '``') + '`';
+      S.sql.value = 'SHOW TABLES FROM ' + quoteIdent(name, false);
     }
     S.sql.focus();
-    runQuery();
+    // 表列表直接复用这次 SHOW TABLES 的结果，不再发第二次查询。
+    runQuery(function (data) {
+      if (!isPg() && data) { S.tables = parseTableNames(data); paintTables(); }
+    });
   }
-  function runQuery() {
+  // PG 在连接默认库上查询，用 pg_tables 取 public schema 的表名（只读）。
+  function loadPgTables(dbName) {
+    if (!isSafeIdent(dbName)) return;
+    var instance = S.selected;
+    invoke(methodFor('query'), {
+      instance: instance,
+      sql: "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+    }).then(function (data) {
+      if (S.destroyed || S.selected !== instance || S.tableDb !== dbName) return;
+      S.tables = parseTableNames(data); paintTables();
+    }, function () { /* 表列表失败只留空态，不阻断控制台 */ });
+  }
+  function runQuery(onSuccess) {
     if (!S.selected || S.busy || !S.sql) return;
     var sql = S.sql.value.trim();
     if (!sql) { S.queryError = tr('db.query.emptyInput', '请输入 SQL 后再执行'); paintQueryNotice(); return; }
@@ -973,6 +1133,7 @@
       if (S.destroyed || S.selected !== instance) return;
       S.busy = false; S.result = data;
       paintRunState(); paintResult();
+      if (typeof onSuccess === 'function') onSuccess(data);
     }, function (err) {
       if (S.destroyed || S.selected !== instance) return;
       S.busy = false; S.queryError = err.message;
@@ -1130,5 +1291,18 @@
     loadInstances(false);
     return { destroy: function () { S.destroyed = true; } };
   }
-  window.KoreDb = { render: render };
+  // 只读验证钩子（供隔离实例自动化断言注入防护，不改变 UI 或调用路径）：
+  // isSafeIdent / structSQL / showTableStructure 与页面按钮走的是同一份实现。
+  window.KoreDb = {
+    render: render,
+    _verify: {
+      isSafeIdent: isSafeIdent,
+      structSQL: structSQL,
+      showTableStructure: showTableStructure,
+      state: function () {
+        return { tables: S.tables.slice(), tableDb: S.tableDb, structLabel: S.structLabel,
+          structError: S.structError, structResult: S.structResult };
+      }
+    }
+  };
 })();
