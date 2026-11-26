@@ -2,6 +2,9 @@
    数据源优先级：monitor 插件（真实读 /proc 与 /sys）→ 内核 /api/v1/system/metrics 降级。
    插件未安装或调用失败时**不报错、不白屏**：降级渲染内核基础指标并在顶部标一条灰字提示。
    调用形态：POST /api/v1/invoke/monitor/monitor.<method>（方法段写完整限定名）。
+   阈值：启动时 monitor.config.get 读后端持久化值（cpu/memory/disk_threshold），
+   「⚙ 阈值设置」复用通用配置面板写回 monitor.config.set，保存后立即重读并重绘；
+   读不到配置时沿用默认值，历史曲线仍由后端 60 点环形缓冲（history.json）接续。
    刷新：仅手动「刷新」按钮（G-19 禁止轮询：本文件不含 setInterval / 轮询定时器）；
    唯一的 setTimeout 是 100ms 的 resize 防抖，唯一的时间驱动是单帧 requestAnimationFrame。
    渲染构件在 web/monitor-cards.js，进入本视图时才注入，不进首屏。
@@ -17,8 +20,11 @@
   var CARDS_URL = '/assets/monitor-cards.js';
   var STYLE_ID = 'kore-mon-style';
   var FALLBACK_NOTE = '当前使用内核基础指标，安装 monitor 插件可获得磁盘/网络/温度详情';
-  /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。 */
-  var THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
+  /* monitor 0.3.0：system 返回 history（列式数组）与 alerts；阈值随调用传入（0 关闭）。
+     config.get 失败（插件未装 / 权限不足）时用这三个默认值继续渲染，不白屏（与后端代码默认值一致）。 */
+  var DEFAULT_THRESHOLDS = { cpu_percent: 90, memory_percent: 90, disk_percent: 90 };
+  var THRESHOLDS = { cpu_percent: DEFAULT_THRESHOLDS.cpu_percent,
+    memory_percent: DEFAULT_THRESHOLDS.memory_percent, disk_percent: DEFAULT_THRESHOLDS.disk_percent };
   /* 四条曲线：CPU / 内存 / 负载 / 磁盘（负载不是百分比，按核数换算参照线）。
      ink 是主题色变量名（布局时只读一次 computedStyle），thr 指明参照线来源。 */
   var SERIES = [
@@ -41,7 +47,7 @@
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
     procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null, pluginSource: '',
-    cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null };
+    cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null, gear: null };
   /* 图表注册表（模块级，唯一真源）：charts 里的实例即 window.__koreMonitorChart.count()；
      chartPanelEl 是持久面板节点，刷新时复用同一个 canvas，不重建 DOM；
      resize 只在有实例时绑定一个监听（100ms 防抖），实例清零即解绑。 */
@@ -59,6 +65,7 @@
     '.mon-h2{margin:0;font-size:20px;font-weight:600}',
     '.mon-ts{font-size:12px;color:var(--kore-text-3);font-variant-numeric:tabular-nums}',
     '.mon-head .btn{margin-left:auto;min-height:44px}',
+    '.mon-head .btn + .btn{margin-left:0}',
     '.mon-notice{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--kore-text-3)}',
     '.mon-notice:empty{display:none}',
     '.mon-fail{color:var(--kore-danger)}',
@@ -228,6 +235,40 @@
     if (!S.refresh) return;
     S.refresh.disabled = busy;
     S.refresh.textContent = busy ? '刷新中…' : '刷新';
+    if (S.gear) S.gear.disabled = busy;
+  }
+
+  /* 阈值唯一真源：monitor 插件的 config.get（config.json > 环境变量 > 代码默认值）。
+     插件未装 / 读不到时保留上一次成功的值（初次即 DEFAULT_THRESHOLDS），继续渲染不白屏。
+     values 里三个键分别是 cpu_threshold / memory_threshold / disk_threshold（0..100）。 */
+  function loadThresholds() {
+    return invoke('config.get', {}).then(function (d) {
+      var values = (d && d.values) || {};
+      var map = { cpu_percent: values.cpu_threshold, memory_percent: values.memory_threshold,
+        disk_percent: values.disk_threshold };
+      var next = {};
+      for (var key in map) {
+        if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+        var v = num(map[key]);
+        if (v !== null && v >= 0 && v <= 100) next[key] = v;
+      }
+      if (Object.keys(next).length === 3) THRESHOLDS = next;
+      return THRESHOLDS;
+    }, function () { return THRESHOLDS; });
+  }
+
+  /* 设置入口复用内核通用配置面板（KoreShell.openConfig → config-panel.js 的 schema 表单），
+     监控页只挂一个齿轮按钮，不重复实现表单控件；保存成功后立即重读阈值并刷新本页。 */
+  function openConfig() {
+    if (!S.box) return;
+    if (!window.KoreShell || typeof window.KoreShell.openConfig !== 'function') {
+      notice([el('span', 'mon-degraded', '设置面板未加载，请刷新页面后重试')], true);
+      return;
+    }
+    window.KoreShell.openConfig(S.box, 'monitor', {
+      title: '监控阈值设置',
+      onSaved: function () { loadThresholds().then(function () { loadAll(); }); }
+    });
   }
 
   /* 温度单独走 monitor.temperature：system 结果不含 thermal zone。 */
@@ -635,8 +676,9 @@
   function legendText(history) {
     var n = Array.isArray(history.timestamps) ? history.timestamps.length : 0;
     var iv = num(history.interval_s);
-    return '共 ' + n + ' 点 · 间隔 ' + (iv === null ? '—' : iv) + 's · 单序列上限 ' +
-      MAX_POINTS + ' 点（后端预聚合待办）· 悬停/点按读数 · 无动画';
+    var cap = num(history.capacity);
+    return '共 ' + n + ' 点 · 间隔 ' + (iv === null ? '—' : iv) + 's · 后端保留 ' +
+      (cap === null ? '—' : cap) + ' 点（重启接续）· 悬停/点按读数 · 无动画';
   }
 
   /* 视图切走 / 卸载：取消待绘制帧 + 清引用 + 解绑唯一 resize 监听。幂等。 */
@@ -848,28 +890,33 @@
     if (!S.box) return;
     var gen = ++S.gen;
     setBusy(true);
-    ensureCards().then(function () {
+    /* 先取后端持久化阈值（不可用时沿用当前值），再拉数据；两条请求串行且不引入定时器（G-19）。 */
+    loadThresholds().then(function () {
       if (stale(gen)) return;
-      // 先试插件：成功即全量渲染；任何失败（未安装 / E_* / 超时 / 网络）都走内核降级。
-      invoke('system', { per_cpu: false, thresholds: THRESHOLDS }).then(function (d) {
+      ensureCards().then(function () {
         if (stale(gen)) return;
-        S.mode = 'plugin';
-        S.pluginSource = d && d.source ? String(d.source) : '';
-        setSource();
-        /* 降级逐项可见：命令不可读时后端写 warnings，不在界面上伪造读数。 */
-        var degraded = Array.isArray(d && d.warnings) ? d.warnings : [];
-        notice(degraded.length ? [el('span', 'mon-degraded', '部分指标不可用：' + degraded[0])] : []);
-        paintPlugin(d || {});
-        finish(gen);
-        loadProcs();
+        // 先试插件：成功即全量渲染；任何失败（未安装 / E_* / 超时 / 网络）都走内核降级。
+        // history_points 不传：由后端 config 决定环容量（默认 60），重启接续 history.json。
+        invoke('system', { per_cpu: false, thresholds: THRESHOLDS }).then(function (d) {
+          if (stale(gen)) return;
+          S.mode = 'plugin';
+          S.pluginSource = d && d.source ? String(d.source) : '';
+          setSource();
+          /* 降级逐项可见：命令不可读时后端写 warnings，不在界面上伪造读数。 */
+          var degraded = Array.isArray(d && d.warnings) ? d.warnings : [];
+          notice(degraded.length ? [el('span', 'mon-degraded', '部分指标不可用：' + degraded[0])] : []);
+          paintPlugin(d || {});
+          finish(gen);
+          loadProcs();
+        }, function (err) {
+          if (stale(gen)) return;
+          if (err && err.status === 401) { failBoth(gen, '会话已过期，请重新登录后刷新页面'); return; }
+          loadKernel(gen, err);
+        });
       }, function (err) {
         if (stale(gen)) return;
-        if (err && err.status === 401) { failBoth(gen, '会话已过期，请重新登录后刷新页面'); return; }
-        loadKernel(gen, err);
+        failBoth(gen, '监控组件加载失败：' + (err && err.message ? err.message : '未知错误'));
       });
-    }, function (err) {
-      if (stale(gen)) return;
-      failBoth(gen, '监控组件加载失败：' + (err && err.message ? err.message : '未知错误'));
     });
   }
 
@@ -878,7 +925,7 @@
     S.gen++;
     disposeCharts();
     S.box = null; S.procs = null; S.procErr = ''; S.pluginSource = '';
-    S.refresh = null; S.tsEl = null; S.notice = null; S.cards = null; S.panels = null;
+    S.refresh = null; S.gear = null; S.tsEl = null; S.notice = null; S.cards = null; S.panels = null;
     S.warn = null; S.procBody = null; S.sortCpu = null; S.sortMem = null; S.src = null;
     S.C = null; S.cardsReady = null; S.mode = '';
   }
@@ -899,6 +946,11 @@
     S.refresh = add(head, el('button', 'btn', '刷新'));
     S.refresh.type = 'button';
     on(S.refresh, loadAll);
+    /* 阈值设置入口：复用通用配置面板，只加一个齿轮，不自建任何表单控件。 */
+    S.gear = add(head, el('button', 'btn btn-ghost', '⚙ 阈值设置'));
+    S.gear.type = 'button';
+    S.gear.setAttribute('aria-label', '监控阈值设置');
+    on(S.gear, openConfig);
 
     S.notice = add(container, el('div', 'mon-notice'));
     S.cards = add(container, el('div', 'monitor-grid'));
