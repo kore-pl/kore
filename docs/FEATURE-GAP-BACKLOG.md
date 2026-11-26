@@ -70,7 +70,7 @@
 ### C8 — 文件前端未接后端能力 【已证伪 / 已接线 PASS】
 
 - 原缺口前提（已推翻）：`docs/PLUGIN-MATURITY.md:71` 旧文「前端未接 search/trash/rename/copy/uploadChunk（`web/files.js` 仅见 `readRange`）」。
-- 证伪证据：① 前端接线事实见 `.agents/verify/files-l2.md`（`web/files.js:295/300/748` rename、`:303`+`web/files-l2.js:318` copy、`:470` search、`:626/644` trash.restore、`:711` trash.purge，G-28 双端截图齐）；② 后端五项经隔离 kored 实例真实 `POST /api/v1/invoke/file/<method>` 逐条断言 **全 PASS（18 断言 / 0 FAIL）**，见 `.agents/verify/c8-file-invoke-live.md`（`file@0.3.6` 包 sha 与索引一致、127.0.0.1:18887 隔离实例、KORE_FILE_ROOT 指测试目录、未碰 8787/.kore-local-*）。
+- 证伪证据：① 前端接线事实见 `.agents/verify/files-l2.md`（G-28 双端截图齐；该文件旧行号 `web/files.js:295/300/748` rename、`:303`+`web/files-l2.js:318` copy、`:470` search、`:626/644` trash.restore、`:711` trash.purge 经 11-26 UI 重构已漂移，**以当前 HEAD 真实调用点为准**：`web/files.js:700` search、`:779,799` trash.list、`:881,896` trash.restore、`:948,951` trash.purge、`:988` rename，`web/files-l2.js:142` uploadChunk、`:149,203,233` uploadStatus、`:455,467` copy）；② 后端五项经隔离 kored 实例真实 `POST /api/v1/invoke/file/<method>` 逐条断言 **全 PASS（13 条可核对断言 / 0 FAIL，HTTP 200 不另计）**，见 `.agents/verify/c8-file-invoke-live.md`（`file@0.3.6` 包 sha 与索引一致、127.0.0.1:18887 隔离实例、KORE_FILE_ROOT 指测试目录、未碰 8787/.kore-local-*）。
 - 结论：C8 已从「硬证据缺口」转为 **已证伪 / 已接线 PASS**；按用户「用本机测试和正式使用」口径，先隔离实测坐实再改文档，不再派无效实现卡。前端双击改名/目录选择器复制/按内容搜索/回收站三动作/断点续传均有真实 UI 落点与后端可达证据。
 
 ### C9 — 监控长期历史缺失 【硬证据】
@@ -161,7 +161,7 @@
 
 ### 第 2 期 · 生态深度：C4、C5、C7、C8、C9、C13、C14
 
-- 前置条件：C4 需插件发布范围（`root_actions` 规则编辑）+ 前端编排设计；C5 需 TSIG 配置与写表单；C7 需先做 D2 表浏览器并出 ADR（`docs/DECISIONS/0050-db-and-runtime-aggregation.md:202`、`:207`）；C8 **已证伪/已接线 PASS**（`web/files.js` 五项 UI 落点 + 隔离 invoke 真跑 18 断言 0 FAIL，见 `.agents/verify/c8-file-invoke-live.md`；`docs/PLUGIN-MATURITY.md:71`）；C9 需历史持久化 + 阈值配置 + 通知渠道；C13/C14 需 dist 重建入索引与索引重签（`docs/PLUGIN-MATURITY.md:85-86`、`:89`）。
+- 前置条件：C4 需插件发布范围（`root_actions` 规则编辑）+ 前端编排设计；C5 需 TSIG 配置与写表单；C7 需先做 D2 表浏览器并出 ADR（`docs/DECISIONS/0050-db-and-runtime-aggregation.md:202`、`:207`）；C8 **已证伪/已接线 PASS**（`web/files.js` 五项 UI 落点 + 隔离 invoke 真跑 13 条可核对断言 0 FAIL，见 `.agents/verify/c8-file-invoke-live.md`；`docs/PLUGIN-MATURITY.md:71`）；C9 需历史持久化 + 阈值配置 + 通知渠道；C13/C14 需 dist 重建入索引与索引重签（`docs/PLUGIN-MATURITY.md:85-86`、`:89`）。
 - 可验证判据：每项同时满足「后端能力可用 + 前端可达 + 隔离实例/真机复验」三件套，并落一份带 `file:line` 或截图的 verify 报告；缺任一件不得标「已补齐」。
 
 ### 第 3 期 · 体验与国际化：C10

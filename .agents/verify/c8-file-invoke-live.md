@@ -4,7 +4,7 @@
 
 ## 0. 结论
 
-五项**全部 PASS**（18 断言 / 0 FAIL）。在**隔离实例**上以 `file@0.3.6`（sha256 与索引逐字节一致）真实经
+五项**全部 PASS**（13 条可逐项核对的断言 / 0 FAIL；HTTP 200 为每次 invoke 的传输前提，不另计断言，见 §2 汇总）。在**隔离实例**上以 `file@0.3.6`（sha256 与索引逐字节一致）真实经
 `POST /api/v1/invoke/file/<method>` 调用后端生产实现，逐条断言文件系统结果 —— 坐实 C8「前端未接后端能力」的
 缺口**前提已被推翻**：后端能力不仅在源码存在，且在真实 kored + 真实插件 + 真实文件上可用。
 **是否碰主实例 8787 / .kore-local-\*：否**（见 §5）。
@@ -71,7 +71,11 @@
   - `inv file.uploadStatus '{"path":"chunk.bin"}'` → `{"path":"chunk.bin","received":77,"exists":true}`
 - 断言：`received(77) == size(77)` → **真**；Python 回读 `$ROOT/chunk.bin` 与原始 payload `==` → `identical: True`（77/77 字节）。2/2 PASS。
 
-**汇总行（harness 原样）**：`PASS=18 FAIL=0`。完整原始日志在隔离树 `testrun.log`（收尾随隔离树删除）。
+**汇总（按本节逐项可核对口径）**：rename 2 + copy 2 + search 2 + trash 5 + uploadChunk 2 = **13 断言 / 0 FAIL**。
+上述 13 条每条都列明了 curl 命令形态、退出码（HTTP 200）与结果断言原文，可逐条回读核对；HTTP 200 是每次
+invoke 的传输前提，**不另计入断言数**（否则 9 次 invoke 将另得 9 条，合计 22，与原「18」亦不符）。
+原 harness 曾输出 `PASS=18 FAIL=0`，但 `testrun.log` 已随隔离树删除、harness 脚本不存，**18 这一数字无法
+逐条追溯，故本报告按可核对的 13 条为准，不再维持 18**。
 
 ## 3. 失败处理说明
 
@@ -81,11 +85,14 @@
 ## 4. 与文档漂移的对应
 
 - `docs/PLUGIN-MATURITY.md:71` 原「前端未接 search/trash/rename/copy/uploadChunk（`web/files.js` 仅见 `readRange`）」
-  为陈旧断言：前端接线事实见 `.agents/verify/files-l2.md`（`web/files.js:295/300/748/470/626/644/711`、
-  `web/files-l2.js:318` 等，G-28 双端截图齐），本轮又补后端 invoke 真跑 PASS 证据。已改为「五项已接线并经隔离实例
-  invoke 真跑 PASS」并引用本报告与 files-l2.md。
+  为陈旧断言：前端接线事实见 `.agents/verify/files-l2.md`（G-28 双端截图齐），本轮又补后端 invoke 真跑 PASS 证据。
+  已改为「五项已接线并经隔离实例 invoke 真跑 PASS」并引用本报告与 files-l2.md。
+  注：files-l2.md 内引用的是 11-23 旧行号（`web/files.js:295/300/748/470/626/644/711`、`web/files-l2.js:318`），
+  经 11-26 UI 重构已漂移；本卡写域不含该文件，未改。以下为当前 HEAD 逐行回读的真实 `invoke(...)` 调用点，以本节为准：
+  `web/files.js:700` search、`:779,799` trash.list、`:881,896` trash.restore、`:948,951` trash.purge、`:988` rename；
+  `web/files-l2.js:142` uploadChunk、`:149,203,233` uploadStatus、`:455,467` copy。
 - `docs/FEATURE-GAP-BACKLOG.md:70-73` C8 条已由【硬证据·缺口】改为【已证伪 / 已接线 PASS】，引用本报告。
-- `docs/FEATURE-GAP-BACKLOG.md:163` 第 2 期前置条件中「C8 需前端接线」同步更正。
+- `docs/FEATURE-GAP-BACKLOG.md:164` 第 2 期前置条件中「C8 需前端接线」同步更正。
 
 ## 5. 隔离声明（未碰主实例）
 
