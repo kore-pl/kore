@@ -27,15 +27,20 @@
 
 ## 2. 真实差距 C1–C15（按用户价值降序）
 
-### C1 — WAF 新增规则提交 502 回滚 【硬证据】
+### C1 — WAF 新增规则提交 502 回滚 【硬证据 · 本机真机验证 PASS】
 
-- 证据：`.agents/verify/waf-rules-ui.md:65`「UI 侧可用（代码已闭环），但后端在 0.4.1 + nft 1.1.6 上 `chain` 回读为空 → 新增规则实际不可用……提交必失败（502 回滚）」；同因见 `:43`、`:46`。
-- 补齐前提：**需真机回归**——修 `nft -j list chain` 的 comment 解析，再验「写入 → 回读非空 → 命中拦截」闭环；仅改前端无效。
+- 原证据：`.agents/verify/waf-rules-ui.md:65`「UI 侧可用（代码已闭环），但后端在 0.4.1 + nft 1.1.6 上 `chain` 回读为空 → 新增规则实际不可用……提交必失败（502 回滚）」；同因见 `:43`、`:46`。
+- **本机验证证据（task-126）**：`.agents/verify/waf-ruleadd-live.md` —— `waf` 0.5.3（含 0.4.3 nft 1.1.x comment 解析修复 + 0.4.4 expr 反解 + 0.4.5 e2e harness）在 `dsh-root` 私有 user+net namespace + 真 nftables 1.1.6 下真跑：`waf.rule.add → 独立 nft -j 回读 chain handle → waf.rule.remove` 闭环全 PASS（报告 §3.3 命令 + nft 原文回读，§4 判定表 8 项全 PASS）。chain 非空、builtin 徽标正确、handle 一致（插件返回 11 == 独立 nft 回读 11）、删除真删数据面且幂等；旧 0.4.1 式 `E_UPSTREAM`（HTTP 502）回滚**未复现**。
+- **验证形态边界**：用「真插件二进制 + 真协议帧 + 按 `info.json` 声明执行真 nft 的假内核 root-action 通道」，覆盖 `rule.*` 协议/数据面闭环，非 kored + 8787 实例；kored 前端徽标渲染与浏览器交互属 UI 层，另卡（见 §5）。
+- **附带观察（后续小项，与本闭环无关）**：上游 `TestRuleAddToggleRemoveAgainstRealNft` 末步「内置规则 toggle off/on」会调 `rebuildChain()`（`internal/wafop/rulecalls.go:194-245`）从 registry 重放已登记自定义规则，使已 `remove` 的 `block-e2e` 复活；如实留痕供后续评估，本轮不改生产代码。
+- 状态：**本机真机验证 PASS**（数据面闭环），原「502 回滚」结论不再复现。
 
-### C2 — ACME 真机签发未验证 【硬证据】
+### C2 — ACME 真机签发未验证 【硬证据 · 离线 mock 已验，真机仍挂起】
 
-- 证据：`docs/PLUGIN-MATURITY.md:77`（`ssl` 0.8.0 L2，20 方法含 `acme.*` / `acme.builtin.*`；ADR-0020 本机无客户端故真机签发未验证）、`:157`（「结案骨架部分；强制 HTTPS 下发与真机签发待补验」）。
-- 补齐前提：**需真机与可控域名**（真实 ACME 客户端 + 80/443 回连），先补验再判定是否属功能缺口。
+- 原证据：`docs/PLUGIN-MATURITY.md:77`（`ssl` 0.8.0 L2，20 方法含 `acme.*` / `acme.builtin.*`；ADR-0020 本机无客户端故真机签发未验证）、`:157`（「结案骨架部分；强制 HTTPS 下发与真机签发待补验」）。该「仍骨架」口径在 **mock 链路层面已过时**，见下条证据（PM 原文未在本文件写域内，保持原样，仅在此说明口径差异）。
+- **本机离线证据（task-125）**：`.agents/verify/acme-offline-evidence.md` —— `ssl` 0.8.1 内置 ACME 客户端 + `acmetest` mock CA（RFC 8555 最小子集，两级 CA，仅 `_test.go` 引用、不进生产二进制）在本机 **零外网**（`GOPROXY=off`、`go test -count=1`）下**全链路 192 条用例 PASS、0 FAIL**：签发闭环（`TestIssueEndToEnd` / `TestACMEIssueEndToEnd`）、自动续期 due/skip、续期失败保留旧证书、失败签发不落盘、EAB（含 missing/accepted/wrong-key）、bad-nonce 重试、零参数一键签发、失败注入路径等均覆盖（报告 §2 命令 + 退出码 0，§3 重点用例清单）。
+- **未证边界**：**真机外部 CA 签发**（Let's Encrypt 等生产 CA）未做、不算完成——需用户明确授权联网 + 可控域名 + HTTP-01 可达性；证书可信链、真实 CA 风控/限流、DNS 解析与防火墙放行均未真机验证。
+- 状态：**离线 mock 全链路已验证，真机外部 CA 签发仍挂起**。PM:77/157「仍骨架/部分补」口径据本期结果在 mock 层面已过时，真机层面仍成立；PM 原文不在本文件写域，未改。
 
 ### C3 — 异地备份不做 【刻意不做】
 
@@ -144,12 +149,14 @@
 
 ### 第 1 期 · 安全核心：C1、C2、C12、C15
 
-- 前置条件：C1/C2 **需真机**（nft 环境、ACME 客户端 + 可控域名）；C12 **需 ADR-0028 落地**（`docs/PLUGIN-MATURITY.md:91`）；C15 **已收口**（task-124 本机复跑 21 段全绿 + exit=6 口径裁决，`.agents/verify/selfupdate-final-gate.md`）。
-- 可验证判据：
-  - C1：真机新增规则写入 → 回读非空 → 命中拦截，全程无 502；`waf-rules-ui.md:65` 的「半可用」结论有新 verify 报告替换。
-  - C2：至少一次真实签发 + 到期续期成功，证据落到 `.agents/verify/` 报告并更新 `PLUGIN-MATURITY.md:157`。
-  - C12：`sshd_config` 写路径按 ADR-0028 实施且可审计，root-action 白名单不扩大，回归 `security-suite-g28.md` 既有行为。
-  - C15：4 段 FAIL 逐段给出归因与处置（回派或环境例外），退出码口径统一；PARTIAL → 明确 PASS 或明确例外，不粉饰。**已达成：4 段全修复并本机复验全绿，退出码按 exitEnv=6，PARTIAL → 核心 PASS（task-124，`.agents/verify/selfupdate-final-gate.md`）。**
+**本期三路证据已全部 PASS 并回写（C1 / C2 / C15 三项闭环；各自的未证边界见 §5，不夸大）**：C1 本机真机数据面闭环 PASS（task-126，`waf-ruleadd-live.md`）、C2 离线 mock 全链路 PASS（task-125，`acme-offline-evidence.md`；真机签发仍挂起）、C15 本机复跑 21 段全绿 PASS（task-124，`selfupdate-final-gate.md`）。C12 技术门槛已具备，但真写宿主 `/etc/ssh` 待用户单独授权（见下）。
+
+- 前置条件：C1 **已由本机私有 netns + 真 nft 满足**（task-126）；C2 离线 mock 已满足、**真机部分仍需授权联网 + 可控域名**；C12 **本机 dsh-root 实测有完整 root + CAP_NET_ADMIN + `/etc/ssh` 可写（task-123），技术门槛已具备**——但 ADR-0028 落地与**真写宿主 `/etc/ssh` 需用户单独授权回滚方案后才动**；C15 **已收口**（task-124 本机复跑 21 段全绿 + exit=6 口径裁决，`.agents/verify/selfupdate-final-gate.md`）。
+- 可验证判据（闭环状态据本期证据更新）：
+  - C1：**已达成（数据面）** —— 真机 `waf.rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现，证据 `.agents/verify/waf-ruleadd-live.md`；kored 前端徽标与浏览器交互属 UI 层另卡，toggle 复活留后续小项。
+  - C2：**离线部分已达成** —— 内置 ACME + mock CA 192 测试 PASS，证据 `.agents/verify/acme-offline-evidence.md`；**真机至少一次真实签发 + 到期续期仍未达成**（需授权联网 + 可控域名），`PLUGIN-MATURITY.md:157` 的 PM 原文不在本文件写域、未改，仅在此同步口径。
+  - C12：**未闭环（等待授权，非技术阻塞）** —— 技术门槛已具备（task-123）；`sshd_config` 写路径按 ADR-0028 实施且可审计、root-action 白名单不扩大、回归 `security-suite-g28.md` 既有行为仍为收口判据；真写宿主 `/etc/ssh` 须先取得用户单独授权并备好回滚方案。
+  - C15：**已达成** —— 4 段 FAIL 全修复并本机复验全绿，退出码按 exitEnv=6，PARTIAL → 核心 PASS（task-124，`.agents/verify/selfupdate-final-gate.md`）。
 
 ### 第 2 期 · 生态深度：C4、C5、C7、C8、C9、C13、C14
 
@@ -169,15 +176,15 @@
 
 ## 5. 诚实边界
 
-本文件是**基于本地已有材料的核实，不是联网实时竞品测评**。竞品能力来自 BA 原文（明示未真机安装）、FEATURE-PARITY draft 矩阵与 PLUGIN-MATURITY 的常识描述，可能过时；kore 能力来自本地代码 / `file:line` 与 verify 报告。原有 7 类未证项，第 7 类（自升级 4 段 FAIL）已由 task-124 本机复跑取证收口，余 6 类未证项逐条列证据，不脑补结论：
+本文件是**基于本地已有材料的核实，不是联网实时竞品测评**。竞品能力来自 BA 原文（明示未真机安装）、FEATURE-PARITY draft 矩阵与 PLUGIN-MATURITY 的常识描述，可能过时；kore 能力来自本地代码 / `file:line` 与 verify 报告。原有 7 类未证项，本期（C1/C2/C15 三路）取证后：第 1 类 WAF 后端链、第 7 类自升级 4 段 FAIL 已证并收口，第 2/3 类部分收窄（本机 nft 与离线 ACME 已证，真机边界仍在），余项逐条列证据；已证的不夸大、未证的仍如实挂起，不脑补结论：
 
-1. **WAF 后端链**：`.agents/verify/waf-rules-ui.md:43`、`:46`、`:65`——`chain` 恒空、`rule.add` 写后回读不到，根因指向 comment 解析，链路未闭环。
-2. **真 nft**：同上，失败口径仅限本机 nft 1.1.6 + 插件 0.4.1；其他 nft 版本与发行版未测。
-3. **SSL 真机签发**：`docs/PLUGIN-MATURITY.md:77`、`:157`——本机无 ACME 客户端，签发与续期未真机验证。
+1. **WAF 后端链 —— 已证并收口（task-126）**：原 `.agents/verify/waf-rules-ui.md:43`、`:46`、`:65` 记 `chain` 恒空、`rule.add` 写后回读不到（502 回滚）；现由 `.agents/verify/waf-ruleadd-live.md` 在 `dsh-root` 私有 netns + 真 nft 1.1.6 下取证——0.5.3 的 `rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现。**边界**：证明的是数据面闭环（真二进制 + 真协议帧 + 按声明执行真 nft），非 kored 前端徽标渲染与浏览器交互；「删除自定义规则 + 后续启停内置规则」会触发 `rebuildChain()` 使规则复活，留后续小项（见 §2 C1）。
+2. **真 nft —— 本机环境已证，跨版本/发行版仍未测（task-126）**：原失败口径仅限本机 nft 1.1.6 + 插件 0.4.1；本期在**同一本机 nft 1.1.6 + 私有 netns** 下用插件 0.5.3 真跑通过（`.agents/verify/waf-ruleadd-live.md` §3 命令 + nft 原文回读）。**仍未证**：其他 nft 版本与发行版、宿主真实 netns（本次为 `unshare -rn` 私有 netns，宿主表零接触）、真实 80/443 拦截命中流量。
+3. **SSL 真机签发 —— 离线已证，真机仍挂起（task-125）**：`docs/PLUGIN-MATURITY.md:77`、`:157` 的「本机无 ACME 客户端、真机签发未验证」中「本机无客户端」口径已过时——`ssl` 0.8.1 内置 ACME 客户端 + `acmetest` mock CA 离线全链路 192 测试 PASS（`.agents/verify/acme-offline-evidence.md`，签发/续期/失败保留旧证书/EAB/bad-nonce）。**仍未证**：真机外部 CA（Let's Encrypt 等）签发与到期续期，需用户授权联网 + 可控域名 + HTTP-01 可达性；证书可信链、CA 风控/限流、DNS 解析与防火墙放行均未真机验证。PM 原文不在本文件写域、未改，仅在此同步口径。
 4. **满载资源**：`.agents/verify/v1-budget-measure.md:18`、`:19`、`:106`——空载 0 常驻插件，「单插件 ≤24 MiB（目标）/ 合计 ≤48 MiB（红线）/ 同时常驻 ≤3」只验证了下界。
 5. **跨平台采集**：`docs/FEATURE-PARITY.md:38`——Linux 真机验证过，macOS / Windows 仅交叉编译 + fixture 单测，真机未验证。
 6. **goroutine**：`.agents/verify/v1-budget-measure.md:21`——只测线程数 16（代理指标），goroutine 未测。
-7. **自升级 4 段 FAIL 归因 —— 已证并收口（task-124）**：原 `.agents/verify/self-update-mvp.md` 记 PARTIAL（基线漂移 / 工作区污染 / 2×环境假阴性）；现由 `.agents/verify/selfupdate-final-gate.md` 给出本机隔离树复跑证据——21 段全绿 exit=0、4 段逐段复验为绿、退出码按 `exitEnv=6` 裁决，不再是未证项。
+7. **自升级 4 段 FAIL 归因 —— 已证伪并收口（task-124）**：原 `.agents/verify/self-update-mvp.md` 记 PARTIAL（基线漂移 / 工作区污染 / 2×环境假阴性）；现由 `.agents/verify/selfupdate-final-gate.md` 给出本机隔离树复跑证据——21 段全绿 exit=0、4 段逐段复验为绿（非环境例外接受）、退出码按 `exitEnv=6` 裁决，原「4 段 FAIL」已证伪，不再是未证项。
 
 其他边界：1Panel 多用户冲突不判定（§1）；PARITY-GAP 旧口径以 PM 为准（§1）；`feedback/` 目录不存在、未引用（§1）；Wiki 156/156 零命中、不列入（§3）。
 
