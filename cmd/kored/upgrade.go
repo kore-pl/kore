@@ -28,7 +28,9 @@ import (
 	"time"
 
 	coreconfig "github.com/pengtang1024/kore/internal/core/config"
+	"github.com/pengtang1024/kore/internal/core/market"
 	"github.com/pengtang1024/kore/internal/core/privilege"
+	"github.com/pengtang1024/kore/internal/core/store"
 )
 
 const (
@@ -91,6 +93,11 @@ type upgradeResult struct {
 	RunPID int `json:"run_pid,omitempty"`
 }
 
+// finalizeCleanup 是内核 finalize 成功后的旧版本清理入口（ADR-0059 §3.5 第 3 条）。
+// stateDir 是本次 finalize 解析出的状态目录；返回 error 只作 WARN，绝不改升级结果。
+// 生产实现见 finalizeCleanupInstalledPlugins；测试用替身验证调用契约，不执行真实 CLI。
+type finalizeCleanup func(stateDir string) error
+
 // upgradeDeps 是升级链的注入点（测试用假实现，绝不重启真实 unit）。
 type upgradeDeps struct {
 	euid       func() int
@@ -99,18 +106,72 @@ type upgradeDeps struct {
 	restart    func(unit string) error
 	stateDir   func(flagStateDir string) (string, error)
 	now        func() time.Time
+	// finalizeClean 可选：nil 时 finalize 只闭环标记、不清理（绝不阻断启动）。
+	finalizeClean finalizeCleanup
 }
 
 // defaultUpgradeDeps 返回生产实现。
 func defaultUpgradeDeps() upgradeDeps {
 	return upgradeDeps{
-		euid:       os.Geteuid,
-		executable: os.Executable,
-		sha256File: fileSHA256,
-		restart:    privilege.RestartUnitNoBlock,
-		stateDir:   resolveUpgradeStateDir,
-		now:        time.Now,
+		euid:          os.Geteuid,
+		executable:    os.Executable,
+		sha256File:    fileSHA256,
+		restart:       privilege.RestartUnitNoBlock,
+		stateDir:      resolveUpgradeStateDir,
+		now:           time.Now,
+		finalizeClean: finalizeCleanupInstalledPlugins,
 	}
+}
+
+// finalizeCleanupInstalledPlugins 是 finalize 成功后清理的生产实现。
+//
+// finalize 在 runServe 之前执行（main.go:74），此时尚无 service/state.db 装配，
+// 所以这里走"只读配置 + 短开状态库"的窄路径：配置快照经 coreconfig.Load 取得
+// （与 resolveUpgradeStateDir 同源，含 backup.*），状态库只在清理窗口内打开，
+// 退出前 closeStore 释放 bbolt 独占锁，随后的 runServe 可正常再次 openStore。
+// 清理由 M7 已交付的 cleanupAfterInstall 执行（backup 透传 / Confirmed=true /
+// CleanupAuditor 落库 / 失败只 WARN 全复用），不新造第二套清理逻辑（G-01/G-02）。
+func finalizeCleanupInstalledPlugins(stateDir string) error {
+	snap, _, err := coreconfig.Load(coreconfig.Options{
+		StateDir: stateDir,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		return fmt.Errorf("内核生效清理：加载 backup 配置失败: %w", err)
+	}
+	// market.New 不触碰文件系统（懒加载索引）；CleanupAfterInstall 只依赖 logger，
+	// 无需验签索引或安装触发器，因此可在本路径安全构造，不必改动装配层文件。
+	return finalizeCleanupWith(stateDir, snap, market.New(market.Options{Logger: slog.Default()}))
+}
+
+// finalizeCleanupWith 是可测试核心：显式注入配置快照与清理服务替身。
+// 对每个已装插件各触发一次 M7 清理；失败由 cleanupAfterInstall 内部只 WARN，
+// 本函数只把"配置/状态库不可得"这类前置错误上抛给 finalize 记为 WARN。
+func finalizeCleanupWith(stateDir string, snap *coreconfig.Snapshot, marketSvc cleanupService) error {
+	if snap == nil || marketSvc == nil {
+		return errors.New("内核生效清理：配置快照与清理入口都必填")
+	}
+	db, err := store.Open(stateDir, slog.Default())
+	if err != nil {
+		return fmt.Errorf("内核生效清理：打开状态库失败: %w", err)
+	}
+	defer closeStore(db)
+
+	refs, err := newStateRepo(db).installed()
+	if err != nil {
+		return fmt.Errorf("内核生效清理：枚举已装插件失败: %w", err)
+	}
+	root := snap.Paths.PluginDir
+	if root == "" {
+		root = filepath.Join(stateDir, "plugins")
+	}
+	cfg := config{StateDir: stateDir, snapshot: snap}
+	svc := &service{db: db, pluginRootDir: root, marketSvc: marketSvc}
+	for _, ref := range refs {
+		// 每个插件独立清理：单个失败只 WARN（cleanupAfterInstall 内），不阻断其余插件。
+		cleanupAfterInstall(cfg, svc, ref.ID)
+	}
+	return nil
 }
 
 // runUpgrade 执行 `kored upgrade`。
@@ -376,6 +437,16 @@ func finalizePendingUpgrade(w io.Writer, deps upgradeDeps) {
 		return
 	}
 	fmt.Fprintf(w, "[INFO] 升级已生效：%s → sha256 %s（upgrade-result=success）\n", target, actual)
+
+	// 生效确认完成后触发一次旧版本清理（ADR-0059 §3.5 第 3 条：插件 reload 成功 /
+	// 内核 finalize 成功）。与插件 reload 路径一致：清理失败只 WARN，绝不把已经
+	// 生效的升级改判为失败，也不阻断 serve 启动。标记未写成功或 sha 不符时上面
+	// 已 return，零清理（未确认短路）。
+	if deps.finalizeClean != nil {
+		if err := deps.finalizeClean(stateDir); err != nil {
+			fmt.Fprintf(w, "[WARN] 内核生效后旧版本清理不可用: %v\n", err)
+		}
+	}
 }
 
 // parseUpgradeFlags 解析 upgrade 参数。
