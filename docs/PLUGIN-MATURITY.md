@@ -124,10 +124,10 @@
 | 告警 / 通知中心 | 有（铃铛 + 未读） | **有**（铃铛 + 红点 + 抽屉 + 服务端历史） | `web/alerts.js` + `handlers_alerts.go:19`（3 端点）+ `ui-alerts-progress.md` 双端截图；无 `setInterval` | 已达标 |
 | 长任务进度 | 有（安装/备份/部署进度条） | **有**（SSE 真实阶段） | `httpapi/sse.go` + `store.js` 按 `task_id` 显示 download/verify/extract/register/reload | 已达标 |
 | 操作审计入口 | 有（谁在何时做了什么） | **有**（设置页「操作审计」tab，按**最终生效能力**决定是否落库） | `web/audit.js` + `GET /api/v1/audit`；`audit_http.go:137`：`!auditInvokeAll && !needAdmin` 直接不写；审计记录无 capability 字段（`store/audit.go:36-44`） | 已达标 |
-| 首次使用引导 | 有（新手任务/检查清单） | 无 | `grep -rn "onboard\|guide" web/*.js` 仅命中 firewall 提权指引 | P2 |
-| 快捷键 | 有（搜索/保存/关闭） | 局部有 | 全局 Ctrl/Cmd+K；其余仅 `db.js` Ctrl+Enter、`files.js` Esc | P2 |
+| 首次使用引导 | 有（新手任务/检查清单） | **有**（R6-4：`web/onboarding.js` + 服务端 `/-/onboarding` 定自动弹出；入口已从顶栏下沉到「设置 → 个性化与帮助」，P0 减法） | `web/onboarding.js:1/144/166`、`web/shell.js` 的 `openOnboarding` / `mountExperience`、`web/shortcuts.js` 帮助面板「重新查看新手引导」 | 引导覆盖面与完成率仍可增强（不再写「无」） |
+| 快捷键 | 有（搜索/保存/关闭） | **有**（R6-6：全局 Ctrl/Cmd+K + 帮助面板，含搜索/保存/关闭/主题切换；入口已从顶栏下沉到「设置 → 个性化与帮助」，手机触摸目标 ≥44px，P0 撤销隐藏补丁） | `web/shortcuts.js`（`getBindings` / `openHelp` / `createTrigger`）+ `web/shell.js` 的 `bootExperience` / `installShortcutEvents` | 已达标（帮助面板内仍可继续扩充动作绑定） |
 | 空状态 / 错误边界 / 配置面板 / 自动预填 | 有 | 有 | `app.js` 统一空状态、`shell.js` 三级兜底、`config-panel.js` 自动填入 | 已达标 |
-| 主题（深色） | 有 | 无 | `web/*.css` 无 `prefers-color-scheme` / `data-theme` | P3 |
+| 主题（深色） | 有 | **有**（R6-5：轻量三档「跟随系统 / 浅色 / 深色」，令牌覆盖，不触碰 G-11 重型主题禁区；入口已从顶栏下沉到「设置 → 个性化与帮助」，P0 减法） | `web/theme.js:44-45/79/103`（`data-kore-theme` / `data-kore-effective`、`matchMedia('(prefers-color-scheme: light)')`）+ `web/theme.css:27-61` + `web/shell.js` 的 `buildThemeSelect` | 扩展主题覆盖面（不再写「无主题」） |
 | 多语言 i18n | 有 | **仅中文 + 英文可选骨架** | G-11 收窄为不做全量框架（ADR-0021）；导航/通用/设置已迁移，页面内部文案待迁移 | 仅骨架 |
 
 ## 4. 改造优先级（3.4，Round 5 五批）

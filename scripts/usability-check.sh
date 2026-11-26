@@ -17,6 +17,7 @@
 #     A5 每个视图必须有空状态 + 跳转（empty-state + button/navigate/scrollIntoView）
 #        视图集合 = web/app.js 的 SHELL_ROUTES 引用到的懒加载模块 + 内联视图（app.js）
 #     A6 一级菜单 ≤10 且 store / plugins 不得并存（web/app.js SHELL_ROUTES 的 id 数）
+#        tab 数（单 hub ≤6 / 全站 ≤24）为推荐提示：只 INFO/WARN 计数，不 FAIL、不改 exit code
 #     A7 主流程 ≤3 点击（web/usability.yaml 的 views.<id>.main_flow 标注）
 #   人工 4 条（WARN，不自动判）
 #     M1 抽 3 个错误码看「怎么办」；M2 小白 60 秒完成；M3 空状态按钮可达；
@@ -39,6 +40,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export USABILITY_ROOT="$ROOT"
 
 exec python3 - "$@" <<'PY'
+import contextlib
+import io
 import json
 import os
 import re
@@ -249,6 +252,51 @@ def view_files(found=None):
     return files
 
 
+# ---------- A6 tab 计数推荐提示（只输出，不进入 violations） ----------
+HUB_START = re.compile(r"\{\s*id\s*:\s*'([a-z][a-z0-9-]*)'")
+
+
+def hub_tabs(found=None):
+    """按 id: 'x' ... views: [...] 逐 hub 扫描 sub: 计数；配对中括号，避免嵌套误吞。"""
+    fn, block = found if found else find_registry()
+    if not block:
+        return []
+    starts = [(m.start(1), m.group(1)) for m in HUB_START.finditer(block)]
+    out = []
+    for i, (pos, hub) in enumerate(starts):
+        tail = block[pos: starts[i + 1][0] if i + 1 < len(starts) else len(block)]
+        m = re.search(r"views\s*:\s*\[", tail)
+        if not m:
+            continue
+        begin = m.end() - 1
+        depth = 0
+        end = None
+        for j in range(begin, len(tail)):
+            if tail[j] == '[':
+                depth += 1
+            elif tail[j] == ']':
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end is None:
+            continue
+        out.append((hub, len(re.findall(r"\bsub\s*:", tail[begin:end + 1]))))
+    return out
+
+
+def display_tab_hints(found):
+    """逐 hub / 全站直 print；绝不 add()、不计 violations、不改 exit code。"""
+    tabs = hub_tabs(found)
+    total = sum(count for _, count in tabs)
+    for hub, count in tabs:
+        level = "WARN" if count > 6 else "INFO"
+        print(f"[{level}] A6-tab-hint 单 hub {hub} 有 {count} 个 tab（推荐 ≤6，非强制）")
+    level = "WARN" if total > 24 else "INFO"
+    print(f"[{level}] A6-total-hint 全站共 {total} 个 tab（推荐 ≤24，非强制）")
+    return tabs, total
+
+
 # ---------- A5 空状态 + 跳转 ----------
 JUMP = re.compile(r"navigate\(|data-route|scrollIntoView|button\(")
 
@@ -355,7 +403,8 @@ def run(ids, files):
     a4_shell()
     found = find_registry()
     a5(files)
-    a6(ids, found)
+    a6(ids, found)  # 硬判据原文不动
+    display_tab_hints(found)  # 推荐提示：只 INFO/WARN，不进 violations
     a7(ids)
     return plugins
 
@@ -373,8 +422,10 @@ def main():
     run(ids, files)
     pending = load_pending()
     warn, fail = report(violations, pending)
+    tabs = hub_tabs(found)
     print(f"usability-check: {len(violations) - warn - fail} pass, {warn} warn, {fail} fail, "
           f"{len(unverified)} unverified（{len(plugins)} 插件 / {len(ids)} 一级菜单 / {len(files)} 视图）")
+    print(f"tab 计数（推荐提示，不影响判定）：{len(tabs)} hub / {sum(c for _, c in tabs)} tab，单 hub ≤6 / 全站 ≤24")
     for u in unverified[:8]:
         print(f"[INFO] {u}")
     if len(unverified) > 8:
@@ -386,7 +437,7 @@ def main():
 
 
 # ---------- 自证：正例 PASS + 四反例 FAIL ----------
-def write_fixture(base, *, presets=True, invalid_msg='请选择备份预设后再试', jargon=False, nav_extra=False):
+def write_fixture(base, *, presets=True, invalid_msg='请选择备份预设后再试', jargon=False, nav_extra=False, tabs_over=False):
     pdir = os.path.join(base, "kore-plugin-foo")
     os.makedirs(os.path.join(pdir, "web"))
     info = {"id": "foo", "name": "示例", "version": "0.1.0", "methods": ["foo.create"]}
@@ -408,15 +459,25 @@ def write_fixture(base, *, presets=True, invalid_msg='请选择备份预设后�
     if nav_extra:
         ids += ["plugins", "logs", "ssl"]
     route_lines = []
-    for vid in ids:
-        if vid == "backup":
-            route_lines.append("    { id: 'backup', label: '备份', render: moduleView('K', '/assets/backups.js', '备份') },")
-        else:
-            route_lines.append(f"    {{ id: '{vid}', label: '{vid}', render: renderX }},")
+    if tabs_over:
+        for vid in ids:
+            if vid == "monitor":
+                subs = ", ".join("{ sub: '%s' }" % s for s in
+                                  ["monitor", "health", "report", "topology", "logs", "process", "alert-rules"])
+                route_lines.append("    { id: 'monitor', label: '监控', views: [%s] }," % subs)
+            else:
+                route_lines.append("    { id: '%s', label: '%s', views: [{ sub: '%s' }] }," % (vid, vid, vid))
+        registry = "var HUB_DEFS = [\n" + "\n".join(route_lines) + "\n];\n"
+    else:
+        for vid in ids:
+            if vid == "backup":
+                route_lines.append("    { id: 'backup', label: '备份', render: moduleView('K', '/assets/backups.js', '备份') },")
+            else:
+                route_lines.append(f"    {{ id: '{vid}', label: '{vid}', render: renderX }},")
+        registry = "var SHELL_ROUTES = [\n" + "\n".join(route_lines) + "\n];\n"
     with open(os.path.join(web, "app.js"), "w", encoding="utf-8") as f:
         f.write("function f(){}\nvar b='<div class=\"empty-state\">暂无</div>';\n"
-                "function g(){ navigate('store'); }\n"
-                "var SHELL_ROUTES = [\n" + "\n".join(route_lines) + "\n];\n")
+                "function g(){ navigate('store'); }\n" + registry)
     with open(os.path.join(web, "backups.js"), "w", encoding="utf-8") as f:
         f.write("var s='<div class=\"empty-state\">暂无</div>';\nfunction g(){ button(x,'去创建'); }\n")
     with open(os.path.join(web, "usability.yaml"), "w", encoding="utf-8") as f:
@@ -433,6 +494,7 @@ def selftest():
         ("反例② message 改成纯错误码", {"invalid_msg": "E_INVALID"}, 1),
         ("反例③ UI 字符串加「实例」", {"jargon": True}, 1),
         ("反例④ 导航加到 11 项（并让 store/plugins 并存）", {"nav_extra": True}, 1),
+        ("tab 超推荐值（单 hub 7 个）仍 INFO/WARN 且 exit 0", {"tabs_over": True}, 0),
     ]
     all_ok = True
     for name, kwargs, want in cases:
@@ -448,6 +510,25 @@ def selftest():
             violations.clear()
             found = find_registry()
             ids = route_ids(found)
+            if kwargs.get("tabs_over"):
+                # 真跑 main()：断言超推荐值只出 WARN 提示、无 FAIL、退出码仍 0。
+                buf = io.StringIO()
+                saved_selftest = globals()['SELFTEST']
+                globals()['SELFTEST'] = False  # 避免 main() 再次进入 selftest（递归）
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        rc = main()
+                finally:
+                    globals()['SELFTEST'] = saved_selftest
+                text = buf.getvalue()
+                lines = [line for line in text.splitlines() if "[FAIL]" in line]
+                ok = rc == 0 and "[WARN] A6-tab-hint" in text and not lines
+                all_ok = all_ok and ok
+                print(f"[{'OK' if ok else 'FAIL'}] self-test {name}: exit={rc}, A6-tab-hint WARN={ '[WARN] A6-tab-hint' in text }, FAIL={len(lines)}")
+                for line in text.splitlines():
+                    if "A6-tab-hint" in line or "A6-total-hint" in line:
+                        print(f"       {line}")
+                continue
             run(ids, view_files(found))
             lines = [f"{r} {t}: {d}" for r, t, d in sorted(violations)]
             ok = (len(lines) == want) if want == 0 else (len(lines) >= 1)
@@ -455,7 +536,7 @@ def selftest():
             print(f"[{'OK' if ok else 'FAIL'}] self-test {name}: 违规 {len(lines)} 条（期望 {'0' if want == 0 else '≥1'}）")
             for line in lines:
                 print(f"       {line}")
-    print("[OK] self-test 全部通过：正例 PASS、四反例均被拦下" if all_ok else "[FAIL] self-test 未通过")
+    print("[OK] self-test 全部通过：正例 PASS、四反例均被拦下、tab 超推荐值仍 exit 0" if all_ok else "[FAIL] self-test 未通过")
     return 0 if all_ok else 1
 
 

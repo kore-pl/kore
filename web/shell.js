@@ -687,18 +687,12 @@
     var btn = buildSearchTrigger();
     if (btn.parentNode !== conn) conn.insertBefore(btn, conn.firstChild);
   }
-  /* ===== 帮助入口（R8-3）=====
-     新用户遇到问题有处求助：顶栏「帮助」按钮打开内置小面板，列常用操作入口 + 下一步。
+  /* ===== 帮助面板（R8-3；P0 顶栏减法 §2.3）=====
+     新用户遇到问题有处求助：内置小面板列常用操作入口 + 下一步，入口已从顶栏下沉到
+     「设置 → 个性化与帮助」；保留 window.KoreShell.openHelp() 供设置页一处调用。
      不臆造文档站外链——只链仓库里真实存在的文档地址（settings.js 已在用的 repo）；
-     面板自包含、首屏不加载（首次点开才建 DOM + 注入样式），手机触摸目标 ≥44px。
-     入口复用 .conn 挂点与同一个 MutationObserver，不新增观察器、不碰 Ctrl+K。 */
-  var HELP_CSS = '#kore-help-trigger{display:inline-flex;align-items:center;justify-content:center;' +
-    'min-width:32px;min-height:32px;padding:0 8px;border:1px solid var(--kore-border-1);border-radius:4px;' +
-    'background:var(--kore-bg-2);color:var(--kore-text-2);font:inherit;font-size:12px;cursor:pointer;' +
-    'white-space:nowrap}' +
-    '#kore-help-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
-    '#kore-help-trigger svg{width:16px;height:16px;flex:0 0 auto}' +
-    '.kore-help-mask{position:fixed;inset:0;z-index:var(--z-modal,1000);background:rgba(0,0,0,.42);' +
+     面板自包含、首屏不加载（首次点开才建 DOM + 注入样式），手机触摸目标 ≥44px。 */
+  var HELP_CSS = '.kore-help-mask{position:fixed;inset:0;z-index:var(--z-modal,1000);background:rgba(0,0,0,.42);' +
     'display:flex;align-items:center;justify-content:center;padding:16px}' +
     '.kore-help-mask[hidden]{display:none}' +
     '.kore-help-panel{width:min(480px,100%);max-height:min(80vh,640px);overflow:auto;' +
@@ -712,9 +706,7 @@
     'text-decoration:none;cursor:pointer}' +
     '.kore-help-panel li button:hover,.kore-help-panel li a:hover{border-color:var(--kore-primary,#2563eb)}' +
     '.kore-help-panel li span{color:var(--kore-text-3);font-size:12px}' +
-    '.kore-help-foot{margin:18px 0 0;font-size:12px;color:var(--kore-text-3);line-height:1.6}' +
-    '@media (max-width:639px){#kore-help-trigger{min-width:44px;min-height:44px}}';
-  var helpTrigger = null;
+    '.kore-help-foot{margin:18px 0 0;font-size:12px;color:var(--kore-text-3);line-height:1.6}';
   var helpMask = null;
   function ensureHelpCss() {
     if (document.getElementById('kore-help-css')) return;
@@ -723,7 +715,6 @@
   }
   function closeHelp() {
     if (helpMask) helpMask.hidden = true;
-    if (helpTrigger) helpTrigger.setAttribute('aria-expanded', 'false');
   }
   function buildHelpPanel() {
     if (helpMask) return;
@@ -771,60 +762,29 @@
     ensureHelpCss();
     buildHelpPanel();
     if (helpMask) helpMask.hidden = false;
-    if (helpTrigger) helpTrigger.setAttribute('aria-expanded', 'true');
-  }
-  function buildHelpTrigger() {
-    if (helpTrigger) return helpTrigger;
-    ensureHelpCss();
-    helpTrigger = el('button', 'kore-help-trigger');
-    helpTrigger.type = 'button';
-    helpTrigger.id = 'kore-help-trigger';
-    helpTrigger.setAttribute('aria-label', tr('common.helpTitle', '帮助与常用操作'));
-    helpTrigger.setAttribute('aria-haspopup', 'dialog');
-    helpTrigger.setAttribute('aria-expanded', 'false');
-    helpTrigger.title = tr('common.helpTitle', '帮助与常用操作');
-    var svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 20 20'); svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.6');
-    var c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', '10'); c.setAttribute('cy', '10'); c.setAttribute('r', '7.2');
-    var q = document.createElementNS(SVG_NS, 'path');
-    q.setAttribute('d', 'M8.2 8a1.9 1.9 0 1 1 2.6 1.8c-.8.4-1 1-1 1.8');
-    var dot = document.createElementNS(SVG_NS, 'path');
-    dot.setAttribute('d', 'M9.8 14h.01');
-    svg.appendChild(c); svg.appendChild(q); svg.appendChild(dot);
-    helpTrigger.appendChild(svg);
-    helpTrigger.appendChild(bindLabel(el('span', null), 'common.help', '帮助'));
-    helpTrigger.addEventListener('click', openHelp);
-    return helpTrigger;
-  }
-  function placeHelpTrigger() {
-    var top = document.getElementById('kore-topbar');
-    if (!top) return;
-    var conn = top.querySelector('.conn');
-    if (!conn) { setTimeout(placeHelpTrigger, 60); return; }
-    var btn = buildHelpTrigger();
-    // 紧跟体验入口之后（连接器组末尾），手机端宽度不足时由 .conn 横向滚动兜住。
-    if (btn.parentNode !== conn) conn.appendChild(btn);
   }
 
-  /* ===== 个性化体验入口：主题三选一 / 快捷键帮助 / 新手引导（R6-4/5/6 接线）=====
-     三组件懒加载、不进首屏六件套。主壳首屏渲染后按 theme → shortcuts → onboarding 顺序注入
-     （文件头对齐结论：onboarding 外观步骤调 KoreTheme.toggle()、shortcuts 帮助面板引用
-     KoreTheme 与 KoreOnboarding，故 theme 最先、onboarding 最后；各引用均作存在性判断）。
-     入口控件与搜索/告警共用 .conn 挂点，app.js 重绘顶栏后由同一 MutationObserver 重新挂回。 */
-  var EXPERIENCE_CSS = '.kore-theme-select{height:32px;padding:0 6px;border:1px solid var(--kore-border-1);' +
-    'border-radius:4px;background:var(--kore-bg-2);color:var(--kore-text-2);font-size:12px;cursor:pointer}' +
-    '#kore-shortcut-trigger,.kore-onboarding-trigger{display:inline-flex;align-items:center;justify-content:center;' +
-    'min-width:32px;min-height:32px;padding:0 8px;border:1px solid var(--kore-border-1);border-radius:4px;' +
-    'background:var(--kore-bg-2);color:var(--kore-text-2);font-size:12px;cursor:pointer;white-space:nowrap}' +
-    '#kore-shortcut-trigger:hover,.kore-onboarding-trigger:hover{color:var(--kore-text-1);border-color:var(--kore-text-3)}' +
+  /* ===== 个性化体验：主题 / 快捷键 / 引导（P0 顶栏减法 §2.3）=====
+     三组件仍按 theme → shortcuts → onboarding 顺序懒加载并 mount（不进首屏六件套），
+     但触发按钮从顶栏下沉到「设置 → 个性化与帮助」：顶栏只保留搜索 / 告警 / 设置 /
+     连接状态 4 个常驻控件。三组件的 mount、快捷键事件监听与服务端引导状态读取全部保留。 */
+  var EXPERIENCE_CSS = '.kore-help-inline,.kore-theme-select,.kore-shortcut-trigger,.kore-onboarding-trigger{' +
+    'min-height:44px;padding:0 10px;border:1px solid var(--kore-border-1);border-radius:4px;' +
+    'background:var(--kore-bg-2);color:var(--kore-text-1);font:inherit;font-size:13px;cursor:pointer}' +
+    '.kore-help-inline:hover,.kore-shortcut-trigger:hover,.kore-onboarding-trigger:hover{' +
+    'border-color:var(--kore-primary,#2563eb)}' +
+    // 旧的手机隐藏补丁（style.css / shortcuts.js 里 display:none）对设置页不再生效：
+    // 顶栏已无常驻快捷键/帮助按钮，个性化区反而要保证触摸目标可见。
+    'body .kore-personalization .kore-shortcut-trigger{display:inline-flex!important}' +
+    '.kore-personalization{margin:20px 0 0;padding:16px;border:1px solid var(--kore-border-1);' +
+    'border-radius:8px;background:var(--kore-bg-1)}' +
+    '.kore-personalization h3{margin:0 0 6px;font-size:var(--kore-font-14,14px);color:var(--kore-text-1)}' +
+    '.kore-personalization p{margin:0 0 12px;font-size:12px;color:var(--kore-text-3)}' +
+    '.kore-personalization-actions{display:flex;flex-wrap:wrap;gap:10px}' +
     '.kore-experience-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:var(--z-modal,1000);' +
     'padding:10px 18px;border:1px solid var(--kore-border-1);border-radius:6px;background:var(--kore-bg-1);' +
     'color:var(--kore-text-1);font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.2)}' +
-    '.kore-experience-toast[hidden]{display:none}' +
-    '@media (max-width:639px){.kore-theme-select{max-width:88px}' +
-    '#kore-shortcut-trigger,.kore-onboarding-trigger{min-width:44px;min-height:44px}}';
+    '.kore-experience-toast[hidden]{display:none}';
   var themeSelect = null;
   var expTrigger = null;
   var onboardTrigger = null;
@@ -879,56 +839,54 @@
         else if (typeof ob.open === 'function') ob.open();
       }, function () { koreToast('新手引导暂时无法加载，请稍后再试'); });
   }
-  // 三个入口各自幂等懒建：任一组件先加载完就先建自己那个，不被其它组件缺席阻塞。
-  function buildThemeSelect() {
-    if (themeSelect || !window.KoreTheme) return;
+  // 三组件的实例不再挂顶栏：设置页调用下面的 mountExperience/host 接口渲染「个性化与帮助」区。
+  // openHelp / openOnboarding 保留为公共动作，不新增组件实例、不复制面板逻辑。
+  function buildThemeSelect(host) {
+    if (!host || !window.KoreTheme) return null;
     var theme = window.KoreTheme;
-    themeSelect = el('select', 'kore-theme-select');
-    themeSelect.id = 'kore-theme-select';
-    themeSelect.setAttribute('aria-label', '外观');
-    themeSelect.title = '外观设置';
+    var select = el('select', 'kore-theme-select');
+    select.id = 'kore-theme-select';
+    select.setAttribute('aria-label', '外观');
+    select.title = '外观设置';
     var opts = [['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']];
     for (var i = 0; i < opts.length; i++) {
       var o = document.createElement('option');
       o.value = opts[i][0]; o.textContent = opts[i][1];
-      themeSelect.appendChild(o);
+      select.appendChild(o);
     }
-    themeSelect.value = typeof theme.get === 'function' ? theme.get() : 'system';
-    themeSelect.addEventListener('change', function () {
-      if (typeof theme.set === 'function') theme.set(themeSelect.value);
+    select.value = typeof theme.get === 'function' ? theme.get() : 'system';
+    select.addEventListener('change', function () {
+      if (typeof theme.set === 'function') theme.set(select.value);
     });
     if (typeof theme.onChange === 'function') {
-      theme.onChange(function (p) { if (p && p.mode) themeSelect.value = p.mode; });
+      theme.onChange(function (p) { if (p && p.mode && select.isConnected && select.value !== p.mode) select.value = p.mode; });
     }
+    host.appendChild(select);
+    themeSelect = select;
+    return select;
   }
-  function buildShortcutTrigger() {
-    if (expTrigger || !window.KoreShortcuts) return;
-    if (typeof window.KoreShortcuts.createTrigger !== 'function') return;
-    expTrigger = window.KoreShortcuts.createTrigger(); // 组件自带「快捷键」文案 + 点击开帮助
+  function mountExperience(host) {
+    if (!host) return;
+    host.textContent = '';
+    themeSelect = null; expTrigger = null; onboardTrigger = null;
+    buildThemeSelect(host);
+    var help = el('button', 'kore-help-inline', tr('common.helpTitle', '帮助与常用操作'));
+    help.type = 'button'; help.id = 'kore-help-inline';
+    help.addEventListener('click', openHelp);
+    host.appendChild(help);
+    if (window.KoreShortcuts && typeof window.KoreShortcuts.createTrigger === 'function') {
+      expTrigger = window.KoreShortcuts.createTrigger();
+      host.appendChild(expTrigger);
+    }
+    var guide = el('button', 'kore-onboarding-trigger', '重新查看新手引导');
+    guide.type = 'button'; guide.id = 'kore-onboarding-trigger';
+    guide.title = '重新查看新手引导';
+    guide.setAttribute('aria-label', '重新查看新手引导');
+    guide.addEventListener('click', function () { openOnboarding(true); });
+    onboardTrigger = guide;
+    host.appendChild(guide);
   }
-  function buildOnboardTrigger() {
-    if (onboardTrigger || !window.KoreOnboarding) return;
-    onboardTrigger = el('button', 'kore-onboarding-trigger', '新手引导');
-    onboardTrigger.type = 'button';
-    onboardTrigger.id = 'kore-onboarding-trigger';
-    onboardTrigger.title = '重新查看新手引导';
-    onboardTrigger.setAttribute('aria-label', '重新查看新手引导');
-    onboardTrigger.addEventListener('click', function () { openOnboarding(true); });
-  }
-  function buildExperienceEntries() {
-    buildThemeSelect(); buildShortcutTrigger(); buildOnboardTrigger();
-  }
-  function placeExperienceEntries() {
-    var top = document.getElementById('kore-topbar');
-    if (!top) return;
-    var conn = top.querySelector('.conn');
-    if (!conn) { setTimeout(placeExperienceEntries, 60); return; }
-    buildExperienceEntries();
-    if (themeSelect && themeSelect.parentNode !== conn) conn.appendChild(themeSelect);
-    if (expTrigger && expTrigger.parentNode !== conn) conn.appendChild(expTrigger);
-    if (onboardTrigger && onboardTrigger.parentNode !== conn) conn.appendChild(onboardTrigger);
-  }
-  // shortcuts 派发的三个事件：做实际动作或明确降级，杜绝"按了没反应"。
+  // shortcuts 派发的事件：做实际动作或明确降级，杜绝"按了没反应"。
   function installShortcutEvents() {
     if (experienceListening) return;
     experienceListening = true;
@@ -948,7 +906,8 @@
       if (drawerOpen) { setDrawer(false, true); acted = true; }
       if (!acted) koreToast('当前没有需要关闭的面板');
     });
-    // 帮助浮层开/关：仅同步顶栏触发按钮的 aria-expanded，不改浮层自身行为。
+    // 帮助浮层开/关：同步设置页「个性化与帮助」里快捷键触发器的 aria-expanded，
+    // 不改浮层自身行为（顶栏已无常驻快捷键按钮）。
     document.addEventListener('kore:shortcut-help', function (ev) {
       if (!expTrigger) return;
       var open = !!(ev && ev.detail && ev.detail.open);
@@ -976,24 +935,117 @@
         return fetchInstallState().then(function (st) {
           if (ob && typeof ob.mount === 'function') ob.mount({ autoOpen: true, installState: st });
         });
-      }, noop)
-      .then(function () { buildExperienceEntries(); placeExperienceEntries(); }, noop);
+      }, noop);
+  }
+
+  // 设置页「个性化与帮助」区：settings.js 不在本卡写域，壳在它 render 后插入一个独立区块，
+  // 不覆盖设置页自身的 tab / 表单；四个入口（主题/帮助/快捷键/引导）只在设置页出现。
+  var personalizationListening = false;
+  function ensurePersonalization(host) {
+    if (!host) return;
+    var wrap = document.getElementById('kore-personalization');
+    if (!wrap) {
+      wrap = el('section', 'kore-personalization');
+      wrap.id = 'kore-personalization';
+      wrap.appendChild(el('h3', null, '个性化与帮助'));
+      wrap.appendChild(el('p', null, '主题外观、快捷键说明、新手引导与常用操作，都在这里；顶栏只留高频动作。'));
+      wrap.appendChild(el('div', 'kore-personalization-actions'));
+      host.insertBefore(wrap, host.firstChild);
+    }
+    mountExperience(wrap.querySelector('.kore-personalization-actions'));
+  }
+  // 设置页懒加载完成后会重绘 #view；观察者只盯 #view（paint 只清内容不换节点），
+  // 命中「settings 视图有内容且尚无个性化区」时插一次，mountExperience 幂等重建动作。
+  function watchSettingsView() {
+    if (personalizationListening || !window.MutationObserver) return;
+    personalizationListening = true;
+    var view = document.getElementById('view');
+    if (!view) return;
+    var observer = new MutationObserver(function () {
+      if (view.getAttribute('data-view') !== 'settings' || !view.firstChild) return;
+      if (document.getElementById('kore-personalization')) return;
+      ensurePersonalization(view);
+    });
+    observer.observe(view, { childList: true });
+  }
+
+  // P0 §2.3：健康灯 + 信息灯合并成一个「连接状态」控件（顶栏 9→4）。
+  // app.js 负责数据，壳只做合并呈现：保留两灯的颜色 / pip / aria 文案，点开看完整详情。
+  var STATUS_MERGE_CSS = '#kore-status-combined{position:relative;display:inline-flex;align-items:center;' +
+    'justify-content:center;width:44px;height:44px;flex:0 0 auto;border-radius:var(--kore-radius-control);' +
+    'background:transparent;color:var(--kore-text-2);cursor:help}' +
+    '#kore-status-combined svg{width:18px;height:18px;pointer-events:none}' +
+    '#kore-status-combined .status-ico-pip{position:absolute;right:8px;bottom:8px;width:6px;height:6px;' +
+    'border-radius:50%;box-shadow:0 0 0 2px var(--kore-bg-1)}' +
+    '.kore-status-combined-tip{position:fixed;z-index:95;display:none;max-width:min(320px,calc(100vw - 16px));' +
+    'padding:8px 12px;border:1px solid var(--kore-border-1);border-radius:6px;' +
+    'background:var(--kore-bg-1);color:var(--kore-text-1);font-size:12px;line-height:1.6;' +
+    'box-shadow:0 6px 18px rgba(0,0,0,.18);pointer-events:none;white-space:normal}' +
+    '@media (max-width:639px){.kore-status-combined-tip{max-width:calc(100vw - 16px)}}';
+  var statusCombinedTip = null;
+  function showStatusTip(anchorEl, lines) {
+    if (!statusCombinedTip) {
+      statusCombinedTip = el('div', 'kore-status-combined-tip');
+      statusCombinedTip.setAttribute('role', 'tooltip');
+      document.body.appendChild(statusCombinedTip);
+    }
+    statusCombinedTip.textContent = lines.join('；');
+    statusCombinedTip.style.display = 'block';
+    var r = anchorEl.getBoundingClientRect();
+    statusCombinedTip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - statusCombinedTip.offsetWidth - 8)) + 'px';
+    statusCombinedTip.style.top = (r.bottom + 8) + 'px';
+  }
+  function mergeStatusIcons() {
+    var top = document.getElementById('kore-topbar');
+    if (!top) return;
+    var conn = top.querySelector('.conn');
+    if (!conn || document.getElementById('kore-status-combined')) return;
+    var lights = conn.querySelectorAll(':scope > .status-ico');
+    if (lights.length < 2) return;
+    var health = lights[0], info = lights[1];
+    var tips = [health.getAttribute('aria-label') || '', info.getAttribute('aria-label') || ''].filter(Boolean);
+    var pip = info.querySelector('.status-ico-pip');
+    var combined = el('button', 'kore-status-combined');
+    combined.type = 'button';
+    combined.id = 'kore-status-combined';
+    combined.setAttribute('aria-label', '连接状态：' + tips.join('；'));
+    combined.title = tips.join('；');
+    combined.style.color = health.style.color || '';
+    var svg = health.querySelector('svg');
+    if (svg) combined.appendChild(svg.cloneNode(true));
+    if (pip) {
+      var dot = pip.cloneNode(true);
+      dot.style.background = pip.style.background || '';
+      combined.appendChild(dot);
+    }
+    var show = function () { showStatusTip(combined, tips); };
+    combined.addEventListener('mouseenter', show);
+    combined.addEventListener('focus', show);
+    combined.addEventListener('click', function (ev) { ev.stopPropagation(); show(); });
+    combined.addEventListener('mouseleave', function () { if (statusCombinedTip) statusCombinedTip.style.display = 'none'; });
+    combined.addEventListener('blur', function () { if (statusCombinedTip) statusCombinedTip.style.display = 'none'; });
+    conn.insertBefore(combined, health);
+    conn.removeChild(health);
+    conn.removeChild(info);
   }
 
   function watchTopbar() {
     ensureSearchCss();
     ensureBellCss();
     ensureExperienceCss();
+    if (!document.getElementById('kore-status-merge-css')) {
+      var sm = el('style'); sm.id = 'kore-status-merge-css'; sm.textContent = STATUS_MERGE_CSS;
+      document.head.appendChild(sm);
+    }
+    mergeStatusIcons();
     placeSearchTrigger();
     placeAlertTrigger();
-    placeExperienceEntries();
-    placeHelpTrigger();
     if (!window.MutationObserver) return;
     if (searchObserver) searchObserver.disconnect();
     var top = document.getElementById('kore-topbar');
     if (!top) return;
     searchObserver = new MutationObserver(function () {
-      placeSearchTrigger(); placeAlertTrigger(); placeExperienceEntries(); placeHelpTrigger();
+      mergeStatusIcons(); placeSearchTrigger(); placeAlertTrigger();
     });
     searchObserver.observe(top, { childList: true, subtree: true });
   }
@@ -1127,8 +1179,9 @@
       alertListening = true;
     }
     watchTopbar();
+    watchSettingsView();
     // 首屏渲染完成后按顺序懒加载并 mount 三组件（theme→shortcuts→onboarding），
-    // 再挂顶栏入口；全程不进首屏六件套，失败只降级对应组件。
+    // 全程不进首屏六件套，失败只降级对应组件；入口只在设置页渲染。
     bootExperience();
     // 首屏渲染完成后懒探测一次告警；不做 setInterval，打开面板时 alerts.js 会再查。
     setTimeout(probeAlerts, 800);
@@ -1163,5 +1216,6 @@
 
   // view 是一级项 children 的渲染工厂：与内置 lazyView 同语义（懒注入 / 失败可重试 / destroy 兑现），
   // 供 app.js 在声明「任务 → tab」时复用，避免导航清单再分裂成 shell 与 app 两处。
-  window.KoreShell = { mount: mount, navigate: navigate, current: current, openConfig: openConfig, view: lazyView };
+  window.KoreShell = { mount: mount, navigate: navigate, current: current, openConfig: openConfig,
+    view: lazyView, openHelp: openHelp, openOnboarding: openOnboarding, mountExperience: mountExperience };
 })();

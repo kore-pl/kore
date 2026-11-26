@@ -283,7 +283,12 @@
   }
   function updateSelection() {
     var list = checkedEntries();
-    if (S.selLabel) S.selLabel.textContent = list.length ? tr('files.selected', '已选 {n} 项', { n: list.length }) : '';
+    var contextual = list.length > 0 || !!S.selected;
+    // P0 §2.4：勾选后上下文栏替换默认三按钮；取消勾选/预览即恢复默认态。
+    if (S.contextBar) S.contextBar.hidden = !contextual;
+    if (S.defaultBar) S.defaultBar.hidden = contextual;
+    if (S.selLabel) S.selLabel.textContent = list.length ? tr('files.selected', '已选 {n} 项', { n: list.length })
+      : (S.selected ? tr('files.selectedOne', '已选 1 项') : '');
     if (S.compressBtn) S.compressBtn.disabled = !list.length;
     if (S.batchDel) S.batchDel.disabled = !list.length;
     if (S.batchMove) S.batchMove.disabled = !list.length;
@@ -999,6 +1004,21 @@
     input.focus(); input.select();
   }
 
+  // P0 工具栏局部样式：只作用于本视图；[hidden] 必须压过 .files-actions 的 display:flex。
+  function ensureToolbarCss() {
+    if (document.getElementById('kore-files-toolbar-css')) return;
+    var style = document.createElement('style');
+    style.id = 'kore-files-toolbar-css';
+    style.textContent = '.files-toolbar [hidden]{display:none!important}' +
+      '.files-context-actions{background:var(--kore-bg-2);border:1px solid var(--kore-border-1);' +
+      'border-radius:6px;padding:6px 10px}' +
+      '.files-new-menu{position:absolute;z-index:30;display:flex;flex-direction:column;gap:4px;' +
+      'padding:6px;border:1px solid var(--kore-border-1);border-radius:6px;' +
+      'background:var(--kore-bg-1);box-shadow:0 6px 18px rgba(0,0,0,.22)}' +
+      '.files-new-menu .btn{min-height:44px;white-space:nowrap;text-align:left}' +
+      '.files-default-actions{position:relative}';
+    document.head.appendChild(style);
+  }
   function build(root) {
     var head = add(root, el('header', 'view-head'));
     add(head, el('h2', 'view-title', tr('files.title', '文件管理')));
@@ -1007,7 +1027,9 @@
     S.filesToolbar = bar;
     S.crumbs = add(bar, el('nav', 'files-crumbs'));
     S.crumbs.setAttribute('aria-label', tr('files.crumbs.aria', '当前路径'));
-    var actions = add(bar, el('div', 'files-actions'));
+    ensureToolbarCss();
+    var actions = add(bar, el('div', 'files-actions files-default-actions'));
+    S.defaultBar = actions;
     var up = add(actions, el('button', 'btn btn-primary', tr('files.upload', '上传')));
     up.type = 'button'; up.setAttribute('data-action', 'upload');
     S.fileInput = add(actions, el('input', 'files-file-input'));
@@ -1019,27 +1041,48 @@
       if (files.length) runL2('uploadFiles', files);
     });
     on(up, function () { S.fileInput.click(); });
-    S.compressBtn = add(actions, el('button', 'btn', tr('files.compress', '压缩')));
+    // P0 §2.4：默认态只留上传 / 新建 / 刷新 3 个按钮；其余 7 个进勾选后的上下文栏。
+    var context = add(bar, el('div', 'files-actions files-context-actions'));
+    context.hidden = true;
+    S.contextBar = context;
+    S.compressBtn = add(context, el('button', 'btn', tr('files.compress', '压缩')));
     S.compressBtn.type = 'button'; S.compressBtn.disabled = true;
     S.compressBtn.setAttribute('data-action', 'compress');
     on(S.compressBtn, function () { runL2('compress', checkedEntries()); });
-    S.batchDel = add(actions, el('button', 'btn btn-ghost files-del', tr('files.batch.delete', '批量删除')));
+    S.batchDel = add(context, el('button', 'btn btn-ghost files-del', tr('files.batch.delete', '批量删除')));
     S.batchDel.type = 'button'; S.batchDel.disabled = true;
     S.batchDel.setAttribute('data-action', 'batch-delete');
-    S.batchMove = add(actions, el('button', 'btn btn-ghost', tr('files.batch.move', '批量移动')));
+    S.batchMove = add(context, el('button', 'btn btn-ghost', tr('files.batch.move', '批量移动')));
     S.batchMove.type = 'button'; S.batchMove.disabled = true;
     S.batchMove.setAttribute('data-action', 'batch-move');
     on(S.batchMove, batchMove);
     on(S.batchDel, function () { runL2('removeMany', checkedEntries()); });
-    S.selLabel = add(actions, el('span', 'files-selected muted', ''));
-    var mk = add(actions, el('button', 'btn', tr('files.newFolder', '新建目录'))); mk.type = 'button';
-    on(mk, function () { newEntry(true); });
-    var nf = add(actions, el('button', 'btn', tr('files.newFile', '新建文件'))); nf.type = 'button';
-    on(nf, function () { newEntry(false); });
+    S.selLabel = add(context, el('span', 'files-selected muted', ''));
+    var mk = add(actions, el('button', 'btn', tr('files.new', '新建'))); mk.type = 'button';
+    mk.id = 'files-new-entry';
+    mk.setAttribute('aria-label', tr('files.newFolder', '新建目录 / 文件'));
+    mk.setAttribute('aria-expanded', 'false');
+    var newMenu = el('div', 'files-new-menu');
+    newMenu.hidden = true;
+    [[tr('files.newFolder', '新建目录'), true], [tr('files.newFile', '新建文件'), false]].forEach(function (pair) {
+      var item = el('button', 'btn btn-ghost', pair[0]); item.type = 'button';
+      item.addEventListener('click', function (ev) { ev.stopPropagation(); newMenu.hidden = true; mk.setAttribute('aria-expanded', 'false'); newEntry(pair[1]); });
+      newMenu.appendChild(item);
+    });
+    actions.appendChild(newMenu);
+    on(mk, function (ev) {
+      ev.stopPropagation();
+      newMenu.hidden = !newMenu.hidden;
+      mk.setAttribute('aria-expanded', newMenu.hidden ? 'false' : 'true');
+    });
+    document.addEventListener('click', function (ev) {
+      if (newMenu.hidden || newMenu.contains(ev.target) || ev.target === mk) return;
+      newMenu.hidden = true; mk.setAttribute('aria-expanded', 'false');
+    });
     var rf = add(actions, el('button', 'btn btn-ghost', tr('files.refresh', '刷新'))); rf.type = 'button';
     on(rf, refresh);
     // 工具栏「改名 / 复制到」：作用于勾选 1 项（或右侧预览的条目），与行内按钮同一套逻辑。
-    S.renameBtn = add(actions, el('button', 'btn btn-ghost', tr('files.op.rename', '改名')));
+    S.renameBtn = add(context, el('button', 'btn btn-ghost', tr('files.op.rename', '改名')));
     S.renameBtn.type = 'button'; S.renameBtn.disabled = true;
     S.renameBtn.setAttribute('data-action', 'rename-selected');
     on(S.renameBtn, function () {
@@ -1054,7 +1097,7 @@
         return;
       }
     });
-    S.copyBtn = add(actions, el('button', 'btn btn-ghost', tr('files.op.copyTo', '复制到')));
+    S.copyBtn = add(context, el('button', 'btn btn-ghost', tr('files.op.copyTo', '复制到')));
     S.copyBtn.type = 'button'; S.copyBtn.disabled = true;
     S.copyBtn.setAttribute('data-action', 'copy-selected');
     on(S.copyBtn, function () {
@@ -1063,7 +1106,7 @@
       runL2('copy', entry);
     });
     // 单条操作「属性」：只读展示后端真实属性，点选一条即可（勾选或预览条目）。
-    S.infoBtn = add(actions, el('button', 'btn btn-ghost', tr('files.info.title', '属性')));
+    S.infoBtn = add(context, el('button', 'btn btn-ghost', tr('files.info.title', '属性')));
     S.infoBtn.type = 'button'; S.infoBtn.disabled = true;
     S.infoBtn.setAttribute('data-action', 'stat-selected');
     on(S.infoBtn, function () { showInfo(targetEntry()); });
