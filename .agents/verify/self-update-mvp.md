@@ -2,12 +2,14 @@
 title: M8 形态 A 全闭环演练独立验收报告
 date: 2026-11-26
 owner: m8-verifier
-verdict: PARTIAL（核心链路 PASS；make check 有 4 段 FAIL + 2 处口径偏差需回派/裁决）
-task: task-59
-head: 5a8439c
+verdict: 核心 PASS + 4 FAIL 已修复并本机复验（task-124，隔离干净树 make check 21 段全绿 exit=0；退出码口径按代码实际 exitEnv=6）——详见证据 .agents/verify/selfupdate-final-gate.md
+task: task-59；task-124（本机复跑收口）
+head: 5a8439c（原演练）；85e18f8（本机复跑收口 HEAD）
 ---
 
 # M8 形态 A 全闭环演练独立验收报告（task-59）
+
+> **本机复跑收口（task-124，2026-11-26）**：本报告 verdict 已由 `PARTIAL` 更新为「核心 PASS + 4 FAIL 已修复并本机复验」。用户裁决「用本机来测试和正式使用」——c15-gate 在 `git archive HEAD`（85e18f8）短路径隔离树上真跑 `make check`，**21 段全绿、exit=0、末行 `[OK] 门禁全部通过`**；下文 §5.3 的 4 段 FAIL 已逐段复核为绿（thin-shell 词表豁免 / oss prune / site EROFS Skip），退出码口径按代码实际 `exitEnv=6`（`cmd/kored/main.go:26`）。首轮另发现并修复一处 HEAD 文档缺陷（backlog:175「48 MiB」未与「红线」同行触发 canonical-check），次轮全绿；两轮命令与退出码见 [selfupdate-final-gate.md](selfupdate-final-gate.md)。下文 §5.3/§8 保留当时现场原文，以本段收口结论为准。
 
 ## 0. 身份、前提与纪律（G-09）
 
@@ -174,7 +176,7 @@ exit=6
 $ sha256sum .../bin/kored → 0d49d7a9...（目标未改，fail-closed PASS）
 ```
 
-**口径偏差（需 lead 裁决，非实现缺陷）**：任务卡写「exit=3（exitEnv）」，但 HEAD 代码 `cmd/kored/main.go:26` 明写 `exitEnv = 6`（`exitState = 3`），`upgrade.go:137-142` 非 root 闸门返回 `exitEnv` → 实测 exit=6。`RUNBOOK-INSTALL.md` §6.5.2 与 `upgrade.go:660` usage 也一致写「6 = 环境不满足」。因此**实现的白话 hint + 不假成功行为 PASS，退出码数字与任务卡描述不一致**——按事实记录为 exit=6，不伪装成 3。若验收硬性要求 exit=3，应由 lead 裁决是改文档口径还是回派实现者改码。
+**口径偏差（已裁决，非实现缺陷）**：任务卡写「exit=3（exitEnv）」，但 HEAD 代码 `cmd/kored/main.go:26` 明写 `exitEnv = 6`（`exitState = 3`），`upgrade.go:137-142` 非 root 闸门返回 `exitEnv` → 实测 exit=6。`RUNBOOK-INSTALL.md` §6.5.2 与 `upgrade.go:660` usage 也一致写「6 = 环境不满足」。因此**实现的白话 hint + 不假成功行为 PASS，退出码数字与任务卡描述不一致**——按事实记录为 exit=6，不伪装成 3。**task-124 裁决：以代码实际 `exitEnv=6` 为准，任务卡旧写 3 为笔误，不回派改码。**
 
 ## 5. ⑤ 门禁 — **PARTIAL（zero-intrusion PASS；make check 4 段 FAIL；make idle SKIP）**
 
@@ -225,6 +227,8 @@ $ GOCACHE=<tmp>/gocache GOWORK=off make check
 | 18 race | `--- FAIL: TestBoundaryNeedRootWhenConfDirRootOwned` 同上；`kore-plugin-site: make race 未通过`；`[FAIL] race 门禁未通过` | 同 15，环境假阴性（`/etc` 只读）。其余 14 个有 boundary 用例的插件仓 `-race` 全 PASS。 | 否 |
 
 > 对照前序基线：[m5-final-clean-clone.md](m5-final-clean-clone.md) 记 `make check`（干净 clone）exit=0、10 段全过——当时 `make check` 仅 10 段，21 段口径是后续扩张；本轮 21 段新增的 thin-shell / oss / presets / race 段在共享工作区暴露上述环境/基线问题。**按 verifier 纪律：这不是「通过」，如实记 FAIL 并回派。**
+>
+> **task-124 复验更新**：上述 4 段 FAIL 已在 HEAD 85e18f8 逐段修复并在本机隔离树复跑全绿（详见 [selfupdate-final-gate.md](selfupdate-final-gate.md) §4/§5）：thin-shell `4 pass/0 fail`、oss `8 pass/0 fail`、presets `8 pass/0 fail`、race 门禁 16 仓真跑全绿；`make check` 21 段 exit=0、末行 `[OK] 门禁全部通过`。本段以上文字为当时现场记录，不再代表当前门禁状态。
 
 **回派建议（verifier 不改业务代码）**：
 - 段 3 → 原 owner（credential / disk / restart 三特性 owner）或 architect：更新 thin-shell 词表精确豁免，或把 `backup`/`sites`/`restart` 用法改成中性命名；须在干净树复跑段 3 绿。
@@ -282,7 +286,9 @@ systemd-run --user --unit=kored-local-restore --wait --pipe --collect \
 
 ## 8. 总评与结论
 
-**总评：形态 A 核心链路（root 服务安装 / 内核升级 happy path + 错 sha + 回滚 / 插件热更新 / fail-closed / 零侵入 / G-10 双基线 / G-29 数据）全部独立复跑 PASS；但 `make check`（21 段）在本机未全绿（4 段 FAIL：thin-shell 基线漂移 + 工作区污染 + 2×环境假阴性），`make idle` 因沙箱 PID 不可见而 SKIP，非 root 升级退出码实测 6 与任务卡写的 3 不符。**
+**总评（task-59 原现场）：形态 A 核心链路（root 服务安装 / 内核升级 happy path + 错 sha + 回滚 / 插件热更新 / fail-closed / 零侵入 / G-10 双基线 / G-29 数据）全部独立复跑 PASS；但 `make check`（21 段）在本机未全绿（4 段 FAIL：thin-shell 基线漂移 + 工作区污染 + 2×环境假阴性），`make idle` 因沙箱 PID 不可见而 SKIP，非 root 升级退出码实测 6 与任务卡写的 3 不符。**
+
+**收口结论（task-124，本机复跑）**：4 段 FAIL 已逐段修复并在本机隔离干净树复验全绿，`make check` 21 段 exit=0；退出码按代码实际 `exitEnv=6`（非任务卡旧写 3）。verdict 由 `PARTIAL` 更新为「核心 PASS + 4 FAIL 已修复并本机复验」。`make idle` 的 SKIP 属沙箱 PID 命名空间不可见，非本次门禁项，维持原标注。证据与两轮命令见 [selfupdate-final-gate.md](selfupdate-final-gate.md)。
 
 - 演练风险：服务安装为授权操作，已执行且成功；临时 unit 与临时目录均已清理；真实服务与主实例运行态零写入。
 - 需 lead 处理：① 判定 `make check` 4 段 FAIL 是回派修基线/门禁/测试，还是按环境例外接受；② 裁决退出码口径（代码/文档写 6，任务卡写 3）；③ `dsh-root` 审计日志只读缺口。

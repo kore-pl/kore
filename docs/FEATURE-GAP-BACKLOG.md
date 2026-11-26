@@ -98,10 +98,12 @@
 - 证据：`docs/PLUGIN-MATURITY.md:89`（`app-deploy` 0.4.0 **L1.5**，8 方法；模板 4→9 并补 start/stop/logs、端口自动检测与资源占用；「索引仍 0.3.3，待重签」）。
 - 补齐前提：**需索引重签与前端可达性复验**；L1.5 是成熟度分级，不是「生产级」结论。
 
-### C15 — 自升级验收 PARTIAL 【硬证据】
+### C15 — 自升级验收 核心 PASS + 4 FAIL 已修复并本机复验 【硬证据 · 已收口】
 
-- 证据：`.agents/verify/self-update-mvp.md:5`（`verdict: PARTIAL`，核心链路 PASS 但 `make check` 4 段 FAIL + 2 处口径偏差）、`:285`（总评原文：4 段 FAIL = thin-shell 基线漂移 + 工作区污染 + 2×环境假阴性）、`:288`（需 lead 裁决 FAIL 归因与退出码口径）。
-- 补齐前提：**需 lead 裁决归因**（回派修基线/门禁/测试，还是按环境例外接受）+ 退出码口径统一；裁决前不得把 PARTIAL 写成 PASS。
+- 原证据：`.agents/verify/self-update-mvp.md`（原 `verdict: PARTIAL`，核心链路 PASS 但 `make check` 4 段 FAIL + 退出码口径偏差）。
+- **收口证据（task-124，用户裁决「用本机来测试和正式使用」）**：`.agents/verify/selfupdate-final-gate.md` —— `git archive HEAD`（85e18f8）短路径隔离树真跑 `make check` **21 段全绿、exit=0、末行 `[OK] 门禁全部通过`**；原 4 段 FAIL 逐段复核为绿（thin-shell 词表豁免 / oss prune / site EROFS Skip / race 16 仓真跑全绿），非环境例外接受。首轮另发现并修复 HEAD 文档缺陷（本文件 §5#4「48 MiB」未标红线触发 canonical-check），次轮全绿，两轮命令与退出码如实留痕见该报告 §3。
+- **退出码口径裁决**：按代码实际 `exitEnv=6`（`cmd/kored/main.go:26`，`exitState=3` 才是 3），任务卡旧写 3 为笔误；不回派改码。
+- 状态：**核心 PASS，已收口**；verdict 由 PARTIAL 更新，证据落在 `.agents/verify/selfupdate-final-gate.md`，不再是未证项。
 
 ## 3. kore 领先项 D1–D9（有原文或代码实证）
 
@@ -142,12 +144,12 @@
 
 ### 第 1 期 · 安全核心：C1、C2、C12、C15
 
-- 前置条件：C1/C2 **需真机**（nft 环境、ACME 客户端 + 可控域名）；C12 **需 ADR-0028 落地**（`docs/PLUGIN-MATURITY.md:91`）；C15 **需 lead 裁决**（4 段 FAIL 归因与退出码口径，`.agents/verify/self-update-mvp.md:288`）。
+- 前置条件：C1/C2 **需真机**（nft 环境、ACME 客户端 + 可控域名）；C12 **需 ADR-0028 落地**（`docs/PLUGIN-MATURITY.md:91`）；C15 **已收口**（task-124 本机复跑 21 段全绿 + exit=6 口径裁决，`.agents/verify/selfupdate-final-gate.md`）。
 - 可验证判据：
   - C1：真机新增规则写入 → 回读非空 → 命中拦截，全程无 502；`waf-rules-ui.md:65` 的「半可用」结论有新 verify 报告替换。
   - C2：至少一次真实签发 + 到期续期成功，证据落到 `.agents/verify/` 报告并更新 `PLUGIN-MATURITY.md:157`。
   - C12：`sshd_config` 写路径按 ADR-0028 实施且可审计，root-action 白名单不扩大，回归 `security-suite-g28.md` 既有行为。
-  - C15：4 段 FAIL 逐段给出归因与处置（回派或环境例外），退出码口径统一；PARTIAL → 明确 PASS 或明确例外，不粉饰。
+  - C15：4 段 FAIL 逐段给出归因与处置（回派或环境例外），退出码口径统一；PARTIAL → 明确 PASS 或明确例外，不粉饰。**已达成：4 段全修复并本机复验全绿，退出码按 exitEnv=6，PARTIAL → 核心 PASS（task-124，`.agents/verify/selfupdate-final-gate.md`）。**
 
 ### 第 2 期 · 生态深度：C4、C5、C7、C8、C9、C13、C14
 
@@ -167,15 +169,15 @@
 
 ## 5. 诚实边界
 
-本文件是**基于本地已有材料的核实，不是联网实时竞品测评**。竞品能力来自 BA 原文（明示未真机安装）、FEATURE-PARITY draft 矩阵与 PLUGIN-MATURITY 的常识描述，可能过时；kore 能力来自本地代码 / `file:line` 与 verify 报告。另有 7 类未证项，逐条列证据，不脑补结论：
+本文件是**基于本地已有材料的核实，不是联网实时竞品测评**。竞品能力来自 BA 原文（明示未真机安装）、FEATURE-PARITY draft 矩阵与 PLUGIN-MATURITY 的常识描述，可能过时；kore 能力来自本地代码 / `file:line` 与 verify 报告。原有 7 类未证项，第 7 类（自升级 4 段 FAIL）已由 task-124 本机复跑取证收口，余 6 类未证项逐条列证据，不脑补结论：
 
 1. **WAF 后端链**：`.agents/verify/waf-rules-ui.md:43`、`:46`、`:65`——`chain` 恒空、`rule.add` 写后回读不到，根因指向 comment 解析，链路未闭环。
 2. **真 nft**：同上，失败口径仅限本机 nft 1.1.6 + 插件 0.4.1；其他 nft 版本与发行版未测。
 3. **SSL 真机签发**：`docs/PLUGIN-MATURITY.md:77`、`:157`——本机无 ACME 客户端，签发与续期未真机验证。
-4. **满载资源**：`.agents/verify/v1-budget-measure.md:18`、`:19`、`:106`——空载 0 常驻插件，「单插件 ≤24 MiB / 合计 ≤48 MiB / 同时常驻 ≤3」只验证了下界。
+4. **满载资源**：`.agents/verify/v1-budget-measure.md:18`、`:19`、`:106`——空载 0 常驻插件，「单插件 ≤24 MiB（目标）/ 合计 ≤48 MiB（红线）/ 同时常驻 ≤3」只验证了下界。
 5. **跨平台采集**：`docs/FEATURE-PARITY.md:38`——Linux 真机验证过，macOS / Windows 仅交叉编译 + fixture 单测，真机未验证。
 6. **goroutine**：`.agents/verify/v1-budget-measure.md:21`——只测线程数 16（代理指标），goroutine 未测。
-7. **自升级 4 段 FAIL 归因**：`.agents/verify/self-update-mvp.md:5`、`:285`、`:288`——基线漂移 / 工作区污染 / 2×环境假阴性的归因与退出码口径尚未裁决。
+7. **自升级 4 段 FAIL 归因 —— 已证并收口（task-124）**：原 `.agents/verify/self-update-mvp.md` 记 PARTIAL（基线漂移 / 工作区污染 / 2×环境假阴性）；现由 `.agents/verify/selfupdate-final-gate.md` 给出本机隔离树复跑证据——21 段全绿 exit=0、4 段逐段复验为绿、退出码按 `exitEnv=6` 裁决，不再是未证项。
 
 其他边界：1Panel 多用户冲突不判定（§1）；PARITY-GAP 旧口径以 PM 为准（§1）；`feedback/` 目录不存在、未引用（§1）；Wiki 156/156 零命中、不列入（§3）。
 
