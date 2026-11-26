@@ -60,6 +60,80 @@ func (a *selfUpdateAuditFromStore) Record(ev httpapi.AuditEvent) error {
 	})
 }
 
+// cleanupService 是 market.Service.CleanupAfterInstall 的最小接口：装配层只依赖
+// 这一个方法，service 结构无需引入 market 包（G-01/G-02 依赖面不扩大）。
+type cleanupService interface {
+	CleanupAfterInstall(market.CleanupOptions) (market.CleanupResult, error)
+}
+
+// cleanupAuditorFromStore 把一次旧版本清理结果写进 audit bucket（ADR-0059 §3.5）。
+// 字段映射沿用 market 的受控 detail（≤16 键、值 ≤256 rune）；写入失败只 WARN，
+// 由 market 清理层把错误返回给调用方，但不回滚已完成的删除。
+type cleanupAuditorFromStore struct{ db *store.Store }
+
+// Audit 实现 market.CleanupAuditor；result 归一为 store 的 ok / error。
+func (a *cleanupAuditorFromStore) Audit(ev market.CleanupAuditEvent) error {
+	result := store.AuditResultOK
+	if ev.Result != "ok" {
+		result = store.AuditResultError
+	}
+	return a.db.PutAudit(store.AuditRecord{
+		Subject: ev.Actor,
+		Action:  market.CleanupAction,
+		Plugin:  ev.PluginID,
+		Target:  ev.Root,
+		Result:  result,
+		Detail:  ev.AuditDetail(),
+	})
+}
+
+// cleanupAfterInstall 在新版本生效确认后调用一次旧版本清理（ADR-0059 §3.5）：
+// backup.keep_count / backup.max_disk_bytes 来自配置快照，审计经 store.PutAudit 落库。
+// 清理由 market.Service 同步执行，不起 goroutine / ticker（G-19）；失败只 WARN，
+// 不把已经成功的安装/重载改判为失败。
+func cleanupAfterInstall(cfg config, svc *service, id string) {
+	if cfg.snapshot == nil || svc == nil || svc.marketSvc == nil || svc.db == nil {
+		return
+	}
+	backup := cfg.snapshot.Backup
+	current, err := installer.PreviousVersion(svc.db, id)
+	if err != nil {
+		slog.Warn("读取已装版本失败，清理按最大版本视为当前", "plugin_id", id, "err", err)
+		current = ""
+	}
+	result, err := svc.marketSvc.CleanupAfterInstall(market.CleanupOptions{
+		Root:           filepath.Join(svc.pluginRootDir, id),
+		PluginID:       id,
+		CurrentVersion: current,
+		KeepCount:      backup.KeepCount,
+		MaxDiskBytes:   backup.MaxDiskBytes,
+		Confirmed:      true, // reloadOne 成功 = 新版本生效确认
+		Actor:          "kored",
+		Auditor:        (&cleanupAuditorFromStore{db: svc.db}).Audit,
+	})
+	if err != nil {
+		slog.Warn("安装成功后旧版本清理失败（不影响已完成的安装）",
+			"plugin_id", id, "err", err)
+		return
+	}
+	slog.Info("安装成功后旧版本清理完成", "plugin_id", id,
+		"kept", strings.Join(result.Kept, ","), "deleted", strings.Join(result.Deleted, ","))
+}
+
+// installRefreshWithCleanup 包装安装/升级成功后的重载回调：只有 reload 成功
+// 才视为生效确认并触发旧版本清理（ADR-0059 §3.5 第 3 条）。reload 作为显式参数
+// 注入，便于隔离测试用替身验证接线，不执行真实 install / CLI。
+func installRefreshWithCleanup(cfg config, svc *service, reload func(string) (string, error)) func(string) (string, error) {
+	return func(id string) (string, error) {
+		result, err := reload(id)
+		if err != nil {
+			return result, err // 未确认生效，清理前置门不成立
+		}
+		cleanupAfterInstall(cfg, svc, id)
+		return result, nil
+	}
+}
+
 // bootstrap 绑定平台实现、探测环境并创建运行期目录，返回退出码。
 func bootstrap(cfg config) (*platform.Platform, envprobe.Report, int) {
 	app, err := platform.New(platform.Config{
@@ -120,7 +194,7 @@ func startHTTP(app *platform.Platform, cfg config, report envprobe.Report, svc *
 		CapabilityAuditor: (&capabilityAuditorFromStore{db: svc.db}).Audit,
 		RestartService:    newRestartRuntime(svc.db, cfg),
 		ConfigWriter:      newConfigWriterAdapter(cfg),
-		InstallRefresh:    svc.reloadOne,
+		InstallRefresh:    installRefreshWithCleanup(cfg, svc, svc.reloadOne),
 		Metrics:           metrics.New(app.Paths.Dir(platform.DirState)),
 		Privilege:         svc.privilege,
 		PluginAuth:        svc.pluginTokenAuth,
@@ -161,7 +235,9 @@ func buildMarket(cfg config, svc *service, events *httpapi.TaskEvents) *market.S
 		AllowUnsigned: cfg.snapshot.Store.AllowUnsigned,
 		Installer:     installerAdapter(cfg, svc, events),
 	}
-	return market.New(opts)
+	marketSvc := market.New(opts)
+	svc.marketSvc = marketSvc
+	return marketSvc
 }
 
 // installerAdapter 把现有 installer 包装成 market.Installer：

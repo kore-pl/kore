@@ -61,6 +61,8 @@ CLI 形态：运维子命令全部由单二进制 `kored` 提供，用标准库 
 | `plugins.allow_unsigned` | bool | `true` | MVP true；M4 起默认 false |
 | `plugins.autostart` | string[] | `[]` | 元素必须是已安装插件 id；启动时按序拉起。默认不硬编码任何插件：`site` 由 M2 安装流程显式写入 |
 | `store.allow_unsigned` | bool | `false`（零值，**不在 `Default()` 中设置**） | 仅显式配置；为 `true` 时允许未签名/验签失败的索引（M2 索引级 ed25519 签名）；与 `plugins.allow_unsigned`（插件包签名，M4）完全独立，勿混用 |
+| `backup.keep_count` | int | `2` | 1–10；`<plugin_dir>/<id>/` 下旧版本目录保留份数；保底 1 份可回滚版本（清理层强制），**冷字段**：需重启生效（ADR-0059 §3.5） |
+| `backup.max_disk_bytes` | int64 | `268435456`（256 MiB） | 1048576（1 MiB）–1073741824（1 GiB）；旧版本目录合计字节上限，超限触发清理；**冷字段**：需重启生效（ADR-0059 §3.5） |
 | `security.login_rate_limit.attempts` | int | `5` | 1–20；窗口内失败次数 |
 | `security.login_rate_limit.window` | duration | `60s` | 10s–1h |
 | `security.login_rate_limit.lock` | duration | `300s` | 30s–24h；连续失败后惩罚等级的记忆窗口（静默超过即归零，不再表示"锁定时长"） |
@@ -121,6 +123,10 @@ plugins:
 
 store:                          # 软件商店：索引仓签名（M2），与 plugins.allow_unsigned 完全独立
   allow_unsigned: false         # 默认零值 false，不在 Default() 中设置；true = 允许未签名/验签失败的索引，需显式配置并写 WARN 审计
+
+backup:                         # 旧版本清理（ADR-0059 §3.5）；冷字段，改后需重启内核
+  keep_count: 2                 # 旧版本目录保留份数（1–10）；保底当前版本 + 1 份可回滚
+  max_disk_bytes: 268435456     # 旧版本合计字节上限（1 MiB–1 GiB），默认 256 MiB
 
 security:
   login_rate_limit:
@@ -370,6 +376,8 @@ curl -fsS http://127.0.0.1:8787/-/healthz    # 期望 {"status":"ok"}
 
 **可观测**：每次清理写一条审计 `action=audit.clean`（`subject=system`、`target=audit`、`result=ok|error`，detail=`{deleted,more,batch,retention_seconds[,error]}`）+ 一条 INFO 日志（deleted / more / retention_seconds / batch / cutoff）。审计写入失败只 WARN，不反向破坏清理。
 
+**旧版本目录清理（ADR-0059 §3.5）**：与按龄审计清理不同，旧版本清理**不起定时器**——由装配层在插件 reload / 内核 finalize 成功后同步调用一次（`market.Service.CleanupAfterInstall`），不做后台轮询（G-19）。触发时按 `backup.keep_count` / `backup.max_disk_bytes` 判定是否超限，只删 `<plugin_dir>/<id>/` 下严格三段数字版本目录，保底保留当前版本 + 最新一份回滚版本；`.prev` / `.bak-<ts>` / `.staging` 不删（G-31）。每次触发（含无删除）写一条审计 `market.backup.clean`，detail 含 `actor` / `path` / `keep_count` / `max_disk_bytes` / `kept` / `deleted` / `deleted_count` / `freed_bytes` / `reason` / `over_budget`，审计写入失败只 WARN 并作为 error 返回；删除已完成不回滚。清理失败不使已成功的安装/升级失败。
+
 **bbolt 文件膨胀（明确结论）**：删键**不会缩小** `state.db`。bbolt 把删除的页放回 freelist 供后续写入复用，因此稳态下文件大小会**停在高水位**而不是随清理下降；突发写入把文件撑大后，即使审计被裁到 90 天，文件也不会自动退回小尺寸。本项目**不做在线 compaction**：bbolt 压缩要求独占文件（关闭当前句柄 → 换文件 → 重开），在运行中的守护进程里做会引入「压缩窗口内写入丢失 / 句柄换错」风险，收益不抵风险。要真缩文件走离线运维：停 `kored` → `bbolt compact -o state.db.new state.db` → `bbolt check` 校验 → 原子替换 → 启动。当前**没有** `kored db compact` 子命令（`kored db` 系列尚未实现，勿按旧文照敲）。结论：清理的作用是**把增长封顶**，不是「让文件变小」；容量按高水位 + 90 天审计量估算。
 
 | 数据 | 规则 | 触发点 |
@@ -377,7 +385,7 @@ curl -fsS http://127.0.0.1:8787/-/healthz    # 期望 {"status":"ok"}
 | `tasks` | 预留 bucket，无写入方 → **不定义保留窗口**（不承诺天数） | 无（写入方落地时再定义规则） |
 | `sessions` | 过期不主动删除，仅读时判定失效（`expires_at < now` 或越过 `created+30d` 均拒绝）；删除只发生在登出 / 吊销 / 改口令 | 读时（无启动清扫、无惰性清理） |
 | `audit` | 保留 `audit.retention`（默认 90 天）：删除键中时间戳早于 `now - retention` 的记录，单次 ≤ `audit.clean_batch`（默认 1000） | scheduler 内置任务 `builtin-audit-clean`（每 `audit.clean_interval`，默认 6h；`audit.clean_enabled=false` 时禁用） |
-| 旧插件版本 | 保留当前 + 上一版本 | 升级成功后同步清理 |
+| 旧插件版本 | 默认保留当前 + 1 份可回滚版本；份数由 `backup.keep_count`（默认 2）控制，合计字节由 `backup.max_disk_bytes`（默认 256 MiB）封顶；超限先删最旧的严格 `MAJOR.MINOR.PATCH` 版本目录，`.prev` / `.bak-<ts>` / `.staging` 等非版本目录永不删除；即使超限也保留保底回滚版本（只标记超预算并 WARN），清理动作写审计 `market.backup.clean`（含保留/删除清单）；清理失败不回滚已成功的安装（ADR-0059 §3.5） | 新版本**生效确认后**自动触发：插件 reload 成功 / 内核 finalize 成功；未确认时短路跳过并 WARN；配置冷加载，重启生效 |
 | 插件日志 | 轮转 10 MiB × 2 | 写入路径 |
 | bbolt 空闲页 | 删键只释放页、不缩文件，稳态停在高水位；不做在线 compaction，缩文件需停服用 bbolt CLI 离线压缩（见上） | 手动 |
 

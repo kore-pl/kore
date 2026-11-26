@@ -58,6 +58,7 @@ type service struct {
 	channelSocket string
 	sched         *scheduler.Service // ADR-0019 定时任务调度器（单 ticker）
 	pluginRootDir string             // 插件落盘根目录，供 reloadOne 重载登记复用
+	marketSvc     cleanupService     // 安装成功后旧版本清理入口（buildMarket 装配；ADR-0059 §3.5）
 	// reloadMu 串行化同一进程内的安装后重载：Stop→Forget→Replace→Start 不能交错，
 	// 否则两次并发安装会互相覆盖 catalog/instance，最终跑错版本。
 	reloadMu sync.Mutex

@@ -69,6 +69,33 @@ func TestBackupInvalidValuesRejected(t *testing.T) {
 	}
 }
 
+// TestBackupAcceptBoundaries 校验的接受侧边界必须恰好通过（拒绝侧见
+// TestBackupInvalidValuesRejected）：keep=1/10、disk=1 MiB/1 GiB（ADR-0059 §3.5）。
+func TestBackupAcceptBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want Backup
+	}{
+		{"keep_min", "backup:\n  keep_count: 1\n", Backup{KeepCount: 1, MaxDiskBytes: 256 * 1024 * 1024}},
+		{"keep_max", "backup:\n  keep_count: 10\n", Backup{KeepCount: 10, MaxDiskBytes: 256 * 1024 * 1024}},
+		{"disk_min", "backup:\n  max_disk_bytes: 1048576\n", Backup{KeepCount: 2, MaxDiskBytes: 1 << 20}},
+		{"disk_max", "backup:\n  max_disk_bytes: 1073741824\n", Backup{KeepCount: 2, MaxDiskBytes: 1 << 30}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), tc.body)
+			snap, warnings, err := loadFile(t, path)
+			if err != nil {
+				t.Fatalf("边界值应被接受: body=%q err=%v（warnings=%v）", tc.body, err, warnings)
+			}
+			if snap.Backup != tc.want {
+				t.Fatalf("边界值不符: got=%+v want=%+v", snap.Backup, tc.want)
+			}
+		})
+	}
+}
+
 // TestBackupWrongTypeRejected 字符串写成字节数按类型错误拒绝。
 func TestBackupWrongTypeRejected(t *testing.T) {
 	path := writeConfig(t, t.TempDir(), "backup:\n  max_disk_bytes: \"256MB\"\n")
