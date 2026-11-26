@@ -100,6 +100,10 @@ fi
 #     通用 nginx 配置只读解析词（不建站、不调插件）；
 #   - ADR-0056 (93fd441)：main.go / restart.go / handlers_restart.go / privilege/restart.go
 #     的 restart = 内核**自重启**原语（同机、同 uid，不重启插件 unit）。
+#   - ADR-0059 §3.5 / U6（M7 83a42ae/960821c）：config 五文件 + serve_boot.go/upgrade.go
+#     + market/cleanup.go 的 backup = 旧版本备份份数/磁盘上限**配置项**（backup.keep_count /
+#     backup.max_disk_bytes）与其解析字段、校验/审计字符串；内核只做通用"保留 N 份/限额"配置，
+#     不含 backup 插件的业务名词表（能力名/动作名由插件仓定义，内核不认识）。
 # 边界（fail-closed）：①精确到文件路径；②只替换上列已合入 token；③替换后仍命中的词照常 FAIL；
 # ④红线 1/2（plugin / "kore/plugins/" import）对全部文件独立扫描，不在本节豁免范围内；
 # ⑤restart 豁免文件出现 kore-plugin-（插件 unit 前缀）单独 FAIL，防止顺带放过插件生命周期。
@@ -126,6 +130,15 @@ function neutralize(line,   f) {
   if (f == "./cmd/kored/main.go" || f == "./cmd/kored/restart.go" ||
       f == "./internal/core/httpapi/handlers_restart.go" || f == "./internal/core/privilege/restart.go") {
     gsub(/RESTART/, "RELAUNCH", line); gsub(/Restart/, "Relaunch", line); gsub(/restart/, "relaunch", line)
+  }
+  # ADR-0059 §3.5 / U6：backup.* 是内核通用旧版本保留配置项（非 backup 插件业务域）。
+  # 以下 8 个文件只中性化 backup 词根（含错误/审计字符串里的词），不动其它业务词；
+  # 若这些文件将来出现 backup 插件业务名词表（能力名/动作名），仍按词表原样 FAIL。
+  if (f == "./cmd/kored/serve_boot.go" || f == "./cmd/kored/upgrade.go" ||
+      f == "./internal/core/config/parse.go" || f == "./internal/core/config/parse_nested.go" ||
+      f == "./internal/core/config/reload.go" || f == "./internal/core/config/types.go" ||
+      f == "./internal/core/config/validate.go" || f == "./internal/core/market/cleanup.go") {
+    gsub(/BACKUP/, "KEEPVER", line); gsub(/Backup/, "Keepver", line); gsub(/backup/, "keepver", line)
   }
   return line
 }
