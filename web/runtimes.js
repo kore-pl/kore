@@ -3,15 +3,29 @@
    只读四动词：versions / info / projects / doctor（三 runtime 共用，保留不变）。
    Python 专属写操作（仅 runtime-python tab 显示）：venv.list / venv.create（path+版本+可选初始包）
    / pip.install / pip.list；写域限制在插件状态目录内，后端有路径白名单 + 软链逃逸防护 + 120s 超时。
-   Node 专属扩展管理（仅 runtime-node tab 显示）：ext.list / ext.install / ext.remove；
-   包只装进 <state>/global/node_modules（npm --prefix 隔离），绝不 npm -g、不改宿主全局环境。
-   与 Python 面板共用既有 rt-venv-* 样式与包名校验助手，不新增一级控件 / hub / CSS。
+   Node / PHP 专属扩展管理（各自 tab 显示）：ext.list / ext.install / ext.remove；
+   Node 包只装进 <state>/global/node_modules（npm --prefix 隔离），绝不 npm -g；
+   PHP 扩展只装进 <state>/global/php_ext（pecl -d extension_dir 隔离），绝不 apt install php-*、不写宿主 php 全局。
+   两个 tab 共用一套面板与包名校验助手（仅提示文案按运行时切换），不新增一级控件 / hub / CSS。
    tab 切换只重绘本页，不换 hash、不重载；每 tab 的扫描根目录写 localStorage。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/', TIMEOUT = 20000, PY_TIMEOUT = 125000, LS = 'kore.runtimes.root.';
-  // Node 扩展后端同样是 120s 硬超时，前端给 125s 避免误掐断。
+  // Node / PHP 扩展后端同样是 120s 硬超时，前端给 125s 避免误掐断。
   var EXT_TIMEOUT = PY_TIMEOUT;
+  // 扩展管理面板配置：Node 与 PHP 共用同一套函数，仅文案/示例按运行时切换（减法：一份实现服务两 tab）。
+  var EXT_CFG = {
+    'runtime-node': { pkgExample: 'chalk commander==12.0.0', emptyPkg: '请先填写要安装的扩展包名，例如 chalk 或 chalk==5.0.0',
+      badPkg: '包名「{p}」不合法：只允许字母数字和 . _ -，可带 ==版本；不要写空格、分号、@scope 或 -g 选项',
+      meta: '装到插件隔离目录，不影响系统全局 npm；仅允许字母数字 . _ - 与 ==版本',
+      suffix: '；只写插件状态目录，不影响系统全局 npm。', fieldHint: '空格或逗号分隔多个包；不会安装到全局环境',
+      fieldLabel: '要装的扩展', installNote: '扩展仅写插件状态目录的隔离前缀；失败时检查网络或镜像源。' },
+    'runtime-php': { pkgExample: 'redis memcached-3.1.5', emptyPkg: '请先填写要安装的扩展包名，例如 redis 或 redis-6.0.0',
+      badPkg: '包名「{p}」不合法：只允许字母数字和 . _ -，可带 -版本；不要写空格、分号、斜杠或 apt 选项',
+      meta: '装到插件隔离目录，不碰宿主 php / apt 全局扩展；仅允许字母数字 . _ - 与 -版本',
+      suffix: '；只写插件状态目录，不影响宿主 php / apt 全局扩展。', fieldHint: '空格或逗号分隔多个扩展；不会安装到系统 php 目录',
+      fieldLabel: '要装的扩展', installNote: '扩展仅写插件状态目录的隔离前缀；失败时检查网络或 PECL 源。' }
+  };
   var SRC = { path: 'PATH', known_path: tr('runtimes.src.known', '常用路径'), nvm: 'nvm', pyenv: 'pyenv', phpenv: 'phpenv', conda: 'conda' };
   var CHECK = { node: tr('runtimes.check.node', 'Node 安装'), npm: tr('runtimes.check.npm', 'npm 可用性'), global_packages_writable: tr('runtimes.check.globalWritable', '全局包目录可写'),
     node_env: tr('runtimes.check.nodeEnv', 'NODE_ENV 环境变量'), php: tr('runtimes.check.php', 'PHP 安装'), version_supported: tr('runtimes.check.versionSupport', '版本支持'), extensions: tr('runtimes.check.extensions', '扩展列表'),
@@ -155,7 +169,7 @@
       venvRoot: '', venvs: null, venvListError: '', venvListLoading: false,
       vPath: '', vVersion: '', vPkgs: '', vBusy: false, vMsg: null, vErr: null,
       pkgFor: '', pkgMode: '', pkgInput: '', pkgBusy: false, pkgResult: null, pkgErr: null,
-      // Node 扩展（仅 runtime-node tab 使用；复用 venv 面板的 rt-* 样式与包校验）
+      // Node / PHP 扩展（仅对应 tab 使用；复用 venv 面板的 rt-* 样式与包校验）
       extPrefix: '', exts: null, extListError: '', extListLoading: false,
       extInput: '', extBusy: '', extMsg: null, extErr: null, extRemoveFor: '' };
   }
@@ -195,7 +209,7 @@
     if (s.doctor === null && !s.doctorLoading) loadDoctor(t, s);
     if (s.guard === null && !s.guardLoading) loadGuard(t, s);
     if (id === 'python' && s.venvs === null && !s.venvListLoading) loadVenvs(t, s);
-    if (id === 'node' && s.exts === null && !s.extListLoading) loadExts(t, s);
+    if (EXT_CFG[t.domain] && s.exts === null && !s.extListLoading) loadExts(t, s);
   }
   // ---- Python venv / pip（仅 runtime-python）：契约源自后端 venv.go 的 *Params/*Result ----
   var PKG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(==[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
@@ -267,8 +281,9 @@
       if (tab === t.id) paintBody();
     }, function (err) { s.pkgBusy = false; s.pkgErr = err; if (tab === t.id) paintBody(); });
   }
-  // ---- Node 扩展（仅 runtime-node）：ext.list + ext.install + ext.remove ----
+  // ---- Node / PHP 扩展（各自 tab）：ext.list + ext.install + ext.remove ----
   // 契约源自后端 ext.go：install/remove 入参 {packages:[...]}，list 入参 {}；前缀由后端固定为 <state>/global。
+  // Node 走 npm --prefix（node_modules），PHP 走 pecl -d extension_dir（php_ext），两者共用本面板。
   function extHint(err) {
     var code = err && err.code ? String(err.code) : '';
     var m = (err && err.backendMessage) || (err && err.message) || '';
@@ -295,27 +310,28 @@
     }, function (err) { s.extListLoading = false; s.extListError = err; if (tab === t.id) paintBody(); });
   }
   function doExtInstall(t, s) {
+    var cfg = EXT_CFG[t.domain] || EXT_CFG['runtime-node'];
     var pkgs = parsePkgs(s.extInput);
-    if (!pkgs.length) { s.extErr = new Error(tr('runtimes.ext.hint.pkgEmpty', '请先填写要安装的扩展包名，例如 chalk 或 chalk==5.0.0')); s.extMsg = null; paintBody(); return; }
+    if (!pkgs.length) { s.extErr = new Error(cfg.emptyPkg); s.extMsg = null; paintBody(); return; }
     var bad = firstBadPkg(pkgs);
     if (bad) {
-      s.extErr = new Error(tr('runtimes.ext.hint.pkgBad', '包名「{p}」不合法：只允许字母数字和 . _ -，可带 ==版本；不要写空格、分号、@scope 或 -g 选项').replace('{p}', bad));
+      s.extErr = new Error(cfg.badPkg.replace('{p}', bad));
       s.extMsg = null; paintBody(); return;
     }
     s.extBusy = 'install'; s.extErr = null; s.extMsg = null; paintBody();
     invoke(t.domain, 'ext.install', { packages: pkgs }, EXT_TIMEOUT).then(function (d) {
       s.extBusy = ''; s.extInput = '';
-      s.extMsg = tr('runtimes.ext.done.install', '已安装隔离扩展：') + ((d.packages || pkgs).join('、'))
-        + tr('runtimes.ext.done.suffix', '；只写插件状态目录，不影响系统全局 npm。');
+      s.extMsg = tr('runtimes.ext.done.install', '已安装隔离扩展：') + ((d.packages || pkgs).join('、')) + cfg.suffix;
       loadExts(t, s);
       if (tab === t.id) paintBody();
     }, function (err) { s.extBusy = ''; s.extErr = err; if (tab === t.id) paintBody(); });
   }
   function doExtRemove(t, s, name) {
+    var cfg = EXT_CFG[t.domain] || EXT_CFG['runtime-node'];
     s.extBusy = 'remove:' + name; s.extErr = null; s.extMsg = null; paintBody();
     invoke(t.domain, 'ext.remove', { packages: [name] }, EXT_TIMEOUT).then(function (d) {
       s.extBusy = '';
-      s.extMsg = tr('runtimes.ext.done.remove', '已移除隔离扩展：') + name + tr('runtimes.ext.done.suffix', '；只写插件状态目录，不影响系统全局 npm。');
+      s.extMsg = tr('runtimes.ext.done.remove', '已移除隔离扩展：') + name + cfg.suffix;
       loadExts(t, s);
       if (tab === t.id) paintBody();
     }, function (err) { s.extBusy = ''; s.extErr = err; if (tab === t.id) paintBody(); });
@@ -570,30 +586,31 @@
     return p;
   }
 
-  // Node 专属「扩展管理」面板：ext.list + ext.install + ext.remove。
-  // 只由 paintBody 按 domain==='runtime-node' 调用；复用 venv 面板的 rt-* 样式与错误框，
-  // 是已有 Node tab 内的一个分区（不新增一级控件 / hub / CSS）。
+  // Node / PHP 共用「扩展管理」面板：ext.list + ext.install + ext.remove。
+  // 由 paintBody 按 domain 属于 EXT_CFG 时调用；复用 venv 面板的 rt-* 样式与错误框，
+  // 是各自已有 tab 内的一个分区（不新增一级控件 / hub / CSS）。
   function extPanel(t, s) {
+    var cfg = EXT_CFG[t.domain] || EXT_CFG['runtime-node'];
     var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
     add(h, el('span', 'panel-title', tr('runtimes.ext.panel.title', '扩展管理')));
-    add(h, el('span', 'panel-meta', tr('runtimes.ext.panel.meta', '装到插件隔离目录，不影响系统全局 npm；仅允许字母数字 . _ - 与 ==版本')));
+    add(h, el('span', 'panel-meta', cfg.meta));
     var rf = add(h, el('button', 'btn', tr('runtimes.ext.btn.refresh', '刷新列表')));
     rf.type = 'button'; rf.disabled = !!s.extListLoading;
     rf.addEventListener('click', function () { loadExts(t, s); });
 
     var form = add(p, el('div', 'rt-venv-form'));
     var wrap = add(form, el('div', 'rt-field'));
-    add(wrap, el('label', null, tr('runtimes.ext.field.pkgs', '要装的扩展')));
+    add(wrap, el('label', null, cfg.fieldLabel));
     var input = add(wrap, el('input', 'rt-input'));
-    input.type = 'text'; input.placeholder = 'chalk commander==12.0.0'; input.value = s.extInput || '';
+    input.type = 'text'; input.placeholder = cfg.pkgExample; input.value = s.extInput || '';
     input.addEventListener('change', function () { s.extInput = input.value; });
-    add(wrap, el('div', 'rt-field-hint', tr('runtimes.ext.field.hint', '空格或逗号分隔多个包；不会安装到全局环境')));
+    add(wrap, el('div', 'rt-field-hint', cfg.fieldHint));
     var actions = add(p, el('div', 'rt-venv-actions'));
     var install = add(actions, el('button', 'btn btn-primary', s.extBusy === 'install'
       ? tr('runtimes.ext.btn.installing', '安装中…（最多 120 秒）') : tr('runtimes.ext.btn.install', '安装扩展')));
     install.type = 'button'; install.disabled = !!s.extBusy;
     install.addEventListener('click', function () { s.extInput = input.value; doExtInstall(t, s); });
-    add(actions, el('span', 'rt-field-hint', tr('runtimes.ext.install.note', '扩展仅写插件状态目录的隔离前缀；失败时检查网络或镜像源。')));
+    add(actions, el('span', 'rt-field-hint', cfg.installNote));
     if (s.extErr) p.appendChild(extErrorBox(s.extErr));
     if (s.extMsg) add(p, el('div', 'rt-ok', s.extMsg));
 
@@ -899,8 +916,8 @@
     bodyBox.appendChild(guardPanel(t, s)); // 三 tab 共用：启动/停止/重启/状态/日志尾部
     // 仅 Python runtime 显示虚拟环境区；domain 是运行时变量、非常量，node/php 走不到这个分支
     if (t.domain === 'runtime-python') bodyBox.appendChild(venvPanel(t, s));
-    // 仅 Node runtime 显示扩展管理区（已有 tab 内的分区，不新增一级控件 / hub）
-    if (t.domain === 'runtime-node') bodyBox.appendChild(extPanel(t, s));
+    // Node / PHP runtime 各自显示扩展管理区（已有 tab 内的分区，不新增一级控件 / hub）
+    if (EXT_CFG[t.domain]) bodyBox.appendChild(extPanel(t, s));
     if (s.versions && s.versions.length) bodyBox.appendChild(projectsPanel(t, s));
     bodyBox.appendChild(doctorPanel(t, s));
     labelCells(bodyBox);
@@ -918,7 +935,7 @@
       s.versions = null; s.error = ''; s.doctor = null; s.doctorError = ''; s.selected = '';
       s.guard = null; s.guardError = ''; s.gLogFor = ''; s.gLog = null; s.pinMsg = ''; s.pinErr = null;
       if (tab === 'python') { s.venvs = null; s.venvListError = ''; s.pkgFor = ''; s.pkgMode = ''; s.pkgResult = null; s.pkgErr = null; }
-      if (tab === 'node') { s.exts = null; s.extListError = ''; s.extMsg = null; s.extErr = null; s.extRemoveFor = ''; }
+      if (EXT_CFG[byId[tab].domain]) { s.exts = null; s.extListError = ''; s.extMsg = null; s.extErr = null; s.extRemoveFor = ''; }
       ensureLoaded(tab); paintBody();
     });
     barBox = add(page, el('div', 'rt-tabs'));
