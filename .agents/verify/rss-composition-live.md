@@ -77,7 +77,7 @@ pgrep -a -x kored                                            # exit 1（采样�
 | 无路径裸 anon（`010b6000-030f9000`，Go arena 预留的实际驻留段） | 100 | 0.70% | 100 | 1 | RssAnon |
 | `[stack]`（主线程栈） | 24 | 0.17% | 24 | 1 | RssAnon |
 | `[vdso]`/`[vvar]`/`[vsyscall]` | 8 | 0.06% | 0 | 4 | RssFile（Shared_Clean 8，PSS=0，进程间共享不占实内存） |
-| **合计** | **14,204** | **100%** | **14,196** | 47 | — |
+| **合计** | **14,204** | **100%** | **14,196** | 48 | — |
 
 **口径对账（关键）**：按 clean/dirty 汇总，`Private_Clean 9,316 + Shared_Clean 8 = 9,324` = status `RssFile`；`Private_Dirty 4,880 + Shared_Dirty 0 = 4,880` = status `RssAnon`；两者之和 14,204 = status `VmRSS` = smaps_rollup `Rss`（14,204）。PSS 14,196（`smaps_rollup` 同为 14,196），与 RSS 差 8 KiB 全来自共享的 `[vdso]`（PSS 摊薄为 0）。
 
@@ -106,7 +106,7 @@ pgrep -a -x kored                                            # exit 1（采样�
 
 ### RssAnon 构成
 
-Go heap 2,932 KiB（60.1%）+ Go 元数据/GC 结构 1,744 KiB（35.7%）+ 裸 anon 100 KiB + 主线程栈 24 KiB = 4,880 KiB。对照旧基线 4,932–4,988 KiB 无拆分数据，本次首次给出实测拆分：**约 96% 的 RssAnon 是 Go 运行时管理区（heap + metadata），程序自身可控的栈仅 24 KiB**。
+Go heap 2,932 KiB（60.1%）+ Go 元数据/GC 结构 1,744 KiB（35.7%）+ 主二进制 `rw-p` dirty 80 KiB（§4 注，status 口径记入 RssAnon）+ 裸 anon 100 KiB + 主线程栈 24 KiB = 4,880 KiB。对照旧基线 4,932–4,988 KiB 无拆分数据，本次首次给出实测拆分：**约 96% 的 RssAnon 是 Go 运行时管理区（heap + metadata），程序自身可控的栈仅 24 KiB**。
 
 ## 6. 结论：8 MiB 目标是否可达、压缩面在哪
 
