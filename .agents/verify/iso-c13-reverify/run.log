@@ -1,0 +1,33 @@
+HANDSHAKE: kore.hello -> ok
+ASSERT 01 PASS: ext.list 空列表返回 count=0
+  CMD: POST-UDS request=runtime-node.ext.list id=a8e19a62768d9b0bec304609f21c38bb params={} -> exit=0 RESPONSE {"type":"response","id":"a8e19a62768d9b0bec304609f21c38bb","req_id":"r-c13-runtime-node.ext.list","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global","packages":[],"count":0,"hint":"还没有隔离扩展；请在版本详情里点「管理扩展」安装，包会写进插件状态目录。"}}
+  EXIT: 0
+ASSERT 02 PASS: ext.install 成功并标注 network_used
+  CMD: POST-UDS request=runtime-node.ext.install id=7dda217e12b7eaceb99296efef656ce4 params={"packages":["chalk","commander==12.0.0"]} -> exit=0 RESPONSE {"type":"response","id":"7dda217e12b7eaceb99296efef656ce4","req_id":"r-c13-runtime-node.ext.install","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global","packages":["chalk","commander==12.0.0"],"output":"added 2 package(s) in isolated prefix\n","truncated":false,"duration_ms":7,"network_used":true,"hint":"扩展只装进插件隔离目录（\u003cstate\u003e/global/node_modules），不会改动系统全局 npm；如失败请检查网络或镜像源。"}}
+  EXIT: 0
+ASSERT 03 PASS: 扩展 chalk 落在隔离 state 前缀 <state>/global/node_modules
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global/node_modules/chalk/package.json -> err=<nil>
+  EXIT: 0
+ASSERT 04 PASS: 扩展 commander 落在隔离 state 前缀
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global/node_modules/commander/package.json -> err=<nil>
+  EXIT: 0
+ASSERT 05 PASS: 假执行面 argv 无 -g/--global（绝不全局安装）
+  CMD: cat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/npm-argv.log -> "install --prefix /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global --no-audit --no-fund --ignore-scripts chalk commander==12.0.0\n"
+  EXIT: 0
+ASSERT 06 PASS: 假执行面 argv 使用固定 --prefix <state>/global
+  CMD: grep -F '--prefix /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global' /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/npm-argv.log -> 命中
+  EXIT: 0
+ASSERT 07 PASS: ext.list 显示 2 个已装隔离扩展
+  CMD: POST-UDS request=runtime-node.ext.list id=473fe5c421055b0bb579711b9083ec95 params={} -> exit=0 RESPONSE {"type":"response","id":"473fe5c421055b0bb579711b9083ec95","req_id":"r-c13-runtime-node.ext.list","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global","packages":[{"name":"chalk","version":"1.0.0"},{"name":"commander","version":"1.0.0"}],"count":2}}
+  EXIT: 0
+ASSERT 08 PASS: ext.remove 成功
+  CMD: POST-UDS request=runtime-node.ext.remove id=68c408277223bb0985556e628d94f28d params={"packages":["chalk","commander"]} -> exit=0 RESPONSE {"type":"response","id":"68c408277223bb0985556e628d94f28d","req_id":"r-c13-runtime-node.ext.remove","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global","removed":["chalk","commander"],"output":"removed 2 package(s)\n","truncated":false,"hint":"只移除隔离目录内的扩展；系统全局 npm 不受影响。"}}
+  EXIT: 0
+ASSERT 09 PASS: ext.remove 后 chalk 从隔离前缀清理
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global/node_modules/chalk -> err=stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-reverify/state/node/global/node_modules/chalk: no such file or directory (IsNotExist=true)
+  EXIT: 0
+ASSERT 10 PASS: 真二进制拒绝 -g 注入（E_INVALID）
+  CMD: POST-UDS request=runtime-node.ext.install id=4c4e1a0a68b03e064059b2b7d60c2033 params={"packages":["npm -g"]} -> exit=0 RESPONSE {"type":"response","id":"4c4e1a0a68b03e064059b2b7d60c2033","req_id":"r-c13-runtime-node.ext.install","error":{"code":"E_INVALID","message":"请检查包名 \"npm -g\"：只接受字母数字 . _ - 和可选的 ==版本，不要写空格、分号、@scope 或 -g 选项"}}
+  EXIT: 0
+TOTAL: 10/10 PASS
+RESULT: ALL PASS
