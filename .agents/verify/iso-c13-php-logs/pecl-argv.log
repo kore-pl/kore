@@ -1,0 +1,2 @@
+install -d extension_dir=/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext redis memcached-3.1.5
+uninstall redis memcached

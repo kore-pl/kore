@@ -1,0 +1,43 @@
+HANDSHAKE: method=kore.hello -> replying ok
+ASSERT 01 PASS: ext.list 空列表返回 count=0
+  CMD: POST-UDS request=runtime-php.ext.list id=37b41fdf9ce7494dbec548db7086b658 params={}
+  EXIT: 0
+  RESPONSE {"type":"response","id":"37b41fdf9ce7494dbec548db7086b658","req_id":"r-c13-37b41fdf","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global","packages":[],"count":0,"hint":"还没有隔离扩展；请在版本详情里点「管理扩展」安装，扩展会写进插件状态目录。"}}
+ASSERT 02 PASS: ext.install 成功并标注 network_used
+  CMD: POST-UDS request=runtime-php.ext.install id=bbd30318b0d24a0b811b6b716b45a65b params={"packages":["redis","memcached-3.1.5"]}
+  EXIT: 0
+  RESPONSE {"type":"response","id":"bbd30318b0d24a0b811b6b716b45a65b","req_id":"r-c13-bbd30318","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global","packages":["redis","memcached-3.1.5"],"output":"added 2 package(s) in isolated prefix\n","truncated":false,"duration_ms":20,"network_used":true,"hint":"扩展只装进插件隔离目录（<state>/global），不会改动宿主 php / apt 全局扩展；如失败请检查网络或 PECL 源。"}}
+ASSERT 03 PASS: 扩展 redis 落在隔离 state 前缀 <state>/global/php_ext
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext/redis/ext.json
+  EXIT: 0
+  exists=True path=/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext/redis/ext.json
+ASSERT 04 PASS: 扩展 memcached 落在隔离 state 前缀
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext/memcached/ext.json
+  EXIT: 0
+  exists=True path=/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext/memcached/ext.json
+ASSERT 05 PASS: 假执行面 argv 无 apt / -g / --global（绝不全局安装）
+  CMD: cat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/pecl-argv.log
+  EXIT: 0
+  argv='install -d extension_dir=/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext redis memcached-3.1.5\n' bad_tokens=[]
+ASSERT 06 PASS: 假执行面 argv 使用固定 -d extension_dir <state>/global/php_ext
+  CMD: grep -F 'extension_dir=/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext' /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/pecl-argv.log
+  EXIT: 0
+  contains_fixed_ext_dir=True
+ASSERT 07 PASS: ext.list 显示 2 个已装隔离扩展
+  CMD: POST-UDS request=runtime-php.ext.list id=53f1441d6e4940ad9924747cf204babe params={}
+  EXIT: 0
+  RESPONSE {"type":"response","id":"53f1441d6e4940ad9924747cf204babe","req_id":"r-c13-53f1441d","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global","packages":[{"name":"memcached","version":"1.0.0"},{"name":"redis","version":"1.0.0"}],"count":2}}
+ASSERT 08 PASS: ext.remove 成功
+  CMD: POST-UDS request=runtime-php.ext.remove id=d0059bcd15bd4e91aa91a3b80e8f047b params={"packages":["redis","memcached"]}
+  EXIT: 0
+  RESPONSE {"type":"response","id":"d0059bcd15bd4e91aa91a3b80e8f047b","req_id":"r-c13-d0059bcd","result":{"prefix":"/home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global","removed":["redis","memcached"],"output":"removed 2 package(s)\n","truncated":false,"hint":"只移除隔离目录内的扩展；宿主 php / apt 全局扩展不受影响。"}}
+ASSERT 09 PASS: ext.remove 后隔离前缀清理
+  CMD: stat /home/pt/Work/GolandProjects/kore-pl/kore/.agents/verify/iso-c13-php/state/php/global/php_ext/redis (expect no such file)
+  EXIT: 0
+  redis_exists=False memcached_exists=False
+ASSERT 10 PASS: 真二进制拒绝 apt 注入（E_INVALID）
+  CMD: POST-UDS request=runtime-php.ext.install id=a80b9bf8e2c34b20a782e4bbabfb8a32 params={"packages":["apt install php-redis"]}
+  EXIT: 0
+  RESPONSE {"type":"response","id":"a80b9bf8e2c34b20a782e4bbabfb8a32","req_id":"r-c13-a80b9bf8","error":{"code":"E_INVALID","message":"请检查包名 \"apt install php-redis\"：只接受字母数字 . _ - 和可选的 -版本，不要写空格、分号、斜杠或 apt 选项"}}
+TOTAL: 10/10 PASS
+RESULT: ALL PASS
