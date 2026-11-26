@@ -936,7 +936,7 @@
       if (s.st === 'loading' && needsSource(p, k)) notes.push(tr('search.src.loading', '正在读取{label}…', { label: SRC_LABEL[k] }));
       if (s.st === 'err' && s.err) notes.push(s.err);
     });
-    if (p.scope === 'db' && src.db.st === 'ok' && src.db.hadInstance === false) notes.push(tr('search.note.dbEmpty', '没有配置数据库实例，这个来源暂时没有内容。'));
+    if (p.scope === 'db' && src.db.st === 'ok' && src.db.hadInstance === false) notes.push(tr('search.note.dbEmpty', '还没有添加数据库连接，这个来源暂时没有内容。'));
     if (p.scope === 'log' && src.logs.sources !== null && !src.logs.sources.length && !src.logs.err) notes.push(tr('search.note.logNoSource', '没有可读的日志来源，这个来源暂时没有内容。'));
     for (var i = 0; i < notes.length; i++) S.list.appendChild(el('div', 'kore-search-note', notes[i]));
   }
