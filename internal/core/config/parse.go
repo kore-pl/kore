@@ -8,11 +8,12 @@ import (
 
 // 各层级的合法键名；未知键按"WARN + 建议最近键名"处理，不因拼写打死服务。
 var (
-	topKeys       = []string{"profile", "server", "auth", "paths", "log", "resources", "plugins", "store", "security", "audit", "cert_renew"}
+	topKeys       = []string{"profile", "server", "auth", "paths", "log", "resources", "plugins", "store", "backup", "security", "audit", "cert_renew"}
 	serverKeys    = []string{"addr", "socket", "tls"}
 	authKeys      = []string{"admin_username", "admin_password_hash", "must_change_password", "session_ttl", "cookie_secure", "initialized"}
 	pathsKeys     = []string{"state_dir", "log_dir", "run_dir", "plugin_dir", "index_dir"}
 	storeKeys     = []string{"allow_unsigned"}
+	backupKeys    = []string{"keep_count", "max_disk_bytes"}
 	logKeys       = []string{"level", "rotate"}
 	rotateKeys    = []string{"max_size_mb", "max_backups"}
 	resourcesKeys = []string{"defaults", "enforce", "resident_max"}
@@ -79,6 +80,7 @@ func (p *parser) decode(root *yaml.Node, snap *Snapshot) error {
 		{"resources", func(n *yaml.Node) error { return p.decodeResources(n, &snap.Resources) }},
 		{"plugins", func(n *yaml.Node) error { return p.decodePlugins(n, &snap.Plugins) }},
 		{"store", func(n *yaml.Node) error { return p.decodeStore(n, &snap.Store) }},
+		{"backup", func(n *yaml.Node) error { return p.decodeBackup(n, &snap.Backup) }},
 		{"security", func(n *yaml.Node) error { return p.decodeSecurity(n, &snap.Security) }},
 		{"audit", func(n *yaml.Node) error { return p.decodeAudit(n, &snap.Audit) }},
 		{"cert_renew", func(n *yaml.Node) error { return p.decodeCertRenew(n, &snap.CertRenew) }},

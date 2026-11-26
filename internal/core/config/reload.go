@@ -173,6 +173,13 @@ func coldChanged(dst, src *Snapshot) []string {
 	if dst.Store.AllowUnsigned != src.Store.AllowUnsigned {
 		keys = append(keys, "store.allow_unsigned")
 	}
+	// backup.* 在 market.Service 构造时固化，运行中改值无法热更（与资源配额同理）。
+	if dst.Backup.KeepCount != src.Backup.KeepCount {
+		keys = append(keys, "backup.keep_count")
+	}
+	if dst.Backup.MaxDiskBytes != src.Backup.MaxDiskBytes {
+		keys = append(keys, "backup.max_disk_bytes")
+	}
 	if dst.Auth.CookieSecure != src.Auth.CookieSecure {
 		keys = append(keys, "auth.cookie_secure")
 	}

@@ -18,6 +18,7 @@ func (p *parser) validate(s *Snapshot) error {
 	validateLog(s, add)
 	validateResources(s, add)
 	validatePlugins(s, add)
+	validateBackup(s, add)
 	validateSecurity(s, add)
 	validateCertRenew(s, add)
 	validateAudit(s, add)
@@ -157,6 +158,21 @@ func validatePlugins(s *Snapshot, add func(string, string)) {
 		if strings.TrimSpace(id) == "" {
 			add("plugins.autostart", fmt.Sprintf("第 %d 个元素不能为空", i+1))
 		}
+	}
+}
+
+// validateBackup 校验旧版本备份份数与磁盘上限（ADR-0059 §3.5）。
+// 份数 1–10（保底 1 份可回滚由 market 清理层再强制）；上限 1 MiB–1 GiB。
+func validateBackup(s *Snapshot, add func(string, string)) {
+	if s.Backup.KeepCount < 1 || s.Backup.KeepCount > 10 {
+		add("backup.keep_count", "必须在 1–10 之间（至少保留 1 份可回滚版本）")
+	}
+	const (
+		minBackupBytes = int64(1) << 20 // 1 MiB
+		maxBackupBytes = int64(1) << 30 // 1 GiB
+	)
+	if s.Backup.MaxDiskBytes < minBackupBytes || s.Backup.MaxDiskBytes > maxBackupBytes {
+		add("backup.max_disk_bytes", "必须在 1048576（1 MiB）–1073741824（1 GiB）之间")
 	}
 }
 

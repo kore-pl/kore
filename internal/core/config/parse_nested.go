@@ -130,6 +130,26 @@ func (p *parser) decodeStore(n *yaml.Node, out *Store) error {
 	return nil
 }
 
+// decodeBackup 解析 backup.*（ADR-0059 §3.5 / U6）。
+// 只覆盖配置里显式出现的键；缺失键保留 Default() 的保守默认值。
+func (p *parser) decodeBackup(n *yaml.Node, out *Backup) error {
+	m, err := p.mapping(n, "backup", backupKeys)
+	if err != nil {
+		return err
+	}
+	if v := m["keep_count"]; v != nil {
+		if out.KeepCount, err = p.integer(v, "backup.keep_count"); err != nil {
+			return err
+		}
+	}
+	if v := m["max_disk_bytes"]; v != nil {
+		if out.MaxDiskBytes, err = p.integer64(v, "backup.max_disk_bytes"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // decodeSecurity 解析 security.* 与 security.login_rate_limit.*。
 func (p *parser) decodeSecurity(n *yaml.Node, out *Security) error {
 	m, err := p.mapping(n, "security", securityKeys)

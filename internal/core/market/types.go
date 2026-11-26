@@ -102,6 +102,9 @@ type InstallJob struct {
 	Message string `json:"message"`
 	// PreviousVersion 安装前的已装版本；首次安装为空。升级时供前端显示 v旧 → v新。
 	PreviousVersion string `json:"previous_version,omitempty"`
-	// StaleVersions 插件目录下仍残留的旧版本目录名（不自动删除，供前端提示清理）。
+	// StaleVersions 是清理后仍保留的旧版本目录名（ADR-0059 §3.5）。
+	// 新版本生效确认后按 backup.keep_count / backup.max_disk_bytes 自动清理最旧版本；
+	// 保底保留当前版本 + 至少 1 份可回滚版本，.prev / .bak-<ts> 等回滚材料永不删除。
+	// 本字段仍回传，供前端展示"仍保留哪些旧版本"与剩余回滚点。
 	StaleVersions []string `json:"stale_versions,omitempty"`
 }
