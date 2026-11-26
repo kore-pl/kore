@@ -102,6 +102,29 @@ type Store struct {
 	AllowUnsigned bool
 }
 
+// Backup 是旧版本备份份数与磁盘上限（ADR-0059 §3.5 / U6）。
+//
+// 只约束 <install> 内的版本目录；清理保底 1 份可回滚版本（market 层执行）。
+// 份数与上限均可配：默认 keep_count=2、max_disk_bytes=256 MiB（见 defaultBackup*）。
+type Backup struct {
+	// KeepCount 是保留的旧版本份数上限（含当前版本之外的可回滚版本）。
+	// 默认 2；范围 1–10，清理层还会强制保底至少 1 份可回滚版本。
+	KeepCount int
+	// MaxDiskBytes 是旧版本目录合计字节上限；超限触发清理最旧版本。
+	// 默认 256 MiB；范围 1 MiB–1 GiB。
+	MaxDiskBytes int64
+}
+
+// defaultBackupKeepCount / defaultBackupMaxDiskBytes 是 backup.* 的保守默认。
+//
+// 推导：G-03 单插件解压硬上限 128 MiB × keep_count 默认 2 = 256 MiB；
+// 对应 ADR-0059 §3.5「按 G-03 预算比例取保守值」的量级，不会因默认配置
+// 无限增长挤占安装目录磁盘。默认值只用于未配置场景，用户可显式调大。
+const (
+	defaultBackupKeepCount    = 2
+	defaultBackupMaxDiskBytes = 256 * 1024 * 1024 // 256 MiB
+)
+
 // Audit 是审计写入面与保留策略配置。
 type Audit struct {
 	// InvokeAll 为 true 时审计全部 invoke（含只读方法），用于调试；
@@ -162,6 +185,8 @@ type Snapshot struct {
 	Plugins Plugins
 	// Store 是软件商店配置。
 	Store Store
+	// Backup 是旧版本备份份数与磁盘上限（ADR-0059 §3.5）。
+	Backup Backup
 	// Security 是安全配置。
 	Security Security
 	// Audit 是审计写入面配置。
@@ -180,7 +205,7 @@ func defaultsFor(profile string) *Snapshot {
 		Profile: profile,
 		Server:  Server{Socket: socket},
 		Auth: Auth{
-			AdminUsername: "admin",          // ADR-0057：固定单账号标识符，非空显式类型（G-24）
+			AdminUsername: "admin",            // ADR-0057：固定单账号标识符，非空显式类型（G-24）
 			SessionTTL:    7 * 24 * time.Hour, // ADR-0041：面板默认 7 天；显式配置优先
 			CookieSecure:  "auto",
 		},
@@ -188,6 +213,7 @@ func defaultsFor(profile string) *Snapshot {
 		Log:       Log{Level: "info", Rotate: Rotate{MaxSizeMB: 10, MaxBackups: 5}},
 		Resources: Resources{Defaults: Defaults{MemoryMB: 12, CPUQuota: "50%", PidsMax: 128}, Enforce: true, ResidentMax: 2},
 		Plugins:   Plugins{AllowUnsigned: true, Autostart: []string{}},
+		Backup:    Backup{KeepCount: defaultBackupKeepCount, MaxDiskBytes: defaultBackupMaxDiskBytes},
 		Security:  Security{LoginRateLimit: RateLimit{Attempts: 1, Window: 60 * time.Second, Lock: 300 * time.Second}},
 		Audit: Audit{
 			InvokeAll: false,

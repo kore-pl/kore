@@ -48,6 +48,21 @@ func (p *parser) integer(n *yaml.Node, path string) (int, error) {
 	return value, nil
 }
 
+// integer64 读取 int64 整数标量（用于 backup.max_disk_bytes 这类字节数）。
+func (p *parser) integer64(n *yaml.Node, path string) (int64, error) {
+	if n == nil {
+		return 0, nil
+	}
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!int" {
+		return 0, p.typeErr(path, "int64", n)
+	}
+	var value int64
+	if err := n.Decode(&value); err != nil {
+		return 0, fmt.Errorf("%s:%d: %s: %v", p.source, n.Line, path, err)
+	}
+	return value, nil
+}
+
 // duration 读取 Go duration 串（如 "12h"）；整数按类型错误处理。
 func (p *parser) duration(n *yaml.Node, path string) (time.Duration, error) {
 	if n == nil {
