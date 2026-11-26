@@ -350,3 +350,48 @@
 
 **结论**：P0 的四项承诺（顶栏 ≤4、文件默认 ≤3、tab 推荐提示不 FAIL、三处文档漂移修订）全部落地且有
 双端截图 + 自评自证；未达的 tab / 首页 / 插件行目标按用户裁决记入后续期，不判 BLOCKED。
+
+## 9. P1 实施结果（2026-11-26，task-114 / agent:ui-p1）
+
+> 口径：用户裁决为**渐进目标**——下列数字逐项实测回读，未达设计目标项不 BLOCKED，登记到 §9.3 转后续期；
+> G-28 双端截图 + 自评三问为硬自证，证据见 `.agents/verify/ui-p1-selfeval.md`。
+> 本节只追加结果，不修改 §1–§8 的方案原文。
+
+### 9.1 改前 → 改后实测点数
+
+| 项 | 改前（方案基线 / P0 实测） | 改后（隔离实例 18931 DOM + 脚本回读） | 设计目标 | 结论 |
+| --- | --- | --- | --- | --- |
+| 首页首屏入口 | 21（hero + 4 快捷 + 待办 8 + KPI 5 + 服务/插件 2 面板 + 最近告警 + 系统信息） | **焦点 1 + 快捷 3 + 待办 ≤3 + 提示条**：`#kore-overview` 根 5 子节点（head/hero/actions/todos/note）；`.ov-card`=0、`.ov-status`=0、`.ov-alert-panel`=0、`.ov-sysinfo`=0 | 焦点 1 + 快捷 ≤3 + 待办 1 | **达标** |
+| 首页 KPI 下沉 | 5 张卡在首页 | 监控 hub「监控」分区可见同等基础指标 + 降级说明（CPU / 负载 / 磁盘 / 内存槽位），服务计数归 sites、插件计数归 store、告警归告警中心 | KPI 下沉监控 hub | **达标** |
+| tab 总数 | P0 实测 31（方案基线 40） | **20**（8 hub / 20 tab，逐 hub：sites 3 / db 2 / files 2 / store 2 / monitor 4 / tasks 1 / security 3 / settings 3） | ≤20 | **达标** |
+| 单 hub tab 数 | monitor 9 / security 8 / sites 6 / settings 6 超目标 | 最大 monitor 4，全部 hub ≤4 | ≤5 | **达标** |
+| 合并映射 | 无 | §2.1 的 17 项全部落地：合并为 tab 内分区（sectionView）、磁盘分析跨 hub、批量操作为选择态；旧 hash 重定向 4 例实测落到正确 tab + `?section=` | 17 项映射 / 合并不删功能 / 不新建 hub | **达标** |
+| A6 硬判据 | 脚本函数体原文 | 原文不动；`--self-test` 四反例仍被拦下，tab 超推荐值仍 exit 0；全站 exit 1 的存量违规与本轮改动无关（18 fail，与 P0 基线一致） | 不动 | **达标** |
+| 首屏 gzip | 基线 83,182 B（P0 实测口径含后续入库变更） | **90,924 B ≤ 307,200 B**（300 KiB）；`make frontend` exit 0，但有 >基线+5% / 绝对线 90,000 的 WARN | ≤300 KiB | **达标（带 WARN，转 §9.3）** |
+| Go 测试 | — | `go test -timeout 200s ./cmd/kored/...` exit 0（8.992s） | 不受影响 | **达标** |
+
+### 9.2 证据
+
+- 门禁：`bash scripts/usability-check.sh --self-test` exit 0（正例 PASS / 四反例 FAIL / tab 超推荐值 exit 0）；
+  `bash scripts/usability-check.sh` exit 1（18 条 FAIL 全部是 A1「ZeroParam 真跑失败」，
+  根因是本沙箱 go-build 缓存只读；与 P0 基线同一组存量违规，均在本期写域之外），
+  tab 提示只 INFO/WARN，未新增 FAIL、未改 exit code。
+- 构建：`make frontend` exit 0（首屏 90,924 B ≤ 300 KiB）；`go test ./cmd/kored/...` exit 0。
+- G-28：PC 1440×900 full-page + 精确视口、手机 390×844 full-page + 精确视口截图存
+  `.agents/verify/screenshots/ui-p1-{desktop,mobile}-*.png`；`identify` 实测尺寸与自评三问原文见
+  `.agents/verify/ui-p1-selfeval.md`。隔离实例端口 18931（非 8787），config/state/run/log/data 独立，
+  收工已关闭；未触碰主实例运行态。
+- 动线复核：旧 hash `#/monitor/fault-drill`、`#/settings/snapshot`、`#/sites/site-migrate`、
+  `#/security/dns` 均重定向到新 tab + `?section=`，分区自动高亮且功能仍可达。
+
+### 9.3 差距转后续期（不 BLOCKED）
+
+| 期 | 项 | 当前差距 | 后续动作 |
+| --- | --- | --- | --- |
+| P2 | 首屏 gzip 体积漂移 WARN | 90,924 B > 绝对线 90,000 B 与基线+5%，本期新增 sectionView / LEGACY_SUB / hero 折叠等 P1 逻辑约 +7.7 KiB | `scripts/frontend-check.sh` 的 `BASE_FILES` 快照在 P2 同轮更新并写来源；或把 P1 辅助逻辑再拆懒加载。脚本不在 P1 写域，故未改 |
+| P2 | 插件行 5 → 2 + 详情抽屉 | §2.5 本期未动 `web/plugins-view.js`（不在 P1 写域） | 按方案落地 |
+| P2 | 手机隐藏帮助 / 快捷键补丁撤销 | §2.5 后的 P2 项目 | 顶栏收敛后复核手机是否仍需要隐藏 |
+
+**结论**：P1 两项承诺（首页 21→焦点 1+快捷 3+待办 ≤3、tab 31→20 且单 hub ≤4）全部落地且有双端
+截图 + 自评自证；A6 硬判据与 exit code 未动，tab 数只提示；未达项仅 P2 的首屏体积漂移 WARN
+（预算本身达标），按用户裁决不判 BLOCKED。

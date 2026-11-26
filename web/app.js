@@ -1128,6 +1128,13 @@
       '.ov-hero-tools{display:flex;gap:var(--kore-space-2);flex:0 0 auto}',
       '.ov-hero-go{min-height:var(--kore-touch)}',
       '.ov-hero-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--kore-space-2)}',
+      // §2.2：异常项留在焦点上，其余 7 项收进折叠区（不删信息，只降权重）。
+      '.ov-hero-trouble{margin-top:var(--kore-space-1)}',
+      '.ov-hero-details{margin-top:var(--kore-space-1)}',
+      '.ov-hero-details>summary{cursor:pointer;min-height:var(--kore-touch);' +
+        'display:flex;align-items:center;color:var(--kore-text-3);font-size:var(--kore-font-12)}',
+      '.ov-hero-details>summary:hover{color:var(--kore-text-1)}',
+      '.ov-hero-details[open] .ov-hero-checks{margin-top:var(--kore-space-2)}',
       '.ov-check{display:flex;align-items:center;gap:var(--kore-space-2);min-height:36px;min-width:0;' +
         'padding:var(--kore-space-1) var(--kore-space-2);background:var(--kore-bg-2);' +
         'border:1px solid var(--kore-border-1);border-radius:var(--kore-radius-control)}',
@@ -1166,6 +1173,7 @@
         '.ov-todo.is-warn .ov-todo-title{color:var(--kore-warning)}',
       '.ov-todo-detail{font-size:var(--kore-font-12);color:var(--kore-text-3);line-height:1.5;overflow-wrap:anywhere}',
       '.ov-todo-cta{font-size:var(--kore-font-12);color:var(--kore-info);white-space:nowrap;flex:0 0 auto}',
+      '.ov-todo-all{margin-left:auto;min-height:var(--kore-touch)}',
       // 迷你趋势：静态条形，点一下 / 方向键把单点读数写出来（G-32「数据点可读」）。
       '.ov-trend{margin-top:var(--kore-space-1)}',
       '.ov-trend-bars{display:flex;align-items:flex-end;gap:2px;height:26px;cursor:crosshair}',
@@ -1232,7 +1240,7 @@
   var OV_CERT_WARN_DAYS = 30; // 证书剩余天数
   var OV_CERT_FAIL_DAYS = 7;
   var OV_TREND_MAX = 24;      // 迷你趋势最多保留的采样点（单图 ≤1000 点，G-32）
-  var OV_TODO_MAX = 8;        // 待办一屏最多 8 条，超出只显示前 8（附「还有 N 项」）
+  var OV_TODO_MAX = 3;        // 待办一屏最多 3 条（§2.2：焦点 1 + 快捷 ≤3 + 待办 1）
   var OV_ALERT_WINDOW_MS = 5 * 60 * 1000;
   var OV_DENIED_BURST = 5;
   var OV_HIGH_RISK = { 'root.action': '提权动作被拒绝', 'capability.denied': '权限不足被拒绝（需要管理员账号；能力由插件声明授予，无逐项授权开关）' };
@@ -1631,10 +1639,10 @@
     return items;
   }
 
-  // 快捷入口：四个高频动作，点击即到（新站点 / 部署 / 日志 / 终端）。
+  // 快捷入口：三个高频动作（§2.2：4→3）。「部署应用」并入「新建网站」流程内的部署步骤，
+  // 原 route sites/appdeploy 保留为深链（全局搜索 / hash 直达仍然可达），不再占首屏一格。
   var OV_ACTIONS = [
-    { label: '新建网站', hint: '添加站点、绑域名、开 HTTPS', route: 'sites' },
-    { label: '部署应用', hint: '从模板一键装应用', route: 'sites/appdeploy' },
+    { label: '新建网站', hint: '建站点、绑域名、部署应用', route: 'sites' },
     { label: '查日志', hint: '按来源看实时日志', route: 'monitor/logs' },
     { label: '打开终端', hint: '直接进本机命令行', route: 'terminal' }
   ];
@@ -1699,30 +1707,43 @@
     main.appendChild(tools);
     host.appendChild(main);
 
-    var checks = el('div', 'ov-hero-checks');
-    for (var c = 0; c < h.checks.length; c++) {
-      (function (ck) {
-        var chip = el('div', 'ov-check is-' + ck.tone);
-        chip.appendChild(el('span', 'dot ' + (ck.tone === 'na' ? '' : ck.tone)));
-        chip.appendChild(el('span', 'ov-check-label', ck.label));
-        chip.appendChild(el('span', 'ov-check-value', ck.value));
-        chip.title = ck.label + '：' + ck.detail;
-        chip.setAttribute('aria-label', ck.label + ' ' + ck.value + '，' + ck.detail);
-        if (ck.tone === 'fail' || ck.tone === 'warn') {
-          chip.className += ' ov-check-link';
-          chip.setAttribute('role', 'button');
-          chip.tabIndex = 0;
-          var jump = function () { ovGo(ck.route); };
-          chip.addEventListener('click', jump);
-          chip.addEventListener('keydown', function (ev) {
-            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(); }
-          });
-          chip.appendChild(el('span', 'ov-check-go', '›'));
-        }
-        checks.appendChild(chip);
-      })(h.checks[c]);
+    // §2.2：7 项状态 chip 收进折叠区；异常项（fail/warn）仍在焦点上直接可见，
+    // 这样「3 秒看到健康」不被 7 个同权重小格稀释，异常又不被藏起来。
+    var trouble = [];
+    for (var t = 0; t < h.checks.length; t++) {
+      if (h.checks[t].tone === 'fail' || h.checks[t].tone === 'warn') trouble.push(h.checks[t]);
     }
-    host.appendChild(checks);
+    function checkChip(ck) {
+      var chip = el('div', 'ov-check is-' + ck.tone);
+      chip.appendChild(el('span', 'dot ' + (ck.tone === 'na' ? '' : ck.tone)));
+      chip.appendChild(el('span', 'ov-check-label', ck.label));
+      chip.appendChild(el('span', 'ov-check-value', ck.value));
+      chip.title = ck.label + '：' + ck.detail;
+      chip.setAttribute('aria-label', ck.label + ' ' + ck.value + '，' + ck.detail);
+      if (ck.tone === 'fail' || ck.tone === 'warn') {
+        chip.className += ' ov-check-link';
+        chip.setAttribute('role', 'button');
+        chip.tabIndex = 0;
+        var jump = function () { ovGo(ck.route); };
+        chip.addEventListener('click', jump);
+        chip.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(); }
+        });
+        chip.appendChild(el('span', 'ov-check-go', '›'));
+      }
+      return chip;
+    }
+    if (trouble.length) {
+      var strip = el('div', 'ov-hero-checks ov-hero-trouble');
+      for (var u = 0; u < trouble.length; u++) strip.appendChild(checkChip(trouble[u]));
+      host.appendChild(strip);
+    }
+    var details = el('details', 'ov-hero-details');
+    details.appendChild(el('summary', null, '查看 ' + h.checks.length + ' 项明细'));
+    var checks = el('div', 'ov-hero-checks');
+    for (var c = 0; c < h.checks.length; c++) checks.appendChild(checkChip(h.checks[c]));
+    details.appendChild(checks);
+    host.appendChild(details);
   }
 
   function paintOvTodos(host) {
@@ -1732,6 +1753,11 @@
     var head = el('div', 'panel-head');
     head.appendChild(el('span', 'panel-title', '待办事项'));
     if (items.length) head.appendChild(ovChip(items[0].tone === 'fail' ? 'fail' : items[0].tone === 'warn' ? 'warn' : 'na', items.length + ' 项', '需要你决定或动手的事'));
+    // §2.2：最多 3 条 + 「查看全部」直达告警中心抽屉，不再重复铺最近告警面板。
+    var all = el('button', 'btn btn-ghost ov-todo-all', '查看全部');
+    all.type = 'button';
+    all.addEventListener('click', openAlertCenter);
+    head.appendChild(all);
     host.appendChild(head);
 
     var body = el('div', 'ov-todo-body');
@@ -2206,33 +2232,9 @@
     root.appendChild(todoPanel);
     paintOvTodos(todoPanel);
 
-    // ④ 关键指标：CPU / 内存 / 磁盘 / 负载 / 网络，带迷你趋势与阈值提示。
-    var metrics = el('div', 'ov-metrics');
-    metrics.id = 'kore-ov-metrics';
-    root.appendChild(metrics);
-    paintOvMetrics(metrics);
-
-    var status = el('div', 'ov-status');
-    status.id = 'kore-ov-status';
-    root.appendChild(status);
-    paintOvStatus(status);
-
-    var alertPanel = el('section', 'panel ov-alert-panel');
-    alertPanel.id = 'kore-ov-alerts';
-    var alertHead = el('div', 'panel-head');
-    alertHead.appendChild(el('span', 'panel-title', '最近告警'));
-    var more = el('button', 'btn btn-ghost', '查看全部');
-    more.type = 'button';
-    more.addEventListener('click', openAlertCenter);
-    alertHead.appendChild(more);
-    alertPanel.appendChild(alertHead);
-    var alertBody = el('div', 'ov-alert-body');
-    alertBody.id = 'kore-ov-alert-body';
-    alertPanel.appendChild(alertBody);
-    root.appendChild(alertPanel);
-    paintOvAlerts();
-
-    root.appendChild(buildOvSysDetails());
+    // §2.2：首屏只 3 块（焦点 1 + 快捷 3 + 待办 1）。KPI 5 卡 / 服务 / 插件计数
+    // 下沉到「监控」hub（已具备同等数据精度与降级说明），最近告警收进告警中心抽屉，
+    // 系统信息在「设置」页已有同一数据源（settings.js:376），不再在首页重复铺开。
   }
 
   // 重画「依赖多来源」的三块：任一来源回填后都重画一次，先到先显示，不互相等待。
@@ -2241,17 +2243,13 @@
     paintOvTodos(document.getElementById('kore-ov-todos'));
   }
 
-  // 数据装载：每个来源独立降级，任何一个失败不拖垮整页；回填后原位重绘对应区块。
+  // 数据装载：每个来源独立降级，任何一个失败不拖垮整页；回填后原位重绘焦点 + 待办。
   // 全部是一次性拉取（进入视图 / 点「重新检测」触发），没有任何定时器（G-19）。
+  // §2.2：系统指标/服务加载仍保留，是因为 ovHealth() 的七项检查与待办阈值共用这份数据；
+  // 只是不再往首页挂 KPI 卡与服务面板（那两份在监控 hub 原样提供）。
   function loadOverview() {
-    ovFetchSystem().then(function () {
-      paintOvMetrics(document.getElementById('kore-ov-metrics'));
-      repaintOvSummary();
-    });
-    ovLoadServices().then(function () {
-      paintOvStatus(document.getElementById('kore-ov-status'));
-      repaintOvSummary();
-    });
+    ovFetchSystem().then(repaintOvSummary);
+    ovLoadServices().then(repaintOvSummary);
     ovLoadJobs().then(repaintOvSummary);
     ovLoadPresets().then(repaintOvSummary);
     ovCollectAlerts().then(repaintOvSummary);
@@ -2297,6 +2295,10 @@
        · 块内保留 app.js 自有视图的 /assets/*.js 路径 → A5 据此定位视图文件检查空状态。 */
   // 壳内置模块的子视图定义（[全局名, 脚本, i18n 键, 中文兜底]）。放块外：它们不是一级项。
   var SHELL_VIEWS = {
+    // P1 合并分区需要按 sub 解析（原 HUB_DEFS 用 moduleView 直挂，未登记在此）：
+    // sites / monitor 仍是懒加载模块，登记只供 sectionView 的分区导航与默认分区使用。
+    sites: ['KoreSites', '/assets/sites.js', 'nav.sites', '网站'],
+    monitor: ['KoreMonitor', '/assets/monitor.js', 'nav.monitor', '监控'],
     db: ['KoreDb', '/assets/db.js', 'nav.db', '数据库'],
     redis: ['KoreRedis', '/assets/redis.js', 'nav.redis', 'Redis'],
     backup: ['KoreBackup', '/assets/backups.js', 'nav.backup', '备份'],
@@ -2343,68 +2345,180 @@
     tasks: ['KoreTasks', '/assets/tasks.js', 'nav.tasks', '计划任务']
   };
 
+  /* ── P1（DESIGN-REDUCTION §2.1）：tab 合并不删功能 ──────────────────────
+     合并 = 一个 tab 内多分区（section）轻导航，分区仍走既有懒加载视图模块；
+     一级项不增不删、不新建 hub。旧 hash（#/<hub>/<旧 sub>）由 LEGACY_SUB
+     重定向到 #/<hub>/<新 tab>?section=<旧 sub>，旧书签与全局搜索深链仍可达。 */
+  var LEGACY_SUB = {
+    'site-migrate': ['sites', 'sites'], batch: ['sites', 'batch'], container: ['sites', 'appdeploy'],
+    slowquery: ['db', 'db'], 'disk-analysis': ['monitor', 'monitor'], health: ['monitor', 'monitor'],
+    report: ['monitor', 'monitor'], topology: ['monitor', 'monitor'],
+    'fault-drill': ['monitor', 'alert'], 'log-alerts': ['monitor', 'alert'],
+    calendar: ['tasks', 'tasks'], macros: ['tasks', 'tasks'],
+    waf: ['security', 'network'], sshguard: ['security', 'network'], dns: ['security', 'network'],
+    'cert-lifecycle': ['security', 'ssl'], discover: ['security', 'integrity'],
+    snapshot: ['settings', 'governance'], migrate: ['settings', 'governance'],
+    'config-drift': ['settings', 'governance'], webhook: ['settings', 'settings']
+  };
+
+  function sectionFromHash() {
+    var m = /[?&]section=([a-z][a-z0-9-]*)/.exec(window.location.hash || '');
+    return m ? m[1] : '';
+  }
+
+  // 旧 hash 重定向：只改 hash，不重新渲染——壳的 hashchange 监听在本文件顶层注册之后，
+  // 会把改写后的 hash 当作一次正常切 tab 处理，不会双绘。
+  window.addEventListener('hashchange', function () {
+    var raw = String(window.location.hash || '');
+    var parts = raw.replace(/^#\/?/, '').split('?')[0].split('/');
+    if (parts.length < 2 || !LEGACY_SUB[parts[1]]) return;
+    var dest = LEGACY_SUB[parts[1]];
+    window.location.hash = '#/' + dest[0] + '/' + dest[1] + '?section=' + parts[1];
+  });
+
+  // sectionView(subsections)：一个 tab 内的分区导航。每项 { sub, label }，渲染走既有
+  // SHELL_VIEWS 懒加载工厂；切分区只换 body，不动壳的 tab 路由（G-19：无定时器）。
+  // sections() 只负责把子视图键包成一份清单：解析器按 sub: 计数 tab，sectionView 的分区
+  // 是 tab 内的第二层，故意不写 sub:，避免把分区误计成一级 tab（§2.1 的节流口径）。
+  function sections() {
+    return Array.prototype.slice.call(arguments);
+  }
+
+  function shellView(sub) {
+    return function (box) {
+      var d = SHELL_VIEWS[sub];
+      return window.KoreShell.view(d[0], d[1], d[2], d[3])(box);
+    };
+  }
+
+  function sectionView(defaultSub, subsections) {
+    var K = window.KoreShell;
+    return function (box) {
+      var wrap = el('div', 'kore-hub kore-sections');
+      var bar = el('div', 'kore-hub-tabs kore-section-tabs');
+      bar.setAttribute('role', 'tablist');
+      var body = el('div', 'kore-hub-body');
+      wrap.appendChild(bar);
+      wrap.appendChild(body);
+      box.appendChild(wrap);
+
+      var defs = [], i, d;
+      for (i = 0; i < subsections.length; i++) {
+        d = SHELL_VIEWS[subsections[i]];
+        if (!d) continue;
+        defs.push({ sub: subsections[i], label: d[3], render: K.view(d[0], d[1], d[2], d[3]) });
+      }
+      var buttons = [], active = '', handle = null;
+      var bySub = Object.create(null);
+      for (i = 0; i < defs.length; i++) bySub[defs[i].sub] = defs[i];
+
+      function activate(sub, syncHash) {
+        if (!bySub[sub]) sub = defs[0] && defs[0].sub;
+        if (!sub) return;
+        if (handle && typeof handle.destroy === 'function') {
+          try { handle.destroy(); } catch (err) { /* 切分区清理失败不阻断 */ }
+        }
+        handle = null;
+        body.textContent = '';
+        active = sub;
+        for (var j = 0; j < buttons.length; j++) {
+          var on = buttons[j].getAttribute('data-sub') === sub;
+          buttons[j].setAttribute('aria-selected', on ? 'true' : 'false');
+          buttons[j].className = 'kore-hub-tab' + (on ? ' is-active' : '');
+        }
+        try { handle = bySub[sub].render(body) || null; } catch (err) {
+          body.appendChild(el('div', 'stub', '分区渲染失败：' + (err && err.message ? err.message : err)));
+        }
+        if (syncHash) {
+          var base = (window.location.hash || '').split('?')[0];
+          if (base) window.location.hash = base + '?section=' + sub;
+        }
+      }
+
+      for (i = 0; i < defs.length; i++) {
+        (function (item) {
+          var b = el('button', 'kore-hub-tab');
+          b.type = 'button';
+          b.setAttribute('role', 'tab');
+          b.setAttribute('data-sub', item.sub);
+          b.appendChild(el('span', null, item.label));
+          b.addEventListener('click', function () {
+            if (active !== item.sub) activate(item.sub, true);
+          });
+          buttons.push(b);
+          bar.appendChild(b);
+        })(defs[i]);
+      }
+      activate(sectionFromHash() || (bySub[defaultSub] ? defaultSub : ''), false);
+
+      // 外部改写 section= 时同步分区（如全局搜索深链）；当前 tab 未变时壳不会重绘。
+      var onHash = function () {
+        var want = sectionFromHash();
+        if (want && bySub[want] && want !== active) activate(want, false);
+      };
+      window.addEventListener('hashchange', onHash);
+      return {
+        destroy: function () {
+          window.removeEventListener('hashchange', onHash);
+          if (handle && typeof handle.destroy === 'function') {
+            try { handle.destroy(); } catch (err) { /* 切视图清理失败不阻断 */ }
+          }
+          handle = null;
+        }
+      };
+    };
+  }
+
   var HUB_DEFS = [
     { id: 'dashboard', label: '概览', render: renderDashboardView },
-    {
-      id: 'sites', label: '网站', views: [
-        { sub: 'sites', label: '网站', labelKey: 'nav.sites', render: moduleView('KoreSites', '/assets/sites.js', '网站') },
-        { sub: 'site-migrate' },
-        { sub: 'runtimes' },
-        { sub: 'appdeploy' },
-        { sub: 'container' },
-        { sub: 'batch' }
-      ]
-    },
-    {
-      id: 'db', label: '数据库', views: [{ sub: 'db' }, { sub: 'redis' }, { sub: 'slowquery' }]
-    },
-    {
-      id: 'files', label: '文件', views: [
-        { sub: 'files', label: '文件管理', labelKey: 'nav.files', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
-        { sub: 'backup' },
-        { sub: 'disk-analysis' }
-      ]
-    },
-    {
-      // 「已装插件」不再是独立一级菜单：商店自带「已安装 / 可更新」筛选，
-      // 插件管理表（版本 / 深度 / 运行方式 / 状态 / 批量升级）作为商店第二个 tab。
-      id: 'store', label: '软件商店', views: [
-        { sub: 'store', label: '应用商店', labelKey: 'nav.store', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
-        { sub: 'plugins', label: '插件管理', labelKey: 'nav.store.plugins', render: renderPluginsView }
-      ]
-    },
-    {
-      id: 'monitor', label: '监控', views: [
-        { sub: 'monitor', label: '监控', labelKey: 'nav.monitor', render: moduleView('KoreMonitor', '/assets/monitor.js', '监控') },
-        { sub: 'health' },
-        { sub: 'report' },
-        { sub: 'topology' },
-        { sub: 'logs' },
-        { sub: 'process' },
-        { sub: 'alert-rules' },
-        { sub: 'fault-drill' },
-        { sub: 'log-alerts' }
-      ]
-    },
-    // R22：计划任务从单视图改为 hub（原 KoreTasks 通过 SHELL_VIEWS.tasks 保留），新增运维日历 tab。
-    // R23：操作宏挂计划任务（自动化/效率工具，与定时任务同一心智模型）。
-    { id: 'tasks', label: '计划任务', views: [{ sub: 'tasks' }, { sub: 'calendar' }, { sub: 'macros' }] },
-    {
-      // 「安全」收的是「对外暴露面的防守」：网络边界（防火墙/WAF/DNS/SSH）、信任链（证书）、
-      // 资产完整性（完整性校验）、本机暴露面盘点（服务发现）。同一心智模型：
-      // 谁在敲门、门锁没锁、锁还灵不灵——服务发现的产出正是「这台机器上有什么在监听」，是安全视图的输入。
-      id: 'security', label: '安全', views: [
-        { sub: 'firewall' }, { sub: 'waf' }, { sub: 'sshguard' }, { sub: 'dns' },
-        { sub: 'ssl' }, { sub: 'integrity' }, { sub: 'discover' },
-        { sub: 'cert-lifecycle' }
-      ]
-    },
-    { id: 'terminal', label: '终端', views: [{ sub: 'terminal' }] },
-    // R22：设置从单视图改为 hub（原 KoreSettings 通过 SHELL_VIEWS.settings 保留），新增快照/迁移/通知三个 tab。
-    // R23：配置漂移挂设置（与快照/迁移同属配置治理闭环）。
+    // §2.1：6→3。站点迁移并入「网站」分区；容器并入「部署应用」分区；
+    // 批量下沉为站点列表勾选后的上下文工具条（sites.js 既有能力，非删除）。
+    { id: 'sites', label: '网站', views: [
+      { sub: 'sites', label: '网站', labelKey: 'nav.sites', render: sectionView('sites', sections('sites', 'site-migrate', 'batch')) },
+      { sub: 'runtimes' },
+      { sub: 'appdeploy', label: '部署应用', labelKey: 'nav.appdeploy', render: sectionView('appdeploy', sections('appdeploy', 'container')) }
+    ] },
+    // §2.1：3→2。慢查询并入「数据库」分区（KoreSlowQuery 仍在 tab 内可达）。
+    { id: 'db', label: '数据库', views: [
+      { sub: 'db', label: '数据库', labelKey: 'nav.db', render: sectionView('db', sections('db', 'slowquery')) },
+      { sub: 'redis' }
+    ] },
+    // §2.1：3→2。磁盘分析下沉到「监控」容量区（LEGACY_SUB 重定向，功能不删）。
+    { id: 'files', label: '文件', views: [
+      { sub: 'files', label: '文件管理', labelKey: 'nav.files', render: moduleView('KoreFiles', '/assets/files.js', '文件管理') },
+      { sub: 'backup' }
+    ] },
+    // 已装插件不是独立一级菜单：商店自带筛选，插件管理表作为第二个 tab（A6 硬判据）。
+    { id: 'store', label: '软件商店', views: [
+      { sub: 'store', label: '应用商店', labelKey: 'nav.store', render: moduleView('KoreStore', '/assets/store.js', '软件商店') },
+      { sub: 'plugins', label: '插件管理', labelKey: 'nav.store.plugins', render: renderPluginsView }
+    ] },
+    // §2.1：9→4。体检/运行报告/拓扑/磁盘分析并入「监控」分区；
+    // 故障演练与日志告警并入「告警」分区；日志/进程/告警规则保留独立 tab。
+    { id: 'monitor', label: '监控', views: [
+      { sub: 'monitor', label: '监控', labelKey: 'nav.monitor',
+        render: sectionView('monitor', sections('monitor', 'health', 'report', 'topology', 'disk-analysis')) },
+      { sub: 'logs' },
+      { sub: 'process' },
+      { sub: 'alert', label: '告警', labelKey: 'nav.alert', render: sectionView('alert-rules', sections('alert-rules', 'fault-drill', 'log-alerts')) }
+    ] },
+    // §2.1：3→1。运维日历 / 操作宏并入「计划任务」分区，单 tab 不显示 tab 条。
+    { id: 'tasks', label: '计划任务', views: [{ sub: 'tasks', label: '计划任务', labelKey: 'nav.tasks', render: sectionView('tasks', sections('tasks', 'calendar', 'macros')) }] },
+    // §2.1：8→3。防火墙/WAF/SSH 防护/DNS → 网络边界分区；证书看板 → 证书分区；
+    // 服务发现 → 完整性分区（监听面）。三个分区仍走各自既有视图模块。
+    { id: 'security', label: '安全', views: [
+      { sub: 'network', label: '网络边界', labelKey: 'nav.networkBoundary', render: sectionView('firewall', sections('firewall', 'waf', 'sshguard', 'dns')) },
+      { sub: 'ssl', label: '证书', labelKey: 'nav.ssl', render: sectionView('ssl', sections('ssl', 'cert-lifecycle')) },
+      { sub: 'integrity', label: '完整性', labelKey: 'nav.integrity', render: sectionView('integrity', sections('integrity', 'discover')) }
+    ] },
+    // §2.1：终端无子 tab，直接渲染（壳对单子视图本就不显示 tab 条）。
+    // 走 SHELL_VIEWS 按 sub 解析，不在注册表里重复写 /assets/ 字面量。
+    { id: 'terminal', label: '终端', render: shellView('terminal') },
+    // §2.1：6→3。快照/迁移/漂移 → 配置治理分区；通知通道 → 设置分区；账户中心保留独立 tab。
     { id: 'settings', label: '设置', views: [
-      { sub: 'settings' }, { sub: 'user-center' }, { sub: 'snapshot' }, { sub: 'migrate' },
-      { sub: 'webhook' }, { sub: 'config-drift' }
+      { sub: 'settings', label: '设置', labelKey: 'nav.settings', render: sectionView('settings', sections('settings', 'webhook')) },
+      { sub: 'user-center' },
+      { sub: 'governance', label: '配置治理', labelKey: 'nav.governance', render: sectionView('snapshot', sections('snapshot', 'migrate', 'config-drift')) }
     ] }
   ];
 
