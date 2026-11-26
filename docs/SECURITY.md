@@ -519,3 +519,9 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 - **复审条件（在 §3.1 / §3.5 原有条件上追加）**：出现短信 / 邮箱 / 第三方 CAPTCHA → 命中 G-10 / G-02 退回提案阶段；验证码被自动化稳定识别或 challenge 出现竞争 / 泄漏 → 复审生成算法与状态机。
 
 实现与证据见 [ADR-0057 §6](DECISIONS/0057-login-account-model.md)、[account-t123.md](../.agents/verify/account-t123.md)、[account-t4-bruteforce.md](../.agents/verify/account-t4-bruteforce.md)。
+
+## 17. 未授权响应固定为 401 + `E_UNAUTHORIZED`（2026-11-26，有意偏离 1Panel）
+
+**未授权响应固定为 HTTP 401 + 统一错误体 `{"code":"E_UNAUTHORIZED","message":...,"detail":...}`，不可配置**——没有状态码伪装（不回 404 / 200）、没有响应体形状开关、没有按来源切换的"未授权外观"。三条理由：① **登录门语义**（[ADR-0043](./DECISIONS/0043-login-gate-vs-passwordless-ops.md)，§3.2）：UDS 与 loopback 未登录一律 401，不回退到"本机通道即认证"，这是用户裁决钉死的契约；② **统一错误契约**：`internal/core/httpapi/` 非测试代码中 `writeError(w, http.StatusUnauthorized, ...)` 共 **44 处**，`code` 常量唯一为 `pluginapi.E_UNAUTHORIZED`（`pkg/pluginapi/errors.go:10`），前端按 `res.status === 401` 分流到「会话已失效，请重新登录」（`web/app.js:2277`、`web/plugins-view.js:175` 等多处）——可配的状态码会让这些分流同时失效；③ **排障透明**：固定 401 让代理日志、审计与用户提示对同一件事有同一名字，伪装成 404 只会把「没登录」变成「路径不存在」，增加诊断成本而不增加安全。
+
+**与 1Panel「Unauthorized Response 可配」是有意偏离**（基准见 [benchmark-auth-design.md](../.agents/verify/benchmark-auth-design.md) 第 11 项 / line 61）：该项的价值是防指纹扫描，而 kore 的默认边界是 **UDS 0600 + 仅回环绑定 + CSRF 双提交 + 登录门**（未登录连本机也 401），已经比「靠可配响应掩盖面板存在」更严；安全不依赖响应伪装，因此不为这一项新增配置项、不扩配置 schema、不改中间件与前端分流。本条只做文档定调（G-23），零代码改动、不重新部署运行实例。

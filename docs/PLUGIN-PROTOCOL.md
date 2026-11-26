@@ -80,7 +80,7 @@
 - `requires_kore` 区间语义（R3）：MVP 只支持 `">=X.Y.Z <A.B.C"` 与 `">=X.Y.Z"` 两种写法；不支持 `^`/`~`/`||`；解析器用标准库自实现，不引第三方库（G-02）。
 - 匹配规则：按 semver 比较 kore 版本；kore 版本含预发布号（如 `0.2.0-rc.1`）时拒绝匹配（MVP 不认 pre-release）。
 - 失败行为：不匹配 → 拒绝安装/加载并回 `E_UNSUPPORTED`，`message` 同时带 kore 版本、`requires_kore`、`<id>@<version>`。
-- `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。
+- `scenario_tags` 与 preset 是两套机制：tag 是能力族标签（5 值固定），**preset 按 `kore-plugins/presets/<id>.json` 的插件 id 列表装配，不按 tag 匹配**；tag 只作商店分类/搜索与预设编辑器筛选提示。`info.json.presets` **不是本协议字段**（§3.1 必填 14 项不含它、运行期无消费者），与 `kore-plugins/presets/*.json` 安装预设同名不同物；G-33 A2 的 `info.json.presets` WARN 仅属可用性门禁元数据，不代表协议要求。
 - 与 `protocol` 的关系：`protocol` 是协议主版本、`requires_kore` 是内核版本区间，两者都要过；`protocol` 不变而 `requires_kore` 收窄是合法发布。REPOS 版本矩阵（0.2.x → `">=0.1.0 <0.3.0"`、1.0.x → `">=0.1.0 <2.0.0"`）符合上述规则。
 - **必填口径（唯一真源，其它文档只引用不复制）**：**14 个必填** = 协议本表 9 项（`id` `name` `version` `protocol` `entry` `capabilities` `resources` `requires_kore` `triggers`）∪ AGENTS.md G-17 的 5 项（`depends_on` `conflicts` `scenario_tags` `size_bytes` `requires_kore`，与前者去重 1 项）∪ G-20 的 `depth_level`。判据是**键必须存在**；值为空数组 / `0` / `false` 合法（逐项语义见上表「约束」列）。上表 `必填=是*` 的 4 项即 G-17 增补项：**商店收录必填**，内核解析期仍按默认值放行（`[]` / `0`）。
 - **必填字段来源归属（改判据只改这里）**：
