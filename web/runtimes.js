@@ -3,10 +3,15 @@
    只读四动词：versions / info / projects / doctor（三 runtime 共用，保留不变）。
    Python 专属写操作（仅 runtime-python tab 显示）：venv.list / venv.create（path+版本+可选初始包）
    / pip.install / pip.list；写域限制在插件状态目录内，后端有路径白名单 + 软链逃逸防护 + 120s 超时。
+   Node 专属扩展管理（仅 runtime-node tab 显示）：ext.list / ext.install / ext.remove；
+   包只装进 <state>/global/node_modules（npm --prefix 隔离），绝不 npm -g、不改宿主全局环境。
+   与 Python 面板共用既有 rt-venv-* 样式与包名校验助手，不新增一级控件 / hub / CSS。
    tab 切换只重绘本页，不换 hash、不重载；每 tab 的扫描根目录写 localStorage。 */
 (function () {
   'use strict';
   var API = '/api/v1/invoke/', TIMEOUT = 20000, PY_TIMEOUT = 125000, LS = 'kore.runtimes.root.';
+  // Node 扩展后端同样是 120s 硬超时，前端给 125s 避免误掐断。
+  var EXT_TIMEOUT = PY_TIMEOUT;
   var SRC = { path: 'PATH', known_path: tr('runtimes.src.known', '常用路径'), nvm: 'nvm', pyenv: 'pyenv', phpenv: 'phpenv', conda: 'conda' };
   var CHECK = { node: tr('runtimes.check.node', 'Node 安装'), npm: tr('runtimes.check.npm', 'npm 可用性'), global_packages_writable: tr('runtimes.check.globalWritable', '全局包目录可写'),
     node_env: tr('runtimes.check.nodeEnv', 'NODE_ENV 环境变量'), php: tr('runtimes.check.php', 'PHP 安装'), version_supported: tr('runtimes.check.versionSupport', '版本支持'), extensions: tr('runtimes.check.extensions', '扩展列表'),
@@ -149,7 +154,10 @@
       // Python venv/pip（仅 runtime-python tab 使用；node/php 这三组字段闲置、不影响其渲染）
       venvRoot: '', venvs: null, venvListError: '', venvListLoading: false,
       vPath: '', vVersion: '', vPkgs: '', vBusy: false, vMsg: null, vErr: null,
-      pkgFor: '', pkgMode: '', pkgInput: '', pkgBusy: false, pkgResult: null, pkgErr: null };
+      pkgFor: '', pkgMode: '', pkgInput: '', pkgBusy: false, pkgResult: null, pkgErr: null,
+      // Node 扩展（仅 runtime-node tab 使用；复用 venv 面板的 rt-* 样式与包校验）
+      extPrefix: '', exts: null, extListError: '', extListLoading: false,
+      extInput: '', extBusy: '', extMsg: null, extErr: null, extRemoveFor: '' };
   }
   var state = {}, byId = {}, tab = 'node', bodyBox = null, barBox = null;
   TABS.forEach(function (t) { byId[t.id] = t; state[t.id] = blank(t.id); });
@@ -187,6 +195,7 @@
     if (s.doctor === null && !s.doctorLoading) loadDoctor(t, s);
     if (s.guard === null && !s.guardLoading) loadGuard(t, s);
     if (id === 'python' && s.venvs === null && !s.venvListLoading) loadVenvs(t, s);
+    if (id === 'node' && s.exts === null && !s.extListLoading) loadExts(t, s);
   }
   // ---- Python venv / pip（仅 runtime-python）：契约源自后端 venv.go 的 *Params/*Result ----
   var PKG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(==[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
@@ -257,6 +266,59 @@
       s.pkgResult = ps.length ? ps.map(function (p) { return p.name + '==' + (p.version || '?'); }).join('、') : tr('runtimes.venv.pkg.empty', '这个环境还没有安装包');
       if (tab === t.id) paintBody();
     }, function (err) { s.pkgBusy = false; s.pkgErr = err; if (tab === t.id) paintBody(); });
+  }
+  // ---- Node 扩展（仅 runtime-node）：ext.list + ext.install + ext.remove ----
+  // 契约源自后端 ext.go：install/remove 入参 {packages:[...]}，list 入参 {}；前缀由后端固定为 <state>/global。
+  function extHint(err) {
+    var code = err && err.code ? String(err.code) : '';
+    var m = (err && err.backendMessage) || (err && err.message) || '';
+    if (code === 'E_INVALID' || /越界|包名|参数|前缀/.test(m))
+      return tr('runtimes.ext.hint.invalid', '检查填写内容：包名只用字母数字和 . _ -、可带 ==版本，不要写空格、分号、@scope 或 -g 选项；改好后重试。');
+    if (/超时|timeout|DeadlineExceeded/i.test(m))
+      return tr('runtimes.ext.hint.timeout', '命令超过 120 秒被中止：联网装包较慢，检查网络或镜像源后重试，也可少装几个分批执行。');
+    return tr('runtimes.ext.hint.generic', '请刷新页面重试；反复失败请把下方错误详情反馈给管理员。');
+  }
+  function extErrorBox(err) {
+    var box = el('div', 'rt-error'), msg = (err && err.backendMessage) || (err && err.message) || String(err);
+    add(box, el('div', null, tr('runtimes.ext.err.title', '操作失败：') + msg));
+    add(box, el('div', 'rt-fix', tr('runtimes.ext.err.howto', '怎么办：') + extHint(err)));
+    var det = add(box, el('details', 'rt-err-detail')), sum = add(det, el('summary', null, tr('runtimes.ext.err.detail', '错误详情')));
+    add(det, el('code', 'rt-cmd', (err && err.code ? err.code + ' · ' : '') + msg));
+    return box;
+  }
+  function loadExts(t, s) {
+    s.extListLoading = true; s.extListError = '';
+    invoke(t.domain, 'ext.list', {}, EXT_TIMEOUT).then(function (d) {
+      s.extListLoading = false; s.exts = Array.isArray(d.packages) ? d.packages : [];
+      s.extPrefix = d.prefix || '';
+      if (tab === t.id) paintBody();
+    }, function (err) { s.extListLoading = false; s.extListError = err; if (tab === t.id) paintBody(); });
+  }
+  function doExtInstall(t, s) {
+    var pkgs = parsePkgs(s.extInput);
+    if (!pkgs.length) { s.extErr = new Error(tr('runtimes.ext.hint.pkgEmpty', '请先填写要安装的扩展包名，例如 chalk 或 chalk==5.0.0')); s.extMsg = null; paintBody(); return; }
+    var bad = firstBadPkg(pkgs);
+    if (bad) {
+      s.extErr = new Error(tr('runtimes.ext.hint.pkgBad', '包名「{p}」不合法：只允许字母数字和 . _ -，可带 ==版本；不要写空格、分号、@scope 或 -g 选项').replace('{p}', bad));
+      s.extMsg = null; paintBody(); return;
+    }
+    s.extBusy = 'install'; s.extErr = null; s.extMsg = null; paintBody();
+    invoke(t.domain, 'ext.install', { packages: pkgs }, EXT_TIMEOUT).then(function (d) {
+      s.extBusy = ''; s.extInput = '';
+      s.extMsg = tr('runtimes.ext.done.install', '已安装隔离扩展：') + ((d.packages || pkgs).join('、'))
+        + tr('runtimes.ext.done.suffix', '；只写插件状态目录，不影响系统全局 npm。');
+      loadExts(t, s);
+      if (tab === t.id) paintBody();
+    }, function (err) { s.extBusy = ''; s.extErr = err; if (tab === t.id) paintBody(); });
+  }
+  function doExtRemove(t, s, name) {
+    s.extBusy = 'remove:' + name; s.extErr = null; s.extMsg = null; paintBody();
+    invoke(t.domain, 'ext.remove', { packages: [name] }, EXT_TIMEOUT).then(function (d) {
+      s.extBusy = '';
+      s.extMsg = tr('runtimes.ext.done.remove', '已移除隔离扩展：') + name + tr('runtimes.ext.done.suffix', '；只写插件状态目录，不影响系统全局 npm。');
+      loadExts(t, s);
+      if (tab === t.id) paintBody();
+    }, function (err) { s.extBusy = ''; s.extErr = err; if (tab === t.id) paintBody(); });
   }
   function toggleVersion(t, s, version) {
     if (s.selected === version) s.selected = ''; else { s.selected = version; loadInfo(t, s, version); }
@@ -505,6 +567,58 @@
       if (opened) { var dtd = add(add(tbody, el('tr', 'rt-detail-row')), el('td')); dtd.colSpan = 4; dtd.appendChild(pipTools(v.path)); }
     });
     add(p, el('div', 'rt-note', tr('runtimes.venv.count', '共 ') + s.venvs.length + tr('runtimes.venv.countSuffix', ' 个虚拟环境')));
+    return p;
+  }
+
+  // Node 专属「扩展管理」面板：ext.list + ext.install + ext.remove。
+  // 只由 paintBody 按 domain==='runtime-node' 调用；复用 venv 面板的 rt-* 样式与错误框，
+  // 是已有 Node tab 内的一个分区（不新增一级控件 / hub / CSS）。
+  function extPanel(t, s) {
+    var p = el('section', 'panel'), h = add(p, el('div', 'panel-head'));
+    add(h, el('span', 'panel-title', tr('runtimes.ext.panel.title', '扩展管理')));
+    add(h, el('span', 'panel-meta', tr('runtimes.ext.panel.meta', '装到插件隔离目录，不影响系统全局 npm；仅允许字母数字 . _ - 与 ==版本')));
+    var rf = add(h, el('button', 'btn', tr('runtimes.ext.btn.refresh', '刷新列表')));
+    rf.type = 'button'; rf.disabled = !!s.extListLoading;
+    rf.addEventListener('click', function () { loadExts(t, s); });
+
+    var form = add(p, el('div', 'rt-venv-form'));
+    var wrap = add(form, el('div', 'rt-field'));
+    add(wrap, el('label', null, tr('runtimes.ext.field.pkgs', '要装的扩展')));
+    var input = add(wrap, el('input', 'rt-input'));
+    input.type = 'text'; input.placeholder = 'chalk commander==12.0.0'; input.value = s.extInput || '';
+    input.addEventListener('change', function () { s.extInput = input.value; });
+    add(wrap, el('div', 'rt-field-hint', tr('runtimes.ext.field.hint', '空格或逗号分隔多个包；不会安装到全局环境')));
+    var actions = add(p, el('div', 'rt-venv-actions'));
+    var install = add(actions, el('button', 'btn btn-primary', s.extBusy === 'install'
+      ? tr('runtimes.ext.btn.installing', '安装中…（最多 120 秒）') : tr('runtimes.ext.btn.install', '安装扩展')));
+    install.type = 'button'; install.disabled = !!s.extBusy;
+    install.addEventListener('click', function () { s.extInput = input.value; doExtInstall(t, s); });
+    add(actions, el('span', 'rt-field-hint', tr('runtimes.ext.install.note', '扩展仅写插件状态目录的隔离前缀；失败时检查网络或镜像源。')));
+    if (s.extErr) p.appendChild(extErrorBox(s.extErr));
+    if (s.extMsg) add(p, el('div', 'rt-ok', s.extMsg));
+
+    if (s.extListError) { p.appendChild(extErrorBox(s.extListError)); return p; }
+    if (s.exts === null) { add(p, el('div', 'stub', tr('runtimes.ext.status.loading', '正在读取扩展列表…'))); return p; }
+    if (!s.exts.length) {
+      add(p, el('div', 'rt-note', tr('runtimes.ext.empty', '还没有隔离扩展。填好上方包名后点「安装扩展」，包只写进插件状态目录。')));
+      return p;
+    }
+    var scroll = add(p, el('div', 'rt-scroll')), table = add(scroll, el('table', 'rt-table'));
+    var htr = add(add(table, el('thead')), el('tr'));
+    [tr('runtimes.ext.col.name', '扩展'), tr('runtimes.ext.col.version', '版本'), tr('runtimes.ext.col.actions', '操作')].forEach(function (x) { add(htr, el('th', null, x)); });
+    var tbody = add(table, el('tbody'));
+    s.exts.forEach(function (x) {
+      var rowNode = add(tbody, el('tr'));
+      add(add(rowNode, el('td')), el('span', null, x.name || '—'));
+      add(add(rowNode, el('td')), el('span', null, x.version || '—'));
+      var td = add(rowNode, el('td')), btns = add(td, el('div', 'rt-row-btns'));
+      var rm = add(btns, el('button', 'btn', s.extBusy === 'remove:' + x.name
+        ? tr('runtimes.ext.btn.removing', '移除中…') : tr('runtimes.ext.btn.remove', '移除')));
+      rm.type = 'button'; rm.disabled = !!s.extBusy;
+      rm.addEventListener('click', function () { doExtRemove(t, s, x.name); });
+    });
+    add(p, el('div', 'rt-note', tr('runtimes.ext.count', '共 ') + s.exts.length + tr('runtimes.ext.countSuffix', ' 个隔离扩展')
+      + (s.extPrefix ? ' · ' + tr('runtimes.ext.prefix', '安装前缀：') + s.extPrefix : '')));
     return p;
   }
 
@@ -785,6 +899,8 @@
     bodyBox.appendChild(guardPanel(t, s)); // 三 tab 共用：启动/停止/重启/状态/日志尾部
     // 仅 Python runtime 显示虚拟环境区；domain 是运行时变量、非常量，node/php 走不到这个分支
     if (t.domain === 'runtime-python') bodyBox.appendChild(venvPanel(t, s));
+    // 仅 Node runtime 显示扩展管理区（已有 tab 内的分区，不新增一级控件 / hub）
+    if (t.domain === 'runtime-node') bodyBox.appendChild(extPanel(t, s));
     if (s.versions && s.versions.length) bodyBox.appendChild(projectsPanel(t, s));
     bodyBox.appendChild(doctorPanel(t, s));
     labelCells(bodyBox);
@@ -802,6 +918,7 @@
       s.versions = null; s.error = ''; s.doctor = null; s.doctorError = ''; s.selected = '';
       s.guard = null; s.guardError = ''; s.gLogFor = ''; s.gLog = null; s.pinMsg = ''; s.pinErr = null;
       if (tab === 'python') { s.venvs = null; s.venvListError = ''; s.pkgFor = ''; s.pkgMode = ''; s.pkgResult = null; s.pkgErr = null; }
+      if (tab === 'node') { s.exts = null; s.extListError = ''; s.extMsg = null; s.extErr = null; s.extRemoveFor = ''; }
       ensureLoaded(tab); paintBody();
     });
     barBox = add(page, el('div', 'rt-tabs'));
