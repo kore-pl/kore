@@ -1,4 +1,4 @@
-> 状态: draft · 归属: gap-backlog · 更新: 2026-11-27 · 里程碑: M5 · 收口: task-131 triage / task-134 文档回写 / round 14 ER 图裁决不做（task-160 取证、task-161 回写）/ round 15 C10 七语言 UI 裁决暂不做（task-172 取证、task-173 回写）
+> 状态: draft · 归属: gap-backlog · 更新: 2026-11-27 · 里程碑: M5 · 收口: task-131 triage / task-134 文档回写 / round 14 ER 图裁决不做（task-160 取证、task-161 回写）/ round 15 C10 七语言 UI 裁决暂不做（task-172 取证、task-173 回写）/ round 16 C7 MySQL exec 已交付 + PG 对称进行中 + 可视化行编辑裁决暂不做（task-175 核实、task-177 回写）
 > 依据: task-120「全量竞品对标核实报告」的结论（报告本身未落盘，本文件由执行者按本地 file:line 逐条回读重建）
 > 性质: 纯文档工作底稿（doc-first）；只规划不实现，不改代码、不联网、不重新部署
 
@@ -66,10 +66,14 @@
 - 证据：`docs/PLUGIN-MATURITY.md:88`（`container` 0.6.0 L2，13 方法为 list/inspect/logs/start/stop/restart/stats/images/pull/rmi/update/health/exec，非编排）；`docs/PLUGIN-MATURITY.md:145`（明确不做容器编排）；`docs/FEATURE-PARITY.md:47`（模板是「脚本 + 变量表单」，不是容器编排）。
 - 补齐前提：**需用户单独确认解除 G-11 并先立 ADR**；现有 `exec` 方法不等于 compose 向导。
 
-### C7 — DB 库表结构已落地；ER 图已裁决不做 【硬证据 · 有意不做】
+### C7 — DB 库表结构已落地；MySQL exec 已交付；ER 图 / 可视化行编辑已裁决不做 【硬证据 · 部分已补 + 有意不做】
 
 - 证据：`docs/DECISIONS/0050-db-and-runtime-aggregation.md:207`「D7 数据编辑（关系型行级）❌ 无（只有 SQL 控制台）；对标宝塔/1Panel 有表数据编辑，P2（先做 D2 再谈）」；同表 `:202` 记两关系型插件均无 `tables` 方法。
-- 只读表结构浏览已落地（task-157/158，commit `335fa83`，`.agents/verify/c7-tables-verification.md`）：纯前端走既有 `invoke('db-mysql.query'/'db-postgres.query')` 通道，不改插件、不 bump 版本；ADR-0050 D7❌ 只锁行级数据编辑（写），**不锁只读浏览**（`.agents/verify/ui-c7-tables-selfeval.md:4`）。数据行编辑（写路径）仍需另立 ADR，不可跳过依赖直接上编辑器。
+- 只读表结构浏览已落地（task-157/158，commit `335fa83`，`.agents/verify/c7-tables-verification.md`）：纯前端走既有 `invoke('db-mysql.query'/'db-postgres.query')` 通道，不改插件、不 bump 版本；ADR-0050 D7❌ 只锁行级数据编辑（写），**不锁只读浏览**（`.agents/verify/ui-c7-tables-selfeval.md:4`）。
+- **纠正「数据编辑需另立 ADR 裁决」的过保守表述（task-175 只读核实）**：D7 不在 `docs/DECISIONS/0050-db-and-runtime-aggregation.md:224-233` 的 §5.3 明确不做清单内（写锁只针对无约束写，不锁受控写子集）；`:207` 的「P2（先做 D2 再谈）」是排序提示、不是禁令，D2 已完成（C7 表结构浏览 commit `335fa83`）即满足条件。故受控行级写**不需要另立 ADR**——MySQL 已按既有门交付（下条）。
+- **MySQL 受控写已交付（硬证据）**：`kore-plugin-db-mysql` 仓 commit `01a6729`（`db-mysql.exec` 后端：两级确认 + 写白名单 + `info.json` 声明 `system:admin` 自动审计）、`kore` 仓 commit `0255f55`（前端 `web/db-mysql.js` exec 面板 + G-28 双端截图）。证据 `.agents/verify/db-mysql-exec-ui.md:7-12,45-61`（1440×900 / 390×844 双端截图 + 三问自评；实时 DB 写成功路径因隔离实例无凭据未证，属环境限制、如实标注）。任意受控 INSERT/UPDATE/DELETE/DDL 已有入口（白名单 + 两级确认，DDL 加确认短语），"能写"已覆盖。
+- **PG 对称进行中**：`db-postgres` 侧 exec 动词与前端对称面板由 task-176 实现（进行中），本卡不碰其写域；完成后按同门（两级确认 + 写白名单 + `system:admin` 审计 + G-28 双端证据）收口。
+- **可视化行编辑（点格子改数据）已裁决暂不做**：理由与可重开判据见本节末「可视化行编辑裁决」，与 ER 图同列「有意不做」清单；不触 ADR 写锁。
 
 **ER 关系图：已裁决不做（用户裁决 round 14；task-160 只读取证、task-161 回写）**。ER 图不进 C7 实现范围，写进本 backlog 的「有意不做」清单；理由逐条：
 
@@ -80,6 +84,15 @@
 5. **非技术不可行，是范围取舍**：前端已有纯 SVG 关系图先例 `web/topology.js:1-4,24,99-100,336-391`（零框架 / 零 CDN / 零图表库 / 零定时器，节点 ≤12、hover+tap、单实例，对齐 G-32），首屏不受影响（`.agents/verify/c7-tables-verification.md:54`，首屏 90924 B ≤ 307200 B；ER 图走懒加载 db 视图）；按 G-23 留痕为范围裁决，不是做不到。
 
 - **可重开判据**：后续若真机多库普遍有 FK 且用户明确要求，可按 C7 同模式（既有 query 通道 + `web/topology.js` 纯 SVG 复刻）重开，重新走 G-23 留痕。只读 FK 浏览本身**不触 ADR-0050 D7❌写锁**——该锁只针对行级数据编辑（写路径，`docs/DECISIONS/0050-db-and-runtime-aggregation.md:207`、`.agents/verify/ui-c7-tables-selfeval.md:4`）；重开仍只做只读元数据浏览，不越界到数据编辑。
+
+**可视化行编辑（点格子改数据）：已裁决暂不做（round 16 / task-175 核实、task-177 回写；与 ER 图、C10 同列「有意不做」清单）**。不是技术不可行，是范围取舍；逐条理由：
+
+1. **竞品无原文实证**：竞品侧唯一原文级材料 `.agents/verify/benchmark-auth-design.md` 全文无「表数据编辑 / 行编辑」原文，只在常识层出现（`.agents/verify/ui-c7-tables-selfeval.md:29`「宝塔 / 1Panel 有完整的……在线改表与数据编辑」为【常】级描述），1Panel G-28 自评 `:29` 属【自】级。按 §1「自评不判领先、不判落后、常识不据以判有无」，不足以据此判为真实差距。
+2. **"能写"已由 exec 原始 SQL 覆盖**：MySQL `db-mysql.exec` 受控写已交付（`01a6729`+`0255f55`，两级确认 + 写白名单 + `system:admin` 自动审计 + G-28 双端证据 `.agents/verify/db-mysql-exec-ui.md`），五个预设覆盖「新增一行 / 修改数据 / 删除数据 / 新建表 / 删除表」（同报告 `:29-31`）；可视化编辑器只是同一写能力的操作形态升级，不是从无到有。
+3. **轻量面板定位下成本不划算**：按 ER 图（§2 C7 理由 4，约 3.5–5 人日）与 C10（§2 C10）同款估算，点格子改数据需行Key选择 / 主键回写 / 脏单元格 diff / 二次确认 / 失败回滚提示 / G-28 双端截图，约 **3–5 人日**；与「它是管理者，不能变成负担」的克制定位不相称，且首屏预算（G-03）与视图复杂度只增不减。
+4. **不触 ADR 写锁**：D7 不在 ADR-0050 §5.3 明确不做清单（`:224-233`），`:207`「先做 D2 再谈」是排序提示且 D2 已完成（commit `335fa83`）；MySQL exec 已在既有安全门下交付，证明受控写不需要另立 ADR。裁决本身按 G-23 留痕，不需要 ADR。
+
+- **可重开判据（任一触发即重开评估，不自动开工）**：①用户明确要求「点格子改数据」而非只满足于「能写」；②拿到竞品可视化编辑的原文级实证（可复跑的一手材料，非【常】/【自】级）；③PG 对称（task-176）完成后仍有真实阻塞——exec 原始 SQL 路径无法覆盖的高频改数据场景。重开走 **doc-first + G-28**（先出设计/验收文档，交付时双端截图 + 自评三问），**不触 ADR 写锁、不推翻 ADR-0050**；仅当重开后确认需要比 exec 更宽的写权限时才另立 ADR。
 
 ### C8 — 文件前端未接后端能力 【已证伪 / 已接线 PASS】
 
@@ -204,8 +217,8 @@
 
 - **本期 triage 结论先行**：4 项文档漂移已收口——C4 规则编辑器（已落地，见 `web/waf.js:687-789/1103-1146`）、C5 记录写表单（已落地，见 `dns-feature-write-ui.md:13`）、C8 前端接线（已证伪/已接线 PASS）、C13/C14 的 dist/索引表述（已同步，24 仓版本全对齐索引）；这些不再派实现卡。真缺项按门槛分类：
   - **ADR / 用户裁决前置（不派实现卡）**：C4-CC/UA/HTTP 层规则（需新 ADR 覆盖宿主 ModSecurity/Naxsi 集成，越过 ADR-0023 零侵入）、C5-zone 增删/DNSSEC（ADR-0051 明确不做，需用户裁决推翻）、C14 建库/写 vhost（G-13 跨插件边界刻意不做，需裁决推翻）、C9 通知渠道/天周视图（新能力，需裁决立项）、**C13 中仅 Python `ext.*` 仍缺**（新能力，需裁决是否入 v1；Node/PHP 已落地并进索引，见 §2 C13）。
-  - **后续实现卡（无 ADR 门槛）**：C7 只读表结构浏览（已落地，见 `.agents/verify/c7-tables-verification.md`；先 D2 再谈 D7，`docs/DECISIONS/0050-db-and-runtime-aggregation.md:202`、`:207`）；**C7 的 ER 图已由 round 14 裁决不做（见 §2 C7），不派实现卡**；C14 升 L2 需补 G-28 双端截图（非代码缺失）。C9 前端阈值卡已由 task-133 落地（commit `06a6b9d`），不再派卡。
-- 前置条件：凡标「ADR / 用户裁决前置」的项，未取得裁决前不进里程碑、不派卡；C7 表结构已落地，ER 图已裁决不做（§2 C7）；数据行编辑（D7 写路径）仍需 ADR。
+   - **后续实现卡（无 ADR 门槛）**：C7 只读表结构浏览（已落地，见 `.agents/verify/c7-tables-verification.md`；先 D2 再谈 D7，`docs/DECISIONS/0050-db-and-runtime-aggregation.md:202`、`:207`，D2 已完成）；**C7 的 MySQL 受控写已交付**（`db-mysql.exec`，commit `01a6729`+`0255f55`，G-28 证据 `.agents/verify/db-mysql-exec-ui.md`）；**PG exec 对称进行中（task-176）**，按同门（两级确认 + 写白名单 + `system:admin` 审计 + G-28 双端证据）收口；**C7 的 ER 图（round 14）与可视化行编辑（round 16）均已裁决不做**（见 §2 C7），不派实现卡；C14 升 L2 需补 G-28 双端截图（非代码缺失）。C9 前端阈值卡已由 task-133 落地（commit `06a6b9d`），不再派卡。
+- 前置条件：凡标「ADR / 用户裁决前置」的项，未取得裁决前不进里程碑、不派卡；C7 表结构已落地（D2 已完成），MySQL exec 受控写已交付、PG 对称进行中，ER 图与可视化行编辑均已裁决暂不做（§2 C7）；**数据行编辑（D7）不是 ADR 硬锁**——D7 不在 ADR-0050 §5.3 明确不做清单，既有受控写门已交付，仅可视形态属范围取舍。
 - 可验证判据：新能力一旦获批，每项同时满足「后端能力可用 + 前端可达 + 隔离实例/真机复验」三件套，并落一份带 `file:line` 或截图的 verify 报告；缺任一件不得标「已补齐」。
 
 ### 第 3 期 · 体验与国际化：C10（已裁决暂不做七语言 UI，附可重开路径）
@@ -232,10 +245,10 @@
 6. **goroutine**：`.agents/verify/v1-budget-measure.md:21`——只测线程数 16（代理指标），goroutine 未测。
 7. **自升级 4 段 FAIL 归因 —— 已证伪并收口（task-124）**：原 `.agents/verify/self-update-mvp.md` 记 PARTIAL（基线漂移 / 工作区污染 / 2×环境假阴性）；现由 `.agents/verify/selfupdate-final-gate.md` 给出本机隔离树复跑证据——21 段全绿 exit=0、4 段逐段复验为绿（非环境例外接受）、退出码按 `exitEnv=6` 裁决，原「4 段 FAIL」已证伪，不再是未证项。
 
-8. **task-131 triage 的文档漂移收口（本期）**：C1/C2/C15 之外，第二/三期 7 项复核结论已落 §2/§4——**4 项文档漂移已收口**（C4 规则编辑器落地、C5 记录写表单落地、C8 前端接线已证伪、C13/C14 dist/索引同步表述）；**真缺项已按门槛标注前置**（C4-CC/UA/HTTP 层需新 ADR 覆盖宿主集成、C5-zone/DNSSEC 与 C14 建库/vhost 属刻意不做需用户裁决推翻 ADR-0051/G-13、C9 通知渠道/天周视图属新能力需裁决）；**C10 已由 round 15 裁决暂不做七语言 UI、写进 §2 C10 有意不做清单（已裁决不做，附可重开路径，不再评估）**——原「受 ADR-0021/G-11 保护需新 ADR 推翻」是 triage 过度保守标签，真实门槛只是 ADR-0021:74① 复审 + G-23 留痕，不做的理由是投入产出的实证（见 §2 C10）。C9 前端阈值部分已由 task-133 落地（commit `06a6b9d`）；C7 只读表结构浏览已落地（先 D2 再 D7），**C7 的 ER 图已由 round 14 裁决不做、写进 §2 C7 有意不做清单（已裁决不做，不再评估）**。所有真缺项在获得 ADR/裁决前不派实现卡，避免再次派无效卡。**2026-11-27 更新（task-167）**：C13 的 Node/PHP 扩展管理已落地并进索引（`runtime-node` 0.4.1 / `runtime-php` 0.4.0），不再属于「需裁决新能力」；仅 Python `ext.*` 仍缺。
+8. **task-131 triage 的文档漂移收口（本期）**：C1/C2/C15 之外，第二/三期 7 项复核结论已落 §2/§4——**4 项文档漂移已收口**（C4 规则编辑器落地、C5 记录写表单落地、C8 前端接线已证伪、C13/C14 dist/索引同步表述）；**真缺项已按门槛标注前置**（C4-CC/UA/HTTP 层需新 ADR 覆盖宿主集成、C5-zone/DNSSEC 与 C14 建库/vhost 属刻意不做需用户裁决推翻 ADR-0051/G-13、C9 通知渠道/天周视图属新能力需裁决）；**C10 已由 round 15 裁决暂不做七语言 UI、写进 §2 C10 有意不做清单（已裁决不做，附可重开路径，不再评估）**——原「受 ADR-0021/G-11 保护需新 ADR 推翻」是 triage 过度保守标签，真实门槛只是 ADR-0021:74① 复审 + G-23 留痕，不做的理由是投入产出的实证（见 §2 C10）。C9 前端阈值部分已由 task-133 落地（commit `06a6b9d`）；C7 只读表结构浏览已落地（先 D2 再 D7），**C7 的 ER 图已由 round 14 裁决不做、写进 §2 C7 有意不做清单（已裁决不做，不再评估）**。所有真缺项在获得 ADR/裁决前不派实现卡，避免再次派无效卡。**2026-11-27 更新（task-167）**：C13 的 Node/PHP 扩展管理已落地并进索引（`runtime-node` 0.4.1 / `runtime-php` 0.4.0），不再属于「需裁决新能力」；仅 Python `ext.*` 仍缺。 **2026-11-27 更新（round 16 / task-175 核实、task-177 回写）**：C7 的 MySQL 受控写已交付（`db-mysql.exec`，commit `01a6729`+`0255f55`，两级确认 + 写白名单 + `system:admin` 自动审计 + G-28 双端证据 `.agents/verify/db-mysql-exec-ui.md`），PG exec 对称进行中（task-176）；ER 图（round 14）与可视化行编辑（round 16）均按 G-23 裁决暂不做。原「数据行编辑需另立 ADR」属过保守表述——D7 不在 ADR-0050 §5.3 明确不做清单，`:207` 是排序提示非禁令且 D2 已完成；写成功真机路径因隔离实例无 DB 凭据未证，如实标注（报告 `:12`、`:61`），不夸大。
 9. **索引与版本也已同步（triage 实证；当前版本以索引为准）**：24 个插件仓 `info.json.version` 与 `../kore-plugins/index/plugins.json` 逐仓一致；**当前版本（`index/plugins.json`）：`waf` 0.5.4、`runtime-node` 0.4.1、`runtime-php` 0.4.0、`runtime-python` 0.4.2、`ssl` 0.8.1、`cron` 0.9.1**（triage 当时的 `waf` 0.5.3 / `runtime-node·php` 0.3.2 为历史快照，保留不抹掉）。故 §2 C13/C14 与 PM 表内旧「索引仍 X 待重签」表述按本期结论统一收口，不再视为前置门槛。
 10. **ER 图裁决的证据边界（round 14 / task-160 只读核实）**：①FK 元数据可得是按两插件 sqlguard「SELECT 首关键字放行、不按 catalog 名过滤」推出的结论（两仓源码无 `KEY_COLUMN_USAGE` / `pg_constraint` 字串），**未对真库执行 FK 查询**——纠正 triage「无元数据源」旧判只推翻其「能力缺失」前提，不等于真机取出过关系数据；②竞品 ER 图仅【常】+【自】级（BA 原文无 ER、FEATURE-PARITY 无 ER 域），无原文级实测，不据此判领先/落后；③3.5–5 人日是估算、非计量；④裁决为范围取舍（用户 round 14 明确不做），保留可重开判据（§2 C7），不写成技术不可行。
 
 其他边界：1Panel 多用户冲突不判定（§1）；PARITY-GAP 旧口径以 PM 为准（§1）；`feedback/` 目录不存在、未引用（§1）；Wiki 156/156 零命中、不列入（§3）。
 
-**门禁记录（如实标注）**：`bash scripts/docs-check.sh` —— 落盘前基线 5 pass / 1 warn / 0 fail（exit 0）；round 14 ER 收口回写后复跑仍为 5 pass / 1 warn / 0 fail（exit 0）；round 15 C10 裁决回写后复跑 **5 pass / 1 warn / 0 fail（exit 0）**。该 WARN 的行数越界均为既有文档（含两份已逐条登记豁免），**非本次引入**（本轮实测越界 11 份，均为 `docs/` 既有长文 / DETAIL 短文，本文件不在其中）。本文件 241 行，落在 docs 期望的 100–400 区间内，未新增行数 WARN。`git diff --check` 无输出（exit 0）。
+**门禁记录（如实标注）**：`bash scripts/docs-check.sh` —— 落盘前基线 5 pass / 1 warn / 0 fail（exit 0）；round 14 ER 收口回写后复跑仍为 5 pass / 1 warn / 0 fail（exit 0）；round 15 C10 裁决回写后复跑 5 pass / 1 warn / 0 fail（exit 0）；round 16 C7（MySQL exec 已交付 + PG 对称进行中 + 可视化行编辑裁决暂不做）回写后复跑 **5 pass / 1 warn / 0 fail（exit 0）**。该 WARN 的行数越界均为既有文档（含两份已逐条登记豁免），**非本次引入**（本轮实测越界 11 份，均为 `docs/` 既有长文 / DETAIL 短文，本文件不在其中）。本文件 254 行，落在 docs 期望的 100–400 区间内，未新增行数 WARN。`git diff --check` 无输出（exit 0）。

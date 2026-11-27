@@ -1,4 +1,4 @@
-> 状态: draft · 归属: architect · 更新: 2026-11-21 · 里程碑: M2
+> 状态: draft · 归属: architect · 更新: 2026-11-27 · 里程碑: M2
 
 # FEATURE-PARITY — 对标宝塔 / 1Panel 专业版的能力矩阵
 
@@ -71,6 +71,8 @@
 | 合计覆盖 | **22** | **20** | — |
 | 明确不做 | 6 | — | 多用户 RBAC、集群/多机、模板市场、厂商云存储深度集成、拖拽建站、i18n 全量框架 |
 
+数据能力口径（round 16 收口，不新增"不做"域）：**MySQL `db-mysql.exec` 受控写已交付**（两级确认 + 写白名单 + `system:admin` + 自动审计，commit `01a6729`+`0255f55`，G-28 双端证据 `.agents/verify/db-mysql-exec-ui.md`）；**PG exec 对称进行中**（task-176）；**可视化行编辑已裁决暂不做**（范围取舍，可重开判据见 [FEATURE-GAP-BACKLOG.md](./FEATURE-GAP-BACKLOG.md) C7，未列入上表 6 项明确不做）。本口径不改变 22 域 / 14 生产级 + 8 基础级 / 6 不做的计数。
+
 ## 5. 红队"对标失真"10 项处置
 
 | 能力 | 状态 | 里程碑 | 用户如何得知 |
@@ -78,7 +80,7 @@
 | 面板自升级 | **做** | M3 | 系统页「检查更新」+ 升级日志；不自动联网 |
 | 迁移导入（宝塔/1Panel 站点与库） | **部分实现**：站点与 SSL 判断已支持（只读解析 + 逐条导入，`a4a6cd2`） | M4（站点面）/ v1.1（库与任务） | 站点页「从宝塔/1Panel 导入」向导：预览给「能不能搬 + 为什么 + 怎么办」，勾选后逐条建站并回读校验；数据库 / 计划任务 / 伪静态规则不搬，私钥不读 |
 | 审计报表（基础） | **做** | M4 | 审计页按时间/动作过滤 + CSV 导出 |
-| DB Web 管理 | **由 `db-mysql` 提供**（生产级） | M3 | 插件页内嵌 SQL 控制台，标注"生产级"；**只读表结构浏览已落地**（C7，commit `335fa83`，走既有 `db-mysql.query`/`db-postgres.query` 通道，不改插件），**ER 关系图 round 14 裁决不做**（范围取舍，见 [FEATURE-GAP-BACKLOG.md](./FEATURE-GAP-BACKLOG.md) C7）；数据行编辑（写）仍需另立 ADR |
+| DB Web 管理 | **由 `db-mysql` 提供**（生产级） | M3 | 插件页内嵌 SQL 控制台，标注"生产级"；**只读表结构浏览已落地**（C7，commit `335fa83`，走既有 `db-mysql.query`/`db-postgres.query` 通道，不改插件），**ER 关系图 round 14 裁决不做**（范围取舍，见 [FEATURE-GAP-BACKLOG.md](./FEATURE-GAP-BACKLOG.md) C7）；**MySQL 受控写已交付**（`db-mysql.exec`：两级确认 + 写白名单 + `system:admin` 自动审计，commit `01a6729`+`0255f55`，G-28 双端证据见 `.agents/verify/db-mysql-exec-ui.md`）；D7 剩余 **PG exec 对称**（task-176 进行中）与**可视化行编辑**（round 16 裁决暂不做，见 backlog C7）；D7 不在 ADR-0050 §5.3 明确不做清单，`:207`「先做 D2 再谈」是排序提示非禁令且 D2 已完成（按 G-06 / G-23 留痕） |
 | 2FA / IP 白名单 | **已实现**（TOTP + 10 个恢复码；CIDR 白名单；默认关闭） | M3 | 安全页开关 + 登录流程二次验证：缺码 428 `E_2FA_REQUIRED`，白名单外 403 `E_IP_DENIED`（`0a66c10`，`auth/security.go`） |
 | API token | **已实现**（Bearer，`read`/`admin` 两档 scope，可吊销；默认 90 天 / 上限 365 天） | M4 | 设置页生成/吊销 token，展示 scope；明文只回显一次，`read` 档禁写（`0a66c10`） |
 | 监控历史报表 | **延后 v1.1**；M4 先做 24h 内存环形 + 落盘采样 | M4 部分 / v1.1 完整 | 监控页标注"24h 环形，历史报表 v1.1" |
