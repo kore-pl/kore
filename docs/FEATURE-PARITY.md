@@ -27,9 +27,9 @@
 | 域名与伪静态 | 有（模板库） | 有 | `site`（域名绑定 + 伪静态规则片段） | 生产级 | M2 | 只内置 8 个常用模板（WP/Laravel/ThinkPHP 等），其余用户自填 |
 | 反向代理 | 有（可视化） | 有（OpenResty） | `site`（upstream + 路径规则） | 生产级 | M2 | 不内置 OpenResty 全家桶，复用宿主 nginx/caddy（插件探测） |
 | SSL 证书与自动续期 | 有（ACME 自动） | 有（ACME 自动） | `ssl`（ACME 签发/续期，内核 `cert_renew` 事件触发） | 生产级 | M2 | 内核只发 `cert.renew_due` 事件；联网只在插件内、且由事件触发 |
-| PHP 运行时 | 有（多版本共存） | 有（容器化） | `runtime-php`（多版本 FPM 管理） | 生产级 | M2 | 不打包 PHP 二进制；管理宿主已装版本，缺失时给安装命令。**版本切换 + 进程守护已实现**（0.3.0 `880d00b`，主壳 `b614884`）：`guard.*` 七方法 + `use`，`setsid` + 状态落盘、无常驻 supervisor（上限 32 应用）；dist 未重建 / 未入索引，商店仍旧版 |
-| Node 运行时 | 有（PM2） | 有 | `runtime-node`（进程守护 + 端口分配） | 基础级 | M3 | 不内嵌 PM2；用插件自带的轻量守护（0.3.0 `6fc250b` 已实现：`guard.*` 七方法 + 默认版本切换 `use`；无常驻 supervisor、上限 32 应用；dist 未重建 / 未入索引，商店仍旧版） |
-| Python 运行时 | 部分（uwsgi） | 有 | `runtime-python`（venv + uwsgi/gunicorn 模板） | 基础级 | M3 | 只做模板生成与进程守护（0.4.0 `7e855ea` 已实现 `guard.*` 七方法 + 版本切换；无常驻 supervisor、上限 32 应用；dist 未重建 / 未入索引），不接管依赖解析 |
+| PHP 运行时 | 有（多版本共存） | 有（容器化） | `runtime-php`（多版本 FPM 管理） | 生产级 | M2 | 不打包 PHP 二进制；管理宿主已装版本，缺失时给安装命令。**版本切换 + 进程守护已实现**（0.3.0 `880d00b`，主壳 `b614884`）：`guard.*` 七方法 + `use`，`setsid` + 状态落盘、无常驻 supervisor（上限 32 应用）；**扩展管理已落地**（0.4.0 `ext.install`/`ext.list`/`ext.remove`，隔离前缀 pecl、不碰宿主）；**dist / 索引已同步（当前 `runtime-php` 0.4.0）** |
+| Node 运行时 | 有（PM2） | 有 | `runtime-node`（进程守护 + 端口分配） | 基础级 | M3 | 不内嵌 PM2；用插件自带的轻量守护（0.3.0 `6fc250b` 已实现：`guard.*` 七方法 + 默认版本切换 `use`；无常驻 supervisor、上限 32 应用）；**扩展管理已落地**（0.4.0 `ext.install`/`ext.list`/`ext.remove`，隔离前缀 npm、不碰宿主全局，前端已接）；**dist / 索引已同步（当前 `runtime-node` 0.4.1）** |
+| Python 运行时 | 部分（uwsgi） | 有 | `runtime-python`（venv + uwsgi/gunicorn 模板） | 基础级 | M3 | 只做模板生成与进程守护（0.4.0 `7e855ea` 已实现 `guard.*` 七方法 + 版本切换；无常驻 supervisor、上限 32 应用），不接管依赖解析；**dist / 索引已同步（当前 `runtime-python` 0.4.2）**；扩展管理 `ext.*` 仍缺（真缺，保留） |
 | MySQL/MariaDB 管理 | 有（含备份/优化） | 有 | `db-mysql`（实例管理、慢查询、备份钩子） | 生产级 | M3 | 不内置数据库二进制；管理宿主实例，`mysqldump` 走备份插件 |
 | PostgreSQL 管理 | 有 | 有 | `db-postgres`（实例、连接、备份钩子） | 基础级 | M3 | 同上；逻辑备份走 `pg_dump` |
 | Redis | 有（键浏览） | 有 | `redis`（实例、内存策略、键扫描） | 生产级 | M3 | 键扫描做限额（默认 1 万键），不做全量遍历 |
@@ -78,7 +78,7 @@
 | 面板自升级 | **做** | M3 | 系统页「检查更新」+ 升级日志；不自动联网 |
 | 迁移导入（宝塔/1Panel 站点与库） | **部分实现**：站点与 SSL 判断已支持（只读解析 + 逐条导入，`a4a6cd2`） | M4（站点面）/ v1.1（库与任务） | 站点页「从宝塔/1Panel 导入」向导：预览给「能不能搬 + 为什么 + 怎么办」，勾选后逐条建站并回读校验；数据库 / 计划任务 / 伪静态规则不搬，私钥不读 |
 | 审计报表（基础） | **做** | M4 | 审计页按时间/动作过滤 + CSV 导出 |
-| DB Web 管理 | **由 `db-mysql` 提供**（生产级） | M3 | 插件页内嵌 SQL 控制台，标注"生产级" |
+| DB Web 管理 | **由 `db-mysql` 提供**（生产级） | M3 | 插件页内嵌 SQL 控制台，标注"生产级"；**只读表结构浏览已落地**（C7，commit `335fa83`，走既有 `db-mysql.query`/`db-postgres.query` 通道，不改插件），**ER 关系图 round 14 裁决不做**（范围取舍，见 [FEATURE-GAP-BACKLOG.md](./FEATURE-GAP-BACKLOG.md) C7）；数据行编辑（写）仍需另立 ADR |
 | 2FA / IP 白名单 | **已实现**（TOTP + 10 个恢复码；CIDR 白名单；默认关闭） | M3 | 安全页开关 + 登录流程二次验证：缺码 428 `E_2FA_REQUIRED`，白名单外 403 `E_IP_DENIED`（`0a66c10`，`auth/security.go`） |
 | API token | **已实现**（Bearer，`read`/`admin` 两档 scope，可吊销；默认 90 天 / 上限 365 天） | M4 | 设置页生成/吊销 token，展示 scope；明文只回显一次，`read` 档禁写（`0a66c10`） |
 | 监控历史报表 | **延后 v1.1**；M4 先做 24h 内存环形 + 落盘采样 | M4 部分 / v1.1 完整 | 监控页标注"24h 环形，历史报表 v1.1" |

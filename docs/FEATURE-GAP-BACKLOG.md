@@ -30,10 +30,10 @@
 ### C1 — WAF 新增规则提交 502 回滚 【硬证据 · 本机真机验证 PASS】
 
 - 原证据：`.agents/verify/waf-rules-ui.md:65`「UI 侧可用（代码已闭环），但后端在 0.4.1 + nft 1.1.6 上 `chain` 回读为空 → 新增规则实际不可用……提交必失败（502 回滚）」；同因见 `:43`、`:46`。
-- **本机验证证据（task-126）**：`.agents/verify/waf-ruleadd-live.md` —— `waf` 0.5.3（含 0.4.3 nft 1.1.x comment 解析修复 + 0.4.4 expr 反解 + 0.4.5 e2e harness）在 `dsh-root` 私有 user+net namespace + 真 nftables 1.1.6 下真跑：`waf.rule.add → 独立 nft -j 回读 chain handle → waf.rule.remove` 闭环全 PASS（报告 §3.3 命令 + nft 原文回读，§4 判定表 8 项全 PASS）。chain 非空、builtin 徽标正确、handle 一致（插件返回 11 == 独立 nft 回读 11）、删除真删数据面且幂等；旧 0.4.1 式 `E_UPSTREAM`（HTTP 502）回滚**未复现**。
+- **本机验证证据（task-126）**：`.agents/verify/waf-ruleadd-live.md` —— `waf` 0.5.3（含 0.4.3 nft 1.1.x comment 解析修复 + 0.4.4 expr 反解 + 0.4.5 e2e harness；当前版本已到 **0.5.4**，见下方规则复活修复）在 `dsh-root` 私有 user+net namespace + 真 nftables 1.1.6 下真跑：`waf.rule.add → 独立 nft -j 回读 chain handle → waf.rule.remove` 闭环全 PASS（报告 §3.3 命令 + nft 原文回读，§4 判定表 8 项全 PASS）。chain 非空、builtin 徽标正确、handle 一致（插件返回 11 == 独立 nft 回读 11）、删除真删数据面且幂等；旧 0.4.1 式 `E_UPSTREAM`（HTTP 502）回滚**未复现**。
 - **验证形态边界**：用「真插件二进制 + 真协议帧 + 按 `info.json` 声明执行真 nft 的假内核 root-action 通道」，覆盖 `rule.*` 协议/数据面闭环，非 kored + 8787 实例；kored 前端徽标渲染与浏览器交互属 UI 层，另卡（见 §5）。
-- **附带观察（后续小项，与本闭环无关）**：上游 `TestRuleAddToggleRemoveAgainstRealNft` 末步「内置规则 toggle off/on」会调 `rebuildChain()`（`internal/wafop/rulecalls.go:194-245`）从 registry 重放已登记自定义规则，使已 `remove` 的 `block-e2e` 复活；如实留痕供后续评估，本轮不改生产代码。
-- 状态：**本机真机验证 PASS**（数据面闭环），原「502 回滚」结论不再复现。
+- **规则复活（已修复收口，不再是后续小项）**：原附带观察 —— `TestRuleAddToggleRemoveAgainstRealNft` 末步「内置规则 toggle off/on」会调 `rebuildChain()`（`internal/wafop/rulecalls.go:194-245`）从 registry 重放已登记自定义规则，使已 `remove` 的 `block-e2e` 复活——已由 `waf` **0.5.4**（commit `63b7b89`）修复：显式 `waf.rule.remove` 成功后 `forgetCustom(name)` 清 registry，内置规则 toggle 不再重放已删规则；回归断言用独立 `nft -j` 回读确认链中不含已删规则，真机（私有 netns + nftables 1.1.6）修复前复现 / 修复后不复活均有证据。当前索引版本 0.5.4；**已 commit 未 push**（避免制造「索引超前发布」口径）。
+- 状态：**本机真机验证 PASS**（数据面闭环），原「502 回滚」结论不再复现；规则复活修复已收口（0.5.4）。
 
 ### C2 — ACME 真机签发未验证 【硬证据 · 离线 mock 已验，真机仍挂起】
 
@@ -110,11 +110,16 @@
 - 证据：`docs/PLUGIN-MATURITY.md:91`（`ssh-guard` 0.4.0 L2；「`sshd_config` 写路径依赖 ADR-0028（未实施，挂 v1.1）」，`ban.add`/`ban.remove` 仍走 root-action）。
 - 补齐前提：**需 ADR-0028 实施 + root-action 白名单不扩大**；`suggest` 建议不能替代写路径。
 
-### C13 — 运行时扩展管理缺（dist/索引已同步，真缺=运行时扩展方法）【硬证据】
+### C13 — 运行时扩展管理已落地（Node 0.4.1 / PHP 0.4.0；Python 仍缺）【硬证据 · 已收口】
 
-- 原证据（部分已过时）：`docs/PLUGIN-MATURITY.md:85`（Node「扩展管理仍缺」，本仓 dist 未重建/未入索引、商店仍旧版）、`:86`（PHP「扩展安装仍缺」，同类 dist 问题）。
-- **代码实证（task-131 triage）**：「dist 未重建 / 未入索引 / 商店旧版」已不成立——索引与 HEAD 版本已同步（`runtime-node` 0.3.2 / `runtime-php` 0.3.2，24 仓版本全部对齐索引）。真缺收敛为**运行时扩展 install/list/remove 方法**：`kore-plugin-runtime-node/internal/*/call.go` 方法面仅 versions/info/projects/doctor/paths/use + guard.*，无 `ext.*`；PHP 同理（`internal/phpop/` 只有 `extensionChecks` 只读探测）。无常驻 supervisor 属已知设计边界（setsid + 状态落盘，可被 cron 驱动）。
-- 补齐前提：**需新增扩展安装/管理方法 + 前端接线**，属新能力；是否纳入 v1 需用户裁决（无 ADR 覆盖，见 §4 第 2 期）。dist/索引不再作为前置门槛。
+- 原证据（已过时，保留历史快照）：`docs/PLUGIN-MATURITY.md:85`（Node「扩展管理仍缺」，本仓 dist 未重建/未入索引、商店仍旧版）、`:86`（PHP「扩展安装仍缺」，同类 dist 问题）。
+- **原真缺（task-131 triage，历史快照）**：「dist 未重建 / 未入索引 / 商店旧版」已不成立；当时真缺收敛为**运行时扩展 install/list/remove 方法**（`runtime-node` 0.3.2 / `runtime-php` 0.3.2，方法面无 `ext.*`），「是否纳入 v1 需用户裁决」。
+- **当前代码实证（task-167 对齐 HEAD）**：Node / PHP 的运行时扩展管理**已落地并已进索引**——
+  - `runtime-node` **0.4.0** 新增 `ext.install`/`ext.list`/`ext.remove`（隔离前缀 `npm install/uninstall --prefix <state>/global --no-audit --no-fund --ignore-scripts`，包名白名单 + 路径/软链逃逸校验 + 120s 超时；`info.json.method_capabilities` 同步三条）；0.4.1 补 G-33 A3 文案（`99ece6c`）；**当前索引 0.4.1**，前端 `web/runtimes.js` 已接扩展管理分区。
+  - `runtime-php` **0.4.0** 新增 `ext.install`/`ext.list`/`ext.remove`（隔离前缀 `pecl install/uninstall -d extension_dir=<state>/global/php_ext`，包名白名单 + 逃逸校验 + 超时，fault 注入全覆盖；`0d2cf0a` 回填 size_bytes）；**当前索引 0.4.0**，前端复用 Node 扩展面板。
+  - **Python 仍缺**：`runtime-python` 0.4.2 有 venv/pip 方法但无 `ext.*`；保持为真缺，不随 Node/PHP 一起改。
+  - 无常驻 supervisor 属已知设计边界（setsid + 状态落盘，可被 cron 驱动）。Node/PHP 扩展管理不再需要用户裁决是否入 v1，dist/索引也已同步。
+- 状态：**Node / PHP 已收口（已落地 + 索引同步 + 前端已接）；Python 仍缺（真缺保留）**。
 
 ### C14 — 一键部署 L1.5（索引已同步；建库/写 vhost 刻意不做）【硬证据】
 
@@ -173,7 +178,7 @@
 
 - 前置条件：C1 **已由本机私有 netns + 真 nft 满足**（task-126）；C2 离线 mock 已满足、**真机部分仍需授权联网 + 可控域名**；C12 **本机 dsh-root 实测有完整 root + CAP_NET_ADMIN + `/etc/ssh` 可写（task-123），技术门槛已具备**——但 ADR-0028 落地与**真写宿主 `/etc/ssh` 需用户单独授权回滚方案后才动**；C15 **已收口**（task-124 本机复跑 21 段全绿 + exit=6 口径裁决，`.agents/verify/selfupdate-final-gate.md`）。
 - 可验证判据（闭环状态据本期证据更新）：
-  - C1：**已达成（数据面）** —— 真机 `waf.rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现，证据 `.agents/verify/waf-ruleadd-live.md`；kored 前端徽标与浏览器交互属 UI 层另卡，toggle 复活留后续小项。
+  - C1：**已达成（数据面）** —— 真机 `waf.rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现，证据 `.agents/verify/waf-ruleadd-live.md`；kored 前端徽标与浏览器交互属 UI 层另卡；**toggle 致规则复活已由 `waf` 0.5.4（`63b7b89`）修复并回归**（显式 remove 清 registry），不再是后续小项（当前索引 0.5.4，已 commit 未 push）。
   - C2：**离线部分已达成** —— 内置 ACME + mock CA 192 测试 PASS，证据 `.agents/verify/acme-offline-evidence.md`；**真机至少一次真实签发 + 到期续期仍未达成**（需授权联网 + 可控域名），`PLUGIN-MATURITY.md:157` 的 PM 原文不在本文件写域、未改，仅在此同步口径。
   - C12：**未闭环（等待授权，非技术阻塞）** —— 技术门槛已具备（task-123）；`sshd_config` 写路径按 ADR-0028 实施且可审计、root-action 白名单不扩大、回归 `security-suite-g28.md` 既有行为仍为收口判据；真写宿主 `/etc/ssh` 须先取得用户单独授权并备好回滚方案。
   - C15：**已达成** —— 4 段 FAIL 全修复并本机复验全绿，退出码按 exitEnv=6，PARTIAL → 核心 PASS（task-124，`.agents/verify/selfupdate-final-gate.md`）。
@@ -181,7 +186,7 @@
 ### 第 2 期 · 生态深度：C4、C5、C7、C8、C9、C13、C14（task-131 triage 后重排）
 
 - **本期 triage 结论先行**：4 项文档漂移已收口——C4 规则编辑器（已落地，见 `web/waf.js:687-789/1103-1146`）、C5 记录写表单（已落地，见 `dns-feature-write-ui.md:13`）、C8 前端接线（已证伪/已接线 PASS）、C13/C14 的 dist/索引表述（已同步，24 仓版本全对齐索引）；这些不再派实现卡。真缺项按门槛分类：
-  - **ADR / 用户裁决前置（不派实现卡）**：C4-CC/UA/HTTP 层规则（需新 ADR 覆盖宿主 ModSecurity/Naxsi 集成，越过 ADR-0023 零侵入）、C5-zone 增删/DNSSEC（ADR-0051 明确不做，需用户裁决推翻）、C13 运行时扩展 install/list/remove（新能力，需裁决是否入 v1）、C14 建库/写 vhost（G-13 跨插件边界刻意不做，需裁决推翻）、C9 通知渠道/天周视图（新能力，需裁决立项）。
+  - **ADR / 用户裁决前置（不派实现卡）**：C4-CC/UA/HTTP 层规则（需新 ADR 覆盖宿主 ModSecurity/Naxsi 集成，越过 ADR-0023 零侵入）、C5-zone 增删/DNSSEC（ADR-0051 明确不做，需用户裁决推翻）、C14 建库/写 vhost（G-13 跨插件边界刻意不做，需裁决推翻）、C9 通知渠道/天周视图（新能力，需裁决立项）、**C13 中仅 Python `ext.*` 仍缺**（新能力，需裁决是否入 v1；Node/PHP 已落地并进索引，见 §2 C13）。
   - **后续实现卡（无 ADR 门槛）**：C7 只读表结构浏览（已落地，见 `.agents/verify/c7-tables-verification.md`；先 D2 再谈 D7，`docs/DECISIONS/0050-db-and-runtime-aggregation.md:202`、`:207`）；**C7 的 ER 图已由 round 14 裁决不做（见 §2 C7），不派实现卡**；C14 升 L2 需补 G-28 双端截图（非代码缺失）。C9 前端阈值卡已由 task-133 落地（commit `06a6b9d`），不再派卡。
 - 前置条件：凡标「ADR / 用户裁决前置」的项，未取得裁决前不进里程碑、不派卡；C7 表结构已落地，ER 图已裁决不做（§2 C7）；数据行编辑（D7 写路径）仍需 ADR。
 - 可验证判据：新能力一旦获批，每项同时满足「后端能力可用 + 前端可达 + 隔离实例/真机复验」三件套，并落一份带 `file:line` 或截图的 verify 报告；缺任一件不得标「已补齐」。
@@ -201,7 +206,7 @@
 
 本文件是**基于本地已有材料的核实，不是联网实时竞品测评**。竞品能力来自 BA 原文（明示未真机安装）、FEATURE-PARITY draft 矩阵与 PLUGIN-MATURITY 的常识描述，可能过时；kore 能力来自本地代码 / `file:line` 与 verify 报告。原有 7 类未证项，本期（C1/C2/C15 三路）取证后：第 1 类 WAF 后端链、第 7 类自升级 4 段 FAIL 已证并收口，第 2/3 类部分收窄（本机 nft 与离线 ACME 已证，真机边界仍在），余项逐条列证据；已证的不夸大、未证的仍如实挂起，不脑补结论：
 
-1. **WAF 后端链 —— 已证并收口（task-126）**：原 `.agents/verify/waf-rules-ui.md:43`、`:46`、`:65` 记 `chain` 恒空、`rule.add` 写后回读不到（502 回滚）；现由 `.agents/verify/waf-ruleadd-live.md` 在 `dsh-root` 私有 netns + 真 nft 1.1.6 下取证——0.5.3 的 `rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现。**边界**：证明的是数据面闭环（真二进制 + 真协议帧 + 按声明执行真 nft），非 kored 前端徽标渲染与浏览器交互；「删除自定义规则 + 后续启停内置规则」会触发 `rebuildChain()` 使规则复活，留后续小项（见 §2 C1）。
+1. **WAF 后端链 —— 已证并收口（task-126）**：原 `.agents/verify/waf-rules-ui.md:43`、`:46`、`:65` 记 `chain` 恒空、`rule.add` 写后回读不到（502 回滚）；现由 `.agents/verify/waf-ruleadd-live.md` 在 `dsh-root` 私有 netns + 真 nft 1.1.6 下取证——0.5.3 的 `rule.add → 独立 nft 回读 handle → rule.remove` 全 PASS、502 未复现。**边界**：证明的是数据面闭环（真二进制 + 真协议帧 + 按声明执行真 nft），非 kored 前端徽标渲染与浏览器交互。原「删除自定义规则 + 后续启停内置规则」经 `rebuildChain()` 使规则复活的附带观察**已由 `waf` 0.5.4（`63b7b89`）修复并回归**（显式 remove 清 registry，独立 nft 回读断言不含已删规则），不再是未证/后续小项；当前索引 0.5.4，**已 commit 未 push**（见 §2 C1）。
 2. **真 nft —— 本机环境已证，跨版本/发行版仍未测（task-126）**：原失败口径仅限本机 nft 1.1.6 + 插件 0.4.1；本期在**同一本机 nft 1.1.6 + 私有 netns** 下用插件 0.5.3 真跑通过（`.agents/verify/waf-ruleadd-live.md` §3 命令 + nft 原文回读）。**仍未证**：其他 nft 版本与发行版、宿主真实 netns（本次为 `unshare -rn` 私有 netns，宿主表零接触）、真实 80/443 拦截命中流量。
 3. **SSL 真机签发 —— 离线已证，真机仍挂起（task-125）**：`docs/PLUGIN-MATURITY.md:77`、`:157` 的「本机无 ACME 客户端、真机签发未验证」中「本机无客户端」口径已过时——`ssl` 0.8.1 内置 ACME 客户端 + `acmetest` mock CA 离线全链路 192 测试 PASS（`.agents/verify/acme-offline-evidence.md`，签发/续期/失败保留旧证书/EAB/bad-nonce）。**仍未证**：真机外部 CA（Let's Encrypt 等）签发与到期续期，需用户授权联网 + 可控域名 + HTTP-01 可达性；证书可信链、CA 风控/限流、DNS 解析与防火墙放行均未真机验证。PM 原文不在本文件写域、未改，仅在此同步口径。
 4. **满载资源**：`.agents/verify/v1-budget-measure.md:18`、`:19`、`:106`——空载 0 常驻插件，「单插件 ≤24 MiB（目标）/ 合计 ≤48 MiB（红线）/ 同时常驻 ≤3」只验证了下界。
@@ -209,8 +214,8 @@
 6. **goroutine**：`.agents/verify/v1-budget-measure.md:21`——只测线程数 16（代理指标），goroutine 未测。
 7. **自升级 4 段 FAIL 归因 —— 已证伪并收口（task-124）**：原 `.agents/verify/self-update-mvp.md` 记 PARTIAL（基线漂移 / 工作区污染 / 2×环境假阴性）；现由 `.agents/verify/selfupdate-final-gate.md` 给出本机隔离树复跑证据——21 段全绿 exit=0、4 段逐段复验为绿（非环境例外接受）、退出码按 `exitEnv=6` 裁决，原「4 段 FAIL」已证伪，不再是未证项。
 
-8. **task-131 triage 的文档漂移收口（本期）**：C1/C2/C15 之外，第二/三期 7 项复核结论已落 §2/§4——**4 项文档漂移已收口**（C4 规则编辑器落地、C5 记录写表单落地、C8 前端接线已证伪、C13/C14 dist/索引同步表述）；**真缺项已按门槛标注前置**（C4-CC/UA/HTTP 层需新 ADR 覆盖宿主集成、C5-zone/DNSSEC 与 C14 建库/vhost 属刻意不做需用户裁决推翻 ADR-0051/G-13、C9 通知渠道/天周视图与 C13 运行时扩展方法属新能力需裁决、C10 受 ADR-0021/G-11 保护需新 ADR）。C9 前端阈值部分已由 task-133 落地（commit `06a6b9d`）；C7 只读表结构浏览已落地（先 D2 再 D7），**C7 的 ER 图已由 round 14 裁决不做、写进 §2 C7 有意不做清单（已裁决不做，不再评估）**。所有真缺项在获得 ADR/裁决前不派实现卡，避免再次派无效卡。
-9. **索引与版本也已同步（triage 实证）**：24 个插件仓 `info.json.version` 与 `../kore-plugins/index/plugins.json` 逐仓一致（含 `waf` 0.5.3、`app-deploy` 0.4.2、`runtime-node/php` 0.3.2），故 §2 C13/C14 与 PM 表内旧「索引仍 X 待重签」表述按本期结论统一收口，不再视为前置门槛。
+8. **task-131 triage 的文档漂移收口（本期）**：C1/C2/C15 之外，第二/三期 7 项复核结论已落 §2/§4——**4 项文档漂移已收口**（C4 规则编辑器落地、C5 记录写表单落地、C8 前端接线已证伪、C13/C14 dist/索引同步表述）；**真缺项已按门槛标注前置**（C4-CC/UA/HTTP 层需新 ADR 覆盖宿主集成、C5-zone/DNSSEC 与 C14 建库/vhost 属刻意不做需用户裁决推翻 ADR-0051/G-13、C9 通知渠道/天周视图属新能力需裁决、C10 受 ADR-0021/G-11 保护需新 ADR）。C9 前端阈值部分已由 task-133 落地（commit `06a6b9d`）；C7 只读表结构浏览已落地（先 D2 再 D7），**C7 的 ER 图已由 round 14 裁决不做、写进 §2 C7 有意不做清单（已裁决不做，不再评估）**。所有真缺项在获得 ADR/裁决前不派实现卡，避免再次派无效卡。**2026-11-27 更新（task-167）**：C13 的 Node/PHP 扩展管理已落地并进索引（`runtime-node` 0.4.1 / `runtime-php` 0.4.0），不再属于「需裁决新能力」；仅 Python `ext.*` 仍缺。
+9. **索引与版本也已同步（triage 实证；当前版本以索引为准）**：24 个插件仓 `info.json.version` 与 `../kore-plugins/index/plugins.json` 逐仓一致；**当前版本（`index/plugins.json`）：`waf` 0.5.4、`runtime-node` 0.4.1、`runtime-php` 0.4.0、`runtime-python` 0.4.2、`ssl` 0.8.1、`cron` 0.9.1**（triage 当时的 `waf` 0.5.3 / `runtime-node·php` 0.3.2 为历史快照，保留不抹掉）。故 §2 C13/C14 与 PM 表内旧「索引仍 X 待重签」表述按本期结论统一收口，不再视为前置门槛。
 10. **ER 图裁决的证据边界（round 14 / task-160 只读核实）**：①FK 元数据可得是按两插件 sqlguard「SELECT 首关键字放行、不按 catalog 名过滤」推出的结论（两仓源码无 `KEY_COLUMN_USAGE` / `pg_constraint` 字串），**未对真库执行 FK 查询**——纠正 triage「无元数据源」旧判只推翻其「能力缺失」前提，不等于真机取出过关系数据；②竞品 ER 图仅【常】+【自】级（BA 原文无 ER、FEATURE-PARITY 无 ER 域），无原文级实测，不据此判领先/落后；③3.5–5 人日是估算、非计量；④裁决为范围取舍（用户 round 14 明确不做），保留可重开判据（§2 C7），不写成技术不可行。
 
 其他边界：1Panel 多用户冲突不判定（§1）；PARITY-GAP 旧口径以 PM 为准（§1）；`feedback/` 目录不存在、未引用（§1）；Wiki 156/156 零命中、不列入（§3）。
