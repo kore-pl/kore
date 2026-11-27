@@ -129,9 +129,28 @@
       '.plugin-notes-empty{margin:0;color:var(--kore-text-3);overflow-wrap:anywhere}',
       '.plugin-risk{margin:2px 0;color:var(--kore-text-2);overflow-wrap:anywhere}',
       '.plugin-risk.is-major{color:var(--kore-warning);font-weight:600}',
+      // P2 §2.5：行内只留「启停 + 详情」，其余操作进行下详情区；勾选进表头后才出现批量条。
+      '.plugin-pick-cb{width:16px;height:16px;margin:0 var(--kore-space-2) 0 0;flex:0 0 auto;' +
+        'accent-color:var(--kore-info);cursor:pointer;vertical-align:middle}',
+      '.plugin-detail-row>td{padding:0}',
+      '.plugin-detail{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);' +
+        'padding:var(--kore-space-2) var(--kore-space-3);background:var(--kore-bg-2);' +
+        'border-top:1px solid var(--kore-border-1)}',
+      '.plugin-detail[hidden]{display:none}',
+      '.plugin-detail .row-note{flex:1 1 100%;margin-top:var(--kore-space-1)}',
+      '.plugin-batch-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);' +
+        'padding:var(--kore-space-2) var(--kore-space-3);margin-bottom:var(--kore-space-2);' +
+        'background:var(--kore-bg-2);border:1px solid var(--kore-border-1);' +
+        'border-radius:var(--kore-radius-control)}',
+      '.plugin-batch-bar[hidden]{display:none}',
+      '.plugin-batch-count{color:var(--kore-text-2);font-size:var(--kore-font-12)}',
+      '.plugin-batch-status{color:var(--kore-text-3);font-size:var(--kore-font-12)}',
       '@media (max-width:639px){',
       '.plugin-notes>summary{min-height:var(--kore-touch)}',
       '.plugin-notes-list{max-height:none}',
+      '.plugin-detail{flex-direction:column;align-items:stretch}',
+      '.plugin-detail .btn,.plugin-batch-bar .btn{min-height:var(--kore-touch)}',
+      '.plugin-pick-cb{width:22px;height:22px}',
       '}'
     ].join('');
     var st = document.createElement('style');
@@ -180,6 +199,43 @@
     });
   }
 
+  // P2 §2.5：行内勾选只影响批量条，不触发请求；勾选态保存在模块级，重绘后回填。
+  var picked = Object.create(null);
+  var openDetail = Object.create(null);
+  function pickedIds() {
+    return state.plugins.filter(function (p) { return p && p.id && picked[p.id]; })
+      .map(function (p) { return p.id; });
+  }
+  function syncBatchBar() {
+    var bar = document.getElementById('kore-plugin-batch-bar');
+    if (!bar) return;
+    var ids = pickedIds();
+    bar.hidden = ids.length === 0;
+    var count = document.getElementById('kore-plugin-batch-count');
+    if (count) count.textContent = '已选 ' + ids.length + ' 个插件';
+    var upBtn = document.getElementById('kore-plugin-batch-upgrade');
+    if (upBtn) {
+      var upgradable = ids.filter(function (id) {
+        var p = state.plugins.filter(function (x) { return x && x.id === id; })[0];
+        return p && pluginUpgradeState(p) === 'upgradable';
+      });
+      upBtn.disabled = !upgradable.length;
+      upBtn.title = upgradable.length ? '升级选中的可升级插件（逐个确认后串行执行）' : '所选插件均已是最新';
+    }
+    var enableBtn = document.getElementById('kore-plugin-batch-enable');
+    var disableBtn = document.getElementById('kore-plugin-batch-disable');
+    var anyOff = ids.some(function (id) {
+      var p = state.plugins.filter(function (x) { return x && x.id === id; })[0];
+      return p && p.enabled !== true;
+    });
+    var anyOn = ids.some(function (id) {
+      var p = state.plugins.filter(function (x) { return x && x.id === id; })[0];
+      return p && p.enabled === true;
+    });
+    if (enableBtn) enableBtn.disabled = !anyOff;
+    if (disableBtn) disableBtn.disabled = !anyOn;
+  }
+
   function pluginRow(plugin) {
     var id = plugin.id || '';
     var tr = el('tr', 'plugin-row');
@@ -187,6 +243,17 @@
     tr.setAttribute('data-plugin-id', id);
 
     var idCell = el('div', 'plugin-id');
+    // 表头勾选框：勾选后出现批量操作条（§2.5）；点复选框不触发展开详情。
+    var pick = el('input', 'plugin-pick-cb');
+    pick.type = 'checkbox'; pick.checked = !!picked[id];
+    pick.setAttribute('data-plugin-id', id);
+    pick.setAttribute('aria-label', '选择插件 ' + (plugin.name || id) + '（勾选后可批量操作）');
+    pick.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    pick.addEventListener('change', function () {
+      if (pick.checked) picked[id] = true; else delete picked[id];
+      syncBatchBar();
+    });
+    idCell.appendChild(pick);
     idCell.appendChild(el('span', 'plugin-id-name', id));
     if (plugin.name && plugin.name !== id) idCell.appendChild(el('span', 'plugin-id-alias', plugin.name));
 
@@ -201,11 +268,42 @@
     tr.appendChild(cell('运行方式', lifecycleLabel(plugin.lifecycle)));
     tr.appendChild(cell('状态', statusTag(pluginStateTag(plugin))));
 
+    var enabled = plugin.enabled === true;
+    var action = enabled ? 'disable' : 'enable';
+    var ping = pingState(id);
+    var note = el('div', 'row-note');
+
     var ops = el('td', 'cell-ops');
     ops.setAttribute('data-label', '操作');
 
-    // 设置：复用统一配置面板（PLUGIN-CONFIG §9），不各自造表单。host 实时取插件面板容器，
-    // 以覆盖启停后 replaceRow 重建行的场景；面板由 openConfig 插在标题下方、列表上方。
+    // P2 §2.5：行内只留两个主操作——启停（高频）+ 详情（展开次级操作区）。
+    var actionBtn = el('button', 'btn plugin-lifecycle-btn', enabled ? '停用' : '启用');
+    actionBtn.type = 'button';
+    actionBtn.setAttribute('data-action', action);
+    actionBtn.title = enabled ? '停用插件（可随时再启用）' : '启用插件';
+    actionBtn.addEventListener('click', function () {
+      lifecycle(plugin, action, tr, actionBtn);
+    });
+    ops.appendChild(actionBtn);
+
+    var detailBtn = el('button', 'btn btn-ghost plugin-detail-btn', '详情');
+    detailBtn.type = 'button';
+    detailBtn.setAttribute('data-action', 'detail');
+    detailBtn.setAttribute('aria-expanded', openDetail[id] ? 'true' : 'false');
+    detailBtn.title = '展开设置 / 升级 / 卸载 / 调用 ping（危险操作需二次确认）';
+    ops.appendChild(detailBtn);
+    tr.appendChild(ops);
+
+    // 次级操作区：紧跟在主行下方独立一行（抽屉语义，不是「⋯」菜单），所有原行内操作全量可达。
+    var detailRow = el('tr', 'plugin-detail-row');
+    detailRow.id = 'kore-detail-row-' + id;
+    var detailCell = el('td');
+    detailCell.colSpan = colsCount();
+    var detail = el('div', 'plugin-detail');
+    detail.id = 'kore-detail-' + id;
+    detail.hidden = !openDetail[id];
+
+    // 设置复用 KoreShell.openConfig 通用面板；不另造表单。
     var settingBtn = el('button', 'btn plugin-setting-btn', '设置');
     settingBtn.type = 'button';
     settingBtn.title = '打开「' + (plugin.name || id) + '」的设置，保存后立即生效';
@@ -214,16 +312,9 @@
       if (!host || !window.KoreShell || typeof window.KoreShell.openConfig !== 'function') return;
       window.KoreShell.openConfig(host, id, { title: (plugin.name || id) + ' 设置' });
     });
-    ops.appendChild(settingBtn);
+    detail.appendChild(settingBtn);
 
-    var enabled = plugin.enabled === true;
-    var action = enabled ? 'disable' : 'enable';
-    var actionBtn = el('button', 'btn', enabled ? '停用' : '启用');
-    actionBtn.type = 'button';
-    actionBtn.addEventListener('click', function () {
-      lifecycle(plugin, action, tr, actionBtn);
-    });
-    // 仅可升级时出现「升级」入口；最新/索引未收录不显示，避免无效按钮。
+    // 可升级才显示升级入口；状态标记（「最新版本」列的 v当前 → v最新）仍留在主行。
     if (upState === 'upgradable') {
       var upgradeBtn = el('button', 'btn btn-primary plugin-upgrade-btn', '升级');
       upgradeBtn.type = 'button';
@@ -231,12 +322,10 @@
       upgradeBtn.addEventListener('click', function () {
         confirmRowUpgrade(plugin, tr, note, upgradeBtn);
       });
-      ops.appendChild(upgradeBtn);
+      detail.appendChild(upgradeBtn);
     }
-    ops.appendChild(actionBtn);
 
-    // 卸载：DELETE /api/v1/plugins/{id}（停进程 + 删程序文件，幂等）。危险色与「停用」灰区分；
-    // 老内核探测到 404/405/501 后按钮直接禁用，不做点了才报错的假按钮。
+    // 卸载不可逆：保留红色 + 二次确认（C7 危险色只给不可逆/故障）。
     var uninstallBtn = el('button', 'btn plugin-uninstall-btn', '卸载');
     uninstallBtn.type = 'button';
     uninstallBtn.style.color = 'var(--kore-danger)';
@@ -245,16 +334,15 @@
       uninstallBtn.disabled = true;
       uninstallBtn.title = '当前内核版本不支持卸载插件';
     } else {
-      uninstallBtn.title = '卸载插件：停止进程并删除程序文件，业务数据保留（需二次确认）';
+      uninstallBtn.title = '卸载插件：停止进程并删除程序文件，业务数据保留（需二次确认，不可撤销）';
       uninstallBtn.addEventListener('click', function () {
         confirmRowUninstall(plugin, tr, note, uninstallBtn);
       });
       if (state.pluginsUninstallOff === undefined) probeRowUninstall();
     }
-    ops.appendChild(uninstallBtn);
+    detail.appendChild(uninstallBtn);
 
-    var ping = pingState(id);
-    var pingBtn = el('button', 'btn', '调用 ping');
+    var pingBtn = el('button', 'btn plugin-ping-btn', '调用 ping');
     pingBtn.type = 'button';
     if (!enabled || plugin.state !== 'ready' || !ping.supported) {
       pingBtn.disabled = true;
@@ -262,25 +350,40 @@
         : (plugin.state !== 'ready' ? '插件当前空闲（lazy 按需启动，未驻留进程）'
           : '该插件不支持 ping 方法');
     }
-    pingBtn.addEventListener('click', function () {
-      invokePing(plugin, pingBtn, note);
+    pingBtn.addEventListener('click', function () { invokePing(plugin, pingBtn, note); });
+    detail.appendChild(pingBtn);
+
+    detailBtn.addEventListener('click', function () {
+      var open = !detail.hidden;
+      detail.hidden = open;
+      openDetail[id] = !open;
+      detailBtn.setAttribute('aria-expanded', open ? 'false' : 'true');
     });
-    ops.appendChild(pingBtn);
+    var noteTextValue = noteText(plugin, ping, enabled);
+    if (noteTextValue) note.appendChild(document.createTextNode(noteTextValue));
+    detail.appendChild(note);
+    detailCell.appendChild(detail);
+    detailRow.appendChild(detailCell);
+    // 两行同级：主行 + 详情行。用 DocumentFragment 保证 appendChild / replaceNode 两处接线都不变
+    // （replaceChild 收到 fragment 时会自动展开为两个子节点，不会丢详情行）。
+    var frag = document.createDocumentFragment();
+    frag.appendChild(tr);
+    frag.appendChild(detailRow);
+    return frag;
+  }
 
-    var note = el('div', 'row-note');
-    if (!ping.supported) note.textContent = '该插件不支持 ping 方法';
-    else if (ping.error) { note.textContent = 'ping 失败：' + ping.error; note.className = 'row-note row-note-fail'; }
-    else if (ping.result) { note.textContent = 'ping → ' + ping.result; note.className = 'row-note row-note-ok'; }
-    else if (!enabled) note.textContent = '已停用（可点「启用」）';
-    else if (plugin.state !== 'ready') {
-      note.textContent = String(plugin.lifecycle || '') === 'lazy' ? '空闲（按需启动）'
-        : '状态 ' + (plugin.state || '未知');
-      note.title = String(plugin.lifecycle || '') === 'lazy' ? LAZY_IDLE_TIP : '';
+  // 主行与详情行的列数一致（插件/版本/最新版本/深度/运行方式/状态/操作）。
+  function colsCount() { return 7; }
+
+  function noteText(plugin, ping, enabled) {
+    if (!ping.supported) return '该插件不支持 ping 方法';
+    if (ping.error) return 'ping 失败：' + ping.error;
+    if (ping.result) return 'ping → ' + ping.result;
+    if (!enabled) return '已停用（可点「启用」）';
+    if (plugin.state !== 'ready') {
+      return String(plugin.lifecycle || '') === 'lazy' ? '空闲（按需启动）' : '状态 ' + (plugin.state || '未知');
     }
-    ops.appendChild(note);
-
-    tr.appendChild(ops);
-    return tr;
+    return '';
   }
 
   // 「最新版本」列：可升级黄字 v当前 → v最新；最新灰字；索引未收录淡灰提示。
@@ -410,8 +513,12 @@
           ok.disabled = false; cancel.disabled = false; btn.disabled = false;
           return;
         }
-        // 成功：行移除 + 一次列表刷新（复用既有 refresh 入口，不新增轮询）。
+        // 成功：主行 + 详情行一起移除 + 一次列表刷新（复用既有 refresh 入口，不新增轮询）。
+        var detail = document.getElementById('kore-detail-row-' + plugin.id);
+        if (detail && detail.parentNode) detail.parentNode.removeChild(detail);
         if (tr.parentNode) tr.parentNode.removeChild(tr);
+        delete picked[plugin.id];
+        delete openDetail[plugin.id];
         state.plugins = state.plugins.filter(function (x) { return !x || x.id !== plugin.id; });
         state.notice = r.message;
         refreshPluginsView();
@@ -492,7 +599,12 @@
       }
     }
     var oldRow = document.getElementById('kore-row-' + plugin.id);
-    if (oldRow) replaceNode(oldRow, pluginRow(plugin));
+    if (!oldRow) return;
+    // 主行 + 详情行成对替换：先摘掉旧详情行，避免重绘后残留第二份操作区。
+    var oldDetail = document.getElementById('kore-detail-row-' + plugin.id);
+    if (oldDetail && oldDetail.parentNode) oldDetail.parentNode.removeChild(oldDetail);
+    replaceNode(oldRow, pluginRow(plugin));
+    syncBatchBar();
   }
 
   function lifecycle(plugin, action, tr, btn) {
@@ -623,6 +735,7 @@
     }
 
     box.appendChild(upgradeSummaryPanel());
+    box.appendChild(renderBatchBar());
 
     var table = el('table', 'plugin-table');
     var thead = el('thead');
@@ -630,6 +743,29 @@
     var cols = ['插件', '版本', '最新版本', '深度', '运行方式', '状态', '操作'];
     for (var c = 0; c < cols.length; c++) {
       var th = el('th', null, cols[c]);
+      // P2 §2.5：表头勾选联动全选（只影响批量条，不触发请求）。
+      if (c === 0) {
+        var allBox = el('input', 'plugin-pick-cb plugin-pick-all');
+        allBox.type = 'checkbox';
+        allBox.id = 'kore-plugin-pick-all';
+        allBox.setAttribute('aria-label', '全选/取消全选插件（勾选后出现批量操作）');
+        allBox.addEventListener('click', function (ev) { ev.stopPropagation(); });
+        allBox.addEventListener('change', function () {
+          state.plugins.forEach(function (p) {
+            if (!p || !p.id) return;
+            if (allBox.checked) picked[p.id] = true; else delete picked[p.id];
+          });
+          // 重绘让每行复选框与全选态一致（只换 DOM，不发请求）。
+          var panelNode = document.getElementById('kore-plugins-panel');
+          if (panelNode && panelNode.parentNode) {
+            var fresh = renderPluginsPanel();
+            fresh.id = 'kore-plugins-panel';
+            replaceNode(panelNode, fresh);
+          }
+          syncBatchBar();
+        });
+        th.insertBefore(allBox, th.firstChild);
+      }
       // 状态列表头带 lazy 语义说明：绿=运行中 / 蓝=空闲（正常）/ 灰=已停用 / 红=异常。
       if (cols[c] === '状态') {
         th.title = '运行中=进程就绪；空闲=已启用的 lazy 插件按需启动、空闲退出以省资源（正常）；' +
@@ -640,14 +776,106 @@
     thead.appendChild(headRow);
     table.appendChild(thead);
     var tbody = el('tbody');
+    // 清理已不在列表里的勾选，避免批量条显示幽灵项。
+    var live = Object.create(null);
     for (var i = 0; i < state.plugins.length; i++) {
       var plugin = state.plugins[i];
       if (!plugin || !plugin.id) continue;
+      live[plugin.id] = true;
       tbody.appendChild(pluginRow(plugin));
     }
+    Object.keys(picked).forEach(function (id) { if (!live[id]) delete picked[id]; });
     table.appendChild(tbody);
     box.appendChild(table);
     return box;
+  }
+
+  // 表头勾选后才出现的批量操作条：批量升级 / 批量启用 / 批量停用。
+  // 批量停用可逆（随时再启用）→ 中性灰；批量升级走既有逐个确认流程，不新增后端。
+  function renderBatchBar() {
+    var bar = el('div', 'plugin-batch-bar');
+    bar.id = 'kore-plugin-batch-bar';
+    bar.hidden = true;
+    var label = el('span', 'plugin-batch-count', '已选 0 个插件');
+    label.id = 'kore-plugin-batch-count';
+    bar.appendChild(label);
+
+    var upBtn = el('button', 'btn', '批量升级');
+    upBtn.type = 'button'; upBtn.id = 'kore-plugin-batch-upgrade';
+    upBtn.setAttribute('data-batch-op', 'upgrade');
+    upBtn.disabled = true;
+    upBtn.addEventListener('click', function () {
+      var list = pickedIds().map(function (id) {
+        return state.plugins.filter(function (p) { return p && p.id === id; })[0];
+      }).filter(function (p) { return p && pluginUpgradeState(p) === 'upgradable'; });
+      if (!list.length) return;
+      var status = document.getElementById('kore-plugin-batch-status');
+      var index = 0;
+      function step() {
+        if (index >= list.length) {
+          if (status) status.textContent = '批量升级完成：共 ' + list.length + ' 个';
+          state.pendingNotice = '批量升级完成：共 ' + list.length + ' 个';
+          loadDashboard();
+          return;
+        }
+        var p = list[index];
+        if (status) status.textContent = '正在升级 ' + (index + 1) + '/' + list.length + ' · ' + p.id + '…';
+        runPluginUpgrade(p, p.latest_version).then(function () { index++; step(); });
+      }
+      step();
+    });
+    bar.appendChild(upBtn);
+
+    var enableBtn = el('button', 'btn', '批量启用');
+    enableBtn.type = 'button'; enableBtn.id = 'kore-plugin-batch-enable';
+    enableBtn.setAttribute('data-batch-op', 'enable');
+    enableBtn.disabled = true;
+    enableBtn.addEventListener('click', function () { batchLifecycle('enable'); });
+    bar.appendChild(enableBtn);
+
+    var disableBtn = el('button', 'btn plugin-batch-muted', '批量停用');
+    disableBtn.type = 'button'; disableBtn.id = 'kore-plugin-batch-disable';
+    disableBtn.setAttribute('data-batch-op', 'disable');
+    disableBtn.title = '批量停用（可随时再启用）';
+    disableBtn.disabled = true;
+    disableBtn.addEventListener('click', function () { batchLifecycle('disable'); });
+    bar.appendChild(disableBtn);
+
+    var status = el('span', 'plugin-batch-status', '');
+    status.id = 'kore-plugin-batch-status';
+    status.setAttribute('role', 'status');
+    bar.appendChild(status);
+    return bar;
+  }
+
+  // 批量启停逐条发既有 enable/disable 请求，单条失败不中断其余；完成后刷新一次。
+  function batchLifecycle(action) {
+    var ids = pickedIds().filter(function (id) {
+      var p = state.plugins.filter(function (x) { return x && x.id === id; })[0];
+      return p && (action === 'enable' ? p.enabled !== true : p.enabled === true);
+    });
+    if (!ids.length) return;
+    var status = document.getElementById('kore-plugin-batch-status');
+    var done = 0, failed = [];
+    ids.forEach(function (id) {
+      var p = state.plugins.filter(function (x) { return x && x.id === id; })[0];
+      writeJson(ENDPOINTS.plugins + '/' + encodeURIComponent(id) + '/' + action, {}).then(function (res) {
+        done++;
+        if (!res.ok) failed.push(id + '：' + describeError(res));
+        if (done === ids.length) {
+          if (status) status.textContent = '批量' + (action === 'enable' ? '启用' : '停用') + '完成：成功 ' +
+            (ids.length - failed.length) + ' 个' + (failed.length ? '，失败 ' + failed.length + ' 个（' + failed.join('、') + '）' : '');
+          loadDashboard();
+        }
+      }, function (err) {
+        done++;
+        failed.push(id + '：' + errText(err));
+        if (done === ids.length) {
+          if (status) status.textContent = '批量操作完成：成功 ' + (ids.length - failed.length) + ' 个，失败 ' + failed.length + ' 个';
+          loadDashboard();
+        }
+      });
+    });
   }
 
   // 插件状态计数：四态口径与 pluginStateTag 一致，汇总条与行内标签永远同一本账。

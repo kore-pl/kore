@@ -169,7 +169,7 @@
       var ops = el('div', 'settings-item-actions');
       for (var i = 0; i < spec.actions.length; i++) {
         (function (a) {
-          var btn = el('button', 'btn' + (a.danger ? ' settings-logout' : ''), a.label);
+          var btn = el('button', 'btn' + (a.danger ? ' settings-logout' : (a.neutral ? ' settings-neutral' : '')), a.label);
           btn.type = 'button';
           if (a.id) btn.id = a.id;
           if (a.route) btn.setAttribute('data-route', a.route);
@@ -241,7 +241,7 @@
         label: '退出登录',
         help: '在公共电脑上用完请退出；只结束当前浏览器的登录，不会改口令。',
         def: '不主动退出时，登录状态随会话到期自动结束',
-        actions: [{ label: '退出登录', danger: true, id: 'kore-settings-logout', action: 'logout',
+        actions: [{ label: '退出登录', neutral: true, id: 'kore-settings-logout', action: 'logout',
           onClick: function (ev) { openLogoutConfirm(ev.currentTarget); } }]
       }),
       cfgItem({
@@ -1054,7 +1054,7 @@
     var cancel = el('button', 'btn', '取消');
     cancel.type = 'button';
     cancel.addEventListener('click', closeLogoutConfirm);
-    var ok = el('button', 'btn settings-logout', '确定退出');
+    var ok = el('button', 'btn settings-neutral', '确定退出');
     ok.type = 'button';
     ok.addEventListener('click', function () {
       closeLogoutConfirm();
@@ -1120,7 +1120,11 @@
     '.settings-page{display:block}@media (max-width:639px){.settings-tab{min-height:var(--kore-touch);flex:1 1 auto}}' +
     // 视图级空态：主体由主壳 KoreUI.emptyBlock 渲染（panel-empty empty-state），这里只吃掉卡片里多出的内边距。
     '.settings-empty-state{padding:0}' +
-    // 退出下沉：红字按钮（danger 只给不可逆操作）+ 确认弹层（C10 三级）。
+    // 退出下沉：确认弹层（C10 三级）；P2 后中性灰按钮（danger 只给不可逆操作）。
+    // P2 danger 治理：退出登录只结束当前浏览器会话（可逆，重新登录即可）→ 中性灰；
+    // 仍保留确认弹层（C10），危险色只留给不可逆的升级回滚。
+    '.settings-neutral{color:var(--kore-text-2);border-color:var(--kore-border-1)}' +
+    '.settings-neutral:hover{color:var(--kore-text-1);border-color:var(--kore-text-3);background:var(--kore-bg-2)}' +
     '.settings-logout{color:var(--kore-danger);border-color:var(--kore-danger)}' +
     '.settings-logout:hover{color:var(--kore-danger);border-color:var(--kore-danger);background:var(--kore-bg-2)}' +
     '.settings-logout:focus-visible{outline:2px solid var(--kore-danger);outline-offset:2px}' +

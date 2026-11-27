@@ -407,7 +407,10 @@
       var mod = add(row, el('td', null, fmtTime(entry.mod_time))); mod.dataset.label = tr('files.col.modified', '修改时间');
       var mode = add(row, el('td', null, entry.mode || '—')); mode.dataset.label = tr('files.col.mode', '权限');
       var ops = add(row, el('td', 'cell-ops')); ops.dataset.label = tr('files.col.actions', '操作');
-      // 行操作清单：桌面平铺；手机收进「⋯」菜单（每个菜单项 min-height 44px，满足触摸目标）。
+      // P2 §2.4 行减法：桌面/手机统一「≤2 行内按钮 + ⋯ 菜单」——
+      // 文件行：[下载][⋯]（2）；目录行：[⋯]（1）。其余 6–7 个操作全部进 ⋯ 菜单，
+      // 与勾选后的 context 栏（改名 / 复制到 / 属性 / 权限 / 移动 / 批量删除）双通道可达。
+      // 不用「隐藏关键操作」的 ... 菜单：下载作为文件主操作仍行内可见（FRONTEND §6 判据）。
       var opList = [];
       if (!entry.is_dir) opList.push([tr('files.op.download', '下载'), 'files-download', 'download', function () { runL2('download', entry); }]);
       if (!entry.is_dir && isArchive(entry.name)) opList.push([tr('files.op.extract', '解压'), 'files-extract', 'extract', function () { runL2('extract', entry); }]);
@@ -416,40 +419,56 @@
       opList.push([tr('files.info.title', '属性'), 'files-info', 'stat', function () { showInfo(entry); }]);
       opList.push([tr('files.op.chmod', '权限'), 'files-chmod', 'chmod', function () { runL2('chmod', entry); }]);
       opList.push([tr('files.op.move', '移动'), 'files-move', 'move', function () { runL2('move', entry); }]);
-      opList.push([tr('files.op.delete', '删除'), 'files-del', 'delete', function () { removeEntry(entry); }]);
-      var narrow = window.matchMedia('(max-width: 639px)').matches;
-      if (narrow) {
-        ops.style.position = 'relative';
-        var more = add(ops, el('button', 'btn btn-ghost files-more', '⋯'));
-        more.type = 'button'; more.setAttribute('aria-label', tr('files.more', '更多操作：{name}', { name: entry.name }));
-        more.setAttribute('aria-haspopup', 'true'); more.setAttribute('aria-expanded', 'false');
-        more.style.minHeight = '44px';
-        var menu = add(ops, el('div', 'files-ops-menu'));
-        // 菜单用 fixed 定位：表格容器 overflow-x:auto 会裁剪 absolute 子元素（实测菜单不可见）。
-        menu.style.cssText = 'position:fixed;z-index:40;display:none;flex-direction:column;gap:4px;padding:6px;width:200px;' +
-          'background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.35)';
-        opList.forEach(function (def) {
-          var item = add(menu, el('button', 'btn btn-ghost ' + def[1], def[0]));
-          item.type = 'button'; item.style.minHeight = '44px'; item.setAttribute('data-action', def[2]);
-          item.addEventListener('click', function (ev) { ev.stopPropagation(); menu.style.display = 'none'; def[3](); });
-        });
-        more.addEventListener('click', function (ev) {
-          ev.stopPropagation();
-          var open = menu.style.display === 'flex';
-          if (!open) {
-            var rect = more.getBoundingClientRect();
-            menu.style.left = Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208)) + 'px';
-            menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 260) + 'px';
+      // 删除=移入回收站（可恢复）→ 中性灰，不占危险色；彻底删除（不可恢复）仍用 .files-del 红+确认。
+      opList.push([tr('files.op.delete', '删除（进回收站）'), 'files-trash-btn', 'delete', function () { removeEntry(entry); }]);
+
+      // 文件行的下载作为唯一行内高频操作（目录没有下载 → 目录行只有 ⋯）。
+      if (!entry.is_dir) {
+        var dl = add(ops, el('button', 'btn btn-ghost files-quick-download', tr('files.op.download', '下载')));
+        dl.type = 'button'; dl.setAttribute('data-action', 'download'); dl.setAttribute('data-path', entry.path);
+        dl.title = tr('files.op.download', '下载') + '（其余操作在「⋯」里）';
+        dl.addEventListener('click', function (ev) { ev.stopPropagation(); runL2('download', entry); });
+      }
+      ops.style.position = 'relative';
+      var more = add(ops, el('button', 'btn btn-ghost files-more', '⋯'));
+      more.type = 'button'; more.setAttribute('aria-label', tr('files.more', '更多操作：{name}', { name: entry.name }));
+      more.setAttribute('aria-haspopup', 'true'); more.setAttribute('aria-expanded', 'false');
+      more.style.minHeight = '44px';
+      var menu = add(ops, el('div', 'files-ops-menu'));
+      // 菜单用 fixed 定位：表格容器 overflow-x:auto 会裁剪 absolute 子元素（实测菜单不可见）。
+      menu.style.cssText = 'position:fixed;z-index:40;display:none;flex-direction:column;gap:4px;padding:6px;width:200px;' +
+        'background:var(--kore-bg-1);border:1px solid var(--kore-border-2);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.35)' +
+        ';max-height:min(70vh,420px);overflow:auto';
+      opList.forEach(function (def) {
+        var item = add(menu, el('button', 'btn btn-ghost ' + def[1], def[0]));
+        item.type = 'button'; item.style.minHeight = '44px'; item.setAttribute('data-action', def[2]);
+        item.setAttribute('data-path', entry.path);
+        item.addEventListener('click', function (ev) { ev.stopPropagation(); menu.style.display = 'none'; more.setAttribute('aria-expanded', 'false'); def[3](); });
+      });
+      more.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var open = menu.style.display === 'flex';
+        if (!open) {
+          var rect = more.getBoundingClientRect();
+          menu.style.left = Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208)) + 'px';
+          menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 260) + 'px';
+        }
+        menu.style.display = open ? 'none' : 'flex';
+        more.setAttribute('aria-expanded', open ? 'false' : 'true');
+      });
+      // 点空白处收起菜单（桌面也需要；避免菜单在表格重绘后残留）。
+      if (!S.filesMenuCloseBound) {
+        document.addEventListener('click', function (ev) {
+          var open = document.querySelectorAll('.files-ops-menu');
+          for (var i = 0; i < open.length; i++) {
+            if (open[i].style.display === 'flex' && !open[i].contains(ev.target)) {
+              open[i].style.display = 'none';
+              var trigger = open[i].parentNode ? open[i].parentNode.querySelector('.files-more') : null;
+              if (trigger) trigger.setAttribute('aria-expanded', 'false');
+            }
           }
-          menu.style.display = open ? 'none' : 'flex';
-          more.setAttribute('aria-expanded', open ? 'false' : 'true');
         });
-      } else {
-        opList.forEach(function (def) {
-          var btn = add(ops, el('button', 'btn btn-ghost ' + def[1], def[0]));
-          btn.type = 'button'; btn.setAttribute('data-action', def[2]); btn.setAttribute('data-path', entry.path);
-          btn.addEventListener('click', function (ev) { ev.stopPropagation(); def[3](); });
-        });
+        S.filesMenuCloseBound = true;
       }
     });
     S.moreBtn = null;
@@ -1049,8 +1068,10 @@
     S.compressBtn.type = 'button'; S.compressBtn.disabled = true;
     S.compressBtn.setAttribute('data-action', 'compress');
     on(S.compressBtn, function () { runL2('compress', checkedEntries()); });
-    S.batchDel = add(context, el('button', 'btn btn-ghost files-del', tr('files.batch.delete', '批量删除')));
+    // 批量删除=移入回收站（可恢复）→ 中性灰，不占危险色（C7 治理）；不可恢复的彻底删除仍在回收站保留红+确认。
+    S.batchDel = add(context, el('button', 'btn btn-ghost files-batch-trash', tr('files.batch.delete', '批量删除（进回收站）')));
     S.batchDel.type = 'button'; S.batchDel.disabled = true;
+    S.batchDel.title = '移入回收站，可恢复；彻底删除请到回收站里再操作一次（需二次确认）';
     S.batchDel.setAttribute('data-action', 'batch-delete');
     S.batchMove = add(context, el('button', 'btn btn-ghost', tr('files.batch.move', '批量移动')));
     S.batchMove.type = 'button'; S.batchMove.disabled = true;

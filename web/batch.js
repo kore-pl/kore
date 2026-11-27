@@ -37,6 +37,8 @@
     '.batch .batch-btn[disabled]{opacity:.5;cursor:not-allowed}' +
     '.batch .batch-btn.is-primary{background:var(--kore-accent,var(--kore-primary,#4a90e2));color:#fff;border-color:transparent}' +
     '.batch .batch-btn.is-danger{background:var(--kore-danger,#d9534f);color:#fff;border-color:transparent}' +
+    // P2 danger 治理：可逆的批量停用走中性色；danger 只给真正不可逆/故障的批量操作。
+    '.batch .batch-btn.is-muted{background:var(--kore-bg-2);color:var(--kore-text-2);border-color:var(--kore-border-1)}' +
     '.batch .batch-list{display:flex;flex-direction:column;gap:2px;max-height:320px;overflow:auto;margin:8px 0;border:1px solid var(--kore-border-1);border-radius:4px}' +
     '.batch .batch-item{display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 10px;border-bottom:1px solid var(--kore-border-2);font-size:var(--kore-font-13,13px)}' +
     '.batch .batch-item:last-child{border-bottom:0}' +
@@ -150,7 +152,9 @@
           params: function (t) { return { domain: t.domain }; }
         },
         {
-          id: 'disable', label: '批量停用', method: 'site.disable', dangerous: true,
+          // 批量停用可逆（随时再启用）→ 中性灰，不占危险色（DESIGN-SYSTEM C7）。
+          // 仍保留危险 flag 的二次确认步骤（批量操作先核对清单，只改颜色不改安全流程）。
+          id: 'disable', label: '批量停用', method: 'site.disable', dangerous: true, reversible: true,
           eligible: function (t) { return !!t.enabled; },
           params: function (t) { return { domain: t.domain }; }
         }
@@ -247,7 +251,7 @@
       add(box, el('h3', '', tr('batch.pickOp', '第二步 · 选择操作')));
       var row = add(box, el('div', 'batch-row'));
       sc.ops.forEach(function (op) {
-        var b = add(row, el('button', 'batch-btn' + (op.dangerous ? ' is-danger' : ''), op.label));
+        var b = add(row, el('button', 'batch-btn' + opToneClass(op), op.label));
         b.type = 'button';
         b.setAttribute('data-action', 'batch-op-' + op.id);
         on(b, function () { loadTargets(sc, op); });
@@ -285,6 +289,12 @@
       });
     }
 
+    // P2 danger 治理：dangerous 表示「需二次确认」，reversible 表示「可逆 → 中性色」。
+    // 两者解耦：批量停用仍要确认清单，但不再染红；批量重启不可逆语境仍保留红。
+    function opToneClass(op) {
+      if (op && op.reversible) return ' is-muted';
+      return op && op.dangerous ? ' is-danger' : '';
+    }
     function paintTargets(sc, op) {
       clear(run.targetHost);
       if (!run.targets.length) {
@@ -370,7 +380,7 @@
       var back = add(bar, el('button', 'batch-btn', tr('common.back', '上一步')));
       back.type = 'button';
       on(back, function () { showTargetsAgain(sc, op); });
-      var go = add(bar, el('button', 'batch-btn ' + (op.dangerous ? 'is-danger' : 'is-primary'),
+      var go = add(bar, el('button', 'batch-btn ' + (opToneClass(op) || 'is-primary').trim(),
         tr('batch.execute', '确认执行 {n} 项', { n: picked.length })));
       go.type = 'button';
       go.setAttribute('data-action', 'batch-execute');
@@ -389,7 +399,7 @@
       add(box, el('h3', '', tr('batch.pickOp', '第二步 · 选择操作')));
       var row = add(box, el('div', 'batch-row'));
       sc.ops.forEach(function (o) {
-        var b = add(row, el('button', 'batch-btn' + (o.dangerous ? ' is-danger' : ''), o.label));
+        var b = add(row, el('button', 'batch-btn' + opToneClass(o), o.label));
         b.type = 'button';
         on(b, function () { loadTargets(sc, o); });
       });

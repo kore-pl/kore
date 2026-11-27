@@ -393,7 +393,7 @@
       add(tr, el('td', null, setText(item.set))).setAttribute('data-label', '所属集合');
       add(tr, el('td', null, fmtRemain(item))).setAttribute('data-label', '剩余时间');
       var ops = add(tr, el('td', 'waf-ops')); ops.setAttribute('data-label', '操作');
-      var btn = add(ops, el('button', 'btn waf-danger', '解封')); btn.type = 'button';
+      var btn = add(ops, el('button', 'btn waf-unban', '解封')); btn.type = 'button';
       btn.disabled = !S.canWrite || S.busy;
       btn.title = S.canWrite ? '把这个地址从封禁集合移除' : '需要 root 权限（当前没有提权通道）';
       on(btn, function () { unban(item.ip, btn); });
@@ -990,6 +990,8 @@
       '.waf-rule-raw{display:block;margin-top:2px;color:var(--kore-text-3);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--kore-font-12);word-break:break-all;}',
       '.waf-ops{display:flex;flex-wrap:wrap;gap:var(--kore-space-2);}',
       '.waf-danger{color:var(--kore-danger);border-color:var(--kore-danger);}',
+      // P2 danger 治理：解封=从封禁集合移除（可逆，可再次封禁）→ 中性灰；关闭防护仍红（高风险语境）。
+      '.waf-unban{color:var(--kore-text-2);border-color:var(--kore-border-1);}',
       '.waf-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--kore-space-3);padding:0 var(--kore-space-4) var(--kore-space-4);}',
       '.waf-form-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
       '.waf-msg{min-height:18px;color:var(--kore-text-3);font-size:var(--kore-font-12);word-break:break-word;}',

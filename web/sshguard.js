@@ -624,7 +624,7 @@
     add(bar, el('span', 'sg-cell-label', sel.length
       ? (tr('sshguard.bans.selectedPrefix', '已选 ') + sel.length + tr('sshguard.unit.items', ' 个'))
       : tr('sshguard.bans.selectHint', '勾选左侧方框可批量解封')));
-    var bulkUnban = add(bar, el('button', 'btn sg-danger', tr('sshguard.btn.unbanSelected', '批量解封')));
+    var bulkUnban = add(bar, el('button', 'btn sg-unban', tr('sshguard.btn.unbanSelected', '批量解封')));
     bulkUnban.type = 'button';
     bulkUnban.disabled = !sel.length || S.readOnly || S.busy || inferred;
     if (S.readOnly) bulkUnban.title = S.readOnlyWhy;
@@ -669,12 +669,12 @@
       var ops = add(rowNode, el('td', 'sg-ops cell-ops')); ops.setAttribute('data-label', tr('sshguard.col.actions', '操作'));
       if (S.confirmUnban === address) {
         add(ops, el('span', 'sg-cell-label', tr('sshguard.bans.confirmUnban', '确定解封？')));
-        var yes = add(ops, el('button', 'btn sg-danger', tr('sshguard.btn.confirm', '确认'))); yes.type = 'button';
+        var yes = add(ops, el('button', 'btn sg-unban', tr('sshguard.btn.confirm', '确认'))); yes.type = 'button';
         var no = add(ops, el('button', 'btn btn-ghost', tr('sshguard.btn.cancel', '取消'))); no.type = 'button';
         on(no, function () { S.confirmUnban = ''; paintBans(); });
         on(yes, function () { S.confirmUnban = ''; unban(address, yes); });
       } else {
-        var btn = add(ops, el('button', 'btn sg-danger', tr('sshguard.btn.unban', '解封'))); btn.type = 'button';
+        var btn = add(ops, el('button', 'btn sg-unban', tr('sshguard.btn.unban', '解封'))); btn.type = 'button';
         btn.disabled = S.readOnly || S.busy || inferred;
         if (S.readOnly) btn.title = S.readOnlyWhy;
         if (inferred) btn.title = tr('sshguard.bans.inferredTitle', '这是从日志推断的可疑 IP，并没有真的被封禁；需要封禁请用下面的「手动封禁」');
@@ -1066,6 +1066,8 @@
       '.sg-bar-fill{display:block;height:100%;background:var(--kore-warning);}',
       '.sg-ops{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
       '.sg-danger{color:var(--kore-danger);border-color:var(--kore-danger);}',
+      // P2 danger 治理：解封=移除封禁（可逆，后续可再封）→ 中性灰，不占危险色。
+      '.sg-unban{color:var(--kore-text-2);border-color:var(--kore-border-1);}',
       '.sg-form{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:var(--kore-space-3);padding:var(--kore-space-3) var(--kore-space-4) 0;}',
       '.sg-form-ops{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);}',
       '.sg-preset-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--kore-space-2);padding:var(--kore-space-2) var(--kore-space-4) 0;}',

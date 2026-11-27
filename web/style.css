@@ -1248,6 +1248,8 @@ button:disabled, .btn:disabled {
 .store-btn-install, .store-btn-muted { width: auto; min-width: 88px; }
 /* 「停用」可逆 → 中性灰，不占危险色（C7 危险色通胀治理；红只留给不可逆操作） */
 .store-btn-muted { color: var(--kore-text-2); border-color: var(--kore-border-1); }
+/* P2 danger 治理（DESIGN-SYSTEM C7：可逆操作走中性色）：插件批量停用等。 */
+.plugin-batch-muted { color: var(--kore-text-2); border-color: var(--kore-border-1); }
 .store-btn-offline { color: var(--kore-text-2); }
 
 /* 离线安装：只有用户点「离线安装」或后端明确要求本地包路径时才在这一张卡片内展开。 */
@@ -1579,6 +1581,9 @@ button:disabled, .btn:disabled {
   background: var(--kore-bg-2); border: 1px solid var(--kore-border-2);
   border-radius: var(--kore-radius-control); font-size: var(--kore-font-12);
 }
+/* P2 danger 治理：删除文件=移入回收站（可恢复）→ 中性；批量删除同理。
+   不可恢复的「彻底删除」（回收站 purge）仍用 .files-del 红 + 二次确认。 */
+.files-trash-btn, .files-batch-trash { color: var(--kore-text-2); border-color: var(--kore-border-1); }
 .files-del, .sites-del, .tasks-del { color: var(--kore-danger); border-color: var(--kore-danger); }
 .files-meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--kore-space-2);
