@@ -276,6 +276,10 @@
         confirm: true,
         confirm_text: c.kind === 'ddl' ? String(phraseBox.value || '').trim() : ''
       };
+      // 写入跟随数据库页点选的业务库（库名仅作为 database 参数，由插件白名单校验）；
+      // 面板只挂载一次，用实时 getter 取当前所选库；未点库时不带该字段，插件回落维护库 postgres。
+      var chosenDb = typeof ctx.getSelectedDb === 'function' ? ctx.getSelectedDb() : ctx.selectedDb;
+      if (chosenDb) params.database = chosenDb;
       var mySeq = ++seq;
       S.busy = true; S.error = ''; S.result = null; paint();
       ctx.invoke('db-postgres.exec', params).then(function (data) {

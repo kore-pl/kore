@@ -654,8 +654,11 @@
     if (dbName && !isSafeIdent(dbName)) return '';
     if (isPg()) {
       if (!isSafeIdent(dbName)) return '';
+      // PG 无跨库限定名：库由 invoke 的 database 参数切到目标库，这里再按
+      // table_catalog 过滤一次，只允许查当前所选库的 public schema（纵深防御）。
       return "SELECT column_name AS 列名, data_type AS 类型, is_nullable AS 可空, column_default AS 默认值 " +
-        "FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '" + tableName + "' " +
+        "FROM information_schema.columns WHERE table_catalog = '" + dbName + "' " +
+        "AND table_schema = 'public' AND table_name = '" + tableName + "' " +
         "ORDER BY ordinal_position";
     }
     // MySQL：SHOW FULL COLUMNS 在连接默认库上执行，库名先经 SELECT 校验存在但不拼进语句；
@@ -678,7 +681,10 @@
     S.structBusy = true; S.structError = ''; S.structResult = null;
     S.structLabel = (dbName ? dbName + '.' : '') + tableName;
     paintTables(); paintStruct();
-    invoke(methodFor('query'), { instance: instance, sql: sql }).then(function (data) {
+    var params = { instance: instance, sql: sql };
+    // PG：表结构查询打到所选业务库（database 走插件白名单）；MySQL 的库名已在 SQL 里，不传。
+    if (isPg() && dbName) params.database = dbName;
+    invoke(methodFor('query'), params).then(function (data) {
       if (S.destroyed || S.selected !== instance) return;
       S.structBusy = false; S.structResult = data;
       paintStruct();
@@ -1049,6 +1055,9 @@
           if (S.destroyed || !execBody.isConnected) return;
           mod.render(execBody, {
             instance: S.selected, instances: S.instances.slice(), invoke: invoke,
+            // PG 写入跟随只读控制台点选的库（database 走插件白名单）；用实时取值函数，
+            // 面板只挂载一次，用户之后再点库也能拿到当前所选库；未点库时空串回落维护库。
+            getSelectedDb: function () { return S.selectedDb; },
             notice: function (text, tone) {
               if (!S.l2NoticeHost || !S.l2NoticeHost.isConnected) return;
               S.l2NoticeHost.textContent = '';
@@ -1102,11 +1111,11 @@
       return;
     }
     if (isPg()) {
-      // PG 插件在连接默认库上执行只读查询，没有跨库 USE；库名先过白名单再拼进单引号字面量
-      // （只用于显示库大小，不进结构查询）。
+      // PG 无跨库 USE：库由 invoke 的 database 参数切；此处预填的 SQL 只做库大小展示
+      // （库名已过白名单，拼进单引号字面量），执行时 runQuery 会带上 database=name。
       S.sql.value = "SELECT datname AS database, pg_size_pretty(pg_database_size(datname)) AS size " +
         "FROM pg_database WHERE datname = '" + name + "'";
-      // PG 表结构查 information_schema（public schema），表列表另发一条只读查询。
+      // 表列表按所选库的 pg_tables 查（database 参数切库），不再只看维护库 postgres。
       loadPgTables(name);
     } else {
       S.sql.value = 'SHOW TABLES FROM ' + quoteIdent(name, false);
@@ -1117,13 +1126,16 @@
       if (!isPg() && data) { S.tables = parseTableNames(data); paintTables(); }
     });
   }
-  // PG 在连接默认库上查询，用 pg_tables 取 public schema 的表名（只读）。
+  // PG 表列表：用 pg_tables 取所选库 public schema 的表名（只读），带 table_catalog 过滤，
+  // database 参数经插件白名单校验；不再固定连接维护库 postgres。
   function loadPgTables(dbName) {
     if (!isSafeIdent(dbName)) return;
     var instance = S.selected;
     invoke(methodFor('query'), {
       instance: instance,
-      sql: "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+      database: dbName,
+      sql: "SELECT tablename FROM pg_tables WHERE table_catalog = '" + dbName + "' " +
+        "AND schemaname = 'public' ORDER BY tablename"
     }).then(function (data) {
       if (S.destroyed || S.selected !== instance || S.tableDb !== dbName) return;
       S.tables = parseTableNames(data); paintTables();
@@ -1136,7 +1148,11 @@
     var instance = S.selected;
     S.busy = true; S.queryError = ''; S.result = null;
     paintQueryNotice(); paintRunState(); paintResult();
-    invoke(methodFor('query'), { instance: instance, sql: sql }).then(function (data) {
+    var params = { instance: instance, sql: sql };
+    // PG：只读控制台也跟随所选库（plugin 侧白名单校验 database）；点库后 S.selectedDb 即目标库。
+    // 未点库时 database 缺省，插件回落维护库 postgres（向后兼容）。
+    if (isPg() && S.selectedDb) params.database = S.selectedDb;
+    invoke(methodFor('query'), params).then(function (data) {
       if (S.destroyed || S.selected !== instance) return;
       S.busy = false; S.result = data;
       paintRunState(); paintResult();
