@@ -1,22 +1,22 @@
 # kore 0.1.2 发版准备独立验收（G-09 / task-235）
 
-> 复核对象：commit `f6372ace2a945c0ab910bd0832516296b50e3e5b`（`f6372ac`，HEAD=main）
+> 复核对象：`f6372ac`（bump 主提交）→ `3375309`（本报告首版）→ **`6c15fa5`（补修 3 份文档现值声明，HEAD=main）**
 > 复核人：`kore-012-verifier`（独立 verifier，非 `kore-012-prep`）
-> 时间：2026-11-27 22:20–22:33 +08:00
+> 时间：2026-11-27 22:20–22:45 +08:00（首轮 + 补修后复验，复验见 §7）
 > 纪律：只读复跑；不 push / 不联网 / 不执行主流程 CLI / 不碰 `.kore-local-*` / 不碰运行实例。
 > 唯一写入 = 本报告（精确 `git add` + `commit -s`）。
 
-## 0. 总评：**BLOCKED / FAIL（打 tag 推送前关口不放行）**
+## 0. 总评：**PASS（放行打 tag；建议 peeled commit = `6c15fa5`）**
 
 | 项 | 结论 |
 | --- | --- |
-| ① bump 正确性 | **FAIL（1 项阻断：3 份活文档仍把 0.1.1 写成当前/MVP 版本）** |
+| ① bump 正确性 | **PASS**（首轮的 1 项阻断已由 `6c15fa5` 补修并独立复验，见 §1.3 / §7） |
 | ② CHANGELOG 诚实性 | PASS |
 | ③ dist 校验 | PASS（含 2 项如实披露） |
 | ④ 门禁复跑 | PASS（全部 exit 0） |
 | ⑤ git 完整性 | PASS |
 
-**唯一阻断项**：`f6372ac` 只 bump 了 `Makefile` / `cmd/kored/main.go` / `docs/CORE.md` 三处版本声明，但仓库另有 3 处**确指当前版本**的活跃文档仍写 0.1.1；上次同类 bump（`f8eb0cb`，0.1.0→0.1.1）同步更新了这 3 份文档，本次漏同步。详见 §1.3。修法（任选其一，需 lead 裁决）：把这 3 行改为 0.1.2 并保留「0.1.1 = 首个含 file_write」历史断言；或由 lead 明文裁决这些行属冻结历史基线并登记 G-23，方可放行。
+首轮唯一阻断项（3 份活文档仍把 0.1.1 写成当前/MVP 版本）已由原 owner 按 lead 裁决补修：`6c15fa5` 精确改 `docs/REPOS.md:131` / `docs/VISION.md:13` / `docs/ARCHITECTURE.md:13` 为 0.1.2，并保留「0.1.1 = 首个含 file_write / file_delete」历史断言；本 verifier 已独立重跑 grep、全部门禁与 git 检查，证据见 §7。**结论由 BLOCKED 翻转为 PASS，打 tag 关口放行。**
 
 ---
 
@@ -38,16 +38,16 @@
 - **README.md 无显式版本号**（`grep -nE '0\.1\.[0-9]|v0\.1\.' README.md` 零命中）——未造版本。✓
 - **测试夹具 / 历史发布记录里的 0.1.1、0.1.2**：`cmd/kored/*_test.go`、`internal/core/{httpapi,market}/*_test.go`、`docs/PLUGIN-SDK.md`、`docs/MILESTONE-M1.md`、`docs/PLUGIN-PROTOCOL.md`（SDK v0.1.2/v0.1.3）、`.agents/verify/*` 等均为他人历史/测试语境，保留正确。✓
 
-### 1.3 阻断项：3 处「当前版本」漏 bump
+### 1.3 首轮阻断项（3 处「当前版本」漏 bump）——已由 `6c15fa5` 补修
 
-| 文件:行 | 现状原文（节选） | 为何算当前版本 |
+| 文件:行 | 首轮原文（节选，修复前） | 修复后实测（`6c15fa5`） |
 | --- | --- | --- |
-| `docs/REPOS.md:131` | `**当前内核版本 = \`0.1.1\`**（\`Makefile\` 的 \`VERSION\` 是唯一真源…）` | 字面「当前内核版本」，无歧义 |
-| `docs/VISION.md:13` | `| 版本基线 | MVP 0.1.1（…；0.1.1 = 首个含 file_write…） |` | 「版本基线」字段，与已改的 `CORE.md:13` 同型 |
-| `docs/ARCHITECTURE.md:13` | `| 版本基线 | MVP 0.1.1（…；0.1.1 = 首个含 file_write…） |` | 同上 |
+| `docs/REPOS.md:131` | `**当前内核版本 = \`0.1.1\`**` | `**当前内核版本 = \`0.1.2\`**`；同段「0.1.1 是首个含 file_write / file_delete 的内核版本」从句原样保留 |
+| `docs/VISION.md:13` | `版本基线 | MVP 0.1.1（…）` | `版本基线 | 当前 MVP 0.1.2（…；0.1.1 = 首个含 file_write…）` |
+| `docs/ARCHITECTURE.md:13` | `版本基线 | MVP 0.1.1（…）` | `版本基线 | 当前 MVP 0.1.2（…；0.1.1 = 首个含 file_write…）` |
 
 **判据是项目自己的先例**：`git show --name-only --format="" f8eb0cb`（上次 0.1.0→0.1.1 bump）改动 7 个文件：
-`CHANGELOG.md`、`Makefile`、`cmd/kored/main.go`、`docs/ARCHITECTURE.md`、`docs/CORE.md`、`docs/REPOS.md`、`docs/VISION.md`——即三份文档当时都随版本声明同步更新。`f6372ac` 只动了其中 `CORE.md`，留下三处 0.1.1 与 0.1.2 并存。打 tag 后用户/agent 读 `REPOS.md:131` 会看到「当前内核版本 = 0.1.1」，与 tag 版本冲突；这不是 HISTORICAL 断言（历史断言已单列为「首个含 file_write = 0.1.1」，三者主句都不是这个口径）。
+`CHANGELOG.md`、`Makefile`、`cmd/kored/main.go`、`docs/ARCHITECTURE.md`、`docs/CORE.md`、`docs/REPOS.md`、`docs/VISION.md`——即三份文档当时都随版本声明同步更新。`f6372ac` 只动了其中 `CORE.md`，留下三处 0.1.1 与 0.1.2 并存；`6c15fa5` 已补齐同批三份，与先例一致。现值模式在全仓源码/活文档零残留（复验命令与输出见 §7.1）。
 
 ---
 
@@ -109,17 +109,49 @@
 | 检查 | 命令 / 证据 | 结果 |
 | --- | --- | --- |
 | 精确 4 文件 | `git show --name-status --format="" f6372ac` | `M CHANGELOG.md` / `M Makefile` / `M cmd/kored/main.go` / `M docs/CORE.md`，无第五文件 |
-| DCO | `git log -1 --format=%B f6372ac` | `Signed-off-by: pengtang1024 <pengtang1024@qq.com>` ✓ |
-| 未 push | `git branch -vv` | `main f6372ac [origin/main: 领先 6]`——6 个提交未推，含 f6372ac ✓ |
-| worktree | `git worktree list` | 仅 `/home/pt/Work/GolandProjects/kore-pl/kore f6372ac [main]` 主树 ✓ |
+| 补修精确 3 文件 | `git show --stat --format=fuller 6c15fa5` / `--name-status` | `M docs/ARCHITECTURE.md` / `M docs/REPOS.md` / `M docs/VISION.md`，3 insertions / 3 deletions，无第四文件 |
+| DCO | `git log -1 --format=%B f6372ac` / `git log -1 --format=%B 6c15fa5` | 两者均含 `Signed-off-by: pengtang1024 <pengtang1024@qq.com>` ✓ |
+| 未 push | `git branch -vv` | `main 6c15fa5 [origin/main: 领先 8]`——8 个提交未推（含 f6372ac / 3375309 / 6c15fa5），无 tag/release ✓ |
+| worktree | `git worktree list` | 仅 `/home/pt/Work/GolandProjects/kore-pl/kore 6c15fa5 [main]` 主树 ✓ |
 | 他人 dirty 原样 | 开工前/门禁后 `git status --short` 逐行对比 | 完全一致：`M scripts/usability-pending.txt` + 12 项既有 untracked（`.agents/.agents/`、`e2e-*.md`、`local-update-plan.md`、`release-batch-*.md`、`run-user-model.md`、截图、`data/`、`dist/`）；本次未改其中任何一个 |
 | .gitignore 未入库 | `git diff -- .gitignore` / `git ls-files dist/` | diff 空 / 0 文件 ✓ |
 | 未碰运行实例 / `.kore-local-*` | 命令清单 | 全部为读、shell 门禁与临时解包；无 serve/install/restart、无 `.kore-local-*` 读写 ✓ |
 
 ---
 
-## 6. 结论与放行条件
+## 6. 结论
 
-- **②/③/④/⑤ 全部通过**，证据与退出码如上。
-- **① 存在 1 项阻断**：`docs/REPOS.md:131`、`docs/VISION.md:13`、`docs/ARCHITECTURE.md:13` 仍把 0.1.1 写成当前/MVP 版本，与 `f6372ac` 的 0.1.2 bump 及 `f8eb0cb` 的同步先例冲突。
-- **总评 FAIL / BLOCKED**：在 lead 明确裁决（补 bump 这三行，或书面认定其为冻结历史基线并登记 G-23）之前，**不建议打 `v0.1.2` tag、不建议推送**。本报告按 G-09 关口如实上报，不代为修改代码或 tag。
+- ①/②/③/④/⑤ **全部通过**，证据与退出码如上及 §7。
+- 首轮唯一阻断项已由 `6c15fa5` 按 lead 裁决补修，并经本 verifier 独立复验（§7）：三处现值声明为 0.1.2、历史断言保留、全仓现值模式零残留、全门禁 exit 0、dist 与 git 状态未受影响。
+- **总评 PASS：放行打 `v0.1.2` tag。** 建议 tag 指向的 peeled commit 为 **`6c15fa5`**（HEAD=main）；本报告未 push、未打 tag、未建 Release，由 lead / 实施者按既定口径执行。
+
+---
+
+## 7. 补修后独立复验（`6c15fa5`，2026-11-27 22:37–22:45）
+
+### 7.1 三处现值 + 全仓 grep
+
+- `sed -n '131p' docs/REPOS.md` → `**当前内核版本 = \`0.1.2\`**`；同段下一句「0.1.1 是首个含 file_write／file_delete 的内核版本」保留。
+- `sed -n '13p' docs/VISION.md` / `docs/ARCHITECTURE.md` → 均为 `版本基线 | 当前 MVP 0.1.2（…；0.1.1 = 首个含 file_write 受控写的内核版本…）`。
+- 现值模式 `当前(内核)?版本…0.1.1|版本基线…0.1.1|MVP 0.1.1|VERSION ?= 0.1.1|var version = "0.1.1"|内核版本 = \`0.1.1\`` 全仓（排除 node_modules）：源码/活文档**零命中**；仅命中本报告对修复前值的引用、以及 `CHANGELOG.md:24` 的历史沿革注（「0.1.1 仍是首个含 file_write…」），均非现值声明。✓
+- 保留的历史断言复核：`REPOS.md:131-136`、`Makefile:27-28/423-479`、`main.go:16`、`CHANGELOG.md` `[0.1.1]` 段与 `:24`、DETAIL 七语言「首个发布版本 0.1.1」、SDK v0.1.1 事故记录、ADR/verify/测试夹具，均未改。✓
+- `git diff --check f6372ac..HEAD` → exit **0**。
+
+### 7.2 门禁复跑（命令 + 退出码）
+
+| 门禁 | 命令 | 退出码 |
+| --- | --- | --- |
+| docs-check | `make docs-check` | **0**（5 pass / 1 warn 行数越界 / 0 fail） |
+| version-check | `make version-check` | **0**（0.1.2 覆盖 24 仓全 OK） |
+| secret-check | `make secret-check` | **0**（0 FAIL / 24 合规占位） |
+| go test | `GOCACHE=<tmp> GOMODCACHE=<仓外隔离副本> GOWORK=off GOPROXY=off go test -timeout 200s ./...` | **0**（17 包全 ok） |
+| make check | 同一隔离环境下 `make check` | **0**（21 段全过） |
+
+> 仍为离线（`GOPROXY=off`），复用仓外已有可写缓存副本，未联网；临时缓存退出后 `/tmp/kore012*` 为空，工作区无残留。
+
+### 7.3 dist 与 git 状态
+
+- `stat -c%s dist/kore-0.1.2.tar.gz` = **5126401**；`sha256sum` = `ac6496e6e2a06e084a5e35e1a50f0c63299f33fbc06810631fdb12ffc09d6a6a`；`cd dist && sha256sum -c kore-0.1.2.tar.gz.sha256` → `OK`，rc=0。纯文档补修未影响发布物，原 sha 仍有效。
+- `git ls-files dist/ | wc -l` = **0**；`git diff -- .gitignore` 为空。
+- `git log -1 --oneline` = `6c15fa5`；`git branch -vv` = `main 6c15fa5 [origin/main: 领先 8]`（未 push / 未 tag / 未建 Release）；`git worktree list` 仅主树。
+- `git status --short` 与首轮逐行一致（`M scripts/usability-pending.txt` + 12 项既有 untracked），他人 dirty 原样未夹带。
