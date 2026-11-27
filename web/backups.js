@@ -41,6 +41,7 @@
       tasks: [], sched: {}, ret: {}, taskDelete: null, schedHydrated: false,
       retPresets: [], retPresetSelected: '',
       verify: { supported: null, version: '' },
+      upload: { supported: null, version: '' }, uploadBtn: null,
       srcDetect: { state: 'idle', data: null, error: null }, presetTask: null,
       pathsTouched: false, pathsAuto: '', presetAuto: '', presetPicked: false,
       pathsBadge: '', schedPathsTouched: false, schedPathsAuto: '', schedPathsBadge: '',
@@ -937,7 +938,7 @@
     }
   }
   function resultTitle(kind) {
-    return { create: '创建结果', verify: '校验结果', restore: '恢复结果', delete: '删除结果' }[kind] || '操作结果';
+    return { create: '创建结果', verify: '校验结果', restore: '恢复结果', delete: '删除结果', upload: '导入结果' }[kind] || '操作结果';
   }
   function paintResult() {
     if (!S.resultHost) return;
@@ -959,6 +960,10 @@
         var fl = add(p, el('ul', 'bak-failed'));
         d.failed.forEach(function (item) { add(fl, el('li', null, item)); });
       }
+    } else if (r.kind === 'upload') {
+      kv(dl, 'id', d.id); kv(dl, 'filename', d.filename); kv(dl, 'entries', d.entries);
+      kv(dl, 'size_bytes', fmtSize(d.size_bytes)); kv(dl, 'sha256', d.sha256);
+      kv(dl, 'compression', d.compression); kv(dl, 'managed', String(d.managed)); kv(dl, 'duration_ms', d.duration_ms);
     } else {
       kv(dl, 'id', d.id); kv(dl, 'deleted', String(d.deleted)); kv(dl, 'duration_ms', d.duration_ms);
     }
@@ -970,12 +975,40 @@
     paintConfirm();
     if (S.confirmHost) S.confirmHost.scrollIntoView({ block: 'nearest' });
   }
+  // 文件选择 + 确认复用 bak-confirm 面板：只引入一个 file 控件，不新造弹窗组件。
+  function paintUploadConfirm(p, c) {
+    var h = add(p, el('div', 'panel-head'));
+    add(h, el('span', 'panel-title', '导入备份'));
+    add(h, el('span', 'panel-meta', '二次确认 · 页面内'));
+    add(p, el('p', 'bak-warn', '只导入本插件生成的 .tar / .tar.gz 备份包；导入不会自动恢复，需到列表点「恢复」并二次确认。单个文件不超过 512 MiB。'));
+    var f = add(p, el('form', 'bak-confirm-form'));
+    c.fileInput = el('input', 'field-input');
+    c.fileInput.type = 'file'; c.fileInput.accept = '.tar,.tar.gz';
+    c.fileInput.setAttribute('aria-label', '选择备份文件');
+    field(f, '备份文件', c.fileInput, 'span2');
+    c.fileMeta = add(f, el('p', 'bak-upload-meta muted span2', '尚未选择文件'));
+    var ops = add(f, el('div', 'bak-confirm-ops span2'));
+    button(ops, '取消', 'btn-ghost', closeConfirm);
+    var ok = add(ops, el('button', 'btn btn-primary bak-upload-ok', '确认导入')); ok.type = 'submit';
+    c.fileInput.addEventListener('change', function () {
+      var file = c.fileInput.files && c.fileInput.files[0];
+      if (c.fileMeta) c.fileMeta.textContent = file
+        ? '已选择：' + file.name + '（' + fmtSize(file.size) + '）；导入前会校验类型与大小。'
+        : '尚未选择文件';
+    });
+    f.addEventListener('submit', function (ev) { ev.preventDefault(); doUpload(c, ok); });
+  }
   function paintConfirm() {
     if (!S.confirmHost) return;
     S.confirmHost.textContent = ''; S.confirmMsg = null;
     if (!S.confirm) return;
     var c = S.confirm, b = c.backup || {};
     var p = add(S.confirmHost, el('section', 'panel bak-confirm'));
+    if (c.kind === 'upload') {
+      paintUploadConfirm(p, c);
+      S.confirmMsg = add(p, el('div', 'bak-confirm-msg'));
+      return;
+    }
     var h = add(p, el('div', 'panel-head'));
     add(h, el('span', 'panel-title', c.kind === 'restore' ? '恢复确认' : '删除确认'));
     add(h, el('span', 'panel-meta', '二次确认 · 页面内'));
@@ -1034,6 +1067,81 @@
       setStatus('删除失败：' + err.message, 'fail');
     });
   }
+  // FileReader 分块转 base64：4 MiB  slices，避免 btoa 一次性展开大字符串炸栈。
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result || '').split(',')[1] || ''); };
+      reader.onerror = function () { reject(new Error('读取文件失败，请重新选择备份包')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+  // sha256 是可选完整性声明：浏览器不支持 Web Crypto 时跳过，后端按未声明处理。
+  function fileSHA256(file) {
+    if (!window.crypto || !window.crypto.subtle || !file.arrayBuffer) return Promise.resolve('');
+    return file.arrayBuffer().then(function (buf) { return window.crypto.subtle.digest('SHA-256', buf); })
+      .then(function (digest) {
+        return Array.prototype.map.call(new Uint8Array(digest), function (byte) {
+          return ('0' + byte.toString(16)).slice(-2);
+        }).join('');
+      }).catch(function () { return ''; });
+  }
+  function doUpload(c, btn) {
+    var file = c.fileInput && c.fileInput.files && c.fileInput.files[0];
+    if (!file) { setNote(S.confirmMsg, '请先选择要导入的备份文件，再点「确认导入」。', 'fail', 'bak-confirm-msg'); return; }
+    if (!/\.(tar|tar\.gz)$/i.test(file.name)) {
+      setNote(S.confirmMsg, '只支持 .tar 或 .tar.gz 备份包；请重新选择文件。', 'fail', 'bak-confirm-msg'); return;
+    }
+    if (file.size <= 0 || file.size > 512 * 1024 * 1024) {
+      setNote(S.confirmMsg, '文件不能为空且不能超过 512 MiB；请检查文件大小后重试。', 'fail', 'bak-confirm-msg'); return;
+    }
+    var uploadID = 'web-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+    var chunkBytes = 4 * 1024 * 1024;
+    btn.disabled = true; setNote(S.confirmMsg, '', '', 'bak-confirm-msg');
+    stopProgress(); ensureProgress();
+    setProgress('busy', '正在准备导入「' + file.name + '」…', '共 ' + fmtSize(file.size) + '，将分块上传');
+    setStatus('正在导入备份 ' + file.name + '…');
+    fileSHA256(file).then(function (sha) {
+      return invoke('backup.upload', {
+        phase: 'begin', upload_id: uploadID, filename: file.name, size_bytes: file.size, sha256: sha
+      }).then(function () {
+        var offset = 0;
+        function sendNext() {
+          if (S.destroyed) return Promise.reject(new Error('页面已关闭，导入已终止'));
+          if (offset >= file.size) return invoke('backup.upload', { phase: 'commit', upload_id: uploadID });
+          var end = Math.min(offset + chunkBytes, file.size);
+          var previous = offset;
+          setProgress('busy', '正在导入「' + file.name + '」…', fmtSize(offset) + ' / ' + fmtSize(file.size));
+          return blobToBase64(file.slice(offset, end)).then(function (data) {
+            return invoke('backup.upload', {
+              phase: 'chunk', upload_id: uploadID, offset: offset, data_base64: data
+            });
+          }).then(function (data) {
+            offset = data.next_offset;
+            if (!offset || offset <= previous) throw new Error('上传进度没有推进，请重试');
+            return sendNext();
+          });
+        }
+        return sendNext();
+      });
+    }).then(function (data) {
+      S.result = { kind: 'upload', id: data.id, data: data };
+      S.confirm = null; paintConfirm(); paintResult();
+      setProgress('ok', '导入完成：' + data.id, '可到备份列表点「恢复」并二次确认');
+      setStatus('已导入备份 ' + data.id + '（' + data.entries + ' 个条目）', 'ok');
+      loadList(true); loadStats();
+    }, function (err) {
+      if (err && err.code === 'E_NOTFOUND') {
+        S.upload.supported = false;
+        if (S.uploadBtn) { S.uploadBtn.hidden = true; S.uploadBtn.title = '当前备份插件版本不支持上传，请升级插件'; }
+      }
+      setProgress('fail', '导入失败', String((err && err.message) || err) + '。怎么办：请确认文件是完整备份包、磁盘空间充足后重试。');
+      setNote(S.confirmMsg, '导入失败：' + String((err && err.message) || err), 'fail', 'bak-confirm-msg');
+      setStatus('导入失败：' + String((err && err.message) || err), 'fail');
+      invoke('backup.upload', { phase: 'abort', upload_id: uploadID }).catch(function () { /* 尽力清理半包 */ });
+      btn.disabled = false;
+    });
+  }
   function versionAtLeast(version, want) {
     var a = String(version || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
     var b = String(want || '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
@@ -1056,6 +1164,14 @@
         if (S.verify.supported !== supported) {
           S.verify.supported = supported;
           if (S.backups.length) paintList();
+        }
+        // 上传是 0.6.0 新增方法：旧插件没有该方法时隐藏按钮并给升级提示（不点才知道失败）。
+        var canUpload = !!(found && versionAtLeast(found.version, '0.6.0'));
+        S.upload.version = S.verify.version;
+        S.upload.supported = canUpload;
+        if (S.uploadBtn) {
+          S.uploadBtn.hidden = !canUpload;
+          S.uploadBtn.title = canUpload ? '导入本地 .tar / .tar.gz 备份包，不会自动恢复' : '当前备份插件版本不支持上传，请升级插件';
         }
       }, function () { /* 探测失败不阻断列表：verify 调用时仍按 404 降级 */ });
   }
@@ -1198,6 +1314,8 @@
       '.bak-task-table tbody tr + tr{border-top:1px solid var(--kore-border-2);}',
       '.bak-task-table td{padding:var(--kore-space-2) var(--kore-space-3);vertical-align:middle;}',
       '.bak-list-summary{margin:0;padding:var(--kore-space-2) var(--kore-space-4);color:var(--kore-text-2);font-size:var(--kore-font-12);border-bottom:1px solid var(--kore-border-2);}',
+      '.bak-upload-meta{margin:0;word-break:break-all;}',
+      '.bak-upload-btn[hidden]{display:none;}',
       // 备份列表分批渲染的底部条（随视图注入，不进首屏 style.css）
       '.bak-list-more{display:flex;align-items:center;justify-content:center;gap:var(--kore-space-3);padding:var(--kore-space-3);flex-wrap:wrap;border-top:1px solid var(--kore-border-2);}',
       '.bak-list-more .panel-meta{color:var(--kore-text-2);font-size:var(--kore-font-12);}',
@@ -1259,6 +1377,11 @@
     var headMain = add(head, el('div', 'view-head-main'));
     add(headMain, el('h2', 'view-title', '备份'));
     add(headMain, el('p', 'view-sub', '打包目录、定时执行、按份数保留与完整性校验；恢复与删除都需要页面内二次确认。'));
+    var uploadBtn = add(head, el('button', 'btn btn-ghost bak-upload-btn', '上传备份'));
+    uploadBtn.type = 'button'; uploadBtn.hidden = true; // 探测到 backup.upload（>=0.6.0）后才显示
+    uploadBtn.setAttribute('aria-label', '上传备份');
+    on(uploadBtn, function () { openConfirm('upload', null); });
+    S.uploadBtn = uploadBtn;
     var gear = add(head, el('button', 'btn btn-ghost cfg-gear', '⚙ 设置'));
     gear.type = 'button';
     gear.setAttribute('aria-label', '备份设置');
