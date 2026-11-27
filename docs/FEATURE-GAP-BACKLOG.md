@@ -53,7 +53,9 @@ round 21 竞品官方一手原文级证据索引（task-203 取证，报告贴�
 
 ### C3 — 异地备份不做 【刻意不做】
 
-- 证据：`docs/PLUGIN-MATURITY.md:78`（`backup` 0.5.2 L2，本地打包 + 标准 S3 兼容对象存储）、`:155`（「异地按 G-11 不做」）；`docs/FEATURE-PARITY.md:43`（对象存储走标准 S3 协议、不绑厂商）。竞品「含云存储」为【常】级参照。
+- 证据：`docs/PLUGIN-MATURITY.md:82`（`backup` L2，本地 tar.gz 打包/恢复/校验，**前端已接**）、`:167`（「异地/S3 按 G-11 不做」）、`:30`（前端已接的逐条 file:line 证据）；`../kore-plugin-backup/README.md:6` 明写「S3 等异地存储在 G-11 里明确不做……由外部同步工具搬运」，15 方法中无 S3/`upload`。竞品「含云存储 / 上传还原 / 跨面板迁移」为【常】+【片段】级参照。
+- **双重漂移订正（round 28 / task-238 只读核实）**：旧口径「后端已备（backup S3＋快照）而前端尚未接入」两项均不成立——前端早已接线（`web/backups.js` 1398 行全量调用、`web/app.js:2304/2489` 注册、G-28 双端 `../.agents/verify/backup-redis-ui.md:25-28`），S3 根本没做（G-11 明确不做）。本条**不是前端接线缺口**，按 G-06/G-23 留痕，从补齐方向剔除。
+- **真差距（非写 UI 能补）**：①「上传还原」——BT 官方「全量备份、上传还原、从 1Panel/AMH 迁移」，我方 backup 15 方法无 `upload`；②「跨面板迁移」——G-11 有意偏离。另 `backup.download` 在 G-28 时因 0 份备份、按钮为行内动作故不可见，**下载链路未实机验证属证据缺口、非功能缺口**（`../.agents/verify/backup-redis-ui.md:39-40,50`），不得据此宣称下载已验证。
 - 补齐前提：**需用户单独确认解除 G-11 并先立 ADR**；未确认前不排期（见 §4 第 4 期）。
 
 ### C4 — WAF 规则编辑器已落地；CC/UA/HTTP 层规则真缺 【硬证据 · 部分已补】
@@ -103,9 +105,9 @@ round 21 竞品官方一手原文级证据索引（task-203 取证，报告贴�
 
 - **可重开判据（任一触发即重开评估，不自动开工）**：①**用户明确要求「点格子改数据」这一交互形态**（而非只满足于「能写」）——round 21 仍维持不做的关键原因即用户未提出该交互要求；②竞品可视化编辑的原文级实证（round 21 已取得，**但只命中 SQLite 场景、我们无该场景，故判据②单独满足不足以重开**）；③PG 对称（task-176）完成后仍有真实阻塞——exec 原始 SQL 路径无法覆盖的高频改数据场景。重开走 **doc-first + G-28**（先出设计/验收文档，交付时双端截图 + 自评三问），**不触 ADR 写锁、不推翻 ADR-0050**；仅当重开后确认需要比 exec 更宽的写权限时才另立 ADR。
 
-### C8 — 文件前端未接后端能力 【已证伪 / 已接线 PASS】
+### C8 — 文件「尚未接后端能力」旧标签 【已证伪 / 已接线 PASS】
 
-- 原缺口前提（已推翻）：`docs/PLUGIN-MATURITY.md:71` 旧文「前端未接 search/trash/rename/copy/uploadChunk（`web/files.js` 仅见 `readRange`）」。
+- 原缺口前提（已推翻）：`docs/PLUGIN-MATURITY.md:71` 旧文称前端尚未接 search/trash/rename/copy/uploadChunk（`web/files.js` 仅见 `readRange`）。
 - 证伪证据：① 前端接线事实见 `.agents/verify/files-l2.md`（G-28 双端截图齐；该文件旧行号 `web/files.js:295/300/748` rename、`:303`+`web/files-l2.js:318` copy、`:470` search、`:626/644` trash.restore、`:711` trash.purge 经 11-26 UI 重构已漂移，**以当前 HEAD 真实调用点为准**：`web/files.js:700` search、`:779,799` trash.list、`:881,896` trash.restore、`:948,951` trash.purge、`:988` rename，`web/files-l2.js:142` uploadChunk、`:149,203,233` uploadStatus、`:455,467` copy）；② 后端五项经隔离 kored 实例真实 `POST /api/v1/invoke/file/<method>` 逐条断言 **全 PASS（13 条可核对断言 / 0 FAIL，HTTP 200 不另计）**，见 `.agents/verify/c8-file-invoke-live.md`（`file@0.3.6` 包 sha 与索引一致、127.0.0.1:18887 隔离实例、KORE_FILE_ROOT 指测试目录、未碰 8787/.kore-local-*）。
 - 结论：C8 已从「硬证据缺口」转为 **已证伪 / 已接线 PASS**；按用户「用本机测试和正式使用」口径，先隔离实测坐实再改文档，不再派无效实现卡。前端双击改名/目录选择器复制/按内容搜索/回收站三动作/断点续传均有真实 UI 落点与后端可达证据。
 
@@ -257,7 +259,7 @@ round 21 竞品官方一手原文级证据索引（task-203 取证，报告贴�
 
 ### 第 4 期 · 刻意不做项复核：C3、C6、C11（需用户单独确认才动）
 
-- 三项均属 G-11 明确不做：C3 异地备份（`docs/PLUGIN-MATURITY.md:155`）、C6 容器编排（`:145`、`docs/FEATURE-PARITY.md:47`）、C11 多因子（`benchmark-auth-design.md:28`、`:62`）。**triage 新增同期裁决项**：C5-zone 增删/DNSSEC（ADR-0051）、C14 建库/写 vhost（G-13）同属「刻意不做」，并入本期复核，不派实现卡（见 §2 C5/C14、§4 第 2 期）。
+- 三项均属 G-11 明确不做：C3 异地备份（`docs/PLUGIN-MATURITY.md:167`、`:30`）、C6 容器编排（`:145`、`docs/FEATURE-PARITY.md:47`）、C11 多因子（`benchmark-auth-design.md:28`、`:62`）。**triage 新增同期裁决项**：C5-zone 增删/DNSSEC（ADR-0051）、C14 建库/写 vhost（G-13）同属「刻意不做」，并入本期复核，不派实现卡（见 §2 C5/C14、§4 第 2 期）。
 - 前置条件：**用户单独确认**是唯一启动条件；C11 还需先对齐 BA（2026-11-23）与 G-28 已落 2FA 的时点差异。
 - 可验证判据：未获确认前，三项不进里程碑、不排期、不写实现代码；确认后先立 ADR，再按普通差距重新评估。本期的产物是「确认记录 + ADR」，不是功能代码。
 
