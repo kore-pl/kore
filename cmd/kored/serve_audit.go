@@ -65,10 +65,17 @@ type capabilityAuditorFromStore struct {
 	db *store.Store
 }
 
-// Audit 实现 httpapi.CapabilityAuditor。
+// Audit 实现 httpapi.CapabilityAuditor（旧 5 参签名，供不使用合并元数据的调用点）。
 // capability 是触发拒绝的真实能力名（invoke 路径的 requirement.name）；非 invoke
 // 出口传空串，omitempty 下不落库——绝不编造能力名（DATA-MODEL §9）。
 func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, capability, reason string) {
+	a.AuditWithDetail(subject, plugin, target, capability, map[string]string{"reason": reason})
+}
+
+// AuditWithDetail 实现 httpapi.CapabilityAuditorWithDetail：把 httpapi 突发合并器
+// 填好的 detail（reason + 可选 count/window_ms/first_at/last_at）原样透传落库。
+// 合并只影响写几条，不影响 result=denied 与 fail-closed 语义（方案 §4 I6）。
+func (a *capabilityAuditorFromStore) AuditWithDetail(subject, plugin, target, capability string, detail map[string]string) {
 	if err := a.db.PutAudit(store.AuditRecord{
 		Subject:    subject,
 		Action:     auditActionCapabilityDenied,
@@ -76,7 +83,7 @@ func (a *capabilityAuditorFromStore) Audit(subject, plugin, target, capability, 
 		Target:     target,
 		Result:     store.AuditResultDenied,
 		Capability: capability,
-		Detail:     map[string]string{"reason": reason},
+		Detail:     detail,
 	}); err != nil {
 		slog.Warn("capability.denied 审计写入失败", "plugin", plugin, "target", target, "err", err)
 	}

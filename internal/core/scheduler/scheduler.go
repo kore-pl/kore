@@ -53,6 +53,8 @@ type Options struct {
 	AuditCleanInterval time.Duration
 	// AuditCleanBatch 对应配置 audit.clean_batch：单次删除上限（默认 1000）。
 	AuditCleanBatch int
+	// AuditMaxRecords 对应配置 audit.max_records：按量硬上限（默认 100000，0 关闭）。
+	AuditMaxRecords int
 	// LogsMaintainInterval 是日志自动维护（切割+清理）周期：0 取默认 6h（默认启用），
 	// 负值表示不注册该任务。默认启用是产品决策：日志无界增长是真实运维问题，
 	// 装完不配就该有人负责切割与清理（G-19：周期仍只来自本调度器的单 ticker）。
@@ -84,10 +86,11 @@ type Service struct {
 	certInterval time.Duration
 
 	// 审计按龄清理（内置任务 builtin-audit-clean）：复用同一 ticker，不新增定时器。
-	auditEnabled   bool
-	auditRetention time.Duration
-	auditInterval  time.Duration
-	auditBatch     int
+	auditEnabled    bool
+	auditRetention  time.Duration
+	auditInterval   time.Duration
+	auditBatch      int
+	auditMaxRecords int
 	// logsMaintainInterval 是日志自动维护任务周期；<0 表示禁用。
 	logsMaintainInterval time.Duration
 	// 更新检查内置任务（ADR-0019 修订 / ADR-0059 §3.1）；默认关闭，零改动空闲行为。
@@ -120,6 +123,7 @@ func New(opts Options) (*Service, error) {
 		auditRetention:       opts.AuditRetention,
 		auditInterval:        opts.AuditCleanInterval,
 		auditBatch:           opts.AuditCleanBatch,
+		auditMaxRecords:      opts.AuditMaxRecords,
 		logsMaintainInterval: opts.LogsMaintainInterval,
 		updateEnabled:        opts.UpdateCheckEnabled,
 		updateSource:         opts.UpdateSource,

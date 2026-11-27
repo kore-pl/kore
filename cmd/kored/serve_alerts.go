@@ -25,7 +25,14 @@ func alertView(rec store.AlertRecord) httpapi.AlertView {
 }
 
 func (a alertSinkFromStore) PutAlert(severity, source, title, detail string) (httpapi.AlertView, error) {
-	rec, err := a.db.PutAlert(severity, source, title, detail)
+	return a.PutAlertCounted(severity, source, title, detail, 1)
+}
+
+// PutAlertCounted 实现 httpapi.AlertSinkCounted：一次写事务累加 n 次告警计数。
+// deny 突发合并的告警侧在触发点一次落库 n 次拒绝，消除每拒绝一次一次
+// PutAlert 读改写事务 + fsync 的写放大（方案候选②）。
+func (a alertSinkFromStore) PutAlertCounted(severity, source, title, detail string, n int) (httpapi.AlertView, error) {
+	rec, err := a.db.PutAlertCounted(severity, source, title, detail, n)
 	if err != nil {
 		return httpapi.AlertView{}, err
 	}

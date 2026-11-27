@@ -205,6 +205,70 @@ func (s *Store) CleanAudit(cutoff time.Time, limit int) (AuditCleanReport, error
 	return report, nil
 }
 
+// CountAudit 返回 audit bucket 的记录总数（只读事务，游标 O(n) 但只在清理
+// 任务里调用，不在请求路径上）。坏键也计数——宁可高估触发容量清理，不漏封顶。
+func (s *Store) CountAudit() (int, error) {
+	count := 0
+	err := s.View(func(tx *Tx) error {
+		b, err := tx.bucket(bucketAudit)
+		if err != nil {
+			return err
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
+// TrimAuditToMax 在审计记录数超过 max 时，从最旧端删除直到记录数 ≤ max，
+// 单次最多删 batch 条（复用单写事务，零 goroutine/ticker）。键序即时间序，
+// 最旧端即游标首端；无法解析年龄的坏键跳过——容量清理不拿坏键开刀（I4）。
+// 返回实际删除数；More=true 表示本次受 batch 限制、下次清理继续。
+func (s *Store) TrimAuditToMax(max, batch int) (deleted int, more bool, err error) {
+	if max < 1 || batch < 1 {
+		return 0, false, fmt.Errorf("%w: 按量清理 max/batch 必须为正数（max=%d batch=%d）",
+			ErrAuditInvalid, max, batch)
+	}
+	total, err := s.CountAudit()
+	if err != nil {
+		return 0, false, err
+	}
+	if total <= max {
+		return 0, false, nil
+	}
+	target := total - max
+	if target > batch {
+		target, more = batch, true
+	}
+	err = s.Update(func(tx *Tx) error {
+		b, err := tx.bucket(bucketAudit)
+		if err != nil {
+			return err
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if deleted >= target {
+				break
+			}
+			if _, _, ok := parseAuditKey(string(k)); !ok {
+				continue // 坏键不删（容量清理同样不猜年龄）
+			}
+			if err := c.Delete(); err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("按量清理审计记录失败: %w", err)
+	}
+	return deleted, more, nil
+}
+
 // ListAudit 按时间升序（键序）列出审计记录，可按 subject/action/plugin 过滤。
 // 只读事务内解析，值在事务末失效前已 copy 到返回切片；Key 一并回填供核对键格式。
 // 单条损坏记录只 WARN 跳过，不因一条坏值中断整个查询。

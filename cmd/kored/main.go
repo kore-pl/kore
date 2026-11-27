@@ -14,7 +14,7 @@ import (
 // version 由构建参数注入（make build 的 -X main.version=...）。
 // 默认值与 Makefile 的 VERSION 必须一致（make version-check 断言）：否则 `go run` 与
 // `make build` 报不同版本，插件安装时 requires_kore 判定跟着漂。0.1.1 = 首个含 file_write 的内核版本。
-var version = "0.1.2"
+var version = "0.1.3"
 
 // 退出码码表（DATA-MODEL §7 / ARCHITECTURE §6.1），子命令与 serve 共用。
 const (

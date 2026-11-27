@@ -212,6 +212,9 @@ func coldChanged(dst, src *Snapshot) []string {
 	if dst.Audit.CleanBatch != src.Audit.CleanBatch {
 		keys = append(keys, "audit.clean_batch")
 	}
+	if dst.Audit.MaxRecords != src.Audit.MaxRecords {
+		keys = append(keys, "audit.max_records")
+	}
 	return keys
 }
 

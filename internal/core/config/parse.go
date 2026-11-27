@@ -20,7 +20,7 @@ var (
 	defaultsKeys  = []string{"memory_mb", "cpu_quota", "pids_max"}
 	pluginsKeys   = []string{"allow_unsigned", "autostart"}
 	securityKeys  = []string{"login_rate_limit"}
-	auditKeys     = []string{"invoke_all", "retention", "clean_enabled", "clean_interval", "clean_batch"}
+	auditKeys     = []string{"invoke_all", "retention", "clean_enabled", "clean_interval", "clean_batch", "max_records"}
 	rateKeys      = []string{"attempts", "window", "lock"}
 	certRenewKeys = []string{"enabled", "interval"}
 )

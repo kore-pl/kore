@@ -83,6 +83,17 @@ func alertEvents(tx *Tx) (*bolt.Bucket, error) {
 // 时刻改写为本次、seen 归 false——新发生重新计未读）→ 新建 → 裁剪到 500 条。
 // 返回合并或新建后的记录（Key/TsNs 已回填），供端点直接回显。
 func (s *Store) PutAlert(severity, source, title, detail string) (AlertRecord, error) {
+	return s.PutAlertCounted(severity, source, title, detail, 1)
+}
+
+// PutAlertCounted 一次写事务累加 n 次告警计数（n≥1；n=1 与 PutAlert 等价）。
+// deny 突发合并用它在窗口触发点一次落库 n 次拒绝，替代 n 次「读改写 + fsync」
+// 写事务（方案候选②）。一个小事务内完成合并 + 裁剪，不引入 goroutine/ticker
+// （G-19），count 守恒由调用方（DenyBurstTracker）保证。
+func (s *Store) PutAlertCounted(severity, source, title, detail string, n int) (AlertRecord, error) {
+	if n < 1 {
+		return AlertRecord{}, fmt.Errorf("%w: 告警累加次数 %d 必须 ≥1", ErrAuditInvalid, n)
+	}
 	if err := validateAlert(severity, source, title, detail); err != nil {
 		return AlertRecord{}, err
 	}
@@ -93,7 +104,7 @@ func (s *Store) PutAlert(severity, source, title, detail string) (AlertRecord, e
 			return err
 		}
 		now := s.now()
-		merged, err := mergeAlert(events, now, severity, source, title, detail)
+		merged, err := mergeAlertCounted(events, now, n, severity, source, title, detail)
 		if err != nil {
 			return err
 		}
@@ -109,6 +120,12 @@ func (s *Store) PutAlert(severity, source, title, detail string) (AlertRecord, e
 // mergeAlert 在窗口内找同 title+source 记录：命中则删旧键、按当前时刻重写
 // （count+1、seen=false、detail 取最新）；未命中则新建（count=1，seen=false）。
 func mergeAlert(events *bolt.Bucket, now time.Time, severity, source, title, detail string) (AlertRecord, error) {
+	return mergeAlertCounted(events, now, 1, severity, source, title, detail)
+}
+
+// mergeAlertCounted 与 mergeAlert 同语义，命中时 count+=n、未命中时 count=n；
+// 整个合并仍在一个写事务内完成，写事务数不随 n 增长。
+func mergeAlertCounted(events *bolt.Bucket, now time.Time, n int, severity, source, title, detail string) (AlertRecord, error) {
 	ns := now.UnixNano()
 	c := events.Cursor()
 	for k, v := c.Last(); k != nil; k, v = c.Prev() {
@@ -130,13 +147,13 @@ func mergeAlert(events *bolt.Bucket, now time.Time, severity, source, title, det
 		if err := events.Delete(k); err != nil {
 			return AlertRecord{}, err
 		}
-		rec.Count++
+		rec.Count += n
 		rec.Seen = false
 		rec.Detail = detail
 		return writeAlert(events, rec, now)
 	}
 	return writeAlert(events, AlertRecord{
-		Severity: severity, Source: source, Title: title, Detail: detail, Seen: false, Count: 1,
+		Severity: severity, Source: source, Title: title, Detail: detail, Seen: false, Count: n,
 	}, now)
 }
 

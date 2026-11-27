@@ -3,6 +3,28 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.3] - 2026-11-28
+
+> 本次是 **perf**（性能修复），按 semver 为 patch。修复动机如实记录：真 `capability.denied` 路径存在
+> 1:1 审计写放大（1 条审计 + 1 次告警读改写事务/拒绝），并发 16 拒绝实测 p95=158ms，**击穿 API
+> p95 ≤ 50ms 硬红线**（`docs/V1-GOALS.md` / `docs/PLAN.md` / `docs/ROADMAP.md`），是认证后低权 DoS 向量。
+> 不是新功能，也不宣称超越竞品——目标只是回到自身红线内。
+
+### Performance
+
+- **审计写放大优化**：`capability.denied` 出口接入突发合并器——同一 `subject+plugin+target+capability+reason`
+  的 1s 窗口内前 10 条逐条审计，第 11 条起合并为 detail 带 `count`/`window_ms`/`first_at`/`last_at`
+  的记录；单窗口聚合上限 `MAX_MERGE=1000` 后转逐条（合并不掩盖持续攻击）。纯内存 `sync.Mutex` +
+  惰性 sweep，零 goroutine / ticker（G-19）。审计记录**不新增顶层字段、不升 schema**，旧记录兼容；
+  web/audit.js 的通用 `detailText` 摊平即可显示，前端零改动。
+- **告警同源聚合**：`noteDeniedAlert` 与审计共用同一突发窗口判断，窗口触发点一次 `PutAlertCounted(n)`
+  累加 n 次拒绝计数，替代每拒绝一次一次 `PutAlert` 读改写事务 + fsync；通知通道同点派发一次，消除通知风暴。
+- **审计按量上限**：新增 `audit.max_records`（默认 100000，0 关闭），内置 `audit.clean` 任务在按龄清理后
+  从最旧端删除超额记录，单次受 `audit.clean_batch` 限制；删除原因（`trim_deleted`）写审计可追溯，
+  封住高频拒绝的磁盘 DoS 维度。
+- **内核版本 0.1.2 → 0.1.3**：`Makefile` 的 `VERSION`、`cmd/kored/main.go` 内置默认值与 `docs/CORE.md`
+  版本基线同步；0.1.3 < 0.2.0 仍落在 24 仓 `requires_kore` 上界内，`make version-check` 不阻断。
+
 ## [0.1.2] - 2026-11-27
 
 > **版本口径（如实记录，不隐瞒张力）**：本次是 **feat**，按 semver 应为 **minor 0.2.0**；但 24 个插件仓的

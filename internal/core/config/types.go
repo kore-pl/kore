@@ -139,6 +139,9 @@ type Audit struct {
 	CleanInterval time.Duration
 	// CleanBatch 是单次清理删除上限（audit.clean_batch，默认 1000）。
 	CleanBatch int
+	// MaxRecords 是审计记录数硬上限（audit.max_records，默认 100000）。
+	// 超过后由内置清理任务从最旧端删除（配合按龄清理，封住高频拒绝的磁盘维度）。
+	MaxRecords int
 }
 
 // RateLimit 是登录限速参数。
@@ -223,6 +226,7 @@ func defaultsFor(profile string) *Snapshot {
 			CleanEnabled:  true,
 			CleanInterval: 6 * time.Hour,
 			CleanBatch:    1000,
+			MaxRecords:    100000,
 		},
 		CertRenew: CertRenew{Enabled: false, Interval: 6 * time.Hour},
 	}

@@ -220,6 +220,11 @@ func (p *parser) decodeAudit(n *yaml.Node, out *Audit) error {
 			return err
 		}
 	}
+	if v := m["max_records"]; v != nil {
+		if out.MaxRecords, err = p.integer(v, "audit.max_records"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

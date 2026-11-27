@@ -92,9 +92,13 @@ type Options struct {
 	// nil 时按单管理员全权语义：有效 session 的 subject=admin，持 6 特权能力。
 	// 插件身份走 UDS 的 KORE_PLUGIN_TOKEN/hello，不经 HTTP session（G-01）。
 	CapabilityResolver CapabilityResolver
-	// CapabilityAuditor 是 capability.denied 的审计出口；nil 时只记 slog WARN。
+	// CapabilityAuditor 是 capability.denied 的审计出口（旧 5 参签名，测试/骨架用）；
+	// nil 且 CapabilityAuditorDetailed 也为 nil 时只记 slog WARN。
 	// 挂点：cmd/kored 注入 store.PutAudit（Result=denied），本包不 import store。
 	CapabilityAuditor CapabilityAuditor
+	// CapabilityAuditorDetailed 是带 detail 的扩展出口（deny 突发合并元数据走这里）；
+	// 优先于 CapabilityAuditor。cmd/kored 注入 store 适配器实现之。
+	CapabilityAuditorDetailed CapabilityAuditorWithDetail
 	// AuditLister 是 GET /api/v1/audit 的查询后端；nil 时该端点回 501。
 	// 由 cmd/kored 注入（内部转换 store.AuditRecord），本包不 import store（G-01）。
 	AuditLister AuditLister
@@ -193,6 +197,14 @@ type CapabilityResolver func(*http.Request) (string, []string)
 // 「以哪个能力授权」的判定来源，调用方必须传空串——不得编造能力名（DATA-MODEL §9）。
 // 装配层把它结构化写入 AuditRecord.Capability，不再只塞 reason 文本。
 type CapabilityAuditor func(subject, plugin, target, capability, reason string)
+
+// CapabilityAuditorWithDetail 是 capability.denied 审计出口的扩展接口：detail 由
+// deny 突发合并器填好（reason + 可选 count/window_ms/first_at/last_at），装配层
+// 适配器直接透传进 AuditRecord.Detail，httpapi 不 import store（G-01）。
+// 未实现本接口的注入方走原 5 参 CapabilityAuditor，向后兼容。
+type CapabilityAuditorWithDetail interface {
+	AuditWithDetail(subject, plugin, target, capability string, detail map[string]string)
+}
 
 // 单管理员语义下的 6 个宿主特权能力（与 registry/validate.go 同源，不重复名词表）。
 var adminCapabilities = []string{
@@ -329,20 +341,25 @@ type Server struct {
 	passwordWriter PasswordWriter
 	loginLimiter   *auth.LoginLimiter
 	// captchas / adminUsername 是 ADR-0057 登录失败防护与账号标识符。
-	captchas       *auth.CaptchaStore
-	adminUsername  string
-	market         *market.Service
-	capResolver    CapabilityResolver
-	capAuditor     CapabilityAuditor
-	capDegradeOnce sync.Once
-	auditLister    AuditLister
-	auditRecorder  AuditRecorder
+	captchas         *auth.CaptchaStore
+	adminUsername    string
+	market           *market.Service
+	capResolver      CapabilityResolver
+	capAuditor       CapabilityAuditor
+	capAuditorDetail CapabilityAuditorWithDetail
+	capDegradeOnce   sync.Once
+	auditLister      AuditLister
+	auditRecorder    AuditRecorder
 	// auditInvokeAll 用 atomic 承载，SIGHUP 热更与请求路径并发读写不产生数据竞争。
 	auditInvokeAll atomic.Bool
 	// burstMu / bursts / burstCalls 是 invoke 突发合并状态（纯内存，零后台 goroutine）。
 	burstMu    sync.Mutex
 	bursts     map[string]*invokeBurstState
 	burstCalls uint64
+	// denyBurst 是 capability.denied 审计/告警同源突发合并决策器（纯内存，零 goroutine）。
+	// auditDenied 唯一入口一次 Submit 同时产出审计与告警计划，保证同批拒绝在两个出口
+	// 得到相同合并判断、Σ逐条+合并 count 守恒。
+	denyBurst DenyBurstTracker
 	// now 是突发窗口时间源；nil 时用 time.Now（测试可替换）。
 	now            func() time.Time
 	installRefresh func(id string) (string, error)
@@ -392,7 +409,8 @@ func New(opts Options, transport platform.Transport) *Server {
 		captchas:      opts.Captchas,
 		adminUsername: opts.AdminUsername,
 		capResolver:   opts.CapabilityResolver, capAuditor: opts.CapabilityAuditor,
-		auditLister: opts.AuditLister, installRefresh: opts.InstallRefresh,
+		capAuditorDetail: opts.CapabilityAuditorDetailed,
+		auditLister:      opts.AuditLister, installRefresh: opts.InstallRefresh,
 		auditRecorder: opts.AuditRecorder, now: time.Now,
 		metrics: opts.Metrics, privilege: opts.Privilege, pluginAuth: opts.PluginAuth,
 		restartService: opts.RestartService,

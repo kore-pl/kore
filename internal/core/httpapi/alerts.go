@@ -75,6 +75,14 @@ type AlertSink interface {
 	MarkAlertSeen(id string) error
 }
 
+// AlertSinkCounted 是支持一次写入累加 n 次计数的扩展接口（deny 突发聚合用）。
+// store 适配器实现之：一次 PutAlertCounted(n) 对应一个写事务，替代 n 次
+// PutAlert 读改写事务，消掉每拒绝一次一次 fsync 的写放大（方案候选②）。
+// 未实现的 sink 由 emitDeniedAlert 退化为循环 n 次 PutAlert，行为等价。
+type AlertSinkCounted interface {
+	PutAlertCounted(severity, source, title, detail string, n int) (AlertView, error)
+}
+
 // recordAlert 是各检查点的统一写入口；写失败只记 WARN（告警是旁路，不阻断主流程）。
 func (s *Server) recordAlert(severity, source, title, detail string) {
 	if s.alerts == nil {
@@ -103,18 +111,33 @@ func (s *Server) recordAlertView(severity, source, title, detail string) (AlertV
 	return rec, nil
 }
 
-// noteDeniedAlert 是 auditDenied 的告警埋点：capability.denied / root.action 拒绝
-// 一律合并为「能力校验被拒绝」（5 分钟窗口内多条合并计数，明细取最新一次）。
+// noteDeniedAlert 保留为「能力校验被拒绝」告警的写入口：一次落库携带 n 次
+// 拒绝计数（n>1 走扩展接口，仅一次写事务/一次 fsync）。它不再自己推进突发
+// 窗口——计数由 auditDenied 的同一份 DenyBurstOutcome 提供，两个出口同源同窗。
+// 其它调用点（若有）以 n=1 走原路径，行为与合并前一致。
 func (s *Server) noteDeniedAlert(subject, plugin, target, reason string) {
-	detail := "subject=" + alertDash(subject)
-	if plugin != "" {
-		detail += "；plugin=" + plugin
+	s.emitDeniedAlert(1, denyAlertDetail(subject, plugin, target, reason))
+}
+
+// emitDeniedAlert 把一批 n 次拒绝合并为一次告警落库 + 一次通知派发。
+// 明细取窗口内最新一次（与 store.mergeAlert 同口径），count 由 n 累加。
+func (s *Server) emitDeniedAlert(n int, detail string) {
+	if n <= 0 || s.alerts == nil {
+		return
 	}
-	if target != "" {
-		detail += "；target=" + target
+	if counted, ok := s.alerts.(AlertSinkCounted); ok {
+		if _, err := counted.PutAlertCounted(alertSeverityCritical, alertSourceAudit,
+			"能力校验被拒绝", detail, n); err != nil {
+			slog.Warn("告警写入失败", "title", "能力校验被拒绝", "err", err)
+			return
+		}
+		s.webhooks.dispatchAlert(alertSeverityCritical, alertSourceAudit, "能力校验被拒绝", detail)
+		return
 	}
-	detail += "；原因：" + reason
-	s.recordAlert(alertSeverityCritical, alertSourceAudit, "能力校验被拒绝", detail)
+	// 未实现扩展接口的 sink：循环写 n 次（行为等价，仍由 sink 自身去重合并）。
+	for i := 0; i < n; i++ {
+		s.recordAlert(alertSeverityCritical, alertSourceAudit, "能力校验被拒绝", detail)
+	}
 }
 
 // alertDash 空串显示为 "-"（detail 可读性；与日志口径一致）。

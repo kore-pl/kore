@@ -29,6 +29,9 @@ const (
 type auditCleanParams struct {
 	RetentionSeconds int64 `json:"retention_seconds"`
 	Batch            int   `json:"batch"`
+	// MaxRecords 是按量硬上限（0 表示关闭按量封顶）。随任务落库，便于
+	// GET /scheduler/tasks 直接读到当前生效值。
+	MaxRecords int `json:"max_records"`
 }
 
 // auditCleanResult 是清理结果（写进 scheduler_runs.error/结果与审计 detail）。
@@ -38,6 +41,9 @@ type auditCleanResult struct {
 	Cutoff           string `json:"cutoff"`
 	RetentionSeconds int64  `json:"retention_seconds"`
 	Batch            int    `json:"batch"`
+	// TrimDeleted 是按量清理删除的条数（删除原因与按龄区分，可追溯）。
+	TrimDeleted int `json:"trim_deleted"`
+	MaxRecords  int `json:"max_records"`
 }
 
 // syncAuditCleanTask 把配置 audit.* 映射为内置任务（同 cert_renew 的迁移方式，
@@ -62,8 +68,8 @@ func (s *Service) syncAuditCleanTask() error {
 	if interval < minIntervalS {
 		interval = minIntervalS
 	}
-	params := json.RawMessage(fmt.Sprintf(`{"retention_seconds":%d,"batch":%d}`,
-		int64(s.auditRetention.Seconds()), s.auditBatch))
+	params := json.RawMessage(fmt.Sprintf(`{"retention_seconds":%d,"batch":%d,"max_records":%d}`,
+		int64(s.auditRetention.Seconds()), s.auditBatch, s.auditMaxRecords))
 	if missing {
 		task = Task{ID: builtinAuditCleanID, Name: "审计按龄清理", Plugin: BuiltinPlugin,
 			Method: AuditCleanMethod, Params: params, IntervalS: interval, Enabled: true,
@@ -108,7 +114,7 @@ func (s *Service) cleanAudit(ctx context.Context, task Task) (json.RawMessage, e
 		_ = json.Unmarshal(task.Params, &attempted)
 		err := fmt.Errorf("%w: %s 只能由内核内置任务 %q 执行（拒绝任务 %q）",
 			ErrInvalid, AuditCleanMethod, builtinAuditCleanID, task.ID)
-		s.recordAuditClean(attempted, store.AuditCleanReport{}, err)
+		s.recordAuditClean(attempted, store.AuditCleanReport{}, err, 0)
 		s.log.Warn("拒绝非内置任务执行审计清理", "task_id", task.ID, "err", err)
 		return nil, err
 	}
@@ -130,6 +136,11 @@ func validateAuditCleanParams(in auditCleanParams) error {
 		return fmt.Errorf("%w: %s 参数非法（batch 取 1–%d）",
 			ErrInvalid, AuditCleanMethod, maxAuditCleanBatch)
 	}
+	// 0 表示关闭按量封顶；正数须落在 [1, 1000000]（与 config.validateAudit 同口径）。
+	if in.MaxRecords < 0 || in.MaxRecords > 1_000_000 {
+		return fmt.Errorf("%w: %s 参数非法（max_records 取 0 或 1–1000000）",
+			ErrInvalid, AuditCleanMethod)
+	}
 	return nil
 }
 
@@ -138,12 +149,12 @@ func (s *Service) runAuditClean(ctx context.Context, params json.RawMessage) (js
 	var in auditCleanParams
 	if err := json.Unmarshal(params, &in); err != nil {
 		parseErr := fmt.Errorf("%w: %s 参数无法解析: %v", ErrInvalid, AuditCleanMethod, err)
-		s.recordAuditClean(in, store.AuditCleanReport{}, parseErr)
+		s.recordAuditClean(in, store.AuditCleanReport{}, parseErr, 0)
 		return nil, parseErr
 	}
 	if err := validateAuditCleanParams(in); err != nil {
 		// 被拒绝的清理尝试同样留痕：删除审计这个动作本身必须可追溯。
-		s.recordAuditClean(in, store.AuditCleanReport{}, err)
+		s.recordAuditClean(in, store.AuditCleanReport{}, err, 0)
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -151,20 +162,35 @@ func (s *Service) runAuditClean(ctx context.Context, params json.RawMessage) (js
 	}
 	cutoff := s.now().Add(-time.Duration(in.RetentionSeconds) * time.Second)
 	report, err := s.store.CleanAudit(cutoff, in.Batch)
-	s.recordAuditClean(in, report, err)
 	if err != nil {
+		s.recordAuditClean(in, report, err, 0)
 		return nil, err
 	}
+	// 按量封顶：按龄清理后再核对总数，超上限则从最旧端删（与按龄删除区分原因）。
+	// 复用同一内置任务与单 ticker，不新增定时器（方案候选④）。
+	trimDeleted := 0
+	trimMore := false
+	if in.MaxRecords > 0 {
+		trimDeleted, trimMore, err = s.store.TrimAuditToMax(in.MaxRecords, in.Batch)
+		if err != nil {
+			s.recordAuditClean(in, report, err, 0)
+			return nil, err
+		}
+	}
+	report.More = report.More || trimMore
+	s.recordAuditClean(in, report, err, trimDeleted)
 	result := auditCleanResult{
 		Deleted: report.Deleted, More: report.More,
 		Cutoff:           cutoff.UTC().Format(time.RFC3339),
 		RetentionSeconds: in.RetentionSeconds, Batch: in.Batch,
+		TrimDeleted: trimDeleted, MaxRecords: in.MaxRecords,
 	}
 	out, err := json.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("序列化清理结果失败: %w", err)
 	}
-	s.log.Info("审计按龄清理完成", "deleted", report.Deleted, "more", report.More,
+	s.log.Info("审计清理完成", "deleted", report.Deleted, "more", report.More,
+		"trim_deleted", trimDeleted, "max_records", in.MaxRecords,
 		"retention_seconds", in.RetentionSeconds, "batch", in.Batch,
 		"cutoff", result.Cutoff)
 	return out, nil
@@ -172,7 +198,7 @@ func (s *Service) runAuditClean(ctx context.Context, params json.RawMessage) (js
 
 // recordAuditClean 把一次清理写进审计（可观测性要求）；写失败只 WARN，
 // 不让"记录清理"这件事反过来破坏清理或主流程。
-func (s *Service) recordAuditClean(in auditCleanParams, report store.AuditCleanReport, cleanErr error) {
+func (s *Service) recordAuditClean(in auditCleanParams, report store.AuditCleanReport, cleanErr error, trimDeleted int) {
 	rec := store.AuditRecord{
 		Subject: "system",
 		Action:  AuditCleanMethod,
@@ -184,6 +210,8 @@ func (s *Service) recordAuditClean(in auditCleanParams, report store.AuditCleanR
 			"more":              strconv.FormatBool(report.More),
 			"batch":             strconv.Itoa(in.Batch),
 			"retention_seconds": strconv.FormatInt(in.RetentionSeconds, 10),
+			"trim_deleted":      strconv.Itoa(trimDeleted),
+			"max_records":       strconv.Itoa(in.MaxRecords),
 		},
 	}
 	if cleanErr != nil {

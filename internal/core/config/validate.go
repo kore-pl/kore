@@ -209,4 +209,9 @@ func validateAudit(s *Snapshot, add func(string, string)) {
 	if s.Audit.CleanBatch < 1 || s.Audit.CleanBatch > 10000 {
 		add("audit.clean_batch", "必须在 1–10000 之间")
 	}
+	// 按量上限：1–100 万（DATA-MODEL §406「审计 <100 万」舒适区上界），
+	// 默认 100000；显式 0 表示不启用按量封顶，仍按按龄清理。
+	if s.Audit.MaxRecords < 0 || s.Audit.MaxRecords > 1_000_000 {
+		add("audit.max_records", "必须在 1–1000000 之间（0 表示不启用按量封顶）")
+	}
 }

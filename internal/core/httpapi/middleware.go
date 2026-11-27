@@ -270,15 +270,51 @@ func (s *Server) authorizeTargetAction(w http.ResponseWriter, r *http.Request) b
 // auditDenied 走注入的审计出口；未注入时只记 WARN（挂点见 server.go）。
 // target 是被拒的目标动作：invoke 传方法名，enable/disable 传动作名，空串表示不细分。
 // capability 是触发拒绝的真实能力名，仅 invoke 路径有值；其余出口传空串（不得编造）。
-// 同时写一条告警埋点（capability.denied / root.action 拒绝，见 alerts.go）。
+//
+// 本出口是唯一 deny 汇聚点：一次 Submit 同时产出审计与告警的落库计划，保证
+// 同源同窗、count 守恒（方案 DESIGN-AUDIT-DENY-OPT §2.1 / §4 I3）。
+// root.action 提权审计是独立 fail-closed 出口，不经过这里，天然不并入合并。
 func (s *Server) auditDenied(subject, plugin, target, capability, reason string) {
-	if s.capAuditor != nil {
-		s.capAuditor(subject, plugin, target, capability, reason)
-	} else {
+	key := DenyBurstKey{Subject: subject, Plugin: plugin, Target: target,
+		Capability: capability, Reason: reason}
+	alertDetail := denyAlertDetail(subject, plugin, target, reason)
+	outcome := s.denyBurst.Submit(key, alertDetail, s.clock())
+
+	for _, rec := range outcome.Audits {
+		s.emitCapabilityAudit(rec)
+	}
+	if len(outcome.Audits) == 0 && s.capAuditor == nil && s.capAuditorDetail == nil {
 		slog.Warn("capability.denied", "subject", subject, "plugin", plugin,
 			"target", target, "capability", capability, "reason", reason)
 	}
-	s.noteDeniedAlert(subject, plugin, target, reason)
+	for _, alert := range outcome.Alerts {
+		s.emitDeniedAlert(alert.N, alertDetail)
+	}
+}
+
+// emitCapabilityAudit 把一条 deny 审计记录交给注入出口。
+// detail 携带合并元数据时走扩展接口；未装配扩展的注入方按原 5 参签名回退，
+// 合并记录仍以原 reason 落库（detail 元数据仅由 store 适配器保留，G-01）。
+func (s *Server) emitCapabilityAudit(rec DenyAuditRecord) {
+	if s.capAuditorDetail != nil {
+		s.capAuditorDetail.AuditWithDetail(rec.Subject, rec.Plugin, rec.Target, rec.Capability, rec.Detail)
+		return
+	}
+	if s.capAuditor != nil {
+		s.capAuditor(rec.Subject, rec.Plugin, rec.Target, rec.Capability, rec.Detail["reason"])
+	}
+}
+
+// denyAlertDetail 构造 deny 告警明细（受控标量拼接，值长度受 store 校验）。
+func denyAlertDetail(subject, plugin, target, reason string) string {
+	detail := "subject=" + alertDash(subject)
+	if plugin != "" {
+		detail += "；plugin=" + plugin
+	}
+	if target != "" {
+		detail += "；target=" + target
+	}
+	return detail + "；原因：" + reason
 }
 
 // sessionFrom 从 cookie 取 token 并校验，返回会话视图（不续期）。
