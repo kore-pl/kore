@@ -1956,6 +1956,32 @@
     S.logsHost = add(logsPanel, el('div', 'task-logs-host'));
   }
 
+  /* 跨视图预填（G-33 A5）：monitor 空态「一键开启连续采样」写一份 sessionStorage draft
+     再导航到本页。这里只读一次：白名单字段直接填进表单控件，不自动提交、不自动创建任务。
+     存储不可用或无 draft 时静默跳过（不影响正常新建流程）。draft 读完即删，避免下次进页又填。 */
+  function applyTaskDraft() {
+    var draft = null, raw = '';
+    try {
+      if (!window.sessionStorage) return;
+      raw = window.sessionStorage.getItem('kore:task-draft:v1') || '';
+      if (!raw) return;
+      draft = JSON.parse(raw);
+      window.sessionStorage.removeItem('kore:task-draft:v1');
+    } catch (e) { return; }
+    if (!draft || typeof draft !== 'object' || !S.form) return;
+    var allowed = ['shell', 'http', 'plugin'];
+    if (allowed.indexOf(draft.type) >= 0) setType(draft.type);
+    if (typeof draft.schedule === 'string') S.form.schedule.value = draft.schedule;
+    if (typeof draft.comment === 'string') S.form.comment.value = draft.comment;
+    if (draft.type === 'plugin') {
+      if (typeof draft.plugin === 'string') S.form.plugin.value = draft.plugin;
+      if (typeof draft.method === 'string') S.form.pluginMethod.value = draft.method;
+      if (draft.params && typeof draft.params === 'object') S.form.params.value = JSON.stringify(draft.params);
+    }
+    setStatus('已按你的选择预填任务表单：核对后点「新增任务」才会创建，不会自动提交。', 'ok');
+    S.form.panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function render(container) {
     if (!container) return null;
     container.textContent = '';
@@ -1969,6 +1995,7 @@
     S.sched = { host: null, meta: null, loading: false, loaded: false, error: '', tasks: [] };
     var root = add(container, el('section', 'tasks'));
     build(root);
+    applyTaskDraft();
     loadQuickTemplates();
     setLocked('');
     load();

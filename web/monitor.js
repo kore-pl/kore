@@ -41,6 +41,25 @@
   ];
   /* 单序列点数硬上限；超出尾部截断（保留最近 MAX_POINTS 点），后端预聚合待办。 */
   var MAX_POINTS = 1000;
+  /* 时间范围：昨天 / 今天 / 7天 / 自定义。分桶点数硬上限与后端 history 容量（720）一致；
+     每桶取末值（不造伪均值），避免"30 天跨度 + 分钟粒度"两者不可兼得时偷改原始采样值。 */
+  var MAX_BUCKETS = 720;
+  var DAY_MS = 24 * 60 * 60 * 1000;
+  var BUCKET_5MIN = 5 * 60 * 1000;
+  var BUCKET_1H = 60 * 60 * 1000;
+  var RANGE_OPTIONS = [
+    { id: 'today', label: '今天' },
+    { id: 'yesterday', label: '昨天' },
+    { id: 'week', label: '7天' },
+    { id: 'custom', label: '自定义' }
+  ];
+  /* 一键开启采样的预填（lead 裁决：仅导航 + 预填，不新增页面 / 不自动创建任务）：
+     推荐 A 档与 scheduler 周期相等——每小时一次 + 历史间隔 3600s，避免"采了但不落点"。 */
+  var SAMPLE_DRAFT = {
+    type: 'plugin', plugin: 'monitor', method: 'monitor.sample',
+    schedule: '0 * * * *', comment: '监控连续采样（每小时）',
+    params: { history_points: 720, history_interval_s: 3600 }
+  };
   /* 少于该点数时直接在点上标数值（G-32 §13 第 11 条：数据点少时标注比 tooltip 更直观）。 */
   var SMALL_POINTS = 12;
   var CHART_PAD = 22;
@@ -48,7 +67,10 @@
   var METRIC_LABEL = { cpu: 'CPU', memory: '内存', disk: '磁盘' };
   var S = { box: null, gen: 0, mode: '', sort: 'cpu', C: null, cardsReady: null,
     procs: null, procErr: '', refresh: null, src: null, tsEl: null, notice: null, pluginSource: '',
-    cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null, gear: null };
+    cards: null, panels: null, warn: null, procBody: null, sortCpu: null, sortMem: null, gear: null,
+    /* 历史时间范围：mode + 自定义两端（YYYY-MM-DD）。切换只重算数据、复用 canvas。 */
+    range: 'today', rangeFrom: '', rangeTo: '', rangeBtns: [], rangeCustom: null,
+    lastHistory: null, rangeNote: null, rangePanel: null, lastCores: null };
   /* 图表注册表（模块级，唯一真源）：charts 里的实例即 window.__koreMonitorChart.count()；
      chartPanelEl 是持久面板节点，刷新时复用同一个 canvas，不重建 DOM；
      resize 只在有实例时绑定一个监听（100ms 防抖），实例清零即解绑。 */
@@ -89,6 +111,13 @@
     '.mon-sort[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
     '.mon-proc-meta{padding:8px 12px;border-top:1px solid var(--kore-border-2);font-size:12px;color:var(--kore-text-3)}',
     '.mon-chart-body{padding:8px 16px 12px}',
+    /* 时间范围控件：四个按钮 + 自定义两个日期框，触摸目标 ≥44px（裁决41）。 */
+    '.mon-range{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:6px 0 2px}',
+    '.mon-range-btn{min-height:44px;padding:0 12px;font-size:12px}',
+    '.mon-range-btn[aria-pressed="true"]{border-color:var(--kore-info);color:var(--kore-text-1)}',
+    '.mon-range-custom{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--kore-text-2)}',
+    '.mon-range-custom input{min-height:44px;padding:0 8px;font-size:12px;max-width:150px}',
+    '.mon-range-note{font-size:12px;color:var(--kore-text-3);padding:2px 0 6px}',
     '.mon-chart-box{position:relative;display:block;padding-top:6px}',
     '.mon-chart{display:block;width:100%;height:132px;touch-action:pan-y}',
     '.mon-chart:focus-visible{outline:2px solid var(--kore-info);outline-offset:2px}',
@@ -341,6 +370,95 @@
       S.procs = null; S.procErr = err.message || '未知错误';
       S.C.procTable(S.procBody, S.procs, S.procErr, { allHref: '#/process' });
     });
+  }
+
+  /* ---------- 历史时间范围：窗口 + ts 分桶（纯函数，可 Node 断言） ----------
+     数据仍是后端列式 history；分桶只做筛选 + 取末值，不改原始采样点语义。
+     桶数硬上限 720（与后端容量一致），超出按跨度自动放大 bucketMs 再分桶。 */
+
+  /* 本地日期起点（00:00:00.000）。自定义端点 YYYY-MM-DD 按本地时区解释（用户看到的是本地日历）。 */
+  function dayStart(ms) {
+    var d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  function parseDateInput(text) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(text || ''))) return null;
+    var parts = String(text).split('-');
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  /* rangeWindow 返回 [start,end]（闭区间）。今天=今日 00:00 → 现在；昨天=前一日全天；
+     7天=最近 7×24h → 现在；自定义=from 00:00 → to 次日 00:00（含结束日全天）。
+     now 可注入，便于纯函数断言（不引入定时器）。 */
+  function rangeWindow(range, from, to, now) {
+    var t = typeof now === 'number' ? now : Date.now();
+    var today = dayStart(t);
+    if (range === 'yesterday') return [today - DAY_MS, today];
+    if (range === 'week') return [t - 7 * DAY_MS, t];
+    if (range === 'custom') {
+      var a = parseDateInput(from), b = parseDateInput(to);
+      if (a === null || b === null) return null;
+      if (b < a) { var swap = a; a = b; b = swap; }
+      return [a, b + DAY_MS];
+    }
+    return [today, t]; // today（默认）
+  }
+
+  /* bucketHistory：按窗口筛选原始点，按 bucketMs 分桶，每桶取末值（时间戳用桶首，
+     让 X 轴落在时间刻度上）。返回 {ts, columns, rawCount, bucketMs, start, end}，
+     columns 是 { cpu_percent: [], memory_percent: [], load1: [], disk_percent: [] }。
+     上限 720 桶：桶数会超时把 bucketMs 放大到 ceil(span/720)，不丢末值语义。 */
+  function bucketHistory(history, range, from, to, now) {
+    var win = rangeWindow(range, from, to, now);
+    var ts = Array.isArray(history && history.timestamps) ? history.timestamps : [];
+    var empty = { ts: [], columns: {}, rawCount: 0, bucketMs: 0, start: win ? win[0] : 0, end: win ? win[1] : 0 };
+    SERIES.forEach(function (s) { empty.columns[s.key] = []; });
+    if (!win) return empty;
+
+    var inWindow = [];
+    for (var i = 0; i < ts.length; i++) {
+      var t = num(ts[i]);
+      if (t !== null && t >= win[0] && t <= win[1]) inWindow.push(i);
+    }
+    empty.rawCount = inWindow.length;
+    if (!inWindow.length) return empty;
+
+    var span = Math.max(1, win[1] - win[0]);
+    var bucketMs = range === 'yesterday' || range === 'today' ? BUCKET_5MIN : BUCKET_1H;
+    if (range === 'custom') bucketMs = Math.max(60 * 1000, Math.ceil(span / MAX_BUCKETS / 60000) * 60000);
+    if (Math.ceil(span / bucketMs) > MAX_BUCKETS) bucketMs = Math.ceil(span / MAX_BUCKETS);
+    empty.bucketMs = bucketMs;
+
+    var lastByBucket = {}; // bucketStart → 原始下标（该桶内最后一个点）
+    inWindow.forEach(function (idx) {
+      var key = Math.floor(num(ts[idx]) / bucketMs) * bucketMs;
+      lastByBucket[key] = idx; // ts 单调递增，后写覆盖即末值
+    });
+    var keys = Object.keys(lastByBucket).map(Number).sort(function (a, b) { return a - b; });
+    keys.forEach(function (key) {
+      var idx = lastByBucket[key];
+      empty.ts.push(key);
+      SERIES.forEach(function (s) {
+        var col = Array.isArray(history[s.key]) ? history[s.key] : [];
+        empty.columns[s.key].push(num(col[idx]) === null ? 0 : col[idx]);
+      });
+    });
+    return empty;
+  }
+
+  /* 空态下一步：仅导航 + 预填，不自动建任务、不新增页面。
+     draft 存 sessionStorage（纯前端态，不碰运行态文件 G-29/G-31），tasks.js 的 render 消费一次即删；
+     tasks.js 缺席时回退 hash 导航，绝不写假成功。 */
+  function goEnableSampling() {
+    try {
+      if (window.sessionStorage) {
+        window.sessionStorage.setItem('kore:task-draft:v1', JSON.stringify(SAMPLE_DRAFT));
+      }
+    } catch (e) { /* 隐私模式下存储不可用：仍导航，用户可手工填 */ }
+    if (window.KoreShell && typeof window.KoreShell.navigate === 'function') window.KoreShell.navigate('tasks');
+    else window.location.hash = '#/tasks';
   }
 
   /* ---------- 自研 Canvas 时序曲线（零图表库 / 零动画 / 有 hover+tap 读数面板） ----------
@@ -697,20 +815,128 @@
     SERIES.forEach(function (series) { makeChart(host, series); });
   }
 
-  function updateCharts(history, cores) {
-    var ts = Array.isArray(history.timestamps) ? history.timestamps : [];
+  function updateCharts(bucketed, cores) {
+    var ts = bucketed.ts;
     charts.forEach(function (c) {
-      var values = Array.isArray(history[c.series.key]) ? history[c.series.key] : [];
-      setChartData(c, ts, values, cores, history.interval_s);
+      setChartData(c, ts, bucketed.columns[c.series.key] || [], cores, bucketed.bucketMs / 1000);
     });
   }
 
-  function legendText(history) {
-    var n = Array.isArray(history.timestamps) ? history.timestamps.length : 0;
-    var iv = num(history.interval_s);
-    var cap = num(history.capacity);
-    return '共 ' + n + ' 点 · 间隔 ' + (iv === null ? '—' : iv) + 's · 后端保留 ' +
+  function legendText(bucketed, history) {
+    var iv = num(history && history.interval_s);
+    var cap = num(history && history.capacity);
+    return '范围 ' + S.range + '：原始 ' + bucketed.rawCount + ' 点 → 显示 ' + bucketed.ts.length +
+      ' 桶（末值）· 间隔 ' + (iv === null ? '—' : iv) + 's · 后端保留 ' +
       (cap === null ? '—' : cap) + ' 点（重启接续）· 悬停/点按读数 · 无动画';
+  }
+
+  /* 范围切换：只改状态 + 重算已有数据，不重新请求。
+     有数据态之间切换复用同一批 canvas/实例（G-32）；跨「有数据↔空态」时替换面板节点，
+     并把新面板插回原位置——这是范围驱动的空态/恢复闭环，不是重建图表实例。 */
+  function setRange(range, from, to) {
+    if (range === S.range && from === S.rangeFrom && to === S.rangeTo) return;
+    S.range = range; S.rangeFrom = from || ''; S.rangeTo = to || '';
+    paintRangeButtons();
+    if (!S.lastHistory || !S.panels) return;
+    var old = S.rangePanel;
+    var panel = renderHistory(S.lastHistory);
+    S.rangePanel = panel;
+    if (old && old !== panel && old.parentNode === S.panels) {
+      S.panels.replaceChild(panel, old);
+    }
+  }
+
+  function rangeHint(bucketed, history) {
+    if (!bucketed.rawCount) return '该时间段没有采样点，可切换范围或开启连续采样。';
+    var spanDays = (bucketed.end - bucketed.start) / DAY_MS;
+    var keptDays = (num(history.capacity) || 0) * (num(history.interval_s) || 0) / DAY_MS;
+    var parts = [];
+    if (bucketed.ts.length < bucketed.rawCount) parts.push('密集采样已按每桶末值合并显示。');
+    if (keptDays > 0 && spanDays > keptDays) parts.push('当前只保留 ' + history.capacity + ' 点（约 ' +
+      keptDays.toFixed(1) + ' 天），调大历史间隔可看更久。');
+    return parts.join('');
+  }
+
+  function renderHistory(history) {
+    var bucketed = bucketHistory(history, S.range, S.rangeFrom, S.rangeTo, Date.now());
+    var note = rangeHint(bucketed, history);
+    if (bucketed.ts.length < 2) {
+      /* 空态：有范围控件 + 差异化文案 + 「一键开启采样」下一步；不建 canvas、不白屏。 */
+      disposeCharts();
+      var p0 = S.C.panel('历史曲线', null, 'mon-chart-body');
+      rangeControl(p0.body);
+      S.rangeNote = add(p0.body, el('div', 'mon-range-note', note));
+      var hasPoints = Array.isArray(history.timestamps) && history.timestamps.length >= 2;
+      var empty = window.KoreUI.emptyBlock({
+        title: hasPoints ? '这个时间段没有采样点' : '监控数据还在收集中',
+        text: hasPoints
+          ? (S.range === 'today' || S.range === 'yesterday'
+            ? '当前保留的历史点不在这一天；可以切换范围看更早的数据，或开启每小时连续采样积累跨天曲线。'
+            : '当前保留的历史点不到这段跨度；可以收窄范围，或开启每小时连续采样慢慢积累。')
+          : '还差采样点才画得出曲线；手动刷新会按历史间隔追加一个点，开启连续采样后会自动积累跨天数据。',
+        label: '一键开启连续采样',
+        onClick: goEnableSampling
+      });
+      empty.classList.add('mon-empty-state');
+      add(p0.body, empty);
+      return p0;
+    }
+    if (!chartPanelEl) {
+      chartPanelEl = S.C.panel('历史曲线', null, 'mon-chart-body');
+      rangeControl(chartPanelEl.body);
+      S.rangeNote = add(chartPanelEl.body, el('div', 'mon-range-note'));
+      buildCharts(chartPanelEl.body);
+      var legend = add(chartPanelEl.body, el('div', 'mon-legend'));
+      SERIES.forEach(function (s) {
+        var item = add(legend, el('span'));
+        add(item, el('i', s.swatch));
+        add(item, el('span', null, s.label));
+      });
+      legendTextEl = add(legend, el('span', 'mon-legend-note'));
+    }
+    S.rangeNote.textContent = note;
+    updateCharts(bucketed, S.lastCores);
+    if (legendTextEl) legendTextEl.textContent = legendText(bucketed, history);
+    return chartPanelEl;
+  }
+
+  /* 时间范围控件构建：四个预设按钮 + 自定义两日期框。挂到当前面板 body（空态/有数据态都可见）。 */
+  function rangeControl(host) {
+    var row = add(host, el('div', 'mon-range'));
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', '历史曲线时间范围');
+    S.rangeBtns = [];
+    RANGE_OPTIONS.forEach(function (opt) {
+      var btn = on(el('button', 'btn btn-ghost mon-range-btn', opt.label), function () {
+        if (opt.id === 'custom') {
+          setRange('custom', S.rangeFrom || new Date(Date.now() - 7 * DAY_MS).toISOString().slice(0, 10),
+            S.rangeTo || new Date().toISOString().slice(0, 10));
+        } else {
+          setRange(opt.id, '', '');
+        }
+      });
+      btn.type = 'button';
+      S.rangeBtns.push({ id: opt.id, node: btn });
+      add(row, btn);
+    });
+    S.rangeCustom = add(row, el('div', 'mon-range-custom'));
+    var fromInput = add(S.rangeCustom, el('input', 'mon-range-from'));
+    fromInput.type = 'date'; fromInput.value = S.rangeFrom;
+    fromInput.setAttribute('aria-label', '开始日期');
+    fromInput.addEventListener('change', function () { setRange('custom', fromInput.value, S.rangeTo); });
+    add(S.rangeCustom, el('span', null, '至'));
+    var toInput = add(S.rangeCustom, el('input', 'mon-range-to'));
+    toInput.type = 'date'; toInput.value = S.rangeTo;
+    toInput.setAttribute('aria-label', '结束日期');
+    toInput.addEventListener('change', function () { setRange('custom', S.rangeFrom, toInput.value); });
+    paintRangeButtons();
+    return row;
+  }
+
+  function paintRangeButtons() {
+    S.rangeBtns.forEach(function (item) {
+      item.node.setAttribute('aria-pressed', item.id === S.range ? 'true' : 'false');
+    });
   }
 
   /* 视图切走 / 卸载：取消待绘制帧 + 清引用 + 解绑唯一 resize 监听。幂等。 */
@@ -736,6 +962,9 @@
     }
     chartPanelEl = null;
     legendTextEl = null;
+    S.rangeNote = null;
+    S.rangeBtns = [];
+    S.rangeCustom = null;
     unbindResize();
   }
 
@@ -759,44 +988,8 @@
     window.removeEventListener('resize', onResize);
   }
 
-  function chartPanel(d) {
-    var history = d.history || {};
-    var ts = Array.isArray(history.timestamps) ? history.timestamps : [];
-    if (ts.length < 2) {
-      /* 空态 / 1 点态：保留原本文案语义，不建 canvas、不白屏；下一步 = 立刻再取一次。 */
-      disposeCharts();
-      var p0 = S.C.panel('历史曲线', null, 'mon-chart-body');
-      var lack = 2 - ts.length;
-      var empty = window.KoreUI.emptyBlock({
-        title: '监控数据还在收集中',
-        text: '还差 ' + lack + ' 个采样点才画得出曲线；默认每 60 秒采一个点，刚启动时通常 10 秒内就能看到第一组。',
-        label: '立即刷新', onClick: loadAll
-      });
-      empty.classList.add('mon-empty-state');
-      add(p0.body, empty);
-      return p0;
-    }
-    if (!chartPanelEl) {
-      chartPanelEl = S.C.panel('历史曲线', null, 'mon-chart-body');
-      buildCharts(chartPanelEl.body);
-      var legend = add(chartPanelEl.body, el('div', 'mon-legend'));
-      SERIES.forEach(function (s) {
-        var item = add(legend, el('span'));
-        add(item, el('i', s.swatch));
-        add(item, el('span', null, s.label));
-      });
-      legendTextEl = add(legend, el('span', 'mon-legend-note'));
-    }
-    return chartPanelEl;
-  }
-
-  /* 数据灌入（面板已挂载后调用）：只更新数据 + 图注 + aria，一帧内重绘数据层。 */
-  function paintCharts(d) {
-    if (!charts.length) return;
-    var history = d.history || {};
-    updateCharts(history, d.cpu && d.cpu.cores);
-    if (legendTextEl) legendTextEl.textContent = legendText(history);
-  }
+  /* 历史面板：renderHistory 是唯一入口（含范围控件 / 分桶 / 空态 / 灌数），
+     返回挂到 S.panels 的面板节点；刷新只换数据，不重建实例（G-32）。 */
 
   /* 阈值告警：alerts 由后端按本次 thresholds 计算；级别色 + 人话 + 怎么办。 */
   function alertPanel(d) {
@@ -836,9 +1029,12 @@
 
     S.panels.textContent = '';
     S.panels.appendChild(alertPanel(d || {}));
-    /* 先挂载再灌数据：canvas 必须在已连接状态下量一次尺寸，之后刷新不再测量。 */
-    S.panels.appendChild(chartPanel(d || {}));
-    paintCharts(d || {});
+    /* 先记录数据/核数，再挂载面板：canvas 必须在已连接状态下量一次尺寸。
+       renderHistory 内部按 S.range 分桶后灌数；刷新复用同一批实例（G-32）。 */
+    S.lastHistory = (d && d.history) || {};
+    S.lastCores = d && d.cpu && d.cpu.cores;
+    S.rangePanel = renderHistory(S.lastHistory);
+    S.panels.appendChild(S.rangePanel);
     S.panels.appendChild(C.diskPanel(d || {}));
     S.panels.appendChild(C.netPanel(d || {}));
     var temp = C.panel('温度', null, 'mon-temp');
@@ -967,6 +1163,7 @@
     S.refresh = null; S.gear = null; S.tsEl = null; S.notice = null; S.cards = null; S.panels = null;
     S.warn = null; S.procBody = null; S.sortCpu = null; S.sortMem = null; S.src = null;
     S.C = null; S.cardsReady = null; S.mode = '';
+    S.lastHistory = null; S.lastCores = null; S.rangeNote = null; S.rangeBtns = []; S.rangeCustom = null; S.rangePanel = null;
   }
 
   function render(container) {
@@ -1012,6 +1209,10 @@
      dispose() 供冒烟脚本主动清场，正常路径由 teardown() 调用。 */
   window.__koreMonitorChart = {
     count: function () { return charts.length; },
-    dispose: function () { disposeCharts(); }
+    dispose: function () { disposeCharts(); },
+    /* 纯函数断言入口（零副作用，不碰 DOM / 网络）：供 Node 与浏览器 mock 验证分桶与窗口。 */
+    _bucket: bucketHistory,
+    _rangeWindow: rangeWindow,
+    _seriesKeys: function () { return SERIES.map(function (s) { return s.key; }); }
   };
 })();
