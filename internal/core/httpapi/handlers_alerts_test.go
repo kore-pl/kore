@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pengtang1024/kore/internal/core/auth"
 	"github.com/pengtang1024/kore/internal/core/metrics"
@@ -203,6 +204,59 @@ func TestAlertsWriteValidates(t *testing.T) {
 	}
 	if len(sink.records) != 1 || sink.records[0].Source != alertSourceSlot {
 		t.Fatalf("仅成功用例应落一条: %+v", sink.records)
+	}
+}
+
+// TestAlertsWriteDispatchesWebhook 验证 bridge：POST /api/v1/alerts（monitor 阈值
+// 告警经前端桥接走此端点）落库后统一经 recordAlertView → dispatchAlert 派发到
+// 已启用且订阅 resource/critical 的通道；未启用通道必须零出站（ADR-0054 判据 2/3）。
+func TestAlertsWriteDispatchesWebhook(t *testing.T) {
+	payloads := make(chan webhookPayload, 2)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p webhookPayload
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		payloads <- p
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer receiver.Close()
+
+	sink := &fakeAlertSink{}
+	srv, session, csrf := alertsAuthServer(t, adminResolver, sink)
+	target, err := srv.webhooks.add(webhookWriteBody{
+		Events: []string{alertSourceResource}, Severities: []string{alertSeverityCritical},
+		URL: receiver.URL,
+	})
+	if err != nil {
+		t.Fatalf("新增通道失败: %v", err)
+	}
+	// 未启用时先写一条：必须零出站。
+	rec := alertsRequest(t, srv, http.MethodPost, "/api/v1/alerts", session, csrf,
+		strings.NewReader(`{"severity":"critical","source":"resource","title":"未启用推送","detail":"current=98.50"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("写入状态码 = %d: %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case p := <-payloads:
+		t.Fatalf("未启用通道不该出站，却收到 %+v", p)
+	case <-time.After(150 * time.Millisecond):
+	}
+	// 启用后再写一条：应收到 1 条含指标值的 payload。
+	if _, ok := srv.webhooks.updateEnabled(target.ID, true); !ok {
+		t.Fatalf("启用通道失败")
+	}
+	rec = alertsRequest(t, srv, http.MethodPost, "/api/v1/alerts", session, csrf,
+		strings.NewReader(`{"severity":"critical","source":"resource","title":"CPU 使用率过高","detail":"current=98.50 threshold=90.00"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("写入状态码 = %d: %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case p := <-payloads:
+		if p.Source != alertSourceResource || p.Severity != alertSeverityCritical ||
+			p.Title != "CPU 使用率过高" || !strings.Contains(p.Detail, "current=98.50") {
+			t.Fatalf("payload 不符（应含指标值）: %+v", p)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("启用通道后 3s 内未收到 webhook")
 	}
 }
 

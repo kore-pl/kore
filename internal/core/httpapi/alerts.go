@@ -80,14 +80,27 @@ func (s *Server) recordAlert(severity, source, title, detail string) {
 	if s.alerts == nil {
 		return
 	}
-	if _, err := s.alerts.PutAlert(severity, source, title, detail); err != nil {
+	// recordAlertView 已记 WARN，并按 ADR-0054 统一派发通知通道。
+	_, _ = s.recordAlertView(severity, source, title, detail)
+}
+
+// recordAlertView 是 recordAlert 的带返回值版本：唯一落库入口仍是 AlertSink.PutAlert，
+// 落库成功后统一走 dispatchAlert。供 POST /api/v1/alerts（如插件阈值告警桥接）复用，
+// 保证显式写入也经过同一通知出口，不被绕过（ADR-0054 §2 判据 3）。
+func (s *Server) recordAlertView(severity, source, title, detail string) (AlertView, error) {
+	if s.alerts == nil {
+		return AlertView{}, fmt.Errorf("告警中心后端未装配")
+	}
+	rec, err := s.alerts.PutAlert(severity, source, title, detail)
+	if err != nil {
 		slog.Warn("告警写入失败", "title", title, "err", err)
-		return
+		return AlertView{}, err
 	}
 	// 通知通道（ADR-0054）：只在告警落库成功后派发，事件驱动、零常驻轮询；
 	// 按「来源 + 级别」路由（通道可分别订阅），未配置/未启用任何通道时立即返回，
 	// 出站恒 0（G-10/G-19）。
 	s.webhooks.dispatchAlert(severity, source, title, detail)
+	return rec, nil
 }
 
 // noteDeniedAlert 是 auditDenied 的告警埋点：capability.denied / root.action 拒绝

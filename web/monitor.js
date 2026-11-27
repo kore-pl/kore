@@ -16,6 +16,7 @@
   'use strict';
 
   var API = '/api/v1/invoke/monitor/monitor.';
+  var ALERTS_API = '/api/v1/alerts';
   var METRICS = '/api/v1/system/metrics';
   var CARDS_URL = '/assets/monitor-cards.js';
   var STYLE_ID = 'kore-mon-style';
@@ -158,6 +159,37 @@
         }
         return data;
       });
+    });
+  }
+
+  /* 阈值告警桥接（ADR-0054）：monitor.system 返回的 alerts[] 只在本函数里按
+     「用户手动刷新/首次进入」的事件驱动写一条站内告警（POST /api/v1/alerts，
+     system:admin + X-Kore-CSRF 双提交），内核 recordAlertView 统一落库并按
+     「来源 + 级别」派发到用户显式启用的通知通道。
+     纪律：无定时器（触发点只在 loadAll 的 manual invoke 回调）、无新外发目标、
+     无遥测（detail 只有指标/阈值/处置建议）、凭据不落前端日志（只用页面可读 CSRF cookie），
+     5 分钟同 title+source 由持久层合并，不会刷库。
+     任何失败只静默（告警是旁路，不能破坏监控页渲染），不向用户伪造成功。 */
+  function bridgeAlerts(alerts) {
+    if (!Array.isArray(alerts) || !alerts.length) return;
+    var token = cookie('kore_csrf');
+    if (!token) return;
+    alerts.forEach(function (a) {
+      if (!a || typeof a !== 'object') return;
+      var severity = a.level === 'critical' || a.level === 'warning' ? a.level : '';
+      if (!severity) return;
+      var metric = a.metric ? String(a.metric).slice(0, 40) : 'resource';
+      var label = METRIC_LABEL[metric] || metric;
+      var current = num(a.current) === null ? '-' : a.current.toFixed(2);
+      var threshold = num(a.threshold) === null ? '-' : a.threshold;
+      var title = (label + ' 使用率超过阈值（' + current + '% / ' + threshold + '%）').slice(0, 200);
+      var detail = ('来源：monitor 插件阈值告警；指标：' + label + '；当前 ' + current +
+        '%，阈值 ' + threshold + '%；' + (a.hint || '')).slice(0, 512);
+      fetch(ALERTS_API, {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Kore-CSRF': token },
+        body: JSON.stringify({ severity: severity, source: 'resource', title: title, detail: detail })
+      }).catch(function () { /* 告警旁路失败不打断监控页 */ });
     });
   }
 
@@ -777,6 +809,10 @@
         THRESHOLDS.memory_percent + '% / ' + THRESHOLDS.disk_percent + '%；超过阈值时这里会出现告警与处理建议'));
       return p;
     }
+    /* UI 明示边界（ADR-0054 判据 6）：告知用户告警会写入站内告警中心，
+       并只在用户显式启用通知通道后才向该地址出站。 */
+    add(p.body, el('p', 'mon-alert-hint',
+      '以下告警会记入告警中心；只有你在「设置 → 通知通道」显式启用后，才会向你配置的地址推送。'));
     alerts.forEach(function (a) {
       var critical = a.level === 'critical';
       var row = el('div', 'mon-alert' + (critical ? ' mon-alert-critical' : ''));
@@ -901,6 +937,9 @@
           if (stale(gen)) return;
           S.mode = 'plugin';
           S.pluginSource = d && d.source ? String(d.source) : '';
+          /* 阈值告警桥接：只在本次真实 invoke 成功时写站内告警（事件驱动、无轮询），
+             失败静默；随后照常渲染告警面板，用户仍能在页面上看到同一批告警。 */
+          bridgeAlerts(d && d.alerts);
           setSource();
           /* 降级逐项可见：命令不可读时后端写 warnings，不在界面上伪造读数。 */
           var degraded = Array.isArray(d && d.warnings) ? d.warnings : [];

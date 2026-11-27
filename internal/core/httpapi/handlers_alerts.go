@@ -105,13 +105,14 @@ func (s *Server) handleAlertsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAlertsWrite 处理 POST /api/v1/alerts：校验受控词表与长度后落库。
-// 内核各检查点走进程内 recordAlert，不经 HTTP；本端点供运维与测试显式写入。
+// 写入统一经 recordAlertView（与内核检查点 recordAlert 同一出口），因此前端桥接的
+// 插件阈值告警也会按来源 + 级别派发到已启用的通知通道（ADR-0054 §2 判据 3）。
+// 本端点仍只由运维/前端显式写入触发，不新增任何自动出站或 ticker。
 func (s *Server) handleAlertsWrite(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAlerts(w, r, alertCapAdmin) {
 		return
 	}
-	sink, ok := s.requireAlerts(w)
-	if !ok {
+	if _, ok := s.requireAlerts(w); !ok {
 		return
 	}
 	var input alertsWriteBody
@@ -125,7 +126,7 @@ func (s *Server) handleAlertsWrite(w http.ResponseWriter, r *http.Request) {
 				"title 1..200 字符，detail ≤512 字符", "")
 		return
 	}
-	rec, err := sink.PutAlert(input.Severity, input.Source, input.Title, input.Detail)
+	rec, err := s.recordAlertView(input.Severity, input.Source, input.Title, input.Detail)
 	if err != nil {
 		writeFailure(w, err)
 		return
