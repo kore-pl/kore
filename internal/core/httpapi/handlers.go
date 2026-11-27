@@ -117,6 +117,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+ipAllowPath, s.handleIPAllowSet)
 	s.mux.HandleFunc("GET "+tokensPath, s.handleTokenList)
 	s.mux.HandleFunc("POST "+tokensPath, s.handleTokenCreate)
+	s.mux.HandleFunc("PUT "+tokenItemPath, s.handleTokenUpdate)
 	s.mux.HandleFunc("DELETE "+tokenItemPath, s.handleTokenRevoke)
 	s.mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/v1/audit", s.handleAudit)

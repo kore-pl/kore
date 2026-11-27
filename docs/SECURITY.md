@@ -150,7 +150,7 @@ kore 是**单管理员、Web 面板管理**的产品（G-11：不做多用户 RB
 | --- | --- | --- |
 | TOTP 两步验证 | RFC 6238 / HMAC-SHA1 / 6 位 / 30 s 周期，允许 ±1 步时钟偏差；开启时一次性展示 **10 个**恢复码（单次有效、库中只存 sha256），密钥只在开启流程返回一次；开启后登录 = 口令 + 动态码，**缺 OTP → 428 `E_2FA_REQUIRED`**，码错 → 401 `E_2FA_INVALID` | 依赖用户自备 TOTP App，内核不联网、不发短信/邮件；恢复码用尽需关闭后重开；密钥在校验侧必须可取回（bbolt 中非哈希存储），威胁等价于能读 `state.db` 的 root |
 | 登录 IP 白名单 | CIDR 列表；开启后在**口令校验之前**判定（不泄露口令正确性），未命中 / 列表为空 / CIDR 解析失败一律拒绝 **403 `E_IP_DENIED`**（fail-closed，文案不回显白名单）；来源取 TCP 对端，仅 UDS / 回环对端才采信 `X-Forwarded-For` 首段 | 只约束**登录入口**，不限制已签发会话与 API token；反向代理非本机时看到的是代理地址，白名单须放行代理 IP；IPv4/IPv6 需分别登记 |
-| API token | `Authorization: Bearer kore_<base64url>`；明文只在创建时返回一次、库中只存 sha256；scope 两档：`read` 只放行安全方法，`admin` 放行全部；TTL 默认 90 天、上限 365 天；按 id 吊销，不存在的 id 幂等成功 | 与 Cookie 会话并存；token 无 IP/UA 绑定，泄漏即等于对应 scope 的长期权限；`read` 是方法级只读，不按资源细分 |
+| API token | `Authorization: Bearer kore_<base64url>`；明文只在创建时返回一次、库中只存 sha256；scope 两档：`read` 只放行安全方法，`admin` 放行全部；TTL 默认 90 天、上限 365 天；按 id 吊销，不存在的 id 幂等成功。**可选 `allowed_cidrs` 来源绑定**（IPv4/IPv6 CIDR + 单 IP，≤16 条、单条 ≤64 字节；空/缺省 = 不限制，存量 token 零改动；`POST /security/tokens` 创建时可选填、`GET /security/tokens` 回读、`PUT /security/tokens/{id}` 三态更新需当前口令）；绑定门在 token 验签之后、scope/能力判定之前，**只认 TCP 对端 `r.RemoteAddr`**，明确不读 `X-Forwarded-For` / `X-Real-IP` / `Forwarded`（与登录白名单「本机才采信 XFF」的 `ClientIP` 刻意分叉），回环不隐式放行；UDS 有绑定时仅在连接可确认且 `SO_PEERCRED` uid ∈ {0, kored uid} 时豁免，取不到连接/凭据即 fail-closed；不匹配回固定 401 `E_UNAUTHORIZED` + `capability=""` 的 `capability.denied`（`reason=token_ip_denied`），不回显白名单/对端 IP。无缓存，每请求读库，改绑定下一次请求即生效 | 与 Cookie 会话并存；**UA 仍未绑定**，泄漏 token 在有效期内于允许网络内仍可复用；反向代理下看到的是代理地址（fail-closed，管理员须显式放行代理或走 UDS）；`read` 是方法级只读，不按资源细分 |
 
 ### 3.7 本机专用更新端点的身份边界（ADR-0058 / CVE-2025-54424）
 

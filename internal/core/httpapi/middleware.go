@@ -122,6 +122,14 @@ func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request) bo
 		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "API 令牌无效或已过期", "")
 		return false
 	}
+	// 来源绑定门：验签之后、scope/能力判定之前。陌生网络发起的任何请求（含只读）
+	// 统一 401，不给攻击者用 403 探测 scope；绑定门没有能力判定来源，capability
+	// 传空串（DATA-MODEL §9 禁止编造能力名），reason 固定 token_ip_denied。
+	if !s.tokenPeerAllowed(r, rec) {
+		s.auditDenied("token:"+rec.ID, "", "", "", "token_ip_denied")
+		writeError(w, http.StatusUnauthorized, pluginapi.E_UNAUTHORIZED, "API 令牌不允许从此网络地址使用", "")
+		return false
+	}
 	if rec.Scope == "read" && !isSafeMethod(r.Method) {
 		writeError(w, http.StatusForbidden, pluginapi.E_UNAUTHORIZED,
 			"这个令牌只有读取权限，不能执行修改操作；请在设置页生成 admin 令牌", "")

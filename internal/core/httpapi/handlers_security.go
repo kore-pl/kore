@@ -17,14 +17,14 @@ import (
 
 // 端点路径常量（settings.js / security.js 与此处逐字对齐）。
 const (
-	securityPath          = "/api/v1/security"
-	securityStatusPath    = securityPath + "/status"
-	totpBeginPath         = securityPath + "/totp/begin"
-	totpEnablePath        = securityPath + "/totp/enable"
-	totpDisablePath       = securityPath + "/totp/disable"
-	ipAllowPath           = securityPath + "/ipallow"
-	tokensPath            = securityPath + "/tokens"
-	tokenItemPath         = tokensPath + "/{id}"
+	securityPath       = "/api/v1/security"
+	securityStatusPath = securityPath + "/status"
+	totpBeginPath      = securityPath + "/totp/begin"
+	totpEnablePath     = securityPath + "/totp/enable"
+	totpDisablePath    = securityPath + "/totp/disable"
+	ipAllowPath        = securityPath + "/ipallow"
+	tokensPath         = securityPath + "/tokens"
+	tokenItemPath      = tokensPath + "/{id}"
 )
 
 // 两步验证 / IP 白名单的错误码：前端按 code 分支显示「怎么办」。
@@ -51,17 +51,25 @@ type ipAllowRequest struct {
 	CIDRs    []string `json:"cidrs"`
 }
 type tokenCreateRequest struct {
-	Password string `json:"password"`
-	Name     string `json:"name"`
-	Scope    string `json:"scope"`
-	TTLDays  int    `json:"ttl_days"`
+	Password     string   `json:"password"`
+	Name         string   `json:"name"`
+	Scope        string   `json:"scope"`
+	TTLDays      int      `json:"ttl_days"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+}
+
+// tokenUpdateRequest 的 allowed_cidrs 用指针表达三态：
+// 缺省（nil）= 不改；空数组 = 清除绑定；非空 = 规范化后替换。
+type tokenUpdateRequest struct {
+	Password     string    `json:"password"`
+	AllowedCIDRs *[]string `json:"allowed_cidrs,omitempty"`
 }
 
 // 统一响应体（显式字段，绝不回显口令/密钥/哈希）。
 type securityStatusBody struct {
-	TOTPEnabled bool            `json:"totpEnabled"`
+	TOTPEnabled bool              `json:"totpEnabled"`
 	IPAllow     auth.IPAllowState `json:"ipAllow"`
-	TokenCount  int             `json:"tokenCount"`
+	TokenCount  int               `json:"tokenCount"`
 }
 type totpBeginBody struct {
 	Secret        string   `json:"secret"`
@@ -69,10 +77,11 @@ type totpBeginBody struct {
 	RecoveryCodes []string `json:"recoveryCodes"`
 }
 type tokenCreatedBody struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Token string `json:"token"`
-	Scope string `json:"scope"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Token        string   `json:"token"`
+	Scope        string   `json:"scope"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 }
 type tokenListBody struct {
 	Tokens []auth.TokenView `json:"tokens"`
@@ -262,12 +271,33 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if req.TTLDays <= 0 {
 		ttl = 0 // 交给 auth 包取默认值
 	}
-	plain, rec, err := sec.CreateToken(req.Name, req.Scope, ttl)
+	plain, rec, err := sec.CreateTokenWithCIDRs(req.Name, req.Scope, ttl, req.AllowedCIDRs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, err.Error(), "")
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenCreatedBody{ID: rec.ID, Name: rec.Name, Token: plain, Scope: rec.Scope})
+	writeJSON(w, http.StatusOK, tokenCreatedBody{ID: rec.ID, Name: rec.Name, Token: plain,
+		Scope: rec.Scope, AllowedCIDRs: rec.AllowedCIDRs})
+}
+
+// handleTokenUpdate 就地改 token 的来源绑定（需当前口令 + 会话 + CSRF）。
+// allowed_cidrs 三态：缺省不改 / 空数组清除 / 非空替换；非法 CIDR 与未知 id 均 400 E_INVALID。
+func (s *Server) handleTokenUpdate(w http.ResponseWriter, r *http.Request) {
+	sec, ok := s.security(w)
+	if !ok {
+		return
+	}
+	var req tokenUpdateRequest
+	if !decodeSecurityBody(w, r, &req) || !s.verifyPasswordOrDeny(w, req.Password) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	view, err := sec.UpdateTokenCIDRs(id, req.AllowedCIDRs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, pluginapi.E_INVALID, err.Error(), "")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // handleTokenRevoke 吊销 API token（需当前口令通过 query? 不——DELETE 带 body 不可靠；

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -49,6 +50,10 @@ const (
 	tokenMaxTTL           = 365 * 24 * time.Hour
 	tokenDefaultTTL       = 90 * 24 * time.Hour
 	tokenLastUsedThrottle = 24 * time.Hour
+	// tokenCIDRMaxEntries / tokenCIDRMaxBytes 是 API token 来源绑定的外部输入上限：
+	// 每请求 O(n) 匹配，记录来自 API，必须防 DoS 与胀库（16 条覆盖内网+办公出口+回环）。
+	tokenCIDRMaxEntries = 16
+	tokenCIDRMaxBytes   = 64
 )
 
 // 安全设置的错误分类（handler 按分类映射用户能看懂的文案与退出码）。
@@ -91,16 +96,21 @@ type APITokenRecord struct {
 	CreatedAt  string `json:"createdAt"`
 	ExpiresAt  string `json:"expiresAt"`
 	LastUsedAt string `json:"lastUsedAt"`
+	// AllowedCIDRs 是可选来源绑定（omitempty 兼容存量记录）：nil/缺字段 = 不限制。
+	// 必须挂在整条记录上——ValidateToken 的 LastUsedAt 节流会把整条记录重新写回，
+	// 字段若挂别处会在一次「更新最后使用时间」后被静默抹掉。
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 }
 
 // TokenView 是 GET /api/v1/security/tokens 的对外视图（显式字段，绝不带 hash/明文）。
 type TokenView struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Scope      string `json:"scope"`
-	CreatedAt  string `json:"createdAt"`
-	ExpiresAt  string `json:"expiresAt"`
-	LastUsedAt string `json:"lastUsedAt"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Scope        string   `json:"scope"`
+	CreatedAt    string   `json:"createdAt"`
+	ExpiresAt    string   `json:"expiresAt"`
+	LastUsedAt   string   `json:"lastUsedAt"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 }
 
 // Security 是安全设置的存储门面，只依赖 store（与 Manager 同源）。
@@ -457,13 +467,100 @@ func normalizeCIDRs(input []string) ([]string, error) {
 	return out, nil
 }
 
+// normalizeTokenCIDRs 归一化 API token 的可选来源绑定（创建与更新共用此唯一收口）。
+//
+// 与上面的登录白名单 normalizeCIDRs 刻意分开：后者是既有登录口径（最多 50 条、
+// 跳过空元素、单 IP 必须写成 /mask、全网段用 ErrIPAllowAll），token 绑定是新语义，
+// 不得反向改变登录行为。规则（DESIGN-TOKEN-IP-BIND §2.2）：
+//   - nil / 空表 → 返回 nil（不限制，兼容存量 token）
+//   - 含 / → netip.ParsePrefix + Masked 归一；裸 IP → 补 /32（IPv4）或 /128（IPv6）
+//   - 拒 zone、拒 /0、单条 trim 后 ≤64 字节、总数 ≤16；拒空元素（不静默放行）
+//   - IPv4-mapped IPv6 用 Unmap 归一，使映射形式能匹配普通 IPv4 规则
+//   - 去重 + sort.Strings，写入幂等、列表稳定
+//
+// 错误统一是人话，由 handler 映射为 400 E_INVALID；不回显 token 内容。
+func normalizeTokenCIDRs(input []string) ([]string, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	if len(input) > tokenCIDRMaxEntries {
+		return nil, fmt.Errorf("来源网段最多 %d 条，请合并后重试", tokenCIDRMaxEntries)
+	}
+	const formatHint = "请写成 192.168.1.0/24 或 203.0.113.7 这样的形式，最多 16 条"
+	seen := make(map[string]bool, len(input))
+	out := make([]string, 0, len(input))
+	for _, raw := range input {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			return nil, fmt.Errorf("来源网段不能留空；不需要限制就不要填写（%s）", formatHint)
+		}
+		if len(s) > tokenCIDRMaxBytes {
+			return nil, fmt.Errorf("单条来源网段不能超过 %d 字节（%s）", tokenCIDRMaxBytes, formatHint)
+		}
+		// zone 必须在 PrefixFrom 之前查：PrefixFrom 会丢掉 Addr 的 zone，
+		// 之后再看 prefix.Addr().Zone() 就永远为空，fe80::1%eth0 会被静默收下。
+		zoneErr := func() error {
+			return fmt.Errorf("来源网段不能带网卡区域（如 fe80::1%%eth0），请去掉 %% 后面的部分（%s）", formatHint)
+		}
+		var prefix netip.Prefix
+		if strings.Contains(s, "/") {
+			parsed, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, fmt.Errorf("来源网段格式不对，%s", formatHint)
+			}
+			if parsed.Addr().Zone() != "" {
+				return nil, zoneErr()
+			}
+			prefix = parsed.Masked()
+		} else {
+			addr, err := netip.ParseAddr(s)
+			if err != nil {
+				return nil, fmt.Errorf("来源网段格式不对，%s", formatHint)
+			}
+			if addr.Zone() != "" {
+				return nil, zoneErr()
+			}
+			bits := addr.BitLen()
+			prefix = netip.PrefixFrom(addr, bits)
+		}
+		if prefix.Bits() == 0 {
+			return nil, errors.New("不能把来源网段设为全部网络，这样等于没有限制")
+		}
+		if prefix.Addr().Is4In6() {
+			// ::ffff:192.0.2.0/120 → 192.0.2.0/24；掩码位数同步减 96。
+			bits := prefix.Bits() - 96
+			if bits < 0 {
+				return nil, fmt.Errorf("来源网段格式不对，%s", formatHint)
+			}
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), bits).Masked()
+		}
+		canonical := prefix.String()
+		if !seen[canonical] {
+			seen[canonical] = true
+			out = append(out, canonical)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // --- API token ---
 
-// CreateToken 生成可撤销的 API token：明文（kore_ 前缀 + base64url）只返回一次，
-// 库中只存 sha256。scope 取 read（只读请求）或 admin（全部请求）。
+// CreateToken 生成无来源绑定的 API token（既有调用方零改动）。
 func (sec *Security) CreateToken(name, scope string, ttl time.Duration) (string, APITokenRecord, error) {
+	return sec.CreateTokenWithCIDRs(name, scope, ttl, nil)
+}
+
+// CreateTokenWithCIDRs 生成可撤销的 API token：明文（kore_ 前缀 + base64url）只返回一次，
+// 库中只存 sha256。scope 取 read（只读请求）或 admin（全部请求）；allowedCIDRs 为空
+// 表示不限制（与存量 token 兼容），非空经 normalizeTokenCIDRs 归一后随记录落库。
+func (sec *Security) CreateTokenWithCIDRs(name, scope string, ttl time.Duration, allowedCIDRs []string) (string, APITokenRecord, error) {
 	if sec == nil {
 		return "", APITokenRecord{}, ErrSecurityUnavailable
+	}
+	cidrs, err := normalizeTokenCIDRs(allowedCIDRs)
+	if err != nil {
+		return "", APITokenRecord{}, err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > tokenNameMax {
@@ -489,12 +586,13 @@ func (sec *Security) CreateToken(name, scope string, ttl time.Duration) (string,
 	}
 	now := time.Now().UTC()
 	record := APITokenRecord{
-		ID:        hex.EncodeToString(idRaw),
-		Name:      name,
-		Hash:      sha256Hex(plain),
-		Scope:     scope,
-		CreatedAt: now.Format(time.RFC3339),
-		ExpiresAt: now.Add(ttl).Format(time.RFC3339),
+		ID:           hex.EncodeToString(idRaw),
+		Name:         name,
+		Hash:         sha256Hex(plain),
+		Scope:        scope,
+		CreatedAt:    now.Format(time.RFC3339),
+		ExpiresAt:    now.Add(ttl).Format(time.RFC3339),
+		AllowedCIDRs: cidrs,
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -524,7 +622,8 @@ func (sec *Security) ListTokens() ([]TokenView, error) {
 				return fmt.Errorf("令牌记录损坏: %w", err)
 			}
 			out = append(out, TokenView{ID: rec.ID, Name: rec.Name, Scope: rec.Scope,
-				CreatedAt: rec.CreatedAt, ExpiresAt: rec.ExpiresAt, LastUsedAt: rec.LastUsedAt})
+				CreatedAt: rec.CreatedAt, ExpiresAt: rec.ExpiresAt, LastUsedAt: rec.LastUsedAt,
+				AllowedCIDRs: rec.AllowedCIDRs})
 			return nil
 		})
 	})
@@ -546,6 +645,57 @@ func (sec *Security) RevokeToken(id string) error {
 	return sec.store.Update(func(tx *store.Tx) error {
 		return tx.Delete(securityBucket, tokenKeyPrefix+id)
 	})
+}
+
+// UpdateTokenCIDRs 就地改一个 token 的来源绑定，三态由调用方表达：
+// cidrs == nil（请求体缺省）→ 不改；*cidrs 为空切片 → 清除绑定；非空 → 归一后替换。
+// 在一个事务内读改写整条记录（ValidateToken 的 LastUsedAt 写回同形），无缓存，
+// 下一次 Bearer 请求即可见。id 不存在、id 不合法、CIDR 非法均返回错误。
+func (sec *Security) UpdateTokenCIDRs(id string, cidrs *[]string) (TokenView, error) {
+	if sec == nil {
+		return TokenView{}, ErrSecurityUnavailable
+	}
+	if id == "" || strings.ContainsAny(id, "/\\.") || len(id) > 64 {
+		return TokenView{}, errors.New("令牌编号不合法")
+	}
+	var normalized []string
+	if cidrs != nil {
+		var err error
+		normalized, err = normalizeTokenCIDRs(*cidrs)
+		if err != nil {
+			return TokenView{}, err
+		}
+	}
+	var view TokenView
+	err := sec.store.Update(func(tx *store.Tx) error {
+		key := tokenKeyPrefix + id
+		raw, err := tx.Get(securityBucket, key)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return errors.New("令牌不存在")
+			}
+			return err
+		}
+		var rec APITokenRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			return fmt.Errorf("令牌记录损坏: %w", err)
+		}
+		if cidrs != nil {
+			rec.AllowedCIDRs = normalized
+		}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		if err := tx.Put(securityBucket, key, data); err != nil {
+			return err
+		}
+		view = TokenView{ID: rec.ID, Name: rec.Name, Scope: rec.Scope,
+			CreatedAt: rec.CreatedAt, ExpiresAt: rec.ExpiresAt, LastUsedAt: rec.LastUsedAt,
+			AllowedCIDRs: rec.AllowedCIDRs}
+		return nil
+	})
+	return view, err
 }
 
 // ValidateToken 校验 API token：哈希比对走常量时间，过期/不存在一律无效。
