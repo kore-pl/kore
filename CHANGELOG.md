@@ -3,6 +3,26 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.2] - 2026-11-27
+
+> **版本口径（如实记录，不隐瞒张力）**：本次是 **feat**，按 semver 应为 **minor 0.2.0**；但 24 个插件仓的
+> `info.json.requires_kore` 上界一律 `<0.2.0`（48/48 行零例外），内核升 0.2.0 会让全部插件在
+> `make version-check` / 安装期 `E_UNSUPPORTED` 判定中被阻断。经生态兼容折中，**以 patch 0.1.2 发布**。
+> 这是兼容性约束压过 semver 的例外，不是"本次没有新功能"。
+
+### Added
+
+- **API token 可选 IP / CIDR 绑定**：token 可声明 `allowed_cidrs`，仅放行来源 IP 命中这些 CIDR 的请求；
+  `allowed_cidrs` 缺省 / 为空时行为与旧 token 完全一致——**向后兼容，旧 token 不限制来源**。
+- **`PUT /api/v1/security/tokens/{id}`**：新增按 id 更新已有 token（用于调整 CIDR 绑定等属性）。内核
+  HTTP API 端点计数由 72 增至 **73**（口径见 `docs/CORE.md` §2.4 / §12.2）。
+
+### Changed
+
+- **内核版本 0.1.1 → 0.1.2**：`Makefile` 的 `VERSION`、`cmd/kored/main.go` 内置默认值与 `docs/CORE.md`
+  版本基线同步；`make version-check` 实测确认 0.1.2 仍落在 24 仓 `requires_kore` 区间内，不触发上界阻断。
+  版本基线沿革不变：`0.1.1` 仍是首个含 `file_write` 受控写的内核版本。
+
 ## [0.1.1] - 2026-11-26
 
 开源工程标准化补齐：七语言（zh/en/es/fr/de/ru/pt）`DETAIL` 文档与 `locale/*.json`、README 语言切换行与 star 提示、Git Flow 分支模型与 SSH 签名约定、六语言 `SECURITY` 译文、`.github/dependabot.yml` 与 `CODEOWNERS`；无日语文件、无死链，JSON 与 `docs-check` 门禁通过。
