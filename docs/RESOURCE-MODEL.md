@@ -319,6 +319,8 @@ CI 规则：`make mem` 与 `make idle` 仅在有 `kored` 时生效（M1 起）�
 
 预算：首屏 HTML + 首屏 JS/CSS 合计 ≤ 300 KiB gzip；首屏图片 ≤ 100 KiB；插件前端资源不计入首屏（按需 `import()` 加载）。
 
+> **首屏口径注记（round 30 / task-249-250）**：当前 `make frontend` 实测 **91,092 B 是用量，不是余量**；预算 307,200 B，**余量 216,108 B（约 70.4% 未用）**，仍在硬红线内（exit 0）。`scripts/frontend-check.sh` 另有非阻断「体积漂移」WARN：`> 基线+5%（87,341 B）或绝对线 90,000 B` 即触发，91,092 B 命中绝对线——**该 WARN 不是 G-03 红线、不改退出码**，别读成"预算告急"。正确处置只有两条：① 增长属已评审的首屏必需功能 → 同轮签字更新脚本 `BASE_FILES` 基线快照并写来源；② 属本该懒加载却塞进首屏的视图 → 拆回 `/assets/<视图>.js` 懒加载后复核。**不是压体积**；红线内不为压缩停进度。详见 [`../.agents/verify/resource-audit-r30.md`](../.agents/verify/resource-audit-r30.md)。
+
 手段：
 
 1. 路由级代码分割：登录页与主壳布局独立 chunk，未访问路由不下载。
