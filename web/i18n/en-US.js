@@ -867,5 +867,13 @@
     'sshguard.label.maxAuth': 'Max auth attempts',
     'sshguard.btn.genSuggest': 'Generate suggestions',
     'sshguard.sug.footer': 'Read-only generation: suggested config + diff + risks (with rollback) + copy-ready commands; it never modifies /etc/ssh and has no "one-click apply".',
+    // runtime-python 扩展管理（惰性英文包；中文由 runtimes.js 原地回退，不占首屏）
+    'runtimes.ext.py.emptyPkg': 'Enter the extension package name first, e.g. requests or requests==2.31.0',
+    'runtimes.ext.py.badPkg': 'Invalid package "{p}": only letters, digits, . _ - and an optional ==version are allowed; no spaces, semicolons, slashes or --user option',
+    'runtimes.ext.py.meta': 'Installed into the plugin isolated directory, never touching host site-packages; only letters, digits, . _ - and ==version',
+    'runtimes.ext.py.suffix': '; written only to the plugin state directory, host site-packages untouched.',
+    'runtimes.ext.py.fieldHint': 'Separate multiple packages with spaces or commas; never installed into host site-packages',
+    'runtimes.ext.py.fieldLabel': 'Extensions to install',
+    'runtimes.ext.py.installNote': 'Extensions go only to the isolated prefix in the plugin state directory; on failure check the network or mirror source.',
   };
 })(typeof window !== 'undefined' ? window : globalThis);

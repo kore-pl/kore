@@ -3,10 +3,11 @@
    只读四动词：versions / info / projects / doctor（三 runtime 共用，保留不变）。
    Python 专属写操作（仅 runtime-python tab 显示）：venv.list / venv.create（path+版本+可选初始包）
    / pip.install / pip.list；写域限制在插件状态目录内，后端有路径白名单 + 软链逃逸防护 + 120s 超时。
-   Node / PHP 专属扩展管理（各自 tab 显示）：ext.list / ext.install / ext.remove；
+   Node / PHP / Python 扩展管理（各自 tab 显示）：ext.list / ext.install / ext.remove；
    Node 包只装进 <state>/global/node_modules（npm --prefix 隔离），绝不 npm -g；
-   PHP 扩展只装进 <state>/global/php_ext（pecl -d extension_dir 隔离），绝不 apt install php-*、不写宿主 php 全局。
-   两个 tab 共用一套面板与包名校验助手（仅提示文案按运行时切换），不新增一级控件 / hub / CSS。
+   PHP 扩展只装进 <state>/global/php_ext（pecl -d extension_dir 隔离），绝不 apt install php-*、不写宿主 php 全局；
+   Python 包只装进 <state>/global/py_ext（pip --target 隔离），不写宿主 site-packages。
+   三个 tab 共用一套面板与包名校验助手（仅提示文案按运行时切换），不新增一级控件 / hub / CSS。
    tab 切换只重绘本页，不换 hash、不重载；每 tab 的扫描根目录写 localStorage。 */
 (function () {
   'use strict';
@@ -24,7 +25,16 @@
       badPkg: '包名「{p}」不合法：只允许字母数字和 . _ -，可带 -版本；不要写空格、分号、斜杠或 apt 选项',
       meta: '装到插件隔离目录，不碰宿主 php / apt 全局扩展；仅允许字母数字 . _ - 与 -版本',
       suffix: '；只写插件状态目录，不影响宿主 php / apt 全局扩展。', fieldHint: '空格或逗号分隔多个扩展；不会安装到系统 php 目录',
-      fieldLabel: '要装的扩展', installNote: '扩展仅写插件状态目录的隔离前缀；失败时检查网络或 PECL 源。' }
+      fieldLabel: '要装的扩展', installNote: '扩展仅写插件状态目录的隔离前缀；失败时检查网络或 PECL 源。' },
+    // Python 复用同一面板：pip --target 装进 <state>/global/py_ext，不碰宿主 site-packages。
+    'runtime-python': { pkgExample: 'requests==2.31.0 flask',
+      emptyPkg: tr('runtimes.ext.py.emptyPkg', '请先填写要安装的扩展包名，例如 requests 或 requests==2.31.0'),
+      badPkg: tr('runtimes.ext.py.badPkg', '包名「{p}」不合法：只允许字母数字和 . _ -，可带 ==版本；不要写空格、分号、斜杠或 --user 选项'),
+      meta: tr('runtimes.ext.py.meta', '装到插件隔离目录，不碰宿主 site-packages；仅允许字母数字 . _ - 与 ==版本'),
+      suffix: tr('runtimes.ext.py.suffix', '；只写插件状态目录，不影响宿主 site-packages。'),
+      fieldHint: tr('runtimes.ext.py.fieldHint', '空格或逗号分隔多个包；不会安装到宿主 site-packages'),
+      fieldLabel: tr('runtimes.ext.py.fieldLabel', '要装的扩展'),
+      installNote: tr('runtimes.ext.py.installNote', '扩展仅写插件状态目录的隔离前缀；失败时检查网络或镜像源。') }
   };
   var SRC = { path: 'PATH', known_path: tr('runtimes.src.known', '常用路径'), nvm: 'nvm', pyenv: 'pyenv', phpenv: 'phpenv', conda: 'conda' };
   var CHECK = { node: tr('runtimes.check.node', 'Node 安装'), npm: tr('runtimes.check.npm', 'npm 可用性'), global_packages_writable: tr('runtimes.check.globalWritable', '全局包目录可写'),
@@ -281,9 +291,9 @@
       if (tab === t.id) paintBody();
     }, function (err) { s.pkgBusy = false; s.pkgErr = err; if (tab === t.id) paintBody(); });
   }
-  // ---- Node / PHP 扩展（各自 tab）：ext.list + ext.install + ext.remove ----
+  // ---- Node / PHP / Python 扩展（各自 tab）：ext.list + ext.install + ext.remove ----
   // 契约源自后端 ext.go：install/remove 入参 {packages:[...]}，list 入参 {}；前缀由后端固定为 <state>/global。
-  // Node 走 npm --prefix（node_modules），PHP 走 pecl -d extension_dir（php_ext），两者共用本面板。
+  // Node 走 npm --prefix，PHP 走 pecl -d extension_dir，Python 走 pip --target（py_ext），三者共用本面板。
   function extHint(err) {
     var code = err && err.code ? String(err.code) : '';
     var m = (err && err.backendMessage) || (err && err.message) || '';
