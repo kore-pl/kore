@@ -21,6 +21,7 @@
       statusError: '', dbError: '', dbLoaded: false, queryError: '', busy: false, destroyed: false,
       discoveryState: 'loading', discovery: null, discoveryError: '',
       autoNotice: null, autoPending: false, selectedDb: '', includeSystem: false, l2Promise: null,
+      execPromise: null, execPgPromise: null,
       dbType: 'mysql', instHint: '', container: null,
       l2UsersHost: null, l2UsersHandle: null, l2NoticeHost: null,
       // 慢查询分析（db-mysql.slowlog）：阈值/条数只存预设档位，schema 空串=全部库。
@@ -142,22 +143,27 @@
   }
   var SYSTEM_DBS = ['mysql', 'information_schema', 'performance_schema', 'sys'];
   var PG_SYSTEM_DBS = ['postgres', 'template0', 'template1'];
-  // ensureExec 只在 MySQL 页展开「SQL 写入」时注入 db-mysql.js（exec 面板，db-mysql 插件视图）；
-  // 失败清缓存允许下次重试，与 ensureL2 同款（首屏零注入）。
+  // ensureExec 按当前实例类型按需注入对应 exec 面板：MySQL → db-mysql.js，
+  // PostgreSQL → db-postgres.js（两者都是 db.js 的 SQL 写入折叠面板视图，同构）。
+  // 只在展开「SQL 写入」时调用，失败清缓存允许重试，与 ensureL2 同款（首屏零注入）。
   function ensureExec() {
-    if (window.KoreDbMysqlExec) return Promise.resolve(window.KoreDbMysqlExec);
-    if (S.execPromise) return S.execPromise;
-    S.execPromise = new Promise(function (resolve, reject) {
+    var pg = isPg();
+    var exported = pg ? 'KoreDbPostgresExec' : 'KoreDbMysqlExec';
+    var src = pg ? '/assets/db-postgres.js' : '/assets/db-mysql.js';
+    var cacheKey = pg ? 'execPgPromise' : 'execPromise';
+    if (window[exported]) return Promise.resolve(window[exported]);
+    if (S[cacheKey]) return S[cacheKey];
+    S[cacheKey] = new Promise(function (resolve, reject) {
       var script = document.createElement('script');
-      script.src = '/assets/db-mysql.js'; script.async = true;
+      script.src = src; script.async = true;
       script.onload = function () {
-        if (!window.KoreDbMysqlExec) { S.execPromise = null; reject(new Error('db-mysql.js 未导出 KoreDbMysqlExec')); return; }
-        resolve(window.KoreDbMysqlExec);
+        if (!window[exported]) { S[cacheKey] = null; reject(new Error(src.split('/').pop() + ' 未导出 ' + exported)); return; }
+        resolve(window[exported]);
       };
-      script.onerror = function () { S.execPromise = null; reject(new Error('db-mysql.js 加载失败')); };
+      script.onerror = function () { S[cacheKey] = null; reject(new Error(src.split('/').pop() + ' 加载失败')); };
       document.head.appendChild(script);
     });
-    return S.execPromise;
+    return S[cacheKey];
   }
   // ensureL2 只在首次执行写操作或展开用户区时注入 db-l2.js；失败清缓存，允许下次重试。
   function ensureL2() {
@@ -1026,9 +1032,10 @@
       });
       paintSlowlog();
     }
-    // SQL 写入（db-mysql.exec，仅 MySQL）：写语句两级确认 —— 折叠区，不展开就不注入
-    // db-mysql.js，首屏零成本。后端 exec 声明 system:admin，未授权用户点了也只收到可执行错误。
-    if (!isPg()) {
+    // SQL 写入（db-mysql.exec / db-postgres.exec）：写语句两级确认 —— 折叠区，
+    // 不展开就不注入对应面板模块，首屏零成本。后端 exec 声明 system:admin，
+    // 未授权用户点了也只收到可执行错误（query 仍为 system:read，不放开写）。
+    {
       var execPanel = add(host, el('details', 'panel db-l2-panel'));
       var execSum = add(execPanel, el('summary', 'db-l2-summary'));
       add(execSum, el('span', 'panel-title', 'SQL 写入（INSERT / UPDATE / 结构变更）'));
