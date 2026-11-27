@@ -64,6 +64,8 @@
 
 ### 3.2 数据模型（②）
 
+**落点口径澄清（P3 真机复验后订正，2026-11-27）**：本文说的“state 根”在 `history.json` 落点上指 **state 根下的插件独占子目录** `<state>/plugins/monitor/history.json`，不是 `<state>/history.json`。内核启动把 `KORE_STATE_DIR` 注入为 `filepath.Dir(inst.manifest.Dir)`（`internal/core/supervisor/start.go:83,169`，即插件版本目录的父目录 = `<state>/plugins/monitor`），插件侧 `historyPath()` 再 `filepath.Join(c.stateDir, "history.json")`（`kore-plugin-monitor/internal/monitor/history.go:63-68`）。该目录正是降权时 `handOverStateDir` 交给 `kore-monitor`（0700）的插件状态目录（`demote.go:79`、`handover.go:38`），不是与内核共享的 state 根。P3 隔离实例实测落点见 `.agents/verify/monitor-history-live.md` §4。
+
 **容量/间隔覆盖 30 天的算式**：`MaxHistoryPoints(720) × MaxHistoryInterval(3600s) = 2,592,000s = 30 天`（理论上限，恰好覆盖竞品口径）。当前默认 `60 × 60s = 1h`，覆盖仅 1 小时——这是"看不到昨天"的根因。
 
 **默认配置建议（做成可配置，不写死单一答案）**：
@@ -78,11 +80,11 @@
 
 **原子写与大文件**：`saveHistoryFile`（`history.go:166-201`）已是"同目录临时文件 → `Chmod(0600)` → `rename`"，保持不动；720 点 × 5 数值字段 ≈ 90 KiB（估算，未实测），远低于协议 8 MiB 帧上限。每次 `recordHistory` 全量读改写是 O(n)，720 点下 30s 一次无压力；**不做增量写 / 分片 / 后端预聚合**：点数硬上限 720，简单原子写比复杂分片更可靠（G-22 设计层已穷尽）。`historyMu`（`:28`）串行化并发调用，保留。
 
-**降权插件 state 写权限实机验证计划（未验证，必须做）**：内核启动注入 `KORE_STATE_DIR`（`internal/core/supervisor/start.go:163-169`），降权时 `handOverStateDir` 移交"插件自己的"落点（`demote.go:147`、`handover.go:38`）；但 `historyPath()` 返回的是 `filepath.Join(c.stateDir, "history.json")`（`history.go:63-68`）——**state 根目录，不是已移交的 `KORE_PLUGIN_DATA` 子目录**。风险：root 内核 + 降权 `kore-monitor` 时，插件可能无权在 state 根创建 history.json，导致 `recordHistory` 只写 warning（`:103-107`）而静默无历史。验证步骤（隔离实例，G-29 不碰 8787 主实例）：
+**降权插件 state 写权限实机验证计划（未验证，必须做）**：内核启动注入 `KORE_STATE_DIR`（`internal/core/supervisor/start.go:163-169`），降权时 `handOverStateDir` 移交"插件自己的"落点（`demote.go:147`、`handover.go:38`）；但 `historyPath()` 返回的是 `filepath.Join(c.stateDir, "history.json")`（`history.go:63-68`）——**落在插件独占的 `<state>/plugins/monitor/`（`KORE_STATE_DIR`），不是 `KORE_PLUGIN_DATA` 子目录，也不是与内核共享的 state 根**。风险：root 内核 + 降权 `kore-monitor` 时，仍需真机确认该已移交目录对 `kore-monitor` 可写，否则 `recordHistory` 只写 warning（`:103-107`）而静默无历史。P3 非 root 路径实测已落盘且 0600（见 `.agents/verify/monitor-history-live.md` §4），降权路径不冒充已验。验证步骤（隔离实例，G-29 不碰 8787 主实例）：
 
 1. 起隔离 `kored --config /tmp/<id>/kore.yaml`，state/run/log 全落 /tmp，内核 root 且开启降权；装 monitor 并确认 `Demoted=true`。
-2. `stat -c '%U %a' <state>` 与 `<state>/plugin-data/monitor`；调 `monitor.sample` 后 `stat <state>/history.json`，确认属主 `kore-monitor`、权限 0600。
-3. 若 `history.json` 未生成且结果 `warnings` 含"保存历史曲线失败"，判 FAIL，修复方向：把 history 落点改到 `KORE_PLUGIN_DATA`（已属主 kore-<id>、0700，`start.go:128-158`）而非 state 根，并同步 `state_dir.go` / 文档。
+2. `stat -c '%U %a' <state>/plugins/monitor` 与 `<state>/plugin-data/monitor`；调 `monitor.sample` 后 `stat <state>/plugins/monitor/history.json`，确认属主 `kore-monitor`、权限 0600。
+3. 若 `history.json` 未生成且结果 `warnings` 含"保存历史曲线失败"，判 FAIL，修复方向：把 history 落点改到 `KORE_PLUGIN_DATA`（已属主 kore-<id>、0700，`start.go:128-158`）而非当前 `<state>/plugins/monitor` 落点，并同步 `state_dir.go` / 文档。
 4. 未降权（非 root 内核）路径同验一次，确认 0600 + 可写。
 5. 结论写入 `.agents/verify/` 证据文件（命令 + 退出码 + stat 原文），不凭推测判定。
 
@@ -158,7 +160,7 @@
 | 风险 | 后果 | 回退 / 缓解 |
 | --- | --- | --- |
 | interval 不匹配（task < history_interval_s） | 采了但落盘点数不涨，用户以为坏 | 引导文案同步设值；sample 结果回带 interval_s 供核对；真机断言 #1 覆盖 |
-| 降权 state 根无写权限 | 历史静默丢失（只有 warning） | §3.2 验证计划；FAIL 则历史落点迁 `KORE_PLUGIN_DATA`，重跑 P1/P3 |
+| 降权后插件独占 state 子目录 `<state>/plugins/monitor/` 无写权限 | 历史静默丢失（只有 warning） | §3.2 验证计划；FAIL 则历史落点迁 `KORE_PLUGIN_DATA`，重跑 P1/P3 |
 | 30 天跨度与细粒度不可兼得 | 7 天/今天视图粒度粗 | 两档可配置 + 前端提示；不写死单一默认（live-games 式口径：分支都实现、默认取保守值） |
 | 720 点全量读改写 | 高频下写放大 | 硬上限 720；task interval ≥30s；不做增量写（G-22 设计层已穷尽） |
 | 新增方法撞测试涟漪 | 4 替身 + 期望表变红 | 按 AGENTS §4 串行实现、≥20 分钟预算；同写域不并行派发 |

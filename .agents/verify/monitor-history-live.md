@@ -132,3 +132,16 @@ ts(today)=["2026-11-27T10:55:00Z","2026-11-27T11:00:00Z"]  ts(week)=["2026-11-27
 ---
 
 **提交**：`[agent:monitor-history-live] docs(verify): 监控历史 P3 真机复验报告（隔离实例 55119，五项断言 PASS）` —— 精确 `git add .agents/verify/monitor-history-live.md` + `git commit -s -- <path>`（只此一文件），不 push。verifier 另派。
+
+## 9. 事后订正（round 23 / task-211，原文一字不改，仅追加）
+
+独立验收 PASS（50fdbf0）后回读发现 4 处非阻断精度偏差，订正如下；§1–§8 原文保持原样，便于与当时证据对照。
+
+| # | 原文处 | 订正 | 证据 |
+| --- | --- | --- | --- |
+| 1 | §4「首点到点比 `next_run_at` 晚约 **60s**」 | 实为**约 30s**（一个 30s 间隔），非 60s。任务 `next_run_at=18:59:04.978`，调度执行记录首条 `started_at=18:59:33.747`（§4 原文 runs），差 ≈28.8s；首点 `ts_unix_ms=1795777173752` 对应 18:59:33.752，与首次执行对齐。原文把「一个 interval」误记成 60s，不影响 0→1→2→3 增长判据。 | 本文件 §3 建任务响应 + §4 runs JSON / 最终 history.json |
+| 2 | §4 与 §7 #2 的 `start.go:76,169` | `stateDir := filepath.Dir(inst.manifest.Dir)` 实际在 `kore/internal/core/supervisor/start.go:83`；`KORE_STATE_DIR=` 注入在 `:169`。正确出处为 **start.go:83,169**（不是 :76,169）；插件侧拼接仍为 `history.go:63-68`。KORE_STATE_DIR 是插件版本目录的父目录 `<state>/plugins/monitor`，即插件独占 state 子目录，DESIGN §3.2 已按 task-211 同步澄清。 | `grep -n 'KORE_STATE_DIR\|stateDir := filepath.Dir' internal/core/supervisor/start.go` → 83 / 169 |
+| 3 | §3 引述的 `E_CONFLICT` 与 §7 #3 只写 `cmd/kored/install.go` + 调度鉴权 | 精确出处：**`cmd/kored/serve_daemon_actions.go:99-103`** —— `if !d.catalog.Enabled(plugin) { return protocolError(pluginapi.E_CONFLICT, "插件 %s 未启用，请先 POST …/%s/enable") }`；**`internal/core/registry/catalog.go:16`** —— `StateInstalled = "installed"`（已安装未启用）的状态取值。`install.go` 只负责把离线包装成 installed，真正拒绝调用的是 daemon.Invoke 的 enabled 校验。 | `grep -n 'E_CONFLICT\|catalog.Enabled' cmd/kored/serve_daemon_actions.go` → 99/100；`sed -n '12,20p' internal/core/registry/catalog.go` |
+| 4 | 任务卡「临时资产删净 **171M**」 | 该体积数字**从未写入本报告正文**，报告 §6 只声明「配置/state/run/log、cookie jar、响应临时文件、编译缓存与一次性脚本随 `.tmp-mlive/` 删除」。隔离目录删前未留体积快照，**171M 不可追溯复算**；可核的只有「残留已删」——`.agents/verify/.tmp-mlive/` 已 GONE、55119 无监听、8787 healthz 200、`.kore-local.yaml` sha 与 state.db mtime 逐字未变（独立验收 `monitor-history-live-verification.md` §31/§70 同口径）。勿把 171M 当作已复核值。 | 本文件 §6；`.agents/verify/monitor-history-live-verification.md` §31、§70 |
+
+> 本段只订正文档精度，不改任何真机结论（五项断言仍 PASS）、不碰生产后端逻辑、不 bump 插件版本；空态引导文案与 DESIGN §3.2 的同步订正见本轮 task-211 提交。
