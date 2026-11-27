@@ -322,6 +322,11 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
   - **I5 不违 G-10/G-01/零侵入**：纯内存 + 同步写路径，无联网/出站/遥测/常驻组件；不 import 插件、不维护业务域名词表；审计写仍走 `Store.Update` 同步提交，**不引入 bbolt Batch / goroutine / ticker**（G-19）。
   - **I6 fail-closed 不变**：鉴权判定在 `withAuth`/能力判定处已完成，失败即 401 + 写审计；合并只影响「写几条」不影响「拒绝这个决定」；`root.action` 提权审计是独立 fail-closed 出口（写不进就不执行），**不并入本 deny 窗口**；审计写失败仍 `slog.Warn` 留痕，不静默放行。
   - **告警侧**：与审计同源同窗，窗口触发点一次 `PutAlertCounted(n)` 替代 n 次读改写事务，`count` 守恒一致、通知只派发一次（无风暴）。前端通用 detail 摊平即可显示合并次数，零改动。
+- **已知边界：sweep 补齐批次的告警 detail 归因错配（2026-11-28 记录为已知可接受，下一发版窗口顺带修）**：`internal/core/httpapi/deny_burst.go:175` 的 `DenyAlertWrite` 只填 `N` 不填 `Detail`，`middleware.go:290-292` 落库用**当前请求**的 `alertDetail`（`:280`）而非批次自己的明细（`st.detail` 在 `deny_burst.go:84,121,125` 写入后零读取）。每 256 次调用触发的惰性 sweep 补齐**其他 key** 的过期窗口时（`:112-114` / `:182-192`），告警文案取自触发 sweep 的那个请求。真实影响按边界如实说，不夸大也不缩小：
+  - **审计正确、不变量不受影响**：审计 detail 走代表事件的 `d.Key`（`deny_burst.go:169-171`）经 `AuditWithDetail` 原样落库（`cmd/kored/serve_audit.go:78-90`）；count 守恒、通知次数、title/source 一致、审计可追溯均成立。
+  - **误导边界**：`denyAlertDetail`（`middleware.go:308-318`）只含 subject/plugin/target/reason、**不含 capability 名**——所以**不存在"按能力错归因"**。风险仅在人读归因：sweep 合并批次里多个 key 并发被拒时，告警的「谁 / 为何被拒」可能对应触发请求而非该批次；这是**安全信号对、归因文案错**，不是无关紧要的展示细节。
+  - **可见窗口有限**：store 按 title+source 5 分钟窗归并、Detail 最新覆盖（`internal/core/store/alerts.go:144-153`），错文案可能被后续覆盖，也可能在窗内被人看到。
+  - **待办（随下一个自然版本发，不单独发版）**：`deny_burst.go:175` 填 Detail + `middleware.go:291` 改用 `alert.Detail`（可选清理 `st.detail` 死字段）；`countingDenyAlertSink`（`deny_burst_integration_test.go:22-33` 现丢弃 detail）加 detail 捕获；补多 key + sweep 对照测试（约 20–40 行）。不为一个只错人读文案、审计正确的窄触发面刷 0.1.4 全版涟漪（版本 / CHANGELOG / tag / 瘦包 / 索引 / release / CDN / wiki）；裁决留痕见 [DECISIONS.md](../.agents/LOG/DECISIONS.md) 2026-11-28 同议题行。
 - **日志字段白名单（M1-14 计划，当前未实现）**：目标字段集合为 `ts`、`level`、`event`、`req_id`、`plugin_id`、`method`、`code`、`dur_ms`、`bytes` 等，落地后按白名单重建、白名单外字段丢弃而非透传（fail-closed）。**现状**：`access_log` 中间件与白名单重建均未实现（`internal/core/httpapi/middleware.go:269` 标注归 M1-14），当前只有 `req_id` 注入；该集合**不含** `ua_hash` / `ip_hash`（全仓无此日志字段）。
 - 禁止记录：口令、token、cookie、secret、`Authorization`、完整请求体、签名原文；`ip`/`ua` 只存 sha256 前 16 字节。
 - 日志文件 `/var/log/kore/kore.log`（插件为 `/var/log/kore/plugins/<id>.log`）权限 `0640 root:kore`；轮转容量以 [DATA-MODEL](./DATA-MODEL.md) 为唯一真源（内核 10 MiB × 5、插件 10 MiB × 2），本文件不另立数字。
