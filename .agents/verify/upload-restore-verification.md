@@ -5,18 +5,20 @@
 > 复核对象：backup `5c22eba`（v0.6.0）/ kore `2915d80` / plugins `e66b893`。
 > 真机端到端留 P3，本报告不声称真机通过。
 
-## 0. 总评：**FAIL**（6 项中 5 项 PASS，1 项关键验收不成立）
+## 0. 总评：**PASS（带发版前置条件）**
+
+初验（backup 5c22eba）判 FAIL，唯一阻断为 §3.3 的 usability 新增 10 条 A3 FAIL；原 owner 以 backup `a1d2bfc` 修复后，本 verifier 用同款严格受控对照独立复验，**阻断解除**（详见 §8）。其余 5 项原 PASS 结论不受影响。
 
 | 项 | 范围 | 结论 |
 |---|---|---|
 | ① 后端读码+复跑 | 四阶段 / 4 MiB / S1–S9 / 版本 / dist / 5 包+11 恶意单测 / e2e | **PASS** |
 | ② EINVAL 修复正当性 | 干净 HEAD 复现 / 最小改动 / CHANGELOG / 未改 restore | **PASS** |
-| ③ 前端 | 1 按钮复用 / node --check / 首屏预算 / **usability 无新增 FAIL** | **FAIL**（前三项 PASS，usability 出现 **10 条新增 A3 FAIL**，详见 §3.3） |
+| ③ 前端 | 1 按钮复用 / node --check / 首屏预算 / usability 无新增 FAIL | **修复后 PASS**（初验 FAIL 10 条，a1d2bfc 后受控对照回 0 FAIL；§3.3+§8） |
 | ④ 分支拓扑 | backup FF 0/0 / plugins 存量分叉如实标 / 实现落 main | **PASS** |
 | ⑤ G-28 四图 | read_image 实读 / identify 宽高 / 内容真实 / mock 边界 | **PASS** |
-| ⑥ 索引+git 纪律 | validate/build-market/store/presets / dist sha 四处 / DCO 未 push / 临时资产 | **PASS** |
+| ⑥ 索引+git 纪律 | validate/build-market/store/presets / dist sha 四处 / DCO 未 push / 临时资产 | **PASS**（sha 四处仍自洽，但见下方发版前置条件） |
 
-**唯一阻断点**：任务卡 ③ 明定「usability 无新增 FAIL」。受控对照（干净 HEAD 基线 vs 当前提交，隔离 GOCACHE、同一 pending 清单、同一目录布局）证明：pre-upload 基线 usability **0 FAIL / exit 0**；上传提交后 **11 FAIL / exit 1**，其中 **10 条 A3 backup FAIL 由本次 upload.go 新增文案挤占 `A3 backup 82` 豁免额度直接引起**，另 1 条为 waf A1 e2e 波动。实现者「11 vs 基线 10、差 1 为 waf 波动、无新增 FAIL」的对照基线只归档了 kore 仓、却让脚本扫描真实（已改动）插件仓，因此把已存在的 10 条 FAIL 误判为存量。详见 §3.3。
+**发版前置条件（非本次验收阻断，但放行 P3/发版前必须做）**：`a1d2bfc` 改变了二进制内字符串；隔离复验实测从 a1d2bfc 源码重打 `make dist` 得到 **新 sha `a5043d36d951c53f8bbff167cf300fd865793243bc315d955a18f41b743acbe4`（1741526 B）**，而当前 committed dist 与 kore-plugins 索引/账本仍为 `26519393…b49b74e`（对应修复前 5c22eba 源码，含旧短文案）。即**当前归档尚未包含 usability 修复**。须由 lead 按 G-17「同 id@version 只允许一个 sha，改 dist sha 必须 bump」裁决：重打 dist + 同步 index/plugins.json / versions.lock.json / presets / market，或按口径 bump 版本后再打。lead 已明确本轮 `dist 重打` 属放行后续动作，故本卡判 PASS。
 
 ---
 
@@ -100,7 +102,7 @@ params 必须是 JSON 对象 ×2 / params 解析失败: ×1 / values 必须是 J
 完整门禁（可写 GOCACHE，真实工作区）：`bash scripts/usability-check.sh` → exit 1，`0 pass / 502 warn / 11 fail`，11 fail = 上述 10 条 A3 backup + 1 条 `A1 waf ZeroParam`（e2e 波动，waf 未触碰）。
 机制：`upload.go` 新增 10 条 A3 违规文案（如 `data_base64 不能为空`、`filename 不能为空`）本身被 `A3 backup 82` 登记为 WARN，但它们占用了 82 条豁免额度，把扫描序在后的 10 条存量违规挤出额度 → 变 FAIL。实现者对照的 BEFORE 仅归档 kore 仓（`.baseline-kore-head`），`PLUGIN_REPOS_DIR` 仍指向真实已改动的插件仓，故 BEFORE 已含这 10 条，误判为存量。
 
-**放行建议（不在本卡执行）**：把 `upload.go` 那 10 条文案改为 ≥8 字且含「请/应/需/例/如」，或经 lead 裁决把 `A3 backup 82` 上调到 92 并写明依据；修后重跑 `bash scripts/usability-check.sh` 须回 0 FAIL。
+**处置结果**：原 owner 已以 backup `a1d2bfc` 改写这 10 条文案（未动门禁/pending/其它仓），本 verifier 独立复验确认回 0 FAIL（详见 §8）。
 
 ## 4. ④ 分支拓扑（PASS）
 ```
@@ -137,7 +139,7 @@ kore: make store-check   → exit 0（24 pass / 0 fail / 37 warn）
 kore: make presets-check → 隔离可写 GOCACHE 后 exit 0（8 pass / 0 warn / 0 fail）
                            （未隔离时因共享 GOCACHE 只读 EROFS 误报 16 fail，属沙箱噪声）
 ```
-- **dist sha 四处一致**：实测 `sha256sum` = dist `.sha256` = `index/plugins.json#backup@0.6.0` = `index/versions.lock.json#backup@0.6.0` = `26519393…b49b74e`；`plugins.json` size_bytes=1741643 与实测相等；market 与 `presets/full.json`、`presets/db-only.json` 的 backup pin 均为 `0.6.0`。
+- **dist sha 四处一致**（就 committed 产物而言）：实测 `sha256sum` = dist `.sha256` = `index/plugins.json#backup@0.6.0` = `index/versions.lock.json#backup@0.6.0` = `26519393…b49b74e`；`plugins.json` size_bytes=1741643 与实测相等；market 与 `presets/full.json`、`presets/db-only.json` 的 backup pin 均为 `0.6.0`。**注意**：该 sha 对应修复前源码；a1d2bfc 后源码已变，重打 dist 得 `a5043d36…`（§0 发版前置条件），四处需同步更新。
 - 三仓 commit 精确路径（见 §1）+ DCO，未 push/tag/Release；worktree 仅主树。
 - 他人 dirty 原样：kore 的 `M scripts/usability-pending.txt` 与多个 `??`（含 A1 豁免删改）未提交；kore-plugins 的 `.tmp-validate-out.txt`、`dist/` 未提交。
 - 临时资产：本次 upload-restore 的基线目录、usability dump、隔离 GOCACHE（`.baseline-*` / `.usability-*` / `.gocache-upload-restore`）均已删净；工作区残留的其它 `.gocache-*`/`.tmp-*` 属其它历史任务资产（日期 11-25/26），非本任务产物，未触碰。
@@ -147,4 +149,29 @@ kore: make presets-check → 隔离可写 GOCACHE 后 exit 0（8 pass / 0 warn /
 - 未 push、未联网业务（Go 命令一律 `GOPROXY=off`）、未启主流程 CLI、未碰 `.kore-local-*`。
 - 共享 GOCACHE 只读（EROFS）导致的 A1/presets 失败已用隔离可写缓存排除，并如实标注为环境噪声，不冒充代码问题。
 - 真机端到端（合法包→restore 成功、恶意/超大/未授权被拒）属 P3，本卡**未验证、不声称通过**。
-- 上方 §3.3 的 usability FAIL 为本卡独立复跑发现，证据可复现，未替实现者掩盖；需回派原 owner 修正并重验。
+- 上方 §3.3 的 usability FAIL 为本卡独立复跑发现，证据可复现，未替实现者掩盖；经原 owner 修正后已独立复验解除（§8）。
+
+## 8. 修复复验（backup a1d2bfc，2026-11-27）——**PASS**
+
+原 owner 回派修复：`git -C kore-plugin-backup show --stat a1d2bfc` → `internal/backupop/upload.go | 20 ++++++++++----------`（+10/-10，仅 1 文件），`Signed-off-by` ×1；kore HEAD 仍 959b642（我的报告）、plugins HEAD 仍 e66b893（未动）；`git show HEAD:scripts/usability-pending.txt` 未变、门禁配置未动；`git -C kore-plugin-backup status --porcelain` 空。10 条文案逐条核对均已 ≥8 字且含「请/应/需/例/如」（sha256 ×2 / offset / data_base64 空 / 解码失败 / 单块超限 / phase / filename 空 / filename 路径分隔符 / 扩展名）。
+
+### 8.1 同款严格受控对照（本 verifier 独立执行，与主报告 §3.3 同法）
+两侧/三侧临时目录同布局（23 个兄弟仓 symlink + 1 个真 `git archive` 解压 backup 仓，24/24），同一 kore 脚本与 clean HEAD pending 清单，隔离可写 GOCACHE，`--no-run-tests`：
+```
+pre   archive 917bbfb → exit 0；A3 backup FAIL=0；0 pass/502 warn/0 fail/190 unverified
+broken archive 5c22eba → exit 1；A3 backup FAIL=10；0 pass/502 warn/10 fail/191 unverified
+post  archive a1d2bfc → exit 0；A3 backup FAIL=0；0 pass/502 warn/0 fail/191 unverified
+```
+当前真实工作区完整门禁（隔离可写 GOCACHE）：`bash scripts/usability-check.sh` → exit 1，`0 pass/502 warn/1 fail`，唯一 FAIL 为 `A1 waf ZeroParam`（waf 仓未触碰的 e2e 波动），与本次改动无关；**A3 backup FAIL 已归零**。
+
+### 8.2 其余门禁与拓扑（复核）
+```
+backup gofmt -l .                                  → 空（clean）
+backup GOPROXY=off GOWORK=off go test ./...         → exit 0（5 包全 ok）
+backup GOPROXY=off GOWORK=off make check            → exit 0（含 boundary race 2.539s）
+backup main=develop=a1d2bfc，main..develop=0 / develop..main=0（分叉 0/0，未 push）
+```
+① 后端逻辑未变（仅文案字符串），② EINVAL、④ 拓扑、⑤ 四图、⑥ 索引门禁结论均不受影响。
+
+### 8.3 发版前置（见 §0）
+隔离从 a1d2bfc 源码重打 `make dist` → 新 sha `a5043d36…b49b74e`、1741526 B，与当前 committed dist/index 的 `26519393…` 不同；**当前归档不含本次文案修复**。按 lead 口径，dist 重打 + 索引/账本同步（或版本 bump）属放行 P3/发版前动作，不构成本次验收阻断；交 lead 裁决具体采用同版本换 sha 还是 bump 路径。
