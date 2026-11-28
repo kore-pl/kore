@@ -1,11 +1,54 @@
 #!/usr/bin/env bash
 # kore 文档门禁（M0）— 校验：必需文件 / 元信息 / 相对链接 / 占位词 / 行数 / 关键口径
-# 用法: bash scripts/docs-check.sh
+# 用法: bash scripts/docs-check.sh [--self-test]
+#   --self-test 只跑链接分类的正反用例（不造临时资产、不读仓库文档）
 # 退出码: 存在 FAIL → 1；仅 WARN → 0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# 跨仓相对链接豁免（与 market-check「kore-plugins 缺失 SKIP」口径一致）：
+# docs/ 与 .agents/ 里的链接可达性判据只对本仓负责。若一条相对链接解析后落在兄弟仓
+# （kore-plugin-* / kore-plugins）目录内，且目标不存在（独立 clone 未检出该仓），
+# 则豁免为 [SKIP]，不阻断；目标存在时照常判可达。指向本仓内的相对链接一律硬判据。
+cross_repo_link() {
+  # $1=链接所在目录（相对 ROOT），$2=target；解析为相对 ROOT 的路径后判定。
+  # 只认「跳出本仓（../ 开头）且第一段是兄弟仓名」，避免受 clone 目录名影响。
+  local dir="$1" target="$2" rel
+  rel=$(realpath -m --relative-to="$ROOT" -- "$dir/$target")
+  case "$rel" in
+    ../kore-plugins|../kore-plugins/*|../kore-plugin-*) return 0 ;;
+  esac
+  return 1
+}
+
+# --self-test：只测链接分类函数，不读仓库文档；退出即结束（不造持久资产）。
+if [ "${1:-}" = "--self-test" ]; then
+  st_fail=0
+  check() { # $1=期望(0=兄弟仓/1=本仓) $2=dir $3=target $4=说明
+    local want="$1" dir="$2" target="$3" what="$4" got
+    if cross_repo_link "$dir" "$target"; then got=0; else got=1; fi
+    if [ "$got" = "$want" ]; then
+      printf '[PASS] self-test %s\n' "$what"
+    else
+      printf '[FAIL] self-test %s（期望 %s，实际 %s）\n' "$what" "$want" "$got"
+      st_fail=$((st_fail + 1))
+    fi
+  }
+  check 0 "docs/DECISIONS" "../../../kore-plugin-dns/README.md" "兄弟仓链接(kore-plugin-*)被识别"
+  check 0 ".agents/verify" "../../../kore-plugins/scripts/sign-index.sh" "兄弟仓链接(kore-plugins)被识别"
+  check 1 "docs/DECISIONS" "../../QUICKSTART.md" "本仓内链接不被误判为跨仓"
+  check 1 "docs" "CORE.md" "本仓子目录链接不被误判为跨仓"
+  # 误伤边界：文件名里含 kore-plugin- 但不是兄弟仓根目录，仍按本仓判据。
+  check 1 "docs" "my-kore-plugin-notes.md" "文件名含 kore-plugin 不误判"
+  if [ "$st_fail" -gt 0 ]; then
+    printf 'docs-check self-test: %d FAIL\n' "$st_fail"
+    exit 1
+  fi
+  printf 'docs-check self-test: 5 pass, 0 fail\n'
+  exit 0
+fi
 
 PASS=0
 WARN=0
@@ -144,6 +187,7 @@ if [ "${#LINK_FILES[@]}" -eq 0 ]; then
   failed "未发现待校验文档或证据，相对链接检查无对象"
 else
   LINK_CHECKED=0
+  LINK_SKIPPED=0
   LINK_BROKEN=0
   for f in "${LINK_FILES[@]}"; do
     dir=$(dirname "$f")
@@ -163,15 +207,21 @@ else
       esac
       LINK_CHECKED=$((LINK_CHECKED + 1))
       if [ ! -e "${dir}/${target}" ]; then
-        detail "断链: ${f} → ${target}"
-        LINK_BROKEN=$((LINK_BROKEN + 1))
+        # 兄弟仓缺失（独立 clone 未检出）= SKIP，口径同 market-check；本仓内断链仍 FAIL。
+        if cross_repo_link "$dir" "$target"; then
+          detail "[SKIP] 兄弟仓未检出: ${f} → ${target}（独立 clone 豁免）"
+          LINK_SKIPPED=$((LINK_SKIPPED + 1))
+        else
+          detail "断链: ${f} → ${target}"
+          LINK_BROKEN=$((LINK_BROKEN + 1))
+        fi
       fi
     done < <(links_of "$f")
   done
   if [ "$LINK_BROKEN" -eq 0 ]; then
-    pass "检查 ${LINK_CHECKED} 条相对链接，全部可达"
+    pass "检查 ${LINK_CHECKED} 条相对链接，全部可达（其中 ${LINK_SKIPPED} 条兄弟仓缺失豁免 SKIP）"
   else
-    failed "相对链接断链 ${LINK_BROKEN} 条（共检查 ${LINK_CHECKED} 条）"
+    failed "相对链接断链 ${LINK_BROKEN} 条（共检查 ${LINK_CHECKED} 条；兄弟仓缺失豁免 ${LINK_SKIPPED} 条）"
   fi
 fi
 flush_details
