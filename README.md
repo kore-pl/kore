@@ -143,18 +143,20 @@ Makefile                  # 唯一入口：make help 看全部目标
 
 ## 快速开始
 
-**M1 起可用**。M0 阶段下面这条命令只是占位：仓库里还没有 `cmd/kored` 源码，`make build` 会打印 `[SKIP] cmd/kored 未就绪` 并以退出码 0 结束——这是骨架的预期行为，不是可运行。
+**当前版本（v0.1.5）可直接构建运行**：`make build` 产出 `bin/kored`（CGO_ENABLED=0 单二进制，已内嵌 `web/dist` 前端三件套），首次启动生成一次性管理员口令，浏览器访问 `http://127.0.0.1:8787/` 登录后即可操作。从构建、最小配置、启动到首登改密的完整步骤见 **[QUICKSTART.md](QUICKSTART.md)**（约 5 分钟）；升级、备份与回滚见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ```bash
-# M1 起可用：产出 bin/kored 并启动主壳
-make build && ./bin/kored
+make build                                          # 产出 bin/kored
+./bin/kored serve --config ./kore-quickstart.yaml   # 最小配置见 QUICKSTART.md §2.3
 ```
 
-M0 阶段真正能跑的是文档门禁：
+> 文档同步留痕（G-06，round51）：本节原描述停留在早期里程碑的占位口径（称构建产物不可运行），与仓库 `CHANGELOG.md [0.1.5]` 及可执行的 [QUICKSTART.md](QUICKSTART.md) 漂移；2026-11-28 按当前真实现状订正为「当前版本可跑 + QUICKSTART 链接」，纯文档修改、不改代码、不 bump 版本（官网对标报告 `.agents/verify/website-parity-r51.md`）。
+
+按需运行的校验门禁：
 
 ```bash
-make docs-check    # 校验文档头元信息、相对链接可达、占位词不泛滥
-make help          # 列出全部 make 目标与 M0 现状
+make docs-check    # 校验文档头元信息、相对链接可达、占位词不泛滥（G-06）
+make help          # 列出全部 make 目标
 ```
 
 ### 多仓库本地布局
