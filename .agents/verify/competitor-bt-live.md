@@ -130,7 +130,7 @@ $ docker exec bt-bench-r54 sh -c 'echo FD_COUNT=$(ls /proc/400/fd|wc -l); ...'
 | 口径 | 首屏 HTTP/字节/TTFB | 空载 VmRSS 中位数（20×1s） | CPU（120s utime+stime 差） | fd | 线程 |
 | --- | --- | --- | --- | --- | --- |
 | 主壳（shell，18890） | 200 / 1551 B / 0.000780–0.001526s | 14,460 KiB（20/20 一致） | 0 ticks / 120s | 79 | 14 |
-| 主壳+插件（plugin，18891，terminal 0.2.2 resident 已 enable） | 200 / 1551 B / 0.000492–0.002264s | 主壳 14,840 KiB + 插件进程 6,456 KiB（各 3/3 一致） | 主壳 1 tick / 120s（enable 场景并行测得；另一次 disabled 场景 1 tick / 120s） | 主壳 82 + 插件 76 | 主壳 15 + 插件 5 |
+| 主壳+插件（plugin，18891，terminal 0.2.2 resident 已 enable） | 200 / 1551 B / 0.000803–0.002264s | 主壳 14,840 KiB + 插件进程 6,456 KiB（各 3/3 一致） | 主壳 1 tick / 120s（enable 场景并行测得；另一次 disabled 场景 1 tick / 120s） | 主壳 82 + 插件 76 | 主壳 15 + 插件 5 |
 
 ```
 $ # 主壳（单次 bash 调用内起服→首屏→sleep60→20×/proc 采样→CPU→kill，进程不跨调用存活）
