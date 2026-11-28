@@ -19,6 +19,8 @@
   // 漏掉前缀时 status（无点）能过，但 ban.list / whitelist.add / config.get 会被
   // 判成"域与插件不一致"回 E_INVALID——本页曾经因此整块功能不可用。
   var API = '/api/v1/invoke/ssh-guard/ssh-guard.', TOKEN_API = '/api/v1/plugins/ssh-guard/root-action/fail2ban-banip/confirm-token';
+  var DROPIN_FILE = 'kore-ssh-guard-hardening.conf';
+  var DROPIN_PATH = '/etc/ssh/sshd_config.d/' + DROPIN_FILE;
   var RUNBOOK_PRIV = 'docs/RUNBOOK.md#5-以-root-启动-kored-与提权通道adr-0018';
   var WINDOWS = [{ v: '24h', label: tr('sshguard.window.24h', '最近 24 小时') }, { v: '7d', label: tr('sshguard.window.7d', '最近 7 天') }];
 
@@ -37,8 +39,9 @@
       // 封禁时长（fail2ban bantime，秒；0 = 未知）：填了才能算剩余时长
       bantimeMin: '', btMsg: '', btTone: '', btBusy: false,
       readOnly: true, readOnlyWhy: '', notInstalled: false, destroyed: false,
-      // 加固建议（suggest）：只生成建议，前端没有任何「应用」写操作
-      sugPw: false, sugRoot: false, sugBusy: false, sugResult: null, sugError: '', sugHint: '', sugMsg: '', sugTone: '' };
+      // 加固建议（suggest）：生成预览；一键应用/回滚（0.5.0）才写宿主
+      sugPw: false, sugRoot: false, sugBusy: false, sugResult: null, sugError: '', sugHint: '', sugMsg: '', sugTone: '',
+      hardBusy: false, hardMsg: '', hardTone: '', applyConfirm: null, rollbackConfirm: false };
   }
   var S = fresh();
 
@@ -95,6 +98,18 @@
     });
   }
   function invoke(verb, params) { return request(API + verb, params || {}); }
+  function rootActionToken(actionID) {
+    return request('/api/v1/plugins/ssh-guard/root-action/' + actionID + '/confirm-token', {}, 'GET')
+      .then(function (r) { return (r && (r.token || r.confirm || r.confirm_token)) || ''; });
+  }
+  function setHardMsg(text, tone) {
+    S.hardMsg = text || ''; S.hardTone = tone || ''; paintHardMsg();
+  }
+  function paintHardMsg() {
+    if (!S.hardMsgHost) return;
+    S.hardMsgHost.textContent = S.hardMsg || '';
+    S.hardMsgHost.className = 'sg-msg' + (S.hardTone === 'fail' ? ' is-fail' : (S.hardTone === 'ok' ? ' is-ok' : ''));
+  }
 
   // ---- 白话 ----
   function engineText(p) {
@@ -850,8 +865,8 @@
   }
 
   // ---- ⑤ 加固建议（suggest）----
-  // 只读：调 ssh-guard.suggest 拿 config_text / diff / risk / apply_commands；
-  // 落地方式只有「复制命令」，**没有一键应用**——后端没有真机下发能力（见插件 0.3.0）。
+  // 生成预览：调 ssh-guard.suggest 拿 config_text / diff / risk / apply_commands（dry-run）；
+  // 真正下发走本文件 ⑤-b 的一键应用/回滚（插件 0.5.0 受控写通道，见 hardening.go）。
   function copyTo(text, msgEl) {
     function done() { if (msgEl) { msgEl.textContent = tr('sshguard.copy.done', '已复制'); msgEl.className = 'sg-msg is-ok'; } }
     function fail() { if (msgEl) { msgEl.textContent = tr('sshguard.copy.fail', '复制失败：请手动选中文本复制'); msgEl.className = 'sg-msg is-fail'; } }
@@ -923,7 +938,7 @@
       return;
     }
     var r = S.sugResult, i;
-    add(host, el('p', 'sg-sug-note', tr('sshguard.sug.note', '建议态：kore 不会自动下发，请确认后手动执行。页面不提供「一键应用」。')));
+    add(host, el('p', 'sg-sug-note', tr('sshguard.sug.note', '这是只读预览（dry-run）：确认无误后可点「一键应用」经受控写下发，应用不会 reload sshd。')));
     // 建议配置
     var cfg = add(host, el('div', 'sg-sug-sec'));
     add(cfg, el('div', 'sg-sug-head')).appendChild(el('span', 'sg-sug-title', tr('sshguard.sug.configTitle', '建议配置（/etc/ssh/sshd_config.d/kore.conf）')));
@@ -960,7 +975,7 @@
         add(rh, el('span', 'sg-risk-level', level === 'high' ? tr('sshguard.risk.high', '高危') : (level === 'medium' ? tr('sshguard.risk.medium', '注意') : tr('sshguard.risk.low', '提示'))));
         if (risk.code) add(rh, el('span', 'sg-mono', risk.code));
         add(card, el('p', 'sg-risk-msg', risk.message || ''));
-        add(card, el('p', 'sg-risk-rollback', tr('sshguard.sug.rollback', '回滚：') + (risk.rollback || tr('sshguard.sug.rollbackDefault', '按 apply_commands 里的备份恢复，再 sshd -t && systemctl reload sshd'))));
+        add(card, el('p', 'sg-risk-rollback', tr('sshguard.sug.rollback', '回滚：') + (risk.rollback || tr('sshguard.sug.rollbackDefault', '点本页「一键回滚」，按变更账本撤销；或在管理员会话手工 reload sshd'))));
       });
     }
     // 落地命令（只有复制）
@@ -980,6 +995,103 @@
       var verMsg = add(verOps, el('span', 'sg-msg', ''));
       add(verOps, copyBtn(verifyText, tr('sshguard.btn.copyVerify', '复制验证命令'), verMsg));
     }
+  }
+
+  // ---- ⑤-b 一键应用 / 回滚（只写 drop-in，不 reload）----
+  function diffLines(result) {
+    var items = (result && result.diff_from_current) || [];
+    if (!items.length) return [tr('sshguard.hard.diffNone', '当前配置不可读或没有差异，写入后请用 sshd -T 复核生效值。')];
+    return items.map(function (d) {
+      return (d.directive || '') + ': ' + String(d.current == null ? '—' : d.current) +
+        ' → ' + String(d.suggested == null ? '—' : d.suggested);
+    });
+  }
+  function riskLines(result) {
+    var items = (result && result.risk) || [];
+    return items.map(function (r) {
+      return (r.level === 'high' ? tr('sshguard.risk.high', '高危') : (r.level === 'medium' ? tr('sshguard.risk.medium', '注意') : tr('sshguard.risk.low', '提示'))) +
+        ' · ' + (r.message || '') + '（回滚：' + (r.rollback || tr('sshguard.hard.rollbackDefault', '在加固面板点「回滚」，按变更账本撤销')) + '）';
+    });
+  }
+  // confirmDialog 是通用二次确认：正文逐条列出文件名、指令 diff、风险与回滚方式，
+  // 并把「下次 sshd 重载生效 + 保留密钥会话别关终端」放到最显眼位置（G-10 用户显式）。
+  function confirmDialog(title, lines, warnings, ackLabel, onConfirm) {
+    var mask = el('div', 'kore-modal');
+    mask.setAttribute('role', 'dialog'); mask.setAttribute('aria-modal', 'true');
+    var box = add(mask, el('div', 'kore-modal-box sg-hard-modal'));
+    add(box, el('div', 'kore-modal-title', title));
+    var body = add(box, el('div', 'sg-hard-modal-body'));
+    lines.forEach(function (line) { add(body, el('p', 'sg-hard-modal-line', line)); });
+    warnings.forEach(function (line) { add(body, el('p', 'sg-hard-modal-warn', line)); });
+    var ops = add(box, el('div', 'kore-modal-actions'));
+    var cancel = add(ops, el('button', 'btn btn-ghost', tr('sshguard.btn.cancel', '取消'))); cancel.type = 'button';
+    var ok = add(ops, el('button', 'btn btn-primary', tr('sshguard.btn.confirm', '确认'))); ok.type = 'button';
+    var ack = add(ops, el('label', 'sg-hard-ack'));
+    var cb = add(ack, el('input', null)); cb.type = 'checkbox';
+    add(ack, el('span', null, ackLabel));
+    ok.disabled = true;
+    on(cb, function () { ok.disabled = !cb.checked; });
+    function close() { if (mask.parentNode) mask.parentNode.removeChild(mask); }
+    on(cancel, close);
+    on(ok, function () { if (!cb.checked) return; close(); onConfirm(); });
+    document.body.appendChild(mask);
+    return mask;
+  }
+  function hardSessionWarning() {
+    return [
+      tr('sshguard.hard.noReload', '应用只写入配置片段，不会重载 sshd：新设置要等下次 sshd 重载/重启才生效。'),
+      tr('sshguard.hard.keepSession', '请先确认已有一条可用的密钥登录会话，保留当前终端不要关闭；另开一个会话验证能登录后再自行 reload。')
+    ];
+  }
+  function requestApply() {
+    if (S.hardBusy) return;
+    if (!S.sugResult) { setHardMsg(tr('sshguard.hard.genFirst', '请先点「生成建议」，确认指令差异后再应用'), 'fail'); return; }
+    if (!/^[a-z][a-z0-9._-]*$/.test((S.sugPort.value || '').trim()) && (S.sugPort.value || '').trim()) {
+      setHardMsg(tr('sshguard.err.portRange', '端口必须是 1–65535 的整数（留空表示保持当前端口）'), 'fail'); return;
+    }
+    var params = sugParams();
+    if (!params || !Object.prototype.hasOwnProperty.call(params, 'disable_password_auth') &&
+        !Object.prototype.hasOwnProperty.call(params, 'disable_root_login') &&
+        !Object.prototype.hasOwnProperty.call(params, 'port') &&
+        !Object.prototype.hasOwnProperty.call(params, 'max_auth_tries')) {
+      setHardMsg(tr('sshguard.hard.pickOne', '请至少勾选一项加固项，应用不写入空配置'), 'fail'); return;
+    }
+    var lines = [tr('sshguard.hard.file', '将写入文件：') + DROPIN_PATH,
+      tr('sshguard.hard.mode', '权限：0644 root:root；内容经受控写 allowlist 校验，不执行任何命令。')]
+      .concat([tr('sshguard.hard.diffTitle', '指令差异：')], diffLines(S.sugResult),
+        [tr('sshguard.hard.riskTitle', '风险与回滚方式：')], riskLines(S.sugResult));
+    confirmDialog(tr('sshguard.hard.applyTitle', '确认一键应用加固？'), lines, hardSessionWarning(),
+      tr('sshguard.hard.applyAck', '我已确认有可用密钥会话，明白下次 sshd 重载才生效，保留当前终端不关闭'),
+      function () { doApply(params); });
+  }
+  function doApply(params) {
+    S.hardBusy = true; setHardMsg(tr('sshguard.hard.applying', '正在写入加固 drop-in…'), '');
+    rootActionToken('sshd-dropin-write').then(function (token) {
+      if (!token) throw new Error(tr('sshguard.hard.noToken', '未拿到一次性确认令牌：请确认当前是管理员会话，未写入任何文件'));
+      return invoke('apply-hardening', Object.assign({}, params, { confirm: token }));
+    }).then(function (r) {
+      S.hardBusy = false;
+      setHardMsg(tr('sshguard.hard.applied', '已写入 ') + DROPIN_PATH + tr('sshguard.hard.appliedTail', '：应用不 reload，下次 sshd 重载/重启生效。请保留密钥会话并另开会话验证。'), 'ok');
+      if (r && r.risk) S.sugResult = Object.assign({}, S.sugResult || {}, { risk: r.risk, diff_from_current: r.diff_from_current || [] });
+    }, function (err) {
+      S.hardBusy = false; setHardMsg(failureText(err, tr('sshguard.hard.applyWord', '一键应用')), 'fail');
+    });
+  }
+  function requestRollback() {
+    if (S.hardBusy) return;
+    confirmDialog(tr('sshguard.hard.rollbackTitle', '确认回滚加固？'),
+      [tr('sshguard.hard.rollbackFile', '将按变更账本撤销文件：') + DROPIN_PATH,
+       tr('sshguard.hard.rollbackHow', '回滚方式：内核受控删除（删前强制备份，账本记 file.restore），不执行 shell 命令；只撤销文件内容，不会逆转 sshd 进程状态。')],
+      hardSessionWarning(),
+      tr('sshguard.hard.rollbackAck', '我已确认要撤销这条加固写入，并保留密钥会话、明白下次 sshd 重载才读回旧配置'),
+      function () {
+        S.hardBusy = true; setHardMsg(tr('sshguard.hard.rolling', '正在按变更账本回滚…'), '');
+        invoke('rollback-hardening', {}).then(function () {
+          S.hardBusy = false; setHardMsg(tr('sshguard.hard.rolled', '已回滚：') + DROPIN_PATH + tr('sshguard.hard.rolledTail', '。下次 sshd 重载/重启读回旧配置；请保留密钥会话。'), 'ok');
+        }, function (err) {
+          S.hardBusy = false; setHardMsg(failureText(err, tr('sshguard.hard.rollbackWord', '一键回滚')), 'fail');
+        });
+      });
   }
 
   // ---- 加载 ----
@@ -1137,6 +1249,13 @@
       '.sg-risk-low .sg-risk-level{color:var(--kore-text-3);}',
       '.sg-risk-msg{margin:0;color:var(--kore-text-2);word-break:break-word;}',
       '.sg-risk-rollback{margin:var(--kore-space-1) 0 0;color:var(--kore-text-1);font-size:var(--kore-font-12);word-break:break-word;}',
+      '.sg-hard-modal{max-width:min(680px,92vw);max-height:86vh;overflow:auto;}',
+      '.sg-hard-modal-body{max-height:60vh;overflow:auto;}',
+      '.sg-hard-modal-line{margin:var(--kore-space-1) 0;color:var(--kore-text-2);font-size:var(--kore-font-12);word-break:break-word;}',
+      '.sg-hard-modal-warn{margin:var(--kore-space-1) 0;padding:var(--kore-space-2);border-left:3px solid var(--kore-warning);background:var(--kore-bg-2);font-weight:600;line-height:1.5;}',
+      '.sg-hard-ack{display:flex;align-items:flex-start;gap:var(--kore-space-2);font-size:var(--kore-font-12);margin-right:auto;}',
+      '.sg-hard-ack input{width:18px;height:18px;flex:0 0 auto;margin-top:2px;}',
+      '.sg-hard-apply,.sg-hard-rollback{min-height:44px;}',
       '@media (max-width:639px){',
       '.sg-grid,.sg-form,.sg-sug-form{grid-template-columns:1fr;}',
       '.sg-wl-form{grid-template-columns:1fr;}',
@@ -1247,7 +1366,7 @@
     S.btHint = add(form.panel, el('p', 'field-hint', ''));
 
     // ⑤ 加固建议（只读生成，不下发）
-    var sug = panel(tr('sshguard.panel.suggest', '加固建议'), tr('sshguard.panel.suggestMeta', '只生成建议，不自动下发'));
+    var sug = panel(tr('sshguard.panel.suggest', '加固建议'), tr('sshguard.panel.suggestMeta', '生成建议 · 一键应用/回滚（应用不 reload）'));
     add(S.root, sug.panel); S.sugPanel = sug.panel;
     var sgrid = add(sug.panel, el('div', 'sg-sug-form'));
     function sugToggle(text) {
@@ -1269,8 +1388,13 @@
     var sugOps = add(sug.panel, el('div', 'sg-sug-ops sg-sug-form-ops'));
     S.sugBtn = add(sugOps, el('button', 'btn btn-primary', tr('sshguard.btn.genSuggest', '生成建议'))); S.sugBtn.type = 'button';
     on(S.sugBtn, submitSuggest);
+    S.applyBtn = add(sugOps, el('button', 'btn btn-ghost sg-hard-apply', tr('sshguard.btn.apply', '一键应用'))); S.applyBtn.type = 'button';
+    on(S.applyBtn, requestApply);
+    S.rollbackBtn = add(sugOps, el('button', 'btn btn-ghost sg-hard-rollback', tr('sshguard.btn.rollback', '一键回滚'))); S.rollbackBtn.type = 'button';
+    on(S.rollbackBtn, requestRollback);
     S.sugMsgHost = add(sugOps, el('span', 'sg-msg', ''));
-    add(sug.panel, el('p', 'field-hint', tr('sshguard.sug.footer', '只读生成：建议配置 + 差异 + 风险（含回滚）+ 可复制命令；不会修改 /etc/ssh，也没有「一键应用」。')));
+    S.hardMsgHost = add(sugOps, el('span', 'sg-msg', ''));
+    add(sug.panel, el('p', 'field-hint', tr('sshguard.sug.footer', '「生成建议」只读预览；「一键应用」经内核受控写只写 drop-in，不 reload sshd——下次 sshd 重载/重启才生效，请保留密钥会话、别关终端。')));
     S.sugHost = add(sug.panel, el('div', 'sg-sug-result'));
     paintSuggestResult();
 

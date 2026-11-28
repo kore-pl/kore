@@ -466,7 +466,7 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 
 | 来源 | 谁定义 | 例子 | 能否由插件/环境改写 |
 | --- | --- | --- | --- |
-| 协议类别目录 | 内核 `pluginapi.FileWritePrefixClasses`（唯一真源） | `/etc/nginx/conf.d/` | 否——新增类别 = 扩内核写面，须改 ADR-0028 §8 并新增 ADR |
+| 协议类别目录 | 内核 `pluginapi.FileWritePrefixClasses`（唯一真源） | `/etc/nginx/conf.d/`、`/etc/ssh/sshd_config.d/`（ADR-0060 `sshd.config.d`） | 否——新增类别 = 扩内核写面，须改 ADR-0028 §8 并新增 ADR |
 | 安装路径目录 | **安装/运维侧运行时注入**：`Environment=KORE_FILE_WRITE_ALLOW_DIRS=<list>` | `<install>/data/ssl/` | 是——值由 unit 决定；未注入 = 空 |
 
 四条判据（都是拒绝式，不是建议）：
@@ -475,6 +475,10 @@ root 的管理能力本身是产品能力的一部分，因此提权通道的**�
 2. **格式**：`os.PathListSeparator` 分隔（Linux `:`）；每条必须绝对、不得含 `..` 段 / `$` / 反斜杠 / 控制字符；规范化后补尾斜杠并去重。`/` 会被丢弃（其前缀等于放行一切绝对路径 = 取消白名单）。非法条目**逐条丢弃**，全部丢弃等价于空 = 拒绝。
 3. **纯词法、不 stat/不解析软链**：注入发生在进程启动期，按目录存在性拒绝会把启动顺序变成安全条件；软链在注入后仍可替换，注入期解析只是 TOCTOU 假安全。真正的边界是"安装目录不可被非 root 改写"（`root:root` 0755/0700），落盘前还有属主复核（`root:root 0644`）与 `nginx -t` 兜底。
 4. **白名单只约束"写"，不授予读**：它不改变插件本身的权限边界，也不给插件 root；越界写入仍然是 `E_INVALID`，不会因为"目录已存在"而放行。
+
+#### 15.3.3 sshd drop-in 写面（ADR-0060）
+
+`sshd.config.d` 片段由 root sshd 解析——`Include` / `AuthorizedKeysCommand` / `HostKey` 等价于把 root 配置执行面交给写入者，因此内容安全门是 `sshd.dropin.v1` 纯文本 allowlist（`pkg/pluginapi/sshdconf.go`，10 条指令白名单 + 18 条显式 deny + 3 族，写盘前校验），**不是 `sshd -t`**（只校语法、root 身份下 `-t` 还会真实打开 HostKey）。残余风险（禁密码登录锁死自己、主配置 Include 位置差异、SELinux / 真机长窗）由「保留密钥会话 + 一键回滚 + 隔离 VM 复验 + 写后 `sshd -T` 复核生效值」承担，不由 allowlist 消除。应用与 reload 解耦（ADR-0060 §3.3）：插件只写 drop-in，**不执行 `systemctl reload/restart sshd`**，UI 明示「下次 sshd 重载/重启生效」并要求保留当前密钥会话；回滚经 `file_delete` 受控删除（强制备份 + `file.restore` 账本），不逆转一次进程重启。
 
 ### 15.4 未证明项（明确列出，不得当成已通过）
 

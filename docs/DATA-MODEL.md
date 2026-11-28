@@ -303,6 +303,8 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 **读取方**：`kored uninstall` 打印清单（默认不自动回滚，仅按 `purge_op` 分派结构化回滚，未知 kind 拒绝）；`before`/`after` 供人工比对。schema 变更（新增字段或 kind）属数据形状变更，须同步本节与 ADR-0023。
 
+**sshd drop-in 实例（ssh-guard 0.5.0 / ADR-0060）**：`sshd-dropin-write`（`file_write`，`target=/etc/ssh/sshd_config.d/`）成功后由内核运行时生成 `purge_op`——**新建 drop-in → `{"kind":"file.remove","args":["/etc/ssh/sshd_config.d/kore-ssh-guard-hardening.conf"]}`；覆盖已有 drop-in → `{"kind":"file.restore","args":[备份路径, 目标路径]}`**（mode 由备份携带，0644 逐属性守恒）；声明里不写静态 `purge_op`。`ssh-guard.rollback-hardening` 读本账本、按 kind/绝对路径/目标目录 fail-closed 核对后，经内核 `file_delete` 受控删除撤销文件（删除自身又登记一条 `file.restore` 账本，审计 begin/end 只存哈希）。应用/回滚都**不 reload sshd**：下次 sshd 重载/重启才读回新/旧配置。
+
 ### 9.2 本地更新状态文件 `update-state.json`（ADR-0023 §3.5 豁免 #5 / §11）
 
 位置 `<state>/update-state.json`（portable 即 `<install>/data/update-state.json`）；**全系统仅此一个文件，不得扩展为目录树**。记录静默更新链跨重启的意图与结果（下载完成、校验通过、pending、`.prev` 回滚材料、新进程 finalize）。它是 ADR-0023 §3.5 新增的**唯一**安装目录外写入豁免（U3 有限放宽 2026-11-26 accept），其余清单外路径仍原样封禁。
