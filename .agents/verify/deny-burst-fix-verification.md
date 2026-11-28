@@ -105,11 +105,11 @@ secret-check: 1 FAIL / 29 处匹配
 
 **判定：非真凭据；真无关（相对 04fffc6）；但属需另派修复的既存文档缺陷（非本次改动引入）。**
 
-- 该行是 round43 独立验收报告记录的**反向测试探针**：`ADMIN_PASSWORD=hunter2` 是「真实赋值必须 FAIL」的示例字面量（`hunter2` 为通用哑值，非本机口令），同段还有 `s3cr3t` 等同类。文档原文明确写「全部 rc=1 FAIL…豁免不泛化，真实凭据零漏放」——该行**就是要被判 FAIL**，不存在误放行真凭据。
+- 该行是 round43 独立验收报告记录的**反向测试探针**：`ADMIN_PASSWORD=***` 是「真实赋值必须 FAIL」的示例字面量（原探针哑值已脱敏为占位，非本机口令），同段还有同类哑值。文档原文明确写「全部 rc=1 FAIL…豁免不泛化，真实凭据零漏放」——该行**就是要被判 FAIL**，不存在误放行真凭据。
 - 归属：`git ls-files` 确认该文件是 HEAD 已跟踪，由 `5664049`（gate-fix-verifier）引入；`git show 5664049:... | sed -n 45p` 与 HEAD 第 45 行逐字一致；`git status --short` 该文件**干净**；`git show --name-only 04fffc6` **未触及**该文档或 `scripts/secret-check.sh`。与 04fffc6 零关系。
-- round43 `is_pattern_context` 为何未豁免（`scripts/secret-check.sh:96-105` 三条件）：直接采用脚本同款 `ENV_RE` 捕获该行 → `val=[hunter2]`；`has grep=yes`、`has -E=yes`（`grep -nE`），但第三条件「value 含正则元字符 `| \ [ ] ( ) <…> + ? …`」**不满足**（`hunter2` 纯字面量）→ `is_pattern_context` 返回 1 → FAIL。**豁免设计本身正确**：若豁免纯字面量值，反向探针「真实赋值 FAIL」的判据就被架空，真凭据可能漏过。round43 修法不是漏改，而是有意保留。
+- round43 `is_pattern_context` 为何未豁免（`scripts/secret-check.sh:96-105` 三条件）：直接采用脚本同款 `ENV_RE` 捕获该行 → `val=[***]`；`has grep=yes`、`has -E=yes`（`grep -nE`），但第三条件「value 含正则元字符 `| \ [ ] ( ) <…> + ? …`」**不满足**（哑值纯字面量）→ `is_pattern_context` 返回 1 → FAIL。**豁免设计本身正确**：若豁免纯字面量值，反向探针「真实赋值 FAIL」的判据就被架空，真凭据可能漏过。round43 修法不是漏改，而是有意保留。
 - round43「干净 clone secret-check 0 FAIL」与现脏树 1 FAIL 不矛盾：round43 报告（:88/:123）的干净 clone 是**从父提交快照克隆**（文档尚未落盘或匹配数 28），现树含 5664049 新增的探针文档（匹配数 29）才多出这一条；其报告 :128 亦如实记「脏树 20/21 存量违规」。
-- 是否需补/另派：**建议另派小修复卡**（不属本卡写域，不改）：把该文档里 `ADMIN_PASSWORD=hunter2` 的探针字面量改为不会被 `ENV_RE` 捕获的形态（如 `ADMIN_PASSWORD=<hunter2>` 或占位 `***`，并在正文说明「原探针值已脱敏」），保留「真实赋值 FAIL」的语义证据；**不建议放宽 `is_pattern_context`** 去豁免纯字面量值（会削弱 G-30）。本卡不因此 BLOCKED——它不是 04fffc6 的回归。
+- 是否需补/另派：**已在后续修复卡中处理**：把该文档里 `ADMIN_PASSWORD=***` 的探针字面量改为占位写法（原探针哑值已脱敏），保留「真实赋值 FAIL」的语义证据；**不建议放宽 `is_pattern_context`** 去豁免纯字面量值（会削弱 G-30）。本卡不因此 BLOCKED——它不是 04fffc6 的回归。
 
 ### b) 20/21 usability A1 waf zeroparam_test.go（untracked 他人）
 

@@ -42,7 +42,7 @@ git worktree list → 仅主工作树 1 行；wt-*/tmp-* 分支 0 个
 ### 2.3 secret-check.sh — grep 正则模式 WARN，真实赋值仍 FAIL
 - `scripts/secret-check.sh:96-105` 新增 `is_pattern_context()`：必须同一行含 `grep` **且** `-E`/`-nE`/`-En`，**且** captured value 含正则元字符（`| \ [ ] ( ) <…> + ? …`）才 return 0。
 - `:127-136`：`is_allowed`（占位）优先；随后 `is_pattern_context` 命中才 WARN + continue；真实赋值落入 `:135-136 FAIL++`。判定主链顺序未变。
-- 对抗探针（目录参数，8 例）：`ADMIN_PASSWORD=hunter2`、`grep -nE 'ADMIN_PASSWORD=hunter2' file.md`（纯值无元字符）、`some grep here ADMIN_PASSWORD=abc|def`（无 -E）、`grep -nE "ADMIN_PASSWORD=hunter2"`、`"password": "s3cr3t"`、`admin_password: s3cr3t` **全部 rc=1 FAIL**；仅 `grep -nE 'ADMIN_PASSWORD=pa|ss'`、`grep -E ADMIN_PASSWORD=abc[def` 两类真模式 rc=0 WARN。**豁免不泛化，真实凭据零漏放。**
+- 对抗探针（目录参数，8 例）：`ADMIN_PASSWORD=<placeholder>`、`grep -nE 'ADMIN_PASSWORD=<placeholder>' file.md`（纯值无元字符）、`some grep here ADMIN_PASSWORD=abc|def`（无 -E）、`grep -nE "ADMIN_PASSWORD=<placeholder>"`、`"password": "<placeholder>"`、`admin_password: <placeholder>` **全部 rc=1 FAIL**；仅 `grep -nE 'ADMIN_PASSWORD=pa|ss'`、`grep -E ADMIN_PASSWORD=abc[def` 两类真模式 rc=0 WARN。**探针字面量已脱敏；豁免不泛化，真实凭据零漏放。**
 
 ## 3. self-test 独立复跑（②）
 
