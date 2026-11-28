@@ -14,7 +14,8 @@ import (
 //   - 声明（info.json root_actions[].file_write）：插件只说"写哪一类文件、什么内容策略"，
 //     不说具体目录——目录由内核 filewrite 的**白名单类别**决定（ADR-0028 §8）。
 //   - 请求（POST /plugins/{id}/root-action）：args[0] 是**单层文件名**，content 是正文。
-//   - 内容策略：本文件只分派；nginx 片段的语法 allowlist 在 nginxconf.go。
+//   - 内容策略：本文件只分派；nginx 片段的语法 allowlist 在 nginxconf.go，
+//     sshd drop-in 的 allowlist 在 sshdconf.go（ADR-0060）。
 //
 // 为什么 none of this 放 internal/core：thin-shell-check.sh 的业务词表含 nginx，
 // 写进 cmd/ internal/ 直接 G-01 FAIL；协议策略与 RootCommandPolicies 同层（ADR-0022 先例）。
@@ -32,8 +33,11 @@ const MaxFileWriteNameRunes = 128
 // 权限位的八进制/十进制歧义是经典坑，字符串把写法钉死成 `"0644"`。
 const FileWriteModeRoot0644 = "0644"
 
-// ContentPolicyNginxVHost 是 nginx vhost 片段的内容策略名（唯一实现的策略）。
+// ContentPolicyNginxVHost 是 nginx vhost 片段的内容策略名。
 const ContentPolicyNginxVHost = "nginx.vhost.v1"
+
+// ContentPolicySSHDropin 是 sshd drop-in 片段的内容策略名（ADR-0060 / C12）。
+const ContentPolicySSHDropin = "sshd.dropin.v1"
 
 // FileWrite 是 root_actions[] 的可选声明（ADR-0052 裁决 A）。
 //
@@ -89,6 +93,18 @@ var FileWritePrefixClasses = map[string]FileWriteClass{
 		Suffix:           ".conf",
 		Mode:             FileWriteModeRoot0644,
 		ContentPolicy:    ContentPolicyNginxVHost,
+		MaxBytes:         MaxFileWriteContentBytes,
+		Owner:            "root:root",
+		PluginNamePrefix: true,
+	},
+	// sshd.config.d 是 C12 / ADR-0060 的 sshd drop-in 类目（方案 DESIGN-SSH-DROPIN §2.1）。
+	// 目录、后缀、属主、文件名前缀与路径逃逸防护完全复用通用层，不新增校验代码。
+	"sshd.config.d": {
+		PrefixClass:      "sshd.config.d",
+		Dir:              "/etc/ssh/sshd_config.d/",
+		Suffix:           ".conf",
+		Mode:             FileWriteModeRoot0644,
+		ContentPolicy:    ContentPolicySSHDropin,
 		MaxBytes:         MaxFileWriteContentBytes,
 		Owner:            "root:root",
 		PluginNamePrefix: true,
@@ -206,11 +222,13 @@ func ValidateFileWriteName(pluginID string, decl *FileWrite, name string) error 
 type FileWriteOptions struct {
 	// Nginx 是 nginx 片段策略；零值等于 DefaultNginxPolicy()。
 	Nginx NginxPolicy
+	// SSHD 是 sshd drop-in 策略；零值等于 DefaultSSHDPolicy()（首版无运行时注入需求）。
+	SSHD SSHDPolicy
 }
 
 // DefaultFileWriteOptions 返回默认内容策略参数。
 func DefaultFileWriteOptions() FileWriteOptions {
-	return FileWriteOptions{Nginx: DefaultNginxPolicy()}
+	return FileWriteOptions{Nginx: DefaultNginxPolicy(), SSHD: DefaultSSHDPolicy()}
 }
 
 // ValidateFileWriteContent 按声明的 content_policy 校验正文。
@@ -252,6 +270,8 @@ func ValidateFileWriteContent(decl *FileWrite, content []byte, opts FileWriteOpt
 	switch decl.ContentPolicy {
 	case ContentPolicyNginxVHost:
 		return ValidateNginxVHostFragment(content, opts.Nginx)
+	case ContentPolicySSHDropin:
+		return ValidateSSHDropinFragment(content, opts.SSHD)
 	default:
 		return fmt.Errorf("content_policy=%q 没有校验实现（fail-closed）", decl.ContentPolicy)
 	}

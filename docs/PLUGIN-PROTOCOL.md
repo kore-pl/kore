@@ -199,14 +199,28 @@
 | `args[0]` | string | `file_write` 动作必填 | **单层文件名**（不含目录）：`kore-<plugin>-<slug>.conf`、≤128 字符、只允许 `[A-Za-z0-9._-]`、不得含 `..` 或路径分隔符。目录只来自类别定义，插件不能指定 |
 
 - **HTTP body 上限必须提高**：当前 `maxRootActionBody` 是 64 KiB（`internal/core/httpapi/handlers_rootaction.go:17`），装不下 256 KiB 正文；按上面的转义最坏倍数，接线时须提升到 **≥ 2 MiB**，解码后仍按 256 KiB 判。旧内核收到 `content` 会因 `DisallowUnknownFields` 直接 `E_INVALID`——这是协议**加法**，新插件必须把 `requires_kore` 收窄到含本字段的内核版本，`protocol_minor` 按 §13 协商。
-- **类别（`prefix_class`）**：当前唯一类别 `nginx.conf.d` → 目录 `/etc/nginx/conf.d/`、强制后缀 `.conf`、权限 `0644`（root:root）、内容策略 `nginx.vhost.v1`、上限 256 KiB。类别由内核 `pluginapi.FileWritePrefixClasses` 定义；`mode` 只接受字符串 `"0644"`（JSON 整数 `644` 是十进制 0o1204，权限位歧义必须焊死）。**新增类别 = 扩内核写面**，须按 ADR-0028 §7#1 改白名单并新增 ADR。
-- **内容 allowlist（`nginx.vhost.v1`，唯一实现 `pkg/pluginapi/nginxconf.go`，手写解析、零第三方依赖）**：conf.d 片段会被 **root master** 解析，ADR-0052 §2 实测 `log_format`+`access_log` 能让 root 创建 `/etc/cron.d/*`、写 `/etc/ld.so.preload`；`root /;` 可经 HTTP 读任意 worker 可读文件；而 `nginx -t` 对这些配置**全部 exit 0**（root 下"测试"本身就会打开目标文件）——**校验禁止依赖 `nginx -t`**，只能对文本纯解析。
+- **类别（`prefix_class`）**：类别由内核 `pluginapi.FileWritePrefixClasses` 唯一定义；`mode` 只接受字符串 `"0644"`（JSON 整数 `644` 是十进制 0o1204，权限位歧义必须焊死）。**新增类别 = 扩内核写面**，须按 ADR-0028 §7#1 改白名单并新增 ADR。
+
+  | 类别 | 目录（固定、带尾斜杠） | 后缀 / 权限 / 属主 | 文件名前缀 | 内容策略 | 默认上限 |
+  | --- | --- | --- | --- | --- | --- |
+  | `nginx.conf.d` | `/etc/nginx/conf.d/` | `.conf` / `0644` / `root:root` | `kore-<plugin>-` | `nginx.vhost.v1` | 256 KiB |
+  | `sshd.config.d`（ADR-0060） | `/etc/ssh/sshd_config.d/` | `.conf` / `0644` / `root:root` | `kore-<plugin>-` | `sshd.dropin.v1` | 256 KiB（插件可自我收紧，如 64 KiB） |
+
+  路径逃逸防护（单层文件名 / `..` / 路径分隔符 / 后缀 / 插件前缀 / `path.Clean` 复核 / 内核禁软链 + 属主复核）两类**完全共用**，`target` 必须逐字等于上表类别目录。
+- **内容 allowlist（`nginx.vhost.v1`，实现 `pkg/pluginapi/nginxconf.go`，手写解析、零第三方依赖）**：conf.d 片段会被 **root master** 解析，ADR-0052 §2 实测 `log_format`+`access_log` 能让 root 创建 `/etc/cron.d/*`、写 `/etc/ld.so.preload`；`root /;` 可经 HTTP 读任意 worker 可读文件；而 `nginx -t` 对这些配置**全部 exit 0**（root 下"测试"本身就会打开目标文件）——**校验禁止依赖 `nginx -t`**，只能对文本纯解析。
   - **结构**：顶层只允许 `server{}`（`http`/`stream`/`events`/顶层指令一律拒绝）；`location` 只在 `server` 内；`if` 只在 `location` 内且条件只允许 `(!-e $request_filename)`（伪静态模板所需，体内只允许 `rewrite`）；`location` 不嵌套；嵌套深度 ≤4、指令数 ≤2048。
   - **指令 allowlist（23 条叶子 + 3 种块）**：`server` `location` `if`（块）+ `listen` `server_name` `root` `alias` `index` `auth_basic` `auth_basic_user_file` `try_files` `return` `rewrite` `proxy_pass` `proxy_set_header` `proxy_http_version` `fastcgi_pass` `fastcgi_index` `fastcgi_param` `ssl_certificate` `ssl_certificate_key` `ssl_protocols` `ssl_ciphers` `ssl_prefer_server_ciphers` `ssl_session_cache` `ssl_session_timeout`。**不在表内一律拒绝**（指令名大小写敏感，`ACCESS_LOG` 同样拒绝）。
   - **无条件拒绝（有显式理由，`pluginapi.DeniedNginxDirectives` 是唯一清单）**：`include`（读任意 root 可读文件，解析错误会回显目标文件首 token）、`load_module`（root 进程加载任意 `.so`）、`log_format` + `access_log`（root 任意文件创建/追加 → `/etc/cron.d`、`/etc/ld.so.preload`、口令文件）、`error_log`（同上）、`perl*` / `lua_*` / `js_*`（root 进程内执行代码）、`dav_*`（worker 身份任意写盘）、`*_temp_path`（给 root 指定任意可写目录）、`map` / `upstream` / `geo`（组合成注入链、绕过上游形状校验）、`limit_*_zone` / `proxy_cache_path`（全局共享内存 / 任意缓存目录）、`ssi` / `sub_filter` / `auth_request`。
   - **参数形状**：`root`/`alias` 必须是规范化绝对路径且落在站点根前缀内（缺省 `/var/www/`，拒绝 `/` 与 `..`）；`ssl_certificate*` 必须落在**运行时注入**的证书目录白名单内（白名单为空即拒绝，不猜安装路径）；`auth_basic_user_file` 必须在受控目录内；`fastcgi_pass` 只允许 `unix:` + 标准 FPM socket 目录（不开 TCP）；`proxy_pass` 只允许 `http(s)://host[:port][/path]`（无 userinfo、无变量），**禁止本机 kore 管理端口**（缺省 8787，可配）；`listen` 只允许裸端口 + `ssl`/`http2`，**禁止 `default_server`**（抢占默认站点 = 劫持所有未匹配域名）；`server_name` 不接受正则；`return` 只允许 3xx + 跳转目标；`rewrite` 的 replacement 必须以 `/`、`$` 或 `http(s)://` 开头，flag ∈ {`last`,`break`,`redirect`,`permanent`}。
 
 **SDK 自检**：插件读自己的 `info.json`，逐条 `pluginapi.ValidateRootAction`，再把渲染出的每个 vhost 交给 `pluginapi.ValidateFileWriteRequest(pluginID, action, fileName, content, opts)`——正例必须覆盖 PHP 块、伪静态块、SSL 块，反例必须覆盖上面的无条件拒绝集。校验器是**安全关键代码**：改动必须过 fuzz（`FuzzValidateNginxVHostFragment`）与红队绕过集；新增 allowlist 指令须走 ADR-0052 §7#2 复审。**残余风险必须披露**：allowlist 内仍有副作用——`proxy_pass` 可反代到本机服务（产品功能，含 8787 已由形状拦直连、挡不住二次代理），`root` 指向的站点根内可能有敏感文件。
+
+- **内容 allowlist（`sshd.dropin.v1`，ADR-0060，实现 `pkg/pluginapi/sshdconf.go`，手写解析、零第三方依赖）**：`sshd_config.d` 片段由 **root sshd** 解析，`Include` / `AuthorizedKeysCommand` / `HostKey` 可形成 root 任意文件读取与命令执行面；`sshd -t` 只校验语法且不校验安全性（root 下 `-t` 会真实打开 HostKey 等文件），**禁止把 `sshd -t` 当内容安全门**，只能对文本纯解析。
+  - **结构**：逐行 `Directive value...`；整行 `#` 注释可，行内 `#`、行尾 `\` 续行、`%` / `${}` 变量、引号、`;`、`{}` 一律拒（防「校验器看到的」与「sshd 解析的」不一致）。
+  - **allowlist（10 条，默认全拒）**：`PasswordAuthentication` / `PubkeyAuthentication` / `KbdInteractiveAuthentication` = `yes`/`no`；`PermitRootLogin` = `yes`/`prohibit-password`/`forced-commands-only`/`no`；`PermitEmptyPasswords` 只 `no`；`MaxAuthTries` 1..100；`ClientAliveInterval` 0..3600；`ClientAliveCountMax` 0..10；`LoginGraceTime` 1..600；`MaxStartups` `start:rate:full` 三段各 1..1000；参数只接受 ASCII 十进制整数（拒 `+`/`-`）。
+  - **显式 deny（`pluginapi.DeniedSSHDDirectives` 是唯一清单，18 条 + 3 族带理由）**：`Include`（拉外部配置绕过 allowlist）、`Match`（条件块吞掉后续配置）、`AuthorizedKeys*` / `AuthorizedPrincipals*`（重定向认证锚点 / root 命令执行）、`HostKey*`（加载任意密钥）、`Port` / `ListenAddress`（改变监听面可致锁死）、`Subsystem` / `ForceCommand`（改变会话语义）、`AllowTcpForwarding` / `AllowStreamLocalForwarding` / `PermitTunnel` / `PermitListen` / `PermitOpen`（打开转发面）；不在 allowlist 的其它指令一律拒。
+  - **上限**：参数个数每规则精确锁定（≤4）、单 token ≤1024 字符、单片段指令数 ≤128（可用 `FileWriteOptions.SSHD.MaxDirectives` 收紧）。
+  - **应用 ≠ reload**：一键应用只写 drop-in，不 reload/restart sshd（ADR-0060 §3.3）；生效值由写后 `sshd -T` 复核；`PasswordAuthentication no` 等业务后果由「保留密钥会话 + 一键回滚 + 隔离 VM 先验」承担，不由 allowlist 消除。
 
 **执行口径（K3 已接线，2026-11-24）**：**`file_write` 动作不走 `os/exec`**，在 `privilege.Execute` 内按声明分派到受控写：
 

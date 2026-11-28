@@ -218,3 +218,17 @@ mode 一致、0600 片段保持、重复回滚幂等、被篡改的 0777 备份�
 **不改变的**：一期四条边界（属主校验、文件名前缀、路径锁、root-action 接线）仍按「实施记录 §4」在二期同批补齐；本修订不放宽其他三个前缀；审计仍只存哈希不存全文；回滚仍走备份 + `purge_op: file.restore`。
 
 **接线与协议**：`file_write` 动作声明、请求体 `content` 字段、SDK tag 与 `requires_kore` 收窄见 ADR-0052 §5 卡 2 / 卡 3。
+
+## 9. 修订记录：sshd drop-in 纳入受控写（2026-11-28，ADR-0060）
+
+> 本节是 **append-only 修订记录**，不改 §1–§8 原文（与「实施记录」、§8 同一口径：原文保留，修订单列）。裁决与威胁模型见 [ADR-0060](./0060-sshd-dropin-controlled-write.md)；本节目的是「原文条款如何被该 ADR 扩展」的最小索引，不重复 ADR 论证。
+
+| 原文 | 修订后（仅对 `/etc/ssh/sshd_config.d/` 前缀生效） | 依据 |
+| --- | --- | --- |
+| §3 白名单目录表含 `/etc/ssh/sshd_config.d/`（4 个 drop-in 目录之一），但 §2「内容不做语义校验——内核不认识 sshd 语法」 | 对该前缀**不适用**：写盘前必须过**纯文本指令级 allowlist**（默认全拒，10 条 allowlist + 18 条显式 deny + 3 族），`sshd -t` 只当语法/锁死门、**不作为安全校验**（root 下 `-t` 会真实打开 HostKey 等文件） | ADR-0060 §3.2 / §3.4 |
+| §3 备注「sshd 片段仅 `0644`」 | 沿用：类别 `sshd.config.d` 的 `Mode` 固定 `FileWriteModeRoot0644`、`Owner=root:root`、`Suffix=.conf`、`PluginNamePrefix=true`、`Dir` 带尾斜杠；增量只是内核**类别数据**（零新路径校验代码，复用 `ValidateFileWriteName` / `FileWritePath` / 属主复核） | ADR-0060 §3.1 |
+| §5 拒绝的输入清单 | 追加：allowlist 外指令；显式 deny（`Include` / `Match` / `AuthorizedKeys*` / `AuthorizedPrincipals*` / `HostKey*` / `Port` / `ListenAddress` / `Subsystem` / `ForceCommand` / 转发类）；行内 `#` / `\` 续行 / 引号 / `%` / `${}` / `;` / `{}`；参数越界；文件名不带 `kore-<plugin>-` 前缀 | ADR-0060 §3.2 |
+| §7#1「新增白名单目录须先改 ADR」 | 已触发并完成：新增 ADR-0060（本 ADR 即该复审产物）；§7 复审条件 #1 对该前缀视为已处置 | ADR-0060 §6 |
+| §6 推荐「内容不做语义校验」 | 同 §8 nginx 例外口径：sshd 前缀也例外；校验器实现放 `pkg/pluginapi/sshdconf.go`（与 `RootCommandPolicies` / `nginxconf.go` 同层），`cmd/` / `internal/core` 不出现 sshd 业务词（G-01） | ADR-0060 §5 |
+
+**不改变的**：一期四条边界（属主校验、文件名前缀、路径锁、root-action 接线）仍按「实施记录 §4」处置；审计仍只存哈希不存全文；回滚仍走备份 + `purge_op: file.restore`；应用 ≠ reload（ADR-0060 §3.3，不新开 reload 命令形状）。`sshd -T` 写后复核生效值属 P2/P3 接线，本 P1 不改内核执行路径。
