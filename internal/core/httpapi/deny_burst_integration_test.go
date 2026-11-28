@@ -125,9 +125,15 @@ func TestDenyBurstOtherKeyNotMerged(t *testing.T) {
 	for i := 0; i < channelDenials; i++ {
 		srv.auditDenied("channel", "system", "root-action", "", "插件不得调用系统重启")
 	}
-	// 该键独立成窗：10 逐条 + 1 合并（第 30 次的 pending 未滚窗未补齐）。
-	if got := len(auditor.details) - denyRecords; got != DenyBurstThreshold+1 {
-		t.Fatalf("不同键应独立成窗（10+1），实际新增 %d 条", got)
+	// 该键独立成窗，但逐条审计写受全局预算约束（task-307）：凭据键已用掉
+	// Threshold 条逐条预算，通道键前 10 次走 pending，第 11 次触发一条
+	// count=Threshold+1 的合并记录（第 30 次的 pending 未滚窗未补齐）。
+	if got := len(auditor.details) - denyRecords; got != 1 {
+		t.Fatalf("全局预算耗尽后不同键触发点应写 1 条合并记录，实际新增 %d 条", got)
+	}
+	merged := auditor.details[len(auditor.details)-1]
+	if merged["count"] != strconv.Itoa(DenyBurstThreshold+1) {
+		t.Fatalf("通道键合并 count 应为 %d，实际 %q", DenyBurstThreshold+1, merged["count"])
 	}
 	// 两键的告警也各自独立计数，不串台。
 	if len(sink.counts) <= alertCalls {

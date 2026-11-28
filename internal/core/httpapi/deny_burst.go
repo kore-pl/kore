@@ -17,6 +17,15 @@ const (
 	DenyBurstWindow     = time.Second
 	DenyMergeMax        = 1000
 	denyBurstSweepEvery = 256
+	// DenyGlobalIndividualBudget 是跨 key 的全局逐条审计写预算（同一全局 1s
+	// 窗口内累计）。task-306 红队场景④：round35 合并器按 key 独立窗口，单一
+	// read token 轮转 4 个可 deny 端点时每 key 各写「前 10 条逐条审计」，4×10=40
+	// 次写事务叠加 bbolt 单写者排队，把 c16/N=300 p95 从单 key 19–41ms 抬回
+	// 79.7–105ms，击穿 p95 ≤50ms 红线。本预算把逐条审计写受全局约束：全局窗口
+	// 内逐条写达到预算后，其余早期拒绝走 pending 合并路径，窗口滚/触发点时补
+	// 一条带 count 的合并记录。审计 Σ(逐条+合并 count)==N、告警 Σ(AlertN)==N
+	// 守恒不受影响；零新增 goroutine/ticker（G-19）。
+	DenyGlobalIndividualBudget = DenyBurstThreshold
 )
 
 // DenyBurstKey 只用既有审计标量字段拼键（token 出口 subject = "token:<id>"），
@@ -89,6 +98,11 @@ type DenyBurstTracker struct {
 	mu     sync.Mutex
 	states map[DenyBurstKey]*denyBurstState
 	calls  uint64
+	// globalWindowStart / globalIndividuals 是跨 key 的全局逐条写预算状态。
+	// 同一全局 1s 窗口内逐条审计写不超过 DenyGlobalIndividualBudget；单 key
+	// 场景（≤Threshold 条）不受影响，MAX_MERGE 转逐条分支也不受约束。
+	globalWindowStart time.Time
+	globalIndividuals int
 }
 
 // Submit 推进一次拒绝并直接生成两个出口的落库计划。写入节律（N 为同键
@@ -121,14 +135,22 @@ func (t *DenyBurstTracker) Submit(key DenyBurstKey, alertDetail string, now time
 		st = &denyBurstState{windowStart: now, key: key, detail: alertDetail}
 		t.states[key] = st
 	}
+	// 全局跨 key 预算：同一全局 1s 窗口内累计逐条审计写次数；预算耗尽后早期
+	// 拒绝走 pending 合并路径（窗口滚/触发点补一条带 count 的合并记录）。
+	if t.globalWindowStart.IsZero() || now.Before(t.globalWindowStart) ||
+		now.Sub(t.globalWindowStart) >= DenyBurstWindow {
+		t.globalWindowStart, t.globalIndividuals = now, 0
+	}
+
 	st.lastAt = now
 	st.detail = alertDetail // 明细取最新一次（与 store.mergeAlert 同口径）
 	st.count++
 
 	switch {
-	case st.count <= DenyBurstThreshold:
+	case st.count <= DenyBurstThreshold && t.globalIndividuals < DenyGlobalIndividualBudget:
 		// 首次拒绝立即落一条告警（保持既有「拒绝即告警」语义与可观测性）；
 		// 第 2..T 次在内存累计，到触发点一次写入，消掉突发段的读改写事务。
+		t.globalIndividuals++
 		alertN := 0
 		if st.count == 1 {
 			alertN = 1
@@ -137,10 +159,25 @@ func (t *DenyBurstTracker) Submit(key DenyBurstKey, alertDetail string, now time
 		}
 		decisions = append(decisions, DenyBurstDecision{Kind: DenyBurstIndividual, Count: 1, AlertN: alertN,
 			Key: key, WindowStart: st.windowStart, LastAt: st.lastAt})
+	case st.count <= DenyBurstThreshold:
+		// 全局预算耗尽（多 key 突发）：早期拒绝转 pending 合并，不逐条写审计；
+		// 首拒仍立即写一条告警（保持「拒绝即告警」语义），其余累计到触发点。
+		st.pending++
+		if st.count == 1 {
+			decisions = append(decisions, DenyBurstDecision{Kind: DenyBurstAlertOnly, AlertN: 1,
+				Key: key, WindowStart: st.windowStart, LastAt: st.lastAt})
+		} else {
+			st.alertPending++
+		}
 	case st.count == DenyBurstThreshold+1:
 		alertN := st.alertPending + 1
 		st.alertPending = 0
-		decisions = append(decisions, DenyBurstDecision{Kind: DenyBurstMerged, Count: 1, AlertN: alertN,
+		// 触发点合并记录须覆盖之前因全局预算转 pending 的早期拒绝（守恒）：
+		// 单 key 场景 pending=0 → Count=1（与 round35 完全一致）；
+		// 预算耗尽的 key 前 10 次在 pending → Count=11。
+		mergedCount := st.pending + 1
+		st.pending = 0
+		decisions = append(decisions, DenyBurstDecision{Kind: DenyBurstMerged, Count: mergedCount, AlertN: alertN,
 			Key: key, WindowStart: st.windowStart, LastAt: st.lastAt})
 	case st.count < DenyMergeMax:
 		st.pending++

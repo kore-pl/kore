@@ -150,21 +150,105 @@ func TestDenyBurstEmptyReason(t *testing.T) {
 	}
 }
 
-// TestDenyBurstDifferentKeysIsolated 不同 key（不同能力/原因）独立窗口，互不合并。
+// TestDenyBurstDifferentKeysIsolated 不同 key（不同能力/原因）独立窗口，互不合并；
+// 但逐条审计写受**全局**预算约束（task-307 修 redteam key 轮换 p95 回弹）：
+// 全局窗口内预算耗尽后，后续 key 的早期拒绝走 pending 合并而非各自 10 条逐条。
+// 守恒仍严格成立，窗口状态仍按 key 独立（keyB 不继承 keyA 的 count）。
 func TestDenyBurstDifferentKeysIsolated(t *testing.T) {
 	var tr DenyBurstTracker
 	now := time.Unix(1_700_000_000, 0)
 	keyA := denyTestKey("reason-a")
 	keyB := denyTestKey("reason-b")
+	var totalAudit, totalAlert int
 	for i := 0; i < DenyBurstThreshold+1; i++ {
-		if len(tr.Submit(keyA, "d", now).Audits) == 0 {
+		out := tr.Submit(keyA, "d", now)
+		a, al := tallyDeny(t, out)
+		totalAudit += a
+		totalAlert += al
+		if len(out.Audits) == 0 {
 			t.Fatal("keyA 前 11 次应逐条/合并写出")
 		}
 	}
-	// keyB 第一次应重新逐条（不继承 keyA 的窗口状态）。
+	// keyB 第一次：全局预算已耗尽（keyA 用掉 Threshold 条逐条），故不逐条写
+	// 审计，但仍立即写一条告警（拒绝即告警语义不破坏）。
 	out := tr.Submit(keyB, "d", now)
-	if len(out.Audits) != 1 || out.Audits[0].Detail["count"] != "" {
-		t.Fatalf("不同 key 应独立逐条，实际 %+v", out.Audits)
+	if len(out.Audits) != 0 {
+		t.Fatalf("全局预算耗尽后不同 key 首拒不应逐条审计，实际 %+v", out.Audits)
+	}
+	if len(out.Alerts) != 1 || out.Alerts[0].N != 1 {
+		t.Fatalf("不同 key 首拒仍应立即写一条告警，实际 %+v", out.Alerts)
+	}
+	a, al := tallyDeny(t, out)
+	totalAudit += a
+	totalAlert += al
+	// keyB 独立窗口：其 count 从 1 开始，到第 Threshold+1 次触发合并记录
+	// count=Threshold+1（前 10 次 pending + 第 11 次），不与 keyA 串台。
+	for i := 1; i < DenyBurstThreshold; i++ {
+		tr.Submit(keyB, "d", now)
+	}
+	out = tr.Submit(keyB, "d", now)
+	a, al = tallyDeny(t, out)
+	totalAudit += a
+	totalAlert += al
+	if len(out.Audits) != 1 || out.Audits[0].Detail["count"] != strconv.Itoa(DenyBurstThreshold+1) {
+		t.Fatalf("keyB 触发点应合并 count=%d，实际 %+v", DenyBurstThreshold+1, out.Audits)
+	}
+	// 两 key 各 11 次拒绝 = 22，审计与告警两侧都守恒。
+	if totalAudit != 2*(DenyBurstThreshold+1) || totalAlert != 2*(DenyBurstThreshold+1) {
+		t.Fatalf("跨 key 守恒失败: audit=%d alert=%d，期望 %d",
+			totalAudit, totalAlert, 2*(DenyBurstThreshold+1))
+	}
+}
+
+// TestDenyBurstGlobalBudgetConservation 跨 key 全局逐条审计写预算守恒
+// （task-307 / redteam 场景④）：单一 read token 轮转 4 个可 deny 端点（4 个
+// 固定 key），每 key N=176 次拒绝（合计 704，与红队双出口守恒口径一致）后滚窗。
+// 断言：① 逐条审计写总数 ≤ DenyGlobalIndividualBudget（写事务受全局约束）；
+// ② 审计 Σ(逐条+合并 detail.count) == 告警 Σ(AlertN) == 704（零丢、零重复）；
+// ③ 每个 key 的窗口状态独立（4 个合并记录各带自己的 count）。
+func TestDenyBurstGlobalBudgetConservation(t *testing.T) {
+	var tr DenyBurstTracker
+	now := time.Unix(1_700_000_000, 0)
+	keys := []DenyBurstKey{
+		{Subject: "token:abc12345", Plugin: "credentials", Reason: "需要 system:admin 能力"},
+		{Subject: "token:abc12345", Plugin: "scheduler", Target: "list", Reason: "缺少 system:admin 特权能力"},
+		{Subject: "token:abc12345", Plugin: "scheduler", Target: "runs", Reason: "缺少 system:admin 特权能力"},
+		{Subject: "token:abc12345", Plugin: "migrate", Target: "export", Reason: "缺少 system:admin 特权能力"},
+	}
+	const perKey = 176
+	total := perKey * len(keys) // 704
+	var totalAudit, totalAlert, individuals int
+	for _, key := range keys {
+		for i := 0; i < perKey; i++ {
+			out := tr.Submit(key, "d", now)
+			a, al := tallyDeny(t, out)
+			totalAudit += a
+			totalAlert += al
+			for _, rec := range out.Audits {
+				if rec.Detail["count"] == "" {
+					individuals++
+				}
+			}
+		}
+	}
+	// 第一个全局 1s 窗口内 704 次跨 key 拒绝，逐条审计写必须 ≤ 全局预算
+	// （round35 旧行为 4×10=40 条逐条写 → bbolt 单写者排队 → p95 回弹）。
+	if individuals > DenyGlobalIndividualBudget {
+		t.Fatalf("跨 key 逐条审计写 %d 超过全局预算 %d（p95 回弹根因未消除）",
+			individuals, DenyGlobalIndividualBudget)
+	}
+	// 逐 key 滚窗补齐各自 pending（固定时钟下惰性 sweep 不触发，须显式推进每个
+	// key 的窗口，与真机请求驱动 flush 同口径）。这 4 次 Submit 属于新全局窗口。
+	for _, key := range keys {
+		out := tr.Submit(key, "detail", now.Add(2*DenyBurstWindow))
+		a, al := tallyDeny(t, out)
+		totalAudit += a
+		totalAlert += al
+	}
+	// 4 次滚窗新拒绝也计入，故期望 total+4。
+	if totalAudit != total+len(keys) || totalAlert != total+len(keys) {
+		t.Fatalf("跨 key 双出口守恒失败: audit=%d alert=%d，期望 %d",
+			totalAudit, totalAlert, total+len(keys))
 	}
 }
 

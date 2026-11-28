@@ -3,6 +3,31 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.4] - 2026-11-28
+
+> 本次是 **perf**（性能红线回弹修复），按 semver 为 patch。修复动机如实记录：0.1.3 的 deny
+> 突发合并按 key 独立窗口，单一低权 read token 轮转 4 个可 deny 的 GET 端点（credentials /
+> scheduler tasks / scheduler runs / migrate export）时，每个 key 各写「前 10 条逐条审计」，
+> 4×10=40 次写事务叠加 bbolt 单写者排队，把 c16/N=300 p95 从单 key 的 19–41ms 抬回
+> **79.7–105ms**（10/10 越线），击穿 API p95 ≤50ms 硬红线——0.1.3 的性能收益在 key 轮换下
+> 大部分丢失（红队报告 `.agents/verify/audit-deny-redteam.md` 场景④）。不是新功能，目标只是
+> 回到自身红线内，不宣称超越竞品。
+
+### Performance
+
+- **跨 key 全局逐条写预算**：`capability.denied` 突发窗口新增全局 1s 窗口内的逐条审计写预算
+  `DenyGlobalIndividualBudget = DenyBurstThreshold`（10）。预算耗尽后，后续 key 的早期拒绝
+  不再各自写 10 条逐条审计，而是走 pending 合并路径，窗口滚动 / 惰性 sweep / `MAX_MERGE`
+  触发点补一条带 `count` 的合并记录。单 key 场景（≤10 条）与双 key 场景不受影响，保留取证
+  语义与 19–41ms 基线；`MAX_MERGE=1000` 转逐条分支不受预算约束（持续攻击仍逐条可见）。
+  审计 `Σ(逐条 + 合并 detail.count) == N` 与告警 `Σ(AlertN) == N` 守恒不变，通知「拒绝即告警」
+  语义不变，fail-closed 不变，零新增 goroutine / ticker（G-19）。
+- **p95 回弹修复实测**：同口径 4-key 轮换 c16/N=300，p95 从 69.2–78.5ms（基线 5 次）
+  降至 10.5–13.7ms（修复后 5 次），连续多次稳定 ≤50ms；单 key 同口径 10.9–13.0ms 不回归；
+  双出口守恒审计 Σcount == 告警 count == 708（704 轮换 + 4 触发 flush）精确守恒。
+- **内核版本 0.1.3 → 0.1.4**：`Makefile` VERSION、`cmd/kored/main.go` 默认值与 `docs/CORE.md`
+  版本基线同步；0.1.4 < 0.2.0 仍落在 24 仓 `requires_kore` 上界内，`make version-check` 不阻断。
+
 ## [0.1.3] - 2026-11-28
 
 > 本次是 **perf**（性能修复），按 semver 为 patch。修复动机如实记录：真 `capability.denied` 路径存在

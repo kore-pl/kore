@@ -317,6 +317,13 @@ Tier A 与 Tier B 的隔离能力**不是同一量级**，必须在文档与 UI 
 - **`capability.denied` 突发合并的安全不变量（2026-11-28，方案 DESIGN-AUDIT-DENY-OPT）**：真拒绝路径的 1:1 写放大会让认证后低权 token 高频打高权端点击穿 API p95 ≤50ms 红线（实测并发 16 拒绝 p95=158ms，属认证后低权 DoS，匿名 401 在 `withAuth` 短路不写审计）。合并不得破坏取证，逐条守住：
   - **I1 每条 deny 可追溯**：逐条段保留完整 `subject`/`action=capability.denied`/`plugin`/`capability`/`detail.reason`；合并记录同样带这些字段（值取代表事件），时间由 bbolt 键承载 + `detail.first_at/last_at` 补窗口起止——任一被拒请求要么落在逐条记录，要么落在其合并记录，四要素不丢。
   - **I2 合并不掩盖攻击**：窗口固定 1s（不可配到无限）、阈值 10；单窗口聚合上限 `MAX_MERGE=1000` 后**转逐条写**——持续高频拒绝的审计量随攻击强度上升，burst 不是无限吸收器；`detail.count` 是合并记录实际代表次数，审计侧与告警侧各自守恒 Σ(逐条+合并 count)==实际拒绝数。
+  - **I2' 跨 key 全局逐条写预算（2026-11-28 / 0.1.4，修 redteam key 轮换 p95 回弹）**：单一低权
+    token 轮转多个可 deny 端点时，旧口径每个 key 各写「前 10 条逐条」，活跃 key 数 × 逐条写
+    事务数叠加 bbolt 单写者排队，把 c16/N=300 p95 从 19–41ms 抬回 79.7–105ms（击穿 p95 ≤50ms
+    红线）。0.1.4 起同一全局 1s 窗口内逐条审计写受 `DenyGlobalIndividualBudget=10` 约束，超出
+    预算的 key 早期拒绝走 pending 合并路径，窗口滚动 / 惰性 sweep / `MAX_MERGE` 触发点补一条
+    带 `count` 的合并记录；审计 Σ(逐条+合并 count)、告警 Σ(AlertN) 仍精确守恒，通知「拒绝即
+    告警」语义与 fail-closed 不变，零新增 ticker / goroutine（G-19）。单 key 场景不受预算约束。
   - **I3 不绕过审计**：`auditDenied` 是唯一 deny 汇聚出口，合并在其内部一次 Submit 同时产出审计与告警计划，出口个数与调用点不变；攻击者无法通过任何路径绕过。
   - **I4 不引入新绕过面**：合并状态是进程内 `sync.Mutex + map` + 惰性 sweep，键只用既有审计标量字段（无外部输入可控长度爆炸）；按量清理阈值远大于正常量，删除只从最旧端（攻击当下的新记录在窗口内不会被删），`trim_deleted` 写审计可追溯。
   - **I5 不违 G-10/G-01/零侵入**：纯内存 + 同步写路径，无联网/出站/遥测/常驻组件；不 import 插件、不维护业务域名词表；审计写仍走 `Store.Update` 同步提交，**不引入 bbolt Batch / goroutine / ticker**（G-19）。
