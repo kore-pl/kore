@@ -3,6 +3,36 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.7] - 2026-11-29
+
+> 本次是 **fix**（宝塔真机实测独立验收 task-351/commit fbb093f 坐实的 G-03 fd≤64 硬红线突破），按 semver 为 patch。
+> 修复动机如实记录：实测 `kored` 主壳 `ls /proc/<pid>/fd | wc -l` = 79（shell-only）/82（主壳+插件），
+> 超硬红线 15–18 远超噪声。逐项分类定位根因：这 70 个额外 fd **不是 kored 自己打开的**，
+> 而是 Linux `execve` 不清空 fd 表、kored 被带大量常驻 fd 的父进程（图形化 harness / supervisor /
+> 测试框架）spawn 时继承的无关描述符（Electron app.asar、Chromium shm、GPUCache、leveldb、
+> D-Bus/abstract UDS 等）——干净 fd 表启动（等价 systemd）的同一二进制仅 **9** 个 fd。
+> 修复只动启动卫生，不调整 G-03 红线口径、不碰监听/插件通道功能、不加 ticker（G-19）、不破薄壳（G-01）。
+> 0.1.7 < 0.2.0 仍落在 24 仓 `requires_kore` 上界内，`make version-check` 不阻断；
+> 本次不 push / 不打 tag / 不建 Release（发版由 lead 统一组织）。
+
+### Fixed
+
+- **启动关闭继承 fd（G-03 fd≤64 硬红线）**：在 `cmd/kored/main.go` 真正进程入口（早于任何
+  Go netpoll / bbolt / HTTP 装配）调用新增的 `closeInheritedFDs()`，关闭 fd≥3 的继承描述符，
+  只保留 0/1/2。Linux 实现 `cmd/kored/fd_hygiene_linux.go` 读 `/proc/self/fd` 逐个 `close`，
+  非 Linux（Tier B）`fd_hygiene_stub.go` 为 no-op（不引入平台专有 syscall，G-16）。
+  只放 `main` 不放 `runServe`：go test 在进程内调 `runServe` 时 netpoll epoll 已就绪，
+  关它会 `runtime: netpoll failed`（实测），放 `main` 则测试路径零影响。
+- **fd 卫生单测**：`cmd/kored/fd_hygiene_test.go` 用子进程验证「关闭数≥3、计数下降、
+  重复调用幂等、stdout 保留」；网络可用性由 60s 隔离实例 healthz/首屏/login 回归覆盖
+  （测试二进制内 netpoll 已初始化，不适合在单测里断言 net.Listen）。
+- **实测收敛**：同一被污染 harness fd 表下，修复前 fd=79、修复后 fd=9（60s 稳定后采样，
+  `GET /-/healthz`=200 / `GET /`=200 / `GET /api/v1/system/info`=401 均正常）；
+  fd 组成 9 = 3 socket（主 UDS + 自更新 UDS + TCP LISTEN）+ 1 bbolt `state.db` +
+  1 epoll + 1 eventfd + stdin/stdout/stderr，无重复监听、无未关 watch、无 idle 连接。
+- **文档口径同步**：`docs/CORE.md` 版本基线与 `README.md` 当前版本更新到 0.1.7；
+  G-03 红线口径（≤64）与 ADR-0016 / RESOURCE-MODEL 未改动，红线数值不调整需 lead 裁决。
+
 ## [0.1.6] - 2026-11-28
 
 > 本次是 **fix**（round51 C12 隔离 VM 验证发现的通用机制缺陷：账本回滚丢权限），按 semver 为 patch。

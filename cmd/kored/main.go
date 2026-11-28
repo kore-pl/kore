@@ -14,7 +14,7 @@ import (
 // version 由构建参数注入（make build 的 -X main.version=...）。
 // 默认值与 Makefile 的 VERSION 必须一致（make version-check 断言）：否则 `go run` 与
 // `make build` 报不同版本，插件安装时 requires_kore 判定跟着漂。0.1.1 = 首个含 file_write 的内核版本。
-var version = "0.1.6"
+var version = "0.1.7"
 
 // 退出码码表（DATA-MODEL §7 / ARCHITECTURE §6.1），子命令与 serve 共用。
 const (
@@ -27,7 +27,17 @@ const (
 )
 
 // main 只负责把退出码交给 shell，逻辑全部在 run 里（便于单测与复盘）。
+//
+// fd 卫生（G-03 fd≤64 硬红线）：execve 不清空 fd 表，kored 若被带大量常驻 fd
+// 的父进程（图形化 harness / supervisor / 测试框架）spawn 会继承几十个无关
+// fd，使 /proc/<pid>/fd 虚高到 79/82，误触硬红线。这里在真正进程入口
+// （早于任何 Go netpoll / bbolt / HTTP 装配）关掉继承的 fd≥3，只保留 0/1/2，
+// 让 fd 计数只反映 kored 自己打开的监听 socket / UDS / state.db。
+//
+// 只放在 main、不放进 runServe：go test 调用的是 runServe（在同进程内跑），
+// 那时 Go runtime 的 netpoll epoll fd 已就绪，关掉会致命（实测 netpoll failed）。
 func main() {
+	closeInheritedFDs()
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
