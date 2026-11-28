@@ -413,3 +413,37 @@ WantedBy=multi-user.target
 **must_change 非阻断**（§2.3 补充）：`auth.must_change_password` 键名保留，但不再把会话降权——登录成功即签完整会话，取消对 `/api/v1/*` 的 403 闸门；会话鉴权通过后由 `notePasswordHint` 挂响应头 `X-Kore-Password-Hint: 1`，前端显示可关闭白话提示。SIGHUP 仅在哈希 / 标志真变化时 `RevokeAll`，普通热更不误踢会话。
 
 实现复核与门禁证据见 [ADR-0057 §6](DECISIONS/0057-login-account-model.md)、[account-t123.md](../.agents/verify/account-t123.md)、[account-t4-bruteforce.md](../.agents/verify/account-t4-bruteforce.md)。
+
+## 13. 静默自更新与 M3 批量更新编排器（ADR-0058 / ADR-0059；round44 据核实补齐）
+
+> 本节 append-only 补齐已落地能力的口径，§0–§12 原文不动；与 §2.4 的 UDS-only `POST /system/self-update`
+> 端点、§2.15 的内置 `update.check` 任务、[DATA-MODEL](./DATA-MODEL.md) §9.2 的 `update-state.json`
+> **并存、互不冲突**（G-06：本轮据 task-302 只读核实补齐既有事实，G-23：无新多选一裁决，仅行内留痕）。
+
+- **静默自更新总览**：本机专用更新链（ADR-0058/0059，v0.1.2 起）由五块拼成——UDS-only 专用端点（§2.4，
+  三重鉴权 + 专用能力 `system:self_update`）、进程内编排器（kored 自身直调 installer / upgrade，不经 HTTP）、
+  M3 批量更新编排器（本节）、scheduler 内置 `update.check`（§2.15，默认禁用 + 离线短路）、本地更新状态文件
+  （DATA-MODEL §9.2）。**边界不夸大**：更新源默认关闭、源地址默认空（未启用零出站，G-10）；
+  `IsOffline` 短路零报错；验签失败带 `requires_restart:true` 且本次不更新；root systemd 服务安装须执行时
+  单独确认（设计口径授权 ≠ 执行授权）。
+- **M3 批量更新编排器（ADR-0059 U2=A，实现 `cmd/kored/selfupdate_batch.go`）**：由装配层注入，复用 M2 编排器
+  的审计出口与结果语义，**不新增对外端点、不新增对外 schema**（批量 `items[]` API 未采纳、留完整期评估；
+  改对外 schema 需独立 ADR + G-24 复核）。执行顺序：
+  1. **规划**：fail-closed 审计门（与 M2 共用 `system.self_update`，审计写不进就不开始）→ 读已装版本快照 →
+     `market.Service.PendingUpdates` 从**已验签索引**算出待更新项并按 `depends_on` **依赖序**排列（循环依赖
+     报 `E_INVALID`，不猜测顺序）。
+  2. **逐条执行**：按依赖序逐条调**现有单条** store/install 的 download 分支（`InstallDownload`，不复制下载 /
+     摘要校验 / 落盘逻辑），成功后复用同一 `reloadOne`（`serve_runtime.go`）热重载；结果内嵌 M2 的
+     `OrchestrationResult`，不另起第二套 phase / 错误码 / 审计面。
+  3. **汇总与失败分诊**：`{total, succeeded, failed}` 显式计数（G-24 禁 `any`）；单条失败记录
+     `BatchFailure{id, error_code, reason, retryable}` 并**继续后续项**——单条失败不整批回滚、成功项不撤销；
+     失败项**不调用 `reloadOne`**（未落盘不重载）；上游 / 校验类瞬时失败标 `retryable=true`，可**单条重试**且
+     不重复安装已成功项；索引结构错误标不可重试。整批 `error` 只用于「整批根本没开始」（未装配 / 审计失败 /
+     读版本或索引失败）。
+- **边界**：不下载代码副本、不改 store/install 语义、不碰运行态资产（G-29）；`--scenario` 真批量仅作离线 /
+  演练补充、不进静默主链（CLI 停服限制见 §10）；不做批量 API `items[]`（C 方案未采纳）。
+- **留痕（G-06/G-23，round44）**：依据 task-302 只读核实（CHANGELOG 与 CORE/DATA-MODEL 原缺该能力口径）
+  补齐；所选口径为「复用单条原语 + reloadOne、不新增对外 schema」，被否决项为「批量 API `items[]`」
+  （G-24 契约改动 + `reloadOne` 单 id 回调交互复杂）与「独立常驻自更新进程」（G-05/G-03/G-31 三重违规），
+  完整备选与依据见 [ADR-0059 §2](DECISIONS/0059-silent-update-trigger-and-supply-chain.md) 与
+  `.agents/LOG/DECISIONS.md` U2/U5 既有条目（本轮无新裁决，不新增台账行）。

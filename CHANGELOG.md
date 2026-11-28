@@ -38,6 +38,19 @@
   `allowed_cidrs` 缺省 / 为空时行为与旧 token 完全一致——**向后兼容，旧 token 不限制来源**。
 - **`PUT /api/v1/security/tokens/{id}`**：新增按 id 更新已有 token（用于调整 CIDR 绑定等属性）。内核
   HTTP API 端点计数由 72 增至 **73**（口径见 `docs/CORE.md` §2.4 / §12.2）。
+- **静默自更新能力（ADR-0058 / ADR-0059，M1–M5）**：本机专用更新链落地——① **UDS-only 专用端点**
+  `POST /api/v1/system/self-update`（独立于公开门与主 mux，`SO_PEERCRED` uid∈{0, kored 运行 uid} + 单一
+  专用能力 `system:self_update`，不含 6 项 admin、不进会话能力集，审计 fail-closed；公开会话门零变化）；
+  ② **进程内更新编排**（kored 自身直接调 installer / upgrade 原语，不经 HTTP、不自连接、不另起常驻进程）；
+  ③ **M3 批量更新编排器**：读已验签索引算待更新项 → 按 `depends_on` 依赖序逐条调现有单条 store/install
+  （download 分支）→ 复用 `reloadOne` 热重载 → 汇总 + 失败分诊，单条失败不整批回滚、失败项可单条重试且
+  不 reload 失败项，**不新增对外 schema**（批量 `items[]` API 留完整期评估）；④ **scheduler 内置
+  `update.check` 任务**（挂在唯一 ticker，不新增周期源）；⑤ **本地更新状态文件**
+  `<state>/update-state.json`（0600、原子写、`changes.jsonl` 账本可回滚，全系统唯一安装目录外写入豁免）；
+  ⑥ **用户显式启用的更新源**（默认关闭 / 源地址默认空）。**边界如实记录，不夸大**：更新源默认关闭，
+  未显式启用时零出站（符合 G-10）；内置 `update.check` 默认禁用且 `IsOffline` 短路（离线零出站、零报错）；
+  验签失败带 `requires_restart:true`、本次不更新；内核升级所需的 **root systemd 服务安装须在执行时单独确认**
+  （设计口径授权 ≠ 执行授权，本能力不代授权）。口径逐条见 `docs/CORE.md` / `docs/DATA-MODEL.md` 对应段。
 
 ### Changed
 

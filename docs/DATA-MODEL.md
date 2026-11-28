@@ -329,6 +329,31 @@ UI 与 API 不直接暴露 bbolt：`GET /plugins`、`GET /system/info` 由内核
 
 实现：`cmd/kored/selfupdate_state.go`（读写 + 账本登记 + 白名单回滚）；门禁：`scripts/zero-intrusion-check.sh`（§11 追加判据）。
 
+### 9.3 M3 批量更新编排器的数据形状（ADR-0059 U2=A；round44 据核实补齐）
+
+> 与 §9.2 的本地更新状态文件、[CORE](./CORE.md) §2.4 的 UDS-only 端点 / §2.15 的 `update.check` 内置任务
+> **并存不冲突**（G-06：本轮据 task-302 只读核实补齐既有能力口径；G-23：无新多选一裁决，行内留痕）。
+> 编排器 `cmd/kored/selfupdate_batch.go` 是**进程内**执行单元（装配层注入），不落新表、不新增对外 schema、
+> 不碰运行态资产（G-29）；批量 `items[]` API 未采纳（留完整期，需独立 ADR + G-24 复核）。
+
+- **输入来源**：`market.Service.PendingUpdates(installed)` 从**已验签索引**读待更新项，按 `depends_on`
+  **依赖序**返回（循环依赖报 `E_INVALID`，不猜顺序）；`installed` 是装配层给的只读版本快照，不改状态库。
+- **结果结构（显式字段，G-24 禁 `any` / `object`）**：`BatchUpdateResult{phase, items[], failures[], summary{total,
+  succeeded, failed}, reason?}`；每条 `BatchItemResult` **内嵌 M2 的 `OrchestrationResult`**（phase / job /
+  error_code / reason 与 M2 同口径，不另起第二套）+ `plugin_id` / `version` / `reload?`（reload 分类：
+  `reloaded` / `restarted` / 缺省）。
+- **失败分诊形状**：`BatchFailure{id?, error_code, reason, retryable}`——`error_code` 优先取 market/pluginapi
+  结构化码（`E_UPSTREAM` / `E_CONFLICT` / `E_INVALID` 等），其余回落 M2 的 `E_UPGRADE_*` 哨兵；`retryable=true`
+  的上游 / 校验类瞬时失败可**单条重试**，索引结构错误标不可重试。
+- **状态与事务边界**：每条项逐条调现有单条 store/install 的 download 分支（自带摘要校验与原子落盘），
+  成功后复用 `reloadOne` 热重载；**单条失败只记分诊并继续后续项，不整批回滚**，成功项不做撤销；失败项
+  **不调用 `reloadOne`**（未落盘即不重载）；失败项可单条重试且不重复安装已成功项。整批不写新持久化状态——
+  跨重启的意图 / 结果仍只走 §9.2 的 `update-state.json` 唯一豁免文件（全系统仅此一个安装目录外写入）。
+- **留痕（G-06/G-23，round44）**：依据 task-302 只读核实（原文缺 M3 编排器数据形状口径）补齐；不选
+  「批量 API `items[]` 对外 schema」（契约改动 + `reloadOne` 单 id 回调交互复杂）、不选「独立常驻更新进程」
+  （G-05/G-03/G-31），依据见 [ADR-0059 §2/§3.4](DECISIONS/0059-silent-update-trigger-and-supply-chain.md)
+  与 `.agents/LOG/DECISIONS.md` U2 既有条目，本轮不新增裁决。
+
 ## 10. 备份与恢复
 
 > **当前未实现**：`kored backup` / `kored restore` / `kored db dump` **都没有对应子命令**（唯一权威清单是 `kored help`）；下面是**停机手工流程**，可直接照敲，M2 由 backup 能力接管。离线核对需要 bbolt CLI，它不随 `kored` 分发，按 `go.mod` 的版本自行安装：`go install go.etcd.io/bbolt/cmd/bbolt@v1.3.11`。
