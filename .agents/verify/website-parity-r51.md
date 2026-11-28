@@ -32,7 +32,7 @@ for p in Home Installation Configuration Usage FAQ Changelog; do
 | --- | --- | --- | --- |
 | Home | 200（重定向 1 次 → `/wiki`） | 1806 B，`# kore · 首页` + README 徽章 + 章节导航 11 项 | 导航页，正文靠链接 |
 | Installation | 200 | 8927 B，「内容忠实摘自仓库 README.md」+ 开始使用/镜像/目录结构/快速开始/平台/开发约定 | 较完整（README 摘录） |
-| Configuration | 200 | 1132 B，原文「README 无独立对应章节；完整说明见 [使用](Usage) 与 [README]」+ 导航 | **最薄**：无配置内容 |
+| Configuration | 200 | 1132 B，原文「README 无独立对应章节；完整说明见 [使用](https://github.com/kore-pl/kore/wiki/Usage) 与 [README]」+ 导航 | **最薄**：无配置内容 |
 | Usage | 200 | 9749 B，机制差异/仓库清单/能力来源/五锚点等 README 摘录 | 较完整 |
 | FAQ | 200 | 3021 B，资源承诺/参与方式/原则/支持本项目 | 有内容但**多为 README 摘抄，非问答式 FAQ** |
 | Changelog | 200 | 1657 B，「当前状态」仍写 M0 文档骨架、M0 进度条满格 | **过时**：与仓库 CHANGELOG `[0.1.5]` 漂移 |
