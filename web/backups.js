@@ -742,7 +742,9 @@
     }
     var scroll = add(S.jobsHost, el('div', 'bak-table-host'));
     var table = add(scroll, el('table', 'bak-table')); table.setAttribute('aria-label', '最近备份作业');
-    var htr = add(add(table, 'thead') || table.appendChild(el('thead')), el('tr'));
+    // 表头必须是真实 DOM 节点：add() 直接把 child 交给 appendChild，
+    // 传字符串 'thead' 会抛 TypeError 让整个「最近作业」表渲染失败（hands-on-r51 P1-1）。
+    var htr = add(add(table, el('thead')), el('tr'));
     ['状态', '名称', '维度', '开始时间', '条目', '大小', '错误'].forEach(function (label) { add(htr, el('th', null, label)); });
     var body = add(table, el('tbody'));
     S.jobs.forEach(function (job) {

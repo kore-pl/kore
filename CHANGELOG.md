@@ -3,6 +3,31 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] - 2026-11-28
+
+> 本次是 **fix**（真机上手演练 round51 发现的 3 个 P1 可用性卡点修复），按 semver 为 patch。
+> 修复动机如实记录：round51 隔离实例从零安装→改口令→核心路径真操作（`.agents/verify/hands-on-r51.md`，
+> 无 P0）发现纯代码审计看不见的三个卡点——备份页有作业记录时 JS 抛 TypeError 表头渲染失败、
+> API 装插件不启用且响应无提示、未启用错误把内部 API 动词甩给用户。不是新功能，目标只是让
+> 已声明的能力在"本机实际使用"中真正可用；0.1.5 < 0.2.0 仍落在 24 仓 `requires_kore` 上界内，
+> `make version-check` 不阻断。
+
+### Fixed
+
+- **备份页「最近作业」表头 TypeError（P1-1）**：`web/backups.js` 的 `paintJobs` 把字符串 `'thead'`
+  直接传给 `add()`/`appendChild`，有作业记录时浏览器抛 2 次
+  `TypeError: parameter 1 is not of type 'Node'`（堆栈 `add:57 → paintJobs:745`），表头/作业表渲染失败。
+  改为 `add(table, el('thead'))` 创建真实 DOM 节点；浏览器探针（真实 Chromium + 非空 `backup.jobs`）
+  断言零 pageerror、表头七列与 1 行作业正确渲染，并以注入旧代码的阴性对照复现原 TypeError。
+- **store/install 装完启用态可见（P1-2）**：保留"只装不启"的默认行为（不破坏装而不用场景），
+  成功响应新增 `enabled`（安装后 registry 真实状态）与 `hint`（未启用时白话提示到
+  「软件商店 → 插件管理」启用，不暴露内部 API 路径）；消除 UI 安装自动启用与 API 直连不一致
+  造成的"装了却用不了"。`docs/CORE.md` 同步明确安装≠启用语义。
+- **未启用错误文案白话化（P1-3）**：`cmd/kored/serve_daemon_actions.go` 的 `Invoke` 对未启用插件
+  不再回「请先 POST /api/v1/plugins/<id>/enable」，改为「插件「<id>」尚未启用，请在
+  「软件商店 → 插件管理」里启用后重试」；内部 API 路径只写服务端日志，不进 message / detail
+  （detail 会被前端当 hint 展示）。
+
 ## [0.1.4] - 2026-11-28
 
 > 本次是 **perf**（性能红线回弹修复），按 semver 为 patch。修复动机如实记录：0.1.3 的 deny

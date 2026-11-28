@@ -23,6 +23,28 @@ type storeInstallResponse struct {
 	*market.InstallJob
 	// Reload 是安装后登记重载结果；未装配回调时为空。
 	Reload string `json:"reload,omitempty"`
+	// Enabled 报告安装结束后插件在 registry 中的真实启用态（读 Backend.Plugin）。
+	// 安装本身不改默认行为：新装插件 desired=disabled，所以"装完即可用"并不成立，
+	// 必须让脚本化/API 直连者看到这个状态，不能只在 UI 安装路径里自动启用。
+	// 无 Backend（测试/未装配）时为 false。
+	Enabled bool `json:"enabled"`
+	// Hint 是面向用户的白话下一步：未启用时告诉用户去哪个真实入口启用，
+	// 不暴露 POST /api/v1/plugins/{id}/enable 这类内部 API 动词（USABILITY 原则④）。
+	Hint string `json:"hint,omitempty"`
+}
+
+// installEnabledState 读取插件安装后的真实启用态；后端未装配 / 查询失败一律按
+// 未启用处理（安装已落盘，查状态失败不能把 200 变成 500），并只写服务端日志。
+func (s *Server) installEnabledState(r *http.Request, id string) bool {
+	if s.opts.Backend == nil {
+		return false
+	}
+	status, ok, err := s.opts.Backend.Plugin(r.Context(), id)
+	if err != nil {
+		slog.Warn("安装后读取插件启用态失败，按未启用报告", "plugin_id", id, "err", err)
+		return false
+	}
+	return ok && status.Enabled
 }
 
 // storeInstallRequest 是 POST /api/v1/store/install 的请求体（显式字段，禁 any，G-24）。
@@ -244,7 +266,15 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.taskEvents.publishDone(req.ID, req.Version, "安装完成")
 	}
-	writeJSON(w, http.StatusOK, storeInstallResponse{InstallJob: job, Reload: reload})
+	// P1-2 / hands-on-r51：安装 ≠ 启用。API 直连者装完立即 invoke 会撞 409，
+	// 但响应里没有任何"还需启用"的线索。保留"只装不启"的默认行为
+	// （不破坏"装而不用"场景），改为在响应里如实回报 enabled 状态 + 白话下一步。
+	enabled := s.installEnabledState(r, req.ID)
+	resp := storeInstallResponse{InstallJob: job, Reload: reload, Enabled: enabled}
+	if !enabled {
+		resp.Hint = "插件已安装，但还没启用；请到「软件商店 → 插件管理」里启用它之后再用。"
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleStoreJob 返回安装任务进度。

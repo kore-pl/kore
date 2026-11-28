@@ -97,8 +97,14 @@ func (d *daemon) Invoke(ctx context.Context, plugin, method string, params json.
 		return nil, protocolError(pluginapi.E_NOTFOUND, "插件 %s 未安装", plugin)
 	}
 	if !d.catalog.Enabled(plugin) {
+		// P1-3 / hands-on-r51：message 主文案必须是小白能看懂的白话，并指向
+		// 真实存在的入口「软件商店 → 插件管理」（不是不存在的「插件页」）。
+		// 内部 API 动词只写服务端日志，不进 message / detail.hint——后者会被
+		// web/app.js 当作错误详情直接展示给用户（违反 USABILITY 原则④）。
+		slog.Info("插件未启用，invoke 被拒绝", "plugin_id", plugin,
+			"enable_endpoint", apiPlugins+"/"+plugin+"/enable")
 		return nil, protocolError(pluginapi.E_CONFLICT,
-			"插件 %s 未启用，请先 POST "+apiPlugins+"/%s/enable", plugin, plugin)
+			"插件「%s」尚未启用，请在「软件商店 → 插件管理」里启用后重试", plugin)
 	}
 	reply, err := d.bus.Call(ctx, plugin, method, params, reqID)
 	if err != nil {

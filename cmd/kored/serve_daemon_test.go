@@ -111,14 +111,26 @@ func TestDisableStopsProcess(t *testing.T) {
 }
 
 // TestInvokeNotEnabledConflict 验证未启用插件调用返回 409 E_CONFLICT（CORE §2.4）。
+// P1-3 / hands-on-r51：message 主文案必须白话、指真实入口，不得甩内部 API 动词。
 func TestInvokeNotEnabledConflict(t *testing.T) {
 	h := newHarness(t, pluginSpec{ID: "echo", Lifecycle: "resident"})
 	code, body, _ := h.do(http.MethodPost, "/api/v1/invoke/echo/ping", []byte(`{}`), nil)
 	if code != http.StatusConflict {
 		t.Fatalf("未启用调用状态码 = %d，期望 409：%s", code, body)
 	}
-	if got := decodeError(t, body).Code; got != "E_CONFLICT" {
+	problem := decodeError(t, body)
+	if got := problem.Code; got != "E_CONFLICT" {
 		t.Fatalf("错误码 = %q，期望 E_CONFLICT", got)
+	}
+	// 白话锚点：给"怎么办"且指向真实存在的「软件商店 → 插件管理」入口。
+	if !strings.Contains(problem.Message, "软件商店") || !strings.Contains(problem.Message, "启用") {
+		t.Fatalf("未启用文案应白话并给出可操作入口，实际 %q", problem.Message)
+	}
+	// 内部 API 动词 / 路径不得进 message 与 detail（detail 会被前端当 hint 展示）。
+	for _, leak := range []string{"POST", "/api/v1/", "/enable"} {
+		if strings.Contains(problem.Message, leak) || strings.Contains(problem.Detail, leak) {
+			t.Fatalf("未启用文案不得暴露内部 API 动词 %q：message=%q detail=%q", leak, problem.Message, problem.Detail)
+		}
 	}
 }
 

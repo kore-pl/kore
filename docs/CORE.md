@@ -10,7 +10,7 @@
 | 作用 | 把"内核只定规则"落成 11 个模块的字段级规格：职责、输入输出、失败模式、明确不做 |
 | 不作用 | 不写组件图与进程模型（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写愿景（见 [VISION.md](./VISION.md)）、不写业务插件规格 |
 | 硬约束 | 依赖白名单 3 个（`yaml.v3`、`bbolt`、M3 的 `protobuf`）；`internal/core` 禁 import `plugins/**`；禁 SQL/Web 框架/出网客户端 |
-| 版本基线 | 当前 MVP 版本 0.1.4（0.1.3 修审计 deny 写放大 p95 红线击穿，0.1.4 修跨 key 轮换下合并收益丢失的 p95 回弹；首个含 `file_write` 受控写的内核版本是 0.1.1；`Makefile` 的 `VERSION` 是唯一真源）；协议 `kore.plugin.v1`；帧上限 8 MiB；术语以 [GLOSSARY.md](./GLOSSARY.md) 为准 |
+| 版本基线 | 当前 MVP 版本 0.1.5（0.1.3 修审计 deny 写放大 p95 红线击穿，0.1.4 修跨 key 轮换下合并收益丢失的 p95 回弹，0.1.5 修备份页作业表头 TypeError + store/install 装完启用态可见 + 未启用错误白话化；首个含 `file_write` 受控写的内核版本是 0.1.1；`Makefile` 的 `VERSION` 是唯一真源）；协议 `kore.plugin.v1`；帧上限 8 MiB；术语以 [GLOSSARY.md](./GLOSSARY.md) 为准 |
 
 ## 1. 内核边界
 
@@ -139,7 +139,7 @@
 
 - **职责**：索引缓存 `/var/lib/kore/store/index.json`（`0600`，含 `id,name,version,requires_kore,sha256,size_bytes,depth_level,scenario_tags`）、**显式刷新**（`POST /store/refresh`，唯一联网入口）、安装/更新任务队列（异步 job）、本地目录导入、出站白名单（仅 refresh 与包下载两处，运行期零后台出站）。
 - **输入输出**：`GET /store/plugins` 读本地缓存（零出站，可带 `stale=true`）；`POST /store/install|update` → `{job_id}`，`GET /store/jobs/{job_id}` 轮询进度；`DELETE /store/plugins/{id}` 卸载；`GET /api/v1/store/presets` 见下（M3-D）。
-- **`POST /api/v1/store/install` 请求体（来源三选一，显式字段）**：`package_path` 走本地包（离线场景）；`download=true` + `id`/`version` 从**已验签索引**取 `download_url` 与 `sha256` 下载安装——URL 不接受请求体传入（防 SSRF），协议只允许 `https://`，缺 `sha256` 或 `download_url` 的条目直接拒；两者同给按歧义 400 拒，都不给 400 并提示二选一。`force=true` 允许覆盖已装同版本（修复/重装）：装配层先停用插件、installer 备份旧目录后覆盖，失败回滚并把旧插件拉回，成功按原 `desired_state` 重载；不带 force 的同版本安装返回 **409 `E_CONFLICT`**。失败码：上游不可达/摘要不符 → 502 `E_UPSTREAM`，索引或包结构非法 → 400 `E_INVALID`。索引验签失败返回 401 `E_UNAUTHORIZED`，错误体带 `requires_restart:true` 与「若刚更新过索引，需重启 kored 重新载入公钥」提示（签名判定本身不变）。
+- **`POST /api/v1/store/install` 请求体（来源三选一，显式字段）**：`package_path` 走本地包（离线场景）；`download=true` + `id`/`version` 从**已验签索引**取 `download_url` 与 `sha256` 下载安装——URL 不接受请求体传入（防 SSRF），协议只允许 `https://`，缺 `sha256` 或 `download_url` 的条目直接拒；两者同给按歧义 400 拒，都不给 400 并提示二选一。`force=true` 允许覆盖已装同版本（修复/重装）：装配层先停用插件、installer 备份旧目录后覆盖，失败回滚并把旧插件拉回，成功按原 `desired_state` 重载；不带 force 的同版本安装返回 **409 `E_CONFLICT`**。失败码：上游不可达/摘要不符 → 502 `E_UPSTREAM`，索引或包结构非法 → 400 `E_INVALID`。索引验签失败返回 401 `E_UNAUTHORIZED`，错误体带 `requires_restart:true` 与「若刚更新过索引，需重启 kored 重新载入公钥」提示（签名判定本身不变）。**安装 ≠ 启用（0.1.5 明确）**：`store/install` 只落盘并重载登记，首次安装的 `desired_state=disabled`，装完立即 `invoke` 会 409 `E_CONFLICT`；UI 商店路径由前端额外调 `POST /plugins/{id}/enable` 自动启用，API 直连/脚本化安装默认行为不变（不自动启用，保留"装而不用"场景）。成功响应在原有 `state/message/reload/previous_version/stale_versions` 之外新增 `enabled`（bool，安装后 registry 真实启用态，读 `Backend.Plugin`；未装配后端按 false）与 `hint`（未启用时给白话下一步「请到『软件商店 → 插件管理』里启用它之后再用」，不返回 `POST /api/v1/plugins/{id}/enable` 这类内部 API 动词，守 USABILITY 原则④）。未启用插件的 `invoke` 错误 message 一律白话 + 指真实入口，内部 API 路径只进服务端日志。
 - **`GET /api/v1/store/presets`（M3-D）**：从环境变量 `KORE_PRESETS_DIR` 读取预设目录，按 id 升序返回预设元数据。
 - **缺省行为**：未设 `KORE_PRESETS_DIR` 时**返回空列表，不是错误**；缺省不指向索引仓，也不是 embed 快照。
 - **验签顺序**：该端点先过 market 强制验签门；索引验签失败即 401，且**不读预设**。

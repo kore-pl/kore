@@ -26,7 +26,7 @@ APP       ?= kored
 # `kored version`、插件安装时的 requires_kore 判定都读它。
 # 0.1.1 = 首个含 file_write 受控写（ADR-0052 K3）的内核版本；使用 file_write 的插件
 # 必须声明 requires_kore 下界 ≥0.1.1（自洽断言：make version-check，G-14）。
-VERSION   ?= 0.1.4
+VERSION   ?= 0.1.5
 CMD       ?= ./cmd/kored
 BIN       ?= ./bin/kored
 # 零侵入安装（ADR-0023）：默认 PREFIX=/opt/kore → 二进制 <install>/bin/kored，
