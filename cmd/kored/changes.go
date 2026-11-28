@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pengtang1024/kore/internal/core/filewrite"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -176,7 +177,11 @@ func executePurgeOp(op purgeOp) error {
 		if err := validatePurgePath(dst); err != nil {
 			return err
 		}
-		if err := os.Rename(src, dst); err != nil {
+		// 复用受控写包里的还原语义：读备份内容 → atomicWrite(target, data, mode)。
+		// 不再用裸 os.Rename(备份, 目标)——那会把备份自身的 mode 带给目标，
+		// 旧备份固定 0600，导致原本 0644 的 drop-in / vhost 回滚后权限退化。
+		// mode 由备份文件携带（copyFile 写备份时保留源 mode），协议形状不变。
+		if err := filewrite.Restore(dst, src); err != nil {
 			return fmt.Errorf("file.restore %s → %s 失败: %w", src, dst, err)
 		}
 		return nil

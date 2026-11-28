@@ -143,7 +143,7 @@ Makefile                  # 唯一入口：make help 看全部目标
 
 ## 快速开始
 
-**当前版本（v0.1.5）可直接构建运行**：`make build` 产出 `bin/kored`（CGO_ENABLED=0 单二进制，已内嵌 `web/dist` 前端三件套），首次启动生成一次性管理员口令，浏览器访问 `http://127.0.0.1:8787/` 登录后即可操作。从构建、最小配置、启动到首登改密的完整步骤见 **[QUICKSTART.md](QUICKSTART.md)**（约 5 分钟）；升级、备份与回滚见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+**当前版本（v0.1.6）可直接构建运行**：`make build` 产出 `bin/kored`（CGO_ENABLED=0 单二进制，已内嵌 `web/dist` 前端三件套），首次启动生成一次性管理员口令，浏览器访问 `http://127.0.0.1:8787/` 登录后即可操作。从构建、最小配置、启动到首登改密的完整步骤见 **[QUICKSTART.md](QUICKSTART.md)**（约 5 分钟）；升级、备份与回滚见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ```bash
 make build                                          # 产出 bin/kored

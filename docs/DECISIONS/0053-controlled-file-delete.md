@@ -21,7 +21,7 @@
 | `FileWrite` 声明**没有**「允许删除」字段 | `pkg/pluginapi/filewrite.go:48-57`（`prefix_class` / `mode` / `content_policy` / `max_bytes`） | 选项「在 file_write 上加 allow_delete 开关」等于给写声明加删除语义，审计无法区分两种动作；故走独立声明 |
 | 空正文被协议拒绝 | `pkg/pluginapi/filewrite.go:235-237`「正文不能为空」 | C 需先放宽判据 |
 | `purge_op` 是回滚语义、声明期被要求绑定写宿主动作 | `pkg/pluginapi/rootaction.go:36-38, 50-55, 188-193` | B 的方向反了 |
-| `purge_op: file.restore` 的执行体是 `rename(备份, 目标)` | `cmd/kored/changes.go:168-180` | 它**就是**删除的备份恢复机制，无需新增 kind |
+| `purge_op: file.restore` 的执行体是「读备份内容 + `atomicWrite(目标, 内容, 备份 mode)`」（2026-11-28 修：原为 `rename(备份, 目标)`，会把旧备份固定 0600 带给目标，见 ADR-0028 §2.1） | `cmd/kored/changes.go` file.restore 分支 → `internal/core/filewrite.Restore` | 它**就是**删除的备份恢复机制，无需新增 kind；现在是逐属性还原（内容 + mode） |
 | 写面已被类别钉死（目录 + 后缀 + 归属前缀） | `pkg/pluginapi/filewrite.go:85-96`（`PluginNamePrefix`） | 删除必须复用同一套名字校验，否则横向隔离失效 |
 | site 删站走 `os.Remove`、停用/启用走 `os.Rename`，均在 `/etc/nginx/conf.d/` | `kore-plugin-site/vhost.go:401`、`toggle.go:93` | 装 root 后 `kore-site` 对 conf.d 无写权限 → 三条全失败（本卡动因） |
 
@@ -55,7 +55,7 @@
 
 ### 3.3 `purge_op: file.restore` 能不能当删除的备份机制？**能，而且这正是 B 唯一有价值的部分。**
 
-`file.restore` 的执行体是 `os.Rename(备份, 目标)`（`cmd/kored/changes.go:168-180`），把备份 rename 回原路径即完整恢复（内容 + 权限位）。所以**删除不需要新的 purge kind**：`file_delete` 成功后账本写 `{"kind":"file.restore","args":[备份路径, 原路径]}`，用户回滚就是把它 rename 回去。
+`file.restore` 的执行体是 `cmd/kored/changes.go` 调 `internal/core/filewrite.Restore`：读备份内容 + 按备份携带的原 mode `atomicWrite` 回目标（2026-11-28 前是裸 `os.Rename(备份, 目标)`，旧备份固定 0600 导致 0644 片段回滚后权限退化，见 ADR-0028 §2.1；修后是内容 + mode 的逐属性还原）。所以**删除不需要新的 purge kind**：`file_delete` 成功后账本写 `{"kind":"file.restore","args":[备份路径, 原路径]}`，用户回滚就是按账本恢复备份。
 
 区别在于：`file.restore` 由**内核在运行时**生成并写入账本（不可由插件请求），而不是被插件当作请求语义使用——这正是 A 与 B 的分界线。
 

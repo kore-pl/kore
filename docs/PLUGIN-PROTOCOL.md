@@ -258,7 +258,7 @@
 1. **schema**：`args` 必须恰为 1 个元素；声明走 `pluginapi.ValidateRootAction`（无 `argv`、`writes_host=true`、`target` 等于类别目录、无静态 `purge_op`、不与 `file_write` 并存）；
 2. **confirm → root → 账本**：**只在显式 `irreversible: true` 时要 confirm**——删除在实现上**强制先备份**，可回滚性由备份 + 运行时 `purge_op` 保证；非 root → `E_NEED_ROOT`；账本未装配 → 拒绝（不留「删了却查无此事」）；
 3. **删**：**删前**属主复核（`internal/platform.VerifyOwner`，防同名文件被替换）→ 备份到 `<state>/backups/<plugin>/<ts>/`（**失败即中止删除**，不存在无备份删除）→ 审计 begin（fail-closed，记 `path/sha256/size/mode/copy_path`，不记正文）→ `unlink` → `fsync(dir)`（unlink 是目录项变更，不 sync 崩溃后文件会复活）→ 审计 end；
-4. **回滚账本**：`purge_op` **恒为** `file.restore(备份路径, 原路径)`——`file.restore` 的执行体是 `rename(备份, 目标)`，即完整的删除恢复机制，**不需要新增 purge kind**；
+4. **回滚账本**：`purge_op` **恒为** `file.restore(备份路径, 原路径)`——`file.restore` 的执行体是「读备份内容 + 按备份携带的原 mode 原子写回目标」（2026-11-28 修，原裸 `rename` 会丢 0644 mode，见 ADR-0028 §2.1），即完整的逐属性删除恢复机制，**不需要新增 purge kind**；
 5. **目标不存在 → `E_NOTFOUND`，不静默成功**：静默成功会让「我删了」与「本来就没有」不可区分，账本会记一条没发生过的删除（审计说谎）。**幂等由插件层负责**（site 的 `deleteLocked` 按自身清单幂等返回 `deleted=false`）。
 
 **为什么不复用 `purge_op` 当删除请求**：`PurgeOp` 没有类别约束（只有 `kind` + `args`，路径只挡 `/` 与 `..`），一旦可当请求用，插件就从「只能删类别目录下自己的片段」变成「能删任意绝对路径」——那是权限放大。`purge_op` 的语义是「如何**撤销**这个动作」，且由内核运行时生成、不可由插件请求。

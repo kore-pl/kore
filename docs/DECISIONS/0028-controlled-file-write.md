@@ -87,7 +87,7 @@
 
 1. **密钥风险**：片段里可能含口令/私钥路径/ACL token（例如 nginx `auth_basic_user_file`、TLS 配置、`ssl_certificate_key` 引用）；审计库是长期保留、可导出、可能被备份到别处——存全文等于把敏感内容复制进另一个长期存储，直接违反 G-30 的立意。
 2. **体积**：256 KiB × N 次写入会撑大 state.db，且与「薄壳」预算冲突。
-3. **可回滚性**：回滚靠写前备份文件（`<install>/data/changes/backup-*`，0600），不靠审计库；审计只需要证明「写了什么哈希、能否对账」。
+3. **可回滚性**：回滚靠写前备份文件（`<install>/data/changes/backup-*`；2026-11-28 起**保留源文件 mode**，创建期 0600、落盘后 Chmod 成源 mode，见 §2.1），不靠审计库；审计只需要证明「写了什么哈希、能否对账」。
 
 需要全文时（排障/取证），由用户显式从备份目录取，不自动进审计。
 
@@ -140,10 +140,23 @@
 | 仅 `.conf`（拒 `.sh`） | `strings.ToLower(filepath.Ext(base)) != ".conf"` → `E_DENIED_PATH`，错误文案显式点名「.sh 可执行脚本」 | `filewrite.go:125-128` |
 | 绝对路径 + Clean 幂等 | `filepath.IsAbs` 拒绝相对路径；`filepath.Clean(path) != path` 拒绝 `..`/`//`/尾部 `/`；另拒路径含 `\x00\n\r` | `filewrite.go:111-120` |
 | 父链与目标禁软链接 | `checkNoSymlink` 从 `/` 逐级 `Lstat`：任一级是符号链接 → `E_SYMLINK`，父目录不存在 → `E_UNSAFE_TARGET`；目标存在时须常规文件且权限在允许集，否则 `E_UNSAFE_TARGET` | `filewrite.go:190-227` |
-| 写前备份 | 目标已存在时先算 `sha256(旧文件)`，复制到 `<CopyRoot>/<plugin>/<UTC 20060102T150405Z>/<basename>`；目录 `0700`，副本以 `O_CREATE\|O_EXCL` 打开（`0600`）；任一失败 → `E_BACKUP_FAILED` 且原文件不动 | `filewrite.go:259-273`、`:351-369` |
+| 写前备份 | 目标已存在时先算 `sha256(旧文件)`，复制到 `<CopyRoot>/<plugin>/<UTC 20060102T150405Z>/<basename>`；目录 `0700`，副本以 `O_CREATE\|O_EXCL` 打开（`0600`），内容落盘后 Chmod 成**源 mode**（2026-11-28 修，见 §2.1；此前固定 0600 导致回滚丢权限）；任一失败 → `E_BACKUP_FAILED` 且原文件不动 | `filewrite.go` 备份段、`copyFile`、`§2.1` |
 | 审计 fail-closed | `Auditor == nil` → `E_AUDIT_DENIED`；`Auditor` 返回错误 → `E_AUDIT_DENIED`；两者都发生在写文件之前，目标不落盘 | `filewrite.go:282-288` |
 | 原子写 | 同目录 `os.CreateTemp(".kore-write-*")`（内部即 `O_CREATE\|O_EXCL`）→ `Write` → `Sync` → `Chmod` → `Close` → `Rename` → 目录 `Sync`；任一步失败删临时文件 | `filewrite.go:297-334` |
 | 插件名形状 | 备份目录与审计字段共用的 `ValidatePlugin`：非空、≤32、仅小写字母/数字/`-` | `filewrite.go:176-187` |
+
+### 2.1 回滚逐属性还原修订（2026-11-28，账本回滚 mode 修复）
+
+> append-only 修订记录：不改 §1–§8 原文，只登记本轮对回滚链的收窄。
+
+round51 C12 隔离验证（`.agents/verify/c12-sshdropin-vm.md` §3③）实证：写前 0644 的 sshd drop-in 按账本
+`file.restore` 回滚后内容逐字节一致但 mode 变 0600。根因两半：① `copyFile` 备份固定 0600，不保留源 mode；
+② `changes.go` 的 `file.restore` 用裸 `os.Rename(备份, 目标)`，把备份自身 mode 带给目标。修法复用包内
+`revertWrite`/`atomicWrite` 既有语义：`copyFile` 写备份时把源 mode 带到副本（副本目录 0700，全文不扩大可见性），
+回滚改走导出原语 `filewrite.Restore(target, copyPath)`——读备份属性并校验 mode 在 `{0644,0600,0640}` 允许集后，
+用 `atomicWrite` 按该 mode 覆盖目标。`purge_op` 协议形状（`{kind,args:[备份,目标]}`）与账本登记语义不变，
+不新增依赖。回归覆盖：备份 mode 保留（0644/0600/0640）、sshd drop-in 与 nginx vhost 0644 回滚逐字节 +
+mode 一致、0600 片段保持、重复回滚幂等、被篡改的 0777 备份拒绝还原（fail-closed）。
 
 ### 3. 审计字段（实际字段名，确认不记全文）
 
@@ -162,7 +175,7 @@
 | `Decision` | `decision` | `allow` |
 | `Result` | `result` | `written` |
 
-**不记全文**：结构体无 content 字段，`Write` 只把 64 位十六进制摘要（`filewrite.go:276-281`）交给审计；测试亦只断言 `Size`/`SHA256`/`PreviousSHA256`/`CopyPath`（`filewrite_test.go:66-71`）。另有两点如实登记：① `Decision`/`Result` 目前只会是 `allow`/`written`——被拒请求在各校验点即返回，**不产生 deny 审计**；② 备份文件本身 0600，全文只存在于备份目录，需排障时由用户显式取（与 §4 一致）。
+**不记全文**：结构体无 content 字段，`Write` 只把 64 位十六进制摘要（`filewrite.go:276-281`）交给审计；测试亦只断言 `Size`/`SHA256`/`PreviousSHA256`/`CopyPath`（`filewrite_test.go:66-71`）。另有两点如实登记：① `Decision`/`Result` 目前只会是 `allow`/`written`——被拒请求在各校验点即返回，**不产生 deny 审计**；② 备份文件全文只存在于备份目录（0700），需排障时由用户显式取；其 mode 自 2026-11-28 起保留源文件权限（创建期 0600，落盘后 Chmod 成源 mode，见 §2.1；此前固定 0600 导致回滚丢权限，与 §4「只存摘要不记全文」不冲突）。
 
 ### 4. 与原文（§2–§5）的差异（一期未做到的部分，逐条如实登记）
 

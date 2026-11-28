@@ -408,7 +408,12 @@ func fileSHA256(path string) (string, *Error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// copyFile 复制原文件到备份路径（0600，失败即返回错误）。
+// copyFile 复制原文件到备份路径，并把源文件的权限位带到副本上（失败即返回错误）。
+//
+// 副本携带原 mode 是账本回滚能「逐属性还原」的前提：`purge_op: file.restore` 的 args
+// 只有（备份路径, 目标路径），没有独立的 mode 字段——备份自身就是原 mode 的唯一载体。
+// 副本创建时仍是 0600（内容写入期间不暴露），内容落盘后才 Chmod 成源文件 mode；
+// 备份目录本身是 0700，故把副本调成 0644 不会扩大其它用户对该全文的可读性。
 func copyFile(source, target string, mode os.FileMode) error {
 	in, err := os.Open(source)
 	if err != nil {
@@ -424,6 +429,10 @@ func copyFile(source, target string, mode os.FileMode) error {
 		return err
 	}
 	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Chmod(mode); err != nil {
 		_ = out.Close()
 		return err
 	}
@@ -488,6 +497,37 @@ func revertWrite(target, copyPath string, mode os.FileMode) error {
 	}
 	if err := atomicWrite(target, content, mode); err != nil {
 		return fmt.Errorf("用备份覆盖目标失败：%w", err)
+	}
+	return nil
+}
+
+// Restore 用备份覆盖目标，并还原备份文件携带的原权限位。
+//
+// 这是账本 `purge_op: file.restore` 的执行体（cmd/kored/changes.go 调用），
+// 语义与包内 revertWrite 完全一致：读备份内容 → atomicWrite(target, content, mode)。
+// 之所以不直接用 os.Rename(备份, 目标)：rename 会把**副本自身**的 mode 带给目标，
+// 而旧版备份固定是 0600，导致原本 0644 的 drop-in / vhost 回滚后变成 0600
+// （内容逐字节一致，权限却退化）。修法分两半：copyFile 备份时把源 mode 写到副本，
+// 这里再把副本 mode 读回显式交给 atomicWrite——两半合起来才是「逐属性还原」。
+//
+// mode 来自备份而非 purge_op 参数：账本 purge_op 的 args 只有（备份, 目标），
+// 不新增字段、不改协议形状（G-24 / 既有账本登记语义不变）。mode 必须落在允许集
+// 内才执行（fail-closed），防止被篡改的备份把目标恢复成 0777 等宽权限。
+// 备份读后保留不消费：重复回滚幂等（旧 rename 语义下第二次会因源不存在报错）。
+func Restore(target, copyPath string) error {
+	if strings.TrimSpace(copyPath) == "" {
+		return fmt.Errorf("用备份还原目标失败：备份路径为空")
+	}
+	info, err := os.Stat(copyPath)
+	if err != nil {
+		return fmt.Errorf("读取备份属性失败：%w", err)
+	}
+	mode := info.Mode().Perm()
+	if perr := ValidateMode(mode); perr != nil {
+		return fmt.Errorf("备份权限 %#o 不在允许集，拒绝还原：%w", mode, perr)
+	}
+	if err := revertWrite(target, copyPath, mode); err != nil {
+		return fmt.Errorf("用备份还原目标失败：%w", err)
 	}
 	return nil
 }

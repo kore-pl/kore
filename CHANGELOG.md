@@ -3,6 +3,32 @@
 本项目的所有重要变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.6] - 2026-11-28
+
+> 本次是 **fix**（round51 C12 隔离 VM 验证发现的通用机制缺陷：账本回滚丢权限），按 semver 为 patch。
+> 修复动机如实记录：写前备份固定 0600（不保留源 mode）+ 账本 `file.restore` 用裸 `os.Rename(备份, 目标)`
+> 把备份自身 mode 带给目标，导致原本 0644 的 sshd drop-in / nginx vhost 回滚后内容逐字节一致但权限变 0600
+> （`.agents/verify/c12-sshdropin-vm.md` §3③ 实证，真机容器内 root 属主下功能不坏，但"逐字节还原"≠"逐属性还原"）。
+> 不是新功能，目标只是让既有回滚链正确还原文件属性。0.1.6 < 0.2.0 仍落在 24 仓 `requires_kore` 上界内，
+> `make version-check` 不阻断；本次不 push / 不打 tag / 不建 Release（发版由 lead 统一组织）。
+
+### Fixed
+
+- **备份保留源 mode**：`internal/core/filewrite/copyFile` 写副本时创建期 0600、内容落盘后 `Chmod` 成源文件权限
+  （备份目录 0700，全文可见性不扩大）。`file.restore` 的 `purge_op` 形状只有 `(备份, 目标)` 两个参数，
+  备份文件自身就是原 mode 的唯一载体——这是逐属性还原的前提。
+- **账本回滚逐属性还原**：`cmd/kored/changes.go` 的 `purgeKindFileRestore` 不再用裸 `os.Rename`，
+  改为调 `internal/core/filewrite.Restore(target, backup)`：读备份属性、校验 mode 落在允许集
+  `{0644,0600,0640}`（fail-closed，拒被篡改的宽权限备份），复用包内既有的
+  `revertWrite`/`atomicWrite(path, data, mode)` 语义覆盖目标。备份不被消费，重复回滚幂等；
+  不改 `purge_op` 协议形状、不改账本登记/审计/原子写语义，不新增依赖。
+- **回归用例**：`internal/core/filewrite/filewrite_test.go` 新增备份 mode 保留（0644/0600/0640）、
+  `Restore` 逐字节 + mode 一致（sshd drop-in 0644 / nginx vhost 0644 / 0600 片段）、重复回滚幂等、
+  0777 备份拒绝还原；`cmd/kored/changes_test.go` 新增完整账本链用例（受控写 → `changes.jsonl` 登记
+  `file.restore` → `executePurgeOp` 回滚 → 内容一致且 mode 保持），两类 0644 片段 + 0600 片段全覆盖。
+- **文档口径同步**：ADR-0028 §2.1 追加回滚逐属性还原修订（原文 append-only 保留），
+  ADR-0053 与 PLUGIN-PROTOCOL 的 `file.restore` 执行体从「rename」订正为「读备份 + atomicWrite(mode)」。
+
 ## [0.1.5] - 2026-11-28
 
 > 本次是 **fix**（真机上手演练 round51 发现的 3 个 P1 可用性卡点修复），按 semver 为 patch。

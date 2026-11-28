@@ -10,7 +10,7 @@
 | 作用 | 把"内核只定规则"落成 11 个模块的字段级规格：职责、输入输出、失败模式、明确不做 |
 | 不作用 | 不写组件图与进程模型（见 [ARCHITECTURE.md](./ARCHITECTURE.md)）、不写愿景（见 [VISION.md](./VISION.md)）、不写业务插件规格 |
 | 硬约束 | 依赖白名单 3 个（`yaml.v3`、`bbolt`、M3 的 `protobuf`）；`internal/core` 禁 import `plugins/**`；禁 SQL/Web 框架/出网客户端 |
-| 版本基线 | 当前 MVP 版本 0.1.5（0.1.3 修审计 deny 写放大 p95 红线击穿，0.1.4 修跨 key 轮换下合并收益丢失的 p95 回弹，0.1.5 修备份页作业表头 TypeError + store/install 装完启用态可见 + 未启用错误白话化；首个含 `file_write` 受控写的内核版本是 0.1.1；`Makefile` 的 `VERSION` 是唯一真源）；协议 `kore.plugin.v1`；帧上限 8 MiB；术语以 [GLOSSARY.md](./GLOSSARY.md) 为准 |
+| 版本基线 | 当前 MVP 版本 0.1.6（0.1.3 修审计 deny 写放大 p95 红线击穿，0.1.4 修跨 key 轮换下合并收益丢失的 p95 回弹，0.1.5 修备份页作业表头 TypeError + store/install 装完启用态可见 + 未启用错误白话化，0.1.6 修账本 `file.restore` 回滚丢权限（0644→0600）与备份 mode 不保留；首个含 `file_write` 受控写的内核版本是 0.1.1；`Makefile` 的 `VERSION` 是唯一真源）；协议 `kore.plugin.v1`；帧上限 8 MiB；术语以 [GLOSSARY.md](./GLOSSARY.md) 为准 |
 
 ## 1. 内核边界
 

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pengtang1024/kore/internal/core/filewrite"
 	"github.com/pengtang1024/kore/internal/core/privilege"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
@@ -85,6 +87,73 @@ func TestExecutePurgeOpFileRemove(t *testing.T) {
 	// 幂等：再删一次不报错。
 	if err := executePurgeOp(purgeOp{Kind: purgeKindFileRemove, Args: []string{path}}); err != nil {
 		t.Fatalf("重复删除应幂等: %v", err)
+	}
+}
+
+// TestLedgerFileRestorePreservesMode 验证完整账本回滚链：受控写（备份保留原 mode）
+// → changes.jsonl 登记 file.restore → 按账本执行回滚 → 内容逐字节一致且 mode 与写前一致。
+// 覆盖 sshd drop-in 与 nginx vhost 两类 0644 片段，以及 0600 片段。
+func TestLedgerFileRestorePreservesMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{"sshd_dropin_0644", 0o644},
+		{"nginx_vhost_0644", 0o644},
+		{"sshd_dropin_0600", 0o600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			// 类别目录按用例分名（同一临时根下避免相互干扰），注入 AllowedPrefixes。
+			prefix := filepath.Join(root, strings.ReplaceAll(tc.name, "_", "-")) + "/"
+			if err := os.MkdirAll(prefix, 0o755); err != nil {
+				t.Fatalf("建类别目录失败：%v", err)
+			}
+			target := filepath.Join(prefix, "kore-test.conf")
+			old := []byte("before\nsecond line\n")
+			if err := os.WriteFile(target, old, tc.mode); err != nil {
+				t.Fatalf("预置原文件失败：%v", err)
+			}
+			written, perr := filewrite.Write(filewrite.Options{
+				Plugin: "site", Actor: "admin", Path: target, Content: []byte("after\n"), Mode: 0o644,
+				CopyRoot:        filepath.Join(root, "backups"),
+				Auditor:         func(filewrite.AuditEvent) error { return nil },
+				AllowedPrefixes: []string{prefix},
+			})
+			if perr != nil {
+				t.Fatalf("受控写失败：%v", perr)
+			}
+			if written.CopyPath == "" {
+				t.Fatalf("覆盖写必须产生备份")
+			}
+			// 账本登记：与 privilege.fileWritePurgeOp 同形状（备份, 目标）。
+			ledger := changesPath(root)
+			entry := changeEntry{
+				Plugin: "site", Action: "vhost.write", Target: target, Reversible: true,
+				PurgeOp: &purgeOp{Kind: purgeKindFileRestore, Args: []string{written.CopyPath, target}},
+			}
+			if err := appendChange(ledger, entry); err != nil {
+				t.Fatalf("账本登记失败：%v", err)
+			}
+			entries, skipped, err := readChanges(ledger)
+			if err != nil || skipped != 0 || len(entries) != 1 {
+				t.Fatalf("读回账本失败：%d 条 / 跳过 %d / err=%v", len(entries), skipped, err)
+			}
+			if err := executePurgeOp(*entries[0].PurgeOp); err != nil {
+				t.Fatalf("按账本回滚失败：%v", err)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || !bytes.Equal(got, old) {
+				t.Fatalf("回滚内容不一致：got=%q err=%v want=%q", got, err, old)
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat 目标失败：%v", err)
+			}
+			if info.Mode().Perm() != tc.mode {
+				t.Fatalf("[%s] 回滚后权限 = %#o，期望写前 %#o", tc.name, info.Mode().Perm(), tc.mode)
+			}
+		})
 	}
 }
 

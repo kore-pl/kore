@@ -1,6 +1,8 @@
 package filewrite
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +72,118 @@ func TestWriteLegal(t *testing.T) {
 	}
 	if strings.Contains(event.Path, "\n") {
 		t.Fatalf("审计不应包含异常路径")
+	}
+}
+
+// TestBackupPreservesMode 验证写前备份保留源文件权限位（账本 file.restore 还原 mode 的前提）。
+func TestBackupPreservesMode(t *testing.T) {
+	for _, mode := range []os.FileMode{0o644, 0o600, 0o640} {
+		t.Run(fmt.Sprintf("mode_%04o", mode), func(t *testing.T) {
+			prefix, copyRoot := testEnv(t)
+			target := filepath.Join(prefix, "kore-mode.conf")
+			old := []byte("original\n")
+			if err := os.WriteFile(target, old, mode); err != nil {
+				t.Fatalf("预置旧文件失败：%v", err)
+			}
+			result, perr := Write(Options{
+				Plugin: "ssh-guard", Actor: "admin", Path: target, Content: []byte("new\n"), Mode: 0o644,
+				CopyRoot: copyRoot, Auditor: func(AuditEvent) error { return nil }, AllowedPrefixes: []string{prefix},
+			})
+			if perr != nil {
+				t.Fatalf("受控写失败：%v", perr)
+			}
+			if result.CopyPath == "" {
+				t.Fatalf("覆盖写必须产生备份")
+			}
+			info, err := os.Stat(result.CopyPath)
+			if err != nil {
+				t.Fatalf("stat 备份失败：%v", err)
+			}
+			if info.Mode().Perm() != mode {
+				t.Fatalf("备份权限 = %#o，期望保留源权限 %#o", info.Mode().Perm(), mode)
+			}
+		})
+	}
+}
+
+// TestRestorePreservesModeAndContent 验证备份还原是「逐属性还原」：内容逐字节一致且 mode 不变。
+// 覆盖 sshd drop-in（0644）与 nginx vhost（0644）两类白名单片段目录，以及 0600 片段。
+func TestRestorePreservesModeAndContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix string // 由测试临时目录派生的类别目录名
+		mode   os.FileMode
+	}{
+		{"sshd_dropin_0644", "sshd_config.d", 0o644},
+		{"nginx_vhost_0644", "nginx-conf.d", 0o644},
+		{"sshd_dropin_0600", "sshd_config.d", 0o600},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			prefix := filepath.Join(root, tc.prefix) + "/"
+			if err := os.MkdirAll(prefix, 0o755); err != nil {
+				t.Fatalf("建类别目录失败：%v", err)
+			}
+			copyRoot := filepath.Join(root, "backups")
+			target := filepath.Join(prefix, "kore-test.conf")
+			old := []byte("before write\nsecond line\n")
+			if err := os.WriteFile(target, old, tc.mode); err != nil {
+				t.Fatalf("预置原文件失败：%v", err)
+			}
+			written, perr := Write(Options{
+				Plugin: "ssh-guard", Actor: "admin", Path: target, Content: []byte("after write\n"), Mode: 0o644,
+				CopyRoot: copyRoot, Auditor: func(AuditEvent) error { return nil }, AllowedPrefixes: []string{prefix},
+			})
+			if perr != nil {
+				t.Fatalf("受控写失败：%v", perr)
+			}
+			if written.CopyPath == "" {
+				t.Fatalf("覆盖写必须产生备份")
+			}
+			if err := Restore(target, written.CopyPath); err != nil {
+				t.Fatalf("按账本回滚失败：%v", err)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || !bytes.Equal(got, old) {
+				t.Fatalf("回滚内容不一致：got=%q err=%v want=%q", got, err, old)
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat 目标失败：%v", err)
+			}
+			if info.Mode().Perm() != tc.mode {
+				t.Fatalf("回滚后权限 = %#o，期望写前权限 %#o", info.Mode().Perm(), tc.mode)
+			}
+			// 重复回滚幂等：备份不被消费，再次还原仍逐字节一致且 mode 不变。
+			if err := Restore(target, written.CopyPath); err != nil {
+				t.Fatalf("重复回滚失败：%v", err)
+			}
+			got2, _ := os.ReadFile(target)
+			if !bytes.Equal(got2, old) {
+				t.Fatalf("重复回滚内容不一致：%q", got2)
+			}
+		})
+	}
+}
+
+// TestRestoreRejectsUnsafeMode 验证被篡改的宽权限备份不会被还原到目标（fail-closed）。
+func TestRestoreRejectsUnsafeMode(t *testing.T) {
+	root := t.TempDir()
+	backup := filepath.Join(root, "backup.conf")
+	target := filepath.Join(root, "target.conf")
+	if err := os.WriteFile(backup, []byte("x\n"), 0o777); err != nil {
+		t.Fatalf("造备份失败：%v", err)
+	}
+	if err := os.WriteFile(target, []byte("y\n"), 0o600); err != nil {
+		t.Fatalf("造目标失败：%v", err)
+	}
+	if err := Restore(target, backup); err == nil {
+		t.Fatalf("备份权限 0777 必须拒绝还原")
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "y\n" {
+		t.Fatalf("拒绝还原时目标不得变化：%q", got)
 	}
 }
 
